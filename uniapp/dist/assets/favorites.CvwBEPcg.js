@@ -1,0 +1,1 @@
+import{del as e,post as t,get as r}from"./utils-request.C_qK1Q0M.js";const s={list:e=>r("/teacher/favorites",e||{}),add:e=>t("/teacher/favorites/add",{question_id:e}),remove:t=>e(`/teacher/favorites/${t}`)};export{s as f};

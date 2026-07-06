@@ -1,0 +1,6 @@
+Starting E2E test
+Step 1: POST /admin/institutions -> 201
+Step 2: POST /institutions/9/members -> 201
+Step 3: POST /classes -> 201 content=b'{"code":0,"message":"\xe5\x88\x9b\xe5\xbb\xba\xe6\x88\x90\xe5\x8a\x9f","data":{"id":107,"class_no":"CLS-60859635","class_name":"Math 101","description":"Basic math","max_students":50,"invite_code":"PYASAJMJ","allow_invite_join":true,"status":"active","institution_name":"Test Academy","creator_name":"Teacher Li","student_count":0,"teachers":[{"id":11,"display_name":"Teacher Li","role":"owner"}],"created_at":"2026-05-30T18:37:18.113380+08:00","updated_at":"2026-05-30T18:37:18.113396+08:00"},"trace_id":"b83f413d3dc745b2"}'
+Step 4: POST /student/classes/join-by-code with code=PYASAJMJ
+Step 4 response: status=201 content=b'{"code":0,"message":"\xe5\x8a\xa0\xe5\x85\xa5\xe6\x88\x90\xe5\x8a\x9f","data":{"class_id":107,"class_name":"Math 101"},"trace_id":"08035a6e6fbf4fc0"}'

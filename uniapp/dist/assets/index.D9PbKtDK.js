@@ -1,0 +1,1 @@
+import{k as e,m as s,L as n,P as o,M as u}from"./index-RhmROvfC.js";const r=e("user",()=>{const e=s("userInfo"),r=n(e||null),a=n(!!e);return{userInfo:r,isLoggedIn:a,setUserInfo:function(e){r.value=e,a.value=!0,o("userInfo",e)},logout:function(){r.value=null,a.value=!1,u("accessToken"),u("refreshToken"),u("tokenExpiry"),u("userInfo")}}});export{r as u};

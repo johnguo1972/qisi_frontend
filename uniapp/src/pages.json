@@ -1,0 +1,43 @@
+{
+  "pages": [
+    { "path": "pages/login/index", "style": { "navigationBarTitleText": "登录" } },
+    { "path": "pages/admin/home", "style": { "navigationBarTitleText": "管理员首页" } },
+    { "path": "pages/admin/institutions", "style": { "navigationBarTitleText": "机构列表" } },
+    { "path": "pages/admin/institution-create", "style": { "navigationBarTitleText": "创建机构" } },
+    { "path": "pages/admin/institution-edit", "style": { "navigationBarTitleText": "编辑机构" } },
+    { "path": "pages/admin/institution-detail", "style": { "navigationBarTitleText": "机构详情" } },
+    { "path": "pages/teacher/workbench", "style": { "navigationBarTitleText": "工作台" } },
+    { "path": "pages/teacher/import", "style": { "navigationBarTitleText": "题库导入" } },
+    { "path": "pages/teacher/bank", "style": { "navigationBarTitleText": "题库管理" } },
+    { "path": "pages/teacher/favorites", "style": { "navigationBarTitleText": "我的精选" } },
+    { "path": "pages/teacher/audit", "style": { "navigationBarTitleText": "OCR审核" } },
+    { "path": "pages/teacher/review-list", "style": { "navigationBarTitleText": "试卷审阅" } },
+    { "path": "pages/teacher/question-edit", "style": { "navigationBarTitleText": "题目编辑" } },
+    { "path": "pages/teacher/new-question", "style": { "navigationBarTitleText": "新增试题" } },
+    { "path": "pages/teacher/photo-upload", "style": { "navigationBarTitleText": "拍照新增试题" } },
+    { "path": "pages/teacher/mission-create", "style": { "navigationBarTitleText": "创建任务" } },
+    { "path": "pages/teacher/mission-detail", "style": { "navigationBarTitleText": "任务详情" } },
+    { "path": "pages/teacher/level-practice", "style": { "navigationBarTitleText": "关卡练习" } },
+    { "path": "pages/teacher/my-classes", "style": { "navigationBarTitleText": "我的班级" } },
+    { "path": "pages/teacher/class-create", "style": { "navigationBarTitleText": "创建班级" } },
+    { "path": "pages/teacher/class-edit", "style": { "navigationBarTitleText": "编辑班级" } },
+    { "path": "pages/teacher/class-detail", "style": { "navigationBarTitleText": "班级详情" } },
+    { "path": "pages/teacher/class-requests", "style": { "navigationBarTitleText": "申请审批" } },
+    { "path": "pages/student/home", "style": { "navigationBarTitleText": "今日任务" } },
+    { "path": "pages/student/join-class", "style": { "navigationBarTitleText": "加入班级" } },
+    { "path": "pages/student/mission", "style": { "navigationBarTitleText": "关卡" } },
+    { "path": "pages/student/answer", "style": { "navigationBarTitleText": "做题" } },
+    { "path": "pages/student/guidance", "style": { "navigationBarTitleText": "引导式解题" } },
+    { "path": "pages/student/wrongbook", "style": { "navigationBarTitleText": "错题本" } },
+    { "path": "pages/student/wrongbook-variants", "style": { "navigationBarTitleText": "同类题练习" } },
+    { "path": "pages/student/growth", "style": { "navigationBarTitleText": "成长" } },
+    { "path": "pages/student/knowledge-graph", "style": { "navigationBarTitleText": "知识图谱" } },
+    { "path": "pages/student/export", "style": { "navigationBarTitleText": "导出 PDF" } }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "A自习室",
+    "navigationBarBackgroundColor": "#F8F8F8",
+    "backgroundColor": "#F8F8F8"
+  }
+}

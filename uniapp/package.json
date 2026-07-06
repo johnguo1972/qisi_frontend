@@ -1,0 +1,25 @@
+{
+  "name": "a-study-room",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:h5": "uni -p h5",
+    "build:h5": "uni build",
+    "dev:app": "uni -p app",
+    "build:app": "uni build"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-alpha-5010120260525001",
+    "@dcloudio/uni-components": "3.0.0-alpha-5010120260525001",
+    "@dcloudio/uni-h5": "3.0.0-alpha-5010120260525001",
+    "@dcloudio/uni-ui": "1.5.6",
+    "pinia": "2.2.6",
+    "vue": "3.4.21",
+    "vue-router": "4.4.4"
+  },
+  "devDependencies": {
+    "@dcloudio/vite-plugin-uni": "3.0.0-alpha-5010120260525001",
+    "typescript": "5.3.3",
+    "vite": "5.2.8"
+  }
+}

@@ -1,0 +1,1 @@
+import{get as e}from"./utils-request.C_qK1Q0M.js";const t={getTree:t=>{const s={};return(null==t?void 0:t.subject)&&(s.subject=t.subject),(null==t?void 0:t.stages)&&(s.stages=t.stages),e("/teacher/knowledge-tree/",s)},tree:e=>t.getTree({subject:e})};export{t as k};
