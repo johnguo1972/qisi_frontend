@@ -5,6 +5,7 @@ app_name = 'missions'
 urlpatterns = [
     path('', views.mission_list, name='mission-list'),
     path('<int:mission_id>/', views.mission_detail, name='mission-detail'),
+    path('<int:mission_id>/delete/', views.mission_delete, name='mission-delete'),
     path('<int:mission_id>/levels/', views.mission_levels, name='mission-levels'),
     path('<int:mission_id>/levels/batch/', views.mission_levels_batch, name='mission-levels-batch'),
     path('<int:mission_id>/levels/<int:level_id>/', views.mission_level_detail, name='mission-level-detail'),

@@ -1,4 +1,4 @@
-import { post, get, put } from '@/utils/request.ts'
+import { post, get, put, del } from '@/utils/request.ts'
 
 export interface Mission {
   id: number
@@ -24,6 +24,9 @@ export const missionApi = {
 
   // PUT /api/v1/missions/{id}/
   update: (id: number, data: any) => put<any>(`/missions/${id}/`, data),
+
+  // DELETE /api/v1/missions/{id}/delete/
+  remove: (id: number) => del<any>(`/missions/${id}/delete/`),
 
   // GET /api/v1/missions/{id}/levels/
   levels: (id: number) => get<any[]>(`/missions/${id}/levels/`),
