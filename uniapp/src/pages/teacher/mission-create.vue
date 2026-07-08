@@ -1153,11 +1153,13 @@ async function publish() {
       })
     }
 
-    // 3. 发布
-    await missionApi.publish(missionId)
+    // 3. 发布（仅新建模式）
+    if (!editMode.value) {
+      await missionApi.publish(missionId)
+    }
 
     uni.hideLoading()
-    uni.showToast({ title: '发布成功', icon: 'success' })
+    uni.showToast({ title: editMode.value ? '保存成功' : '发布成功', icon: 'success' })
     setTimeout(() => uni.navigateTo({ url: '/pages/teacher/workbench' }), 1500)
   } catch (e: any) {
     uni.hideLoading()
@@ -1168,6 +1170,9 @@ async function publish() {
 }
 
 onMounted(async () => {
+  // 先加载班级列表（编辑模式需要用到）
+  await loadClasses()
+
   const pages = getCurrentPages()
   const page = pages[pages.length - 1] as any
   const id = parseInt(page.options?.id)
@@ -1179,7 +1184,6 @@ onMounted(async () => {
     await loadMissionData(id)
   }
 
-  await loadClasses()
   await loadKnowledgeTree()
   await loadQuestions()
 })
@@ -1197,7 +1201,7 @@ async function loadMissionData(id: number) {
     form.value.end_at = data.end_at || ''
     form.value.class_id = data.class_obj || null
 
-    // 加载班级名称
+    // 加载班级名称（此时 classList 已加载）
     if (data.class_obj) {
       const cls = classList.value.find((c: any) => c.id === data.class_obj)
       if (cls) selectedClassName.value = cls.class_name
@@ -1209,8 +1213,39 @@ async function loadMissionData(id: number) {
         name: lv.level_name,
         type: lv.level_type,
         mode: lv.mode_policy,
-        questionIds: [], // 需要另外加载
+        questionIds: [], // 关卡题目需要从 mission_questions 接口加载
       }))
+
+      // 加载每个关卡的题目
+      for (let i = 0; i < data.levels.length; i++) {
+        const lv = data.levels[i]
+        if (lv.id) {
+          try {
+            const qRes: any = await missionApi.levelDetail(id, lv.id)
+            const qData = qRes.data
+            if (qData && qData.questions) {
+              levels.value[i].questionIds = qData.questions.map((q: any) => q.id)
+            }
+          } catch (e) {
+            console.error(`加载关卡${i + 1}题目失败:`, e)
+          }
+        }
+      }
+
+      // 将所有题目加入 selectedIds（用于显示）
+      for (const lv of data.levels) {
+        try {
+          const qRes: any = await missionApi.levelDetail(id, lv.id)
+          const qData = qRes.data
+          if (qData && qData.questions) {
+            for (const q of qData.questions) {
+              if (!selectedIds.value.includes(q.id)) {
+                selectedIds.value.push(q.id)
+              }
+            }
+          }
+        } catch {}
+      }
     }
   } catch (e) {
     console.error('加载任务数据失败:', e)
@@ -2064,12 +2099,18 @@ input, .form-textarea {
 .level-q-stem { flex: 1; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .level-q-actions { display: flex; align-items: center; gap: 4rpx; flex-shrink: 0; }
 .level-q-move {
-  color: #409eff; cursor: pointer; font-size: 24rpx; padding: 2rpx 6rpx;
-  border-radius: 4rpx; transition: background 0.15s;
+  color: #409eff; cursor: pointer; font-size: 22rpx;
+  width: 36rpx; height: 36rpx;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 6rpx;
+  background: #f0f4ff;
+  border: 1rpx solid #d0d9f5;
+  transition: all 0.15s;
+  font-weight: bold;
 }
-.level-q-move:hover { background: #ecf5ff; }
-.level-q-move.disabled { color: #ccc; cursor: not-allowed; }
-.level-q-move.disabled:hover { background: transparent; }
+.level-q-move:hover { background: #dce4ff; border-color: #409eff; }
+.level-q-move.disabled { color: #ddd; cursor: not-allowed; background: #f5f5f5; border-color: #eee; }
+.level-q-move.disabled:hover { background: #f5f5f5; border-color: #eee; }
 .level-q-remove { color: #f44336; cursor: pointer; font-size: 20rpx; padding: 2rpx 6rpx; border-radius: 4rpx; }
 .level-q-remove:hover { background: #ffebee; }
 .level-q-empty { text-align: center; padding: 16rpx; color: #999; font-size: 22rpx; }
@@ -2083,6 +2124,7 @@ input, .form-textarea {
   width: 80%; max-width: 700px; background: #fff; border-radius: 16rpx;
   box-shadow: 0 8rpx 30rpx rgba(0,0,0,0.15); max-height: 80vh;
   display: flex; flex-direction: column;
+  overflow: hidden;
 }
 .assign-header { display: flex; justify-content: space-between; align-items: center; padding: 24rpx; border-bottom: 1rpx solid #eee; }
 .assign-title { font-size: 26rpx; font-weight: bold; color: #333; }
@@ -2090,16 +2132,20 @@ input, .form-textarea {
 .assign-actions { display: flex; gap: 24rpx; padding: 12rpx 24rpx; background: #f8f8f8; }
 .assign-select-all { font-size: 22rpx; color: #409eff; cursor: pointer; }
 .assign-clear { font-size: 22rpx; color: #f44336; cursor: pointer; }
-.assign-list { flex: 1; max-height: 50vh; padding: 0 24rpx; }
+.assign-list { flex: 1; max-height: 50vh; padding: 0; overflow: hidden; }
 .assign-item {
-  display: flex; align-items: center; padding: 12rpx 0; border-bottom: 1rpx solid #f0f0f0;
+  display: flex; align-items: center; padding: 12rpx 32rpx; border-bottom: 1rpx solid #f0f0f0;
   gap: 12rpx; cursor: pointer; font-size: 22rpx;
 }
-.assign-item.assigned { background: #e8f5e9; padding: 12rpx 8rpx; border-radius: 4rpx; }
+.assign-item.assigned { background: #e8f5e9; padding: 12rpx 32rpx; border-radius: 0; }
 .assign-check { font-size: 24rpx; width: 28rpx; flex-shrink: 0; }
 .assign-no { color: #409eff; width: 36rpx; flex-shrink: 0; }
-.assign-stem { flex: 1; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.assign-diff { color: #ff9800; width: 48rpx; text-align: center; flex-shrink: 0; }
+.assign-stem { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assign-diff { color: #ff9800; flex-shrink: 0; padding-left: 16rpx; padding-right: 32rpx; }
+.assign-item.assigned { background: #e8f5e9; padding: 12rpx 32rpx; border-radius: 0; }
+.assign-check { font-size: 24rpx; width: 28rpx; flex-shrink: 0; }
+.assign-no { color: #409eff; width: 36rpx; flex-shrink: 0; }
+.assign-stem { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .assign-footer { display: flex; justify-content: space-between; align-items: center; padding: 16rpx 24rpx; border-top: 1rpx solid #eee; }
 .assign-count { font-size: 22rpx; color: #666; }
 .assign-confirm { padding: 12rpx 40rpx; background: #4caf50; color: #fff; border-radius: 8rpx; font-size: 24rpx; height: auto; line-height: normal; }
