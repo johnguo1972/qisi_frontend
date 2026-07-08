@@ -6,14 +6,26 @@ from .models import LearningMission, MissionLevel, MissionQuestionRel
 class MissionListSerializer(serializers.ModelSerializer):
     creator_name = serializers.CharField(source='creator_teacher.display_name', read_only=True)
     level_count = serializers.SerializerMethodField()
+    class_name = serializers.SerializerMethodField()
+    question_count = serializers.SerializerMethodField()
 
     class Meta:
         model = LearningMission
         fields = ['id', 'mission_no', 'mission_name', 'goal_text',
-                  'status', 'start_at', 'end_at', 'creator_name', 'level_count']
+                  'status', 'start_at', 'end_at', 'creator_name',
+                  'level_count', 'class_name', 'question_count',
+                  'default_mode_policy', 'class_obj']
 
     def get_level_count(self, obj):
         return obj.levels.count()
+
+    def get_class_name(self, obj):
+        if obj.class_obj:
+            return obj.class_obj.class_name
+        return None
+
+    def get_question_count(self, obj):
+        return MissionQuestionRel.objects.filter(mission=obj).count()
 
 
 class MissionDetailSerializer(serializers.ModelSerializer):

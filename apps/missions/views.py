@@ -69,6 +69,30 @@ def mission_detail(request, mission_id):
     return Response({'code': 0, 'message': '更新成功', 'data': None, 'trace_id': make_trace_id()})
 
 
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def mission_delete(request, mission_id):
+    """M-04b: Delete mission (only draft missions can be deleted)."""
+    try:
+        mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
+    except LearningMission.DoesNotExist:
+        return Response({
+            'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': make_trace_id(),
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    if mission.status != 'draft':
+        return Response({
+            'code': 400, 'message': '只能删除草稿状态的任务', 'data': None, 'trace_id': make_trace_id(),
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # Delete related levels and question relations
+    MissionLevel.objects.filter(mission=mission).delete()
+    MissionQuestionRel.objects.filter(mission=mission).delete()
+    mission.delete()
+
+    return Response({'code': 0, 'message': '删除成功', 'data': None, 'trace_id': make_trace_id()})
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def mission_levels(request, mission_id):

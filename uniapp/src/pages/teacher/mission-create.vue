@@ -310,10 +310,14 @@
                   <text class="level-q-assign-btn" @click="openQuestionAssign(i)">分配题目</text>
                 </view>
                 <view v-if="level.questionIds && level.questionIds.length > 0" class="level-q-list">
-                  <view v-for="qid in level.questionIds" :key="qid" class="level-q-item">
-                    <text class="level-q-no">#{{ getQuestionSortNo(qid) }}</text>
+                  <view v-for="(qid, j) in level.questionIds" :key="qid" class="level-q-item">
+                    <text class="level-q-no">#{{ j + 1 }}</text>
                     <text class="level-q-stem">{{ getQuestionPreview(qid) }}</text>
-                    <text class="level-q-remove" @click="removeQuestionFromLevel(qid, i)">✕</text>
+                    <view class="level-q-actions">
+                      <text class="level-q-move" :class="{disabled: j === 0}" @click="moveQuestion(i, j, -1)">↑</text>
+                      <text class="level-q-move" :class="{disabled: j === level.questionIds.length - 1}" @click="moveQuestion(i, j, 1)">↓</text>
+                      <text class="level-q-remove" @click="removeQuestionFromLevel(qid, i)">✕</text>
+                    </view>
                   </view>
                 </view>
                 <view v-else class="level-q-empty">
@@ -526,6 +530,9 @@ import TeacherSidebar from '@/components/TeacherSidebar.vue'
 const userStore = useUserStore()
 
 const step = ref(1)
+
+const editMode = ref(false)
+const editMissionId = ref(0)
 
 const form = ref({ mission_name: '', goal_text: '', start_at: '', end_at: '', class_id: null as number | null })
 const levels = ref([{ name: '基础练习', type: 'practice', mode: 'block_a', questionIds: [] as number[] }])
@@ -1031,6 +1038,18 @@ function removeQuestionFromLevel(qid: number, levelIndex: number) {
   if (idx !== undefined && idx >= 0) level.questionIds.splice(idx, 1)
 }
 
+// 移动题目顺序（direction: -1=上移, 1=下移）
+function moveQuestion(levelIndex: number, questionIndex: number, direction: number) {
+  const level = levels.value[levelIndex]
+  if (!level || !level.questionIds) return
+  const newIndex = questionIndex + direction
+  if (newIndex < 0 || newIndex >= level.questionIds.length) return
+  // 交换位置
+  const temp = level.questionIds[questionIndex]
+  level.questionIds[questionIndex] = level.questionIds[newIndex]
+  level.questionIds[newIndex] = temp
+}
+
 function getQuestionSortNo(qid: number): number {
   const q = orderedQuestions.value.find(q => q.id === qid)
   return q?.sort_no || 0
@@ -1082,38 +1101,65 @@ async function publish() {
   }
 
   try {
-    uni.showLoading({ title: '发布中...' })
+    uni.showLoading({ title: editMode.value ? '保存中...' : '发布中...' })
 
-    // 1. 创建任务
-    const res = await missionApi.create({
-      mission_name: form.value.mission_name,
-      goal_text: form.value.goal_text,
-      start_at: form.value.start_at,
-      end_at: form.value.end_at,
-      class_id: form.value.class_id,
-    })
-    const missionId = res.data?.id
-    if (!missionId) {
-      uni.hideLoading()
-      uni.showToast({ title: '任务创建失败', icon: 'none' })
-      return
+    let missionId: number
+
+    if (editMode.value) {
+      // 编辑模式：更新任务
+      missionId = editMissionId.value
+      await missionApi.update(missionId, {
+        mission_name: form.value.mission_name,
+        goal_text: form.value.goal_text,
+        start_at: form.value.start_at,
+        end_at: form.value.end_at,
+        class_id: form.value.class_id,
+      })
+
+      // 重新创建关卡和题目
+      await missionApi.addLevelsBatch(missionId, {
+        levels: levels.value.map((level, i) => ({
+          name: level.name || `第${i + 1}关`,
+          type: level.type,
+          mode: level.mode,
+          questionIds: level.questionIds || [],
+        })),
+      })
+    } else {
+      // 新建模式
+      // 1. 创建任务
+      const res = await missionApi.create({
+        mission_name: form.value.mission_name,
+        goal_text: form.value.goal_text,
+        start_at: form.value.start_at,
+        end_at: form.value.end_at,
+        class_id: form.value.class_id,
+      })
+      missionId = res.data?.id
+      if (!missionId) {
+        uni.hideLoading()
+        uni.showToast({ title: '任务创建失败', icon: 'none' })
+        return
+      }
+
+      // 2. 批量创建关卡和题目（一次请求完成）
+      await missionApi.addLevelsBatch(missionId, {
+        levels: levels.value.map((level, i) => ({
+          name: level.name || `第${i + 1}关`,
+          type: level.type,
+          mode: level.mode,
+          questionIds: level.questionIds || [],
+        })),
+      })
     }
 
-    // 2. 批量创建关卡和题目（一次请求完成）
-    await missionApi.addLevelsBatch(missionId, {
-      levels: levels.value.map((level, i) => ({
-        name: level.name || `第${i + 1}关`,
-        type: level.type,
-        mode: level.mode,
-        questionIds: level.questionIds || [],
-      })),
-    })
-
-    // 3. 发布
-    await missionApi.publish(missionId)
+    // 3. 发布（仅新建模式）
+    if (!editMode.value) {
+      await missionApi.publish(missionId)
+    }
 
     uni.hideLoading()
-    uni.showToast({ title: '发布成功', icon: 'success' })
+    uni.showToast({ title: editMode.value ? '保存成功' : '发布成功', icon: 'success' })
     setTimeout(() => uni.navigateTo({ url: '/pages/teacher/workbench' }), 1500)
   } catch (e: any) {
     uni.hideLoading()
@@ -1124,16 +1170,93 @@ async function publish() {
 }
 
 onMounted(async () => {
+  // 先加载班级列表（编辑模式需要用到）
   await loadClasses()
+
+  const pages = getCurrentPages()
+  const page = pages[pages.length - 1] as any
+  const id = parseInt(page.options?.id)
+
+  if (id) {
+    // 编辑模式：加载已有任务数据
+    editMode.value = true
+    editMissionId.value = id
+    await loadMissionData(id)
+  }
+
   await loadKnowledgeTree()
   await loadQuestions()
 })
 
+// 加载已有任务数据（编辑模式）
+async function loadMissionData(id: number) {
+  try {
+    const res: any = await missionApi.detail(id)
+    const data = res.data
+    if (!data) return
+
+    form.value.mission_name = data.mission_name || ''
+    form.value.goal_text = data.goal_text || ''
+    form.value.start_at = data.start_at || ''
+    form.value.end_at = data.end_at || ''
+    form.value.class_id = data.class_obj || null
+
+    // 加载班级名称（此时 classList 已加载）
+    if (data.class_obj) {
+      const cls = classList.value.find((c: any) => c.id === data.class_obj)
+      if (cls) selectedClassName.value = cls.class_name
+    }
+
+    // 加载关卡和题目
+    if (data.levels && Array.isArray(data.levels)) {
+      levels.value = data.levels.map((lv: any) => ({
+        name: lv.level_name,
+        type: lv.level_type,
+        mode: lv.mode_policy,
+        questionIds: [], // 关卡题目需要从 mission_questions 接口加载
+      }))
+
+      // 加载每个关卡的题目
+      for (let i = 0; i < data.levels.length; i++) {
+        const lv = data.levels[i]
+        if (lv.id) {
+          try {
+            const qRes: any = await missionApi.levelDetail(id, lv.id)
+            const qData = qRes.data
+            if (qData && qData.questions) {
+              levels.value[i].questionIds = qData.questions.map((q: any) => q.id)
+            }
+          } catch (e) {
+            console.error(`加载关卡${i + 1}题目失败:`, e)
+          }
+        }
+      }
+
+      // 将所有题目加入 selectedIds（用于显示）
+      for (const lv of data.levels) {
+        try {
+          const qRes: any = await missionApi.levelDetail(id, lv.id)
+          const qData = qRes.data
+          if (qData && qData.questions) {
+            for (const q of qData.questions) {
+              if (!selectedIds.value.includes(q.id)) {
+                selectedIds.value.push(q.id)
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.error('加载任务数据失败:', e)
+  }
+}
+
 // 加载班级列表
 async function loadClasses() {
   try {
-    const res = await classApi.simpleList()
-    classList.value = res.data || []
+    const res: any = await classApi.simpleList()
+    classList.value = res.data?.data || res.data || []
   } catch (e) {
     console.error('加载班级列表失败:', e)
   }
@@ -1165,6 +1288,7 @@ function selectClass(cls: any) {
 }
 .form-item {
   margin-bottom: 24rpx;
+  position: relative;
 }
 .label {
   font-size: 26rpx;
@@ -1220,10 +1344,6 @@ input, .form-textarea {
 .class-value:empty::before { content: '请选择班级'; color: #999; }
 .class-arrow { font-size: 36rpx; margin-left: 12rpx; }
 .class-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0; right: 0;
-  margin-top: 4rpx;
   background: #fff;
   border: 1rpx solid #ddd;
   border-radius: 8rpx;
@@ -1231,6 +1351,7 @@ input, .form-textarea {
   z-index: 100;
   max-height: 400rpx;
   overflow-y: auto;
+  margin-top: 8rpx;
 }
 .class-option {
   display: flex;
@@ -1973,11 +2094,25 @@ input, .form-textarea {
 .level-q-title { font-size: 22rpx; color: #666; }
 .level-q-assign-btn { font-size: 22rpx; color: #409eff; cursor: pointer; }
 .level-q-list { max-height: 200rpx; overflow-y: auto; }
-.level-q-item { display: flex; align-items: center; padding: 6rpx 4rpx; gap: 8rpx; font-size: 20rpx; }
-.level-q-no { color: #409eff; width: 32rpx; flex-shrink: 0; }
+.level-q-item { display: flex; align-items: center; padding: 6rpx 4rpx; gap: 6rpx; font-size: 20rpx; }
+.level-q-no { color: #409eff; width: 36rpx; flex-shrink: 0; text-align: center; }
 .level-q-stem { flex: 1; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.level-q-diff { color: #ff9800; width: 48rpx; text-align: center; flex-shrink: 0; }
-.level-q-remove { color: #f44336; cursor: pointer; font-size: 20rpx; flex-shrink: 0; padding: 4rpx; }
+.level-q-actions { display: flex; align-items: center; gap: 4rpx; flex-shrink: 0; }
+.level-q-move {
+  color: #409eff; cursor: pointer; font-size: 22rpx;
+  width: 36rpx; height: 36rpx;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 6rpx;
+  background: #f0f4ff;
+  border: 1rpx solid #d0d9f5;
+  transition: all 0.15s;
+  font-weight: bold;
+}
+.level-q-move:hover { background: #dce4ff; border-color: #409eff; }
+.level-q-move.disabled { color: #ddd; cursor: not-allowed; background: #f5f5f5; border-color: #eee; }
+.level-q-move.disabled:hover { background: #f5f5f5; border-color: #eee; }
+.level-q-remove { color: #f44336; cursor: pointer; font-size: 20rpx; padding: 2rpx 6rpx; border-radius: 4rpx; }
+.level-q-remove:hover { background: #ffebee; }
 .level-q-empty { text-align: center; padding: 16rpx; color: #999; font-size: 22rpx; }
 
 /* 题目分配弹窗 */
@@ -1989,6 +2124,7 @@ input, .form-textarea {
   width: 80%; max-width: 700px; background: #fff; border-radius: 16rpx;
   box-shadow: 0 8rpx 30rpx rgba(0,0,0,0.15); max-height: 80vh;
   display: flex; flex-direction: column;
+  overflow: hidden;
 }
 .assign-header { display: flex; justify-content: space-between; align-items: center; padding: 24rpx; border-bottom: 1rpx solid #eee; }
 .assign-title { font-size: 26rpx; font-weight: bold; color: #333; }
@@ -1996,16 +2132,20 @@ input, .form-textarea {
 .assign-actions { display: flex; gap: 24rpx; padding: 12rpx 24rpx; background: #f8f8f8; }
 .assign-select-all { font-size: 22rpx; color: #409eff; cursor: pointer; }
 .assign-clear { font-size: 22rpx; color: #f44336; cursor: pointer; }
-.assign-list { flex: 1; max-height: 50vh; padding: 0 24rpx; }
+.assign-list { flex: 1; max-height: 50vh; padding: 0; overflow: hidden; }
 .assign-item {
-  display: flex; align-items: center; padding: 12rpx 0; border-bottom: 1rpx solid #f0f0f0;
+  display: flex; align-items: center; padding: 12rpx 32rpx; border-bottom: 1rpx solid #f0f0f0;
   gap: 12rpx; cursor: pointer; font-size: 22rpx;
 }
-.assign-item.assigned { background: #e8f5e9; padding: 12rpx 8rpx; border-radius: 4rpx; }
+.assign-item.assigned { background: #e8f5e9; padding: 12rpx 32rpx; border-radius: 0; }
 .assign-check { font-size: 24rpx; width: 28rpx; flex-shrink: 0; }
 .assign-no { color: #409eff; width: 36rpx; flex-shrink: 0; }
-.assign-stem { flex: 1; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.assign-diff { color: #ff9800; width: 48rpx; text-align: center; flex-shrink: 0; }
+.assign-stem { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assign-diff { color: #ff9800; flex-shrink: 0; padding-left: 16rpx; padding-right: 32rpx; }
+.assign-item.assigned { background: #e8f5e9; padding: 12rpx 32rpx; border-radius: 0; }
+.assign-check { font-size: 24rpx; width: 28rpx; flex-shrink: 0; }
+.assign-no { color: #409eff; width: 36rpx; flex-shrink: 0; }
+.assign-stem { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .assign-footer { display: flex; justify-content: space-between; align-items: center; padding: 16rpx 24rpx; border-top: 1rpx solid #eee; }
 .assign-count { font-size: 22rpx; color: #666; }
 .assign-confirm { padding: 12rpx 40rpx; background: #4caf50; color: #fff; border-radius: 8rpx; font-size: 24rpx; height: auto; line-height: normal; }
