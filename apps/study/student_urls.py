@@ -4,6 +4,7 @@ from .student_views import (
 )
 from .answer_views import submit_answer, retry_answer, get_mode_a
 from .guidance_views import start_guidance, guidance_reply
+from .knowledge_views import knowledge_mastery
 
 app_name = 'student'
 urlpatterns = [
@@ -18,4 +19,5 @@ urlpatterns = [
     path('growth', growth_summary, name='growth-summary'),
     path('export/pdf', export_pdf, name='export-pdf'),
     path('attempts/<int:attempt_id>/upload-image', upload_attempt_image, name='upload-attempt-image'),
+    path('knowledge-mastery', knowledge_mastery, name='knowledge-mastery'),
 ]

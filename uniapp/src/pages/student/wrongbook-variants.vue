@@ -62,7 +62,7 @@
               class="kp-tag"
             >{{ kp }}</text>
           </view>
-          <button class="btn-practice" @click="startPractice(item.id)">
+          <button class="btn-practice" @click="startPractice()">
             开始练习
           </button>
         </view>
@@ -123,10 +123,9 @@ async function loadVariants() {
   }
 }
 
-function startPractice(questionId: number) {
-  uni.navigateTo({
-    url: `/pages/student/guidance?questionId=${questionId}`,
-  })
+function startPractice() {
+  // 进入独立“同类题练习”页，传错题 id
+  uni.navigateTo({ url: `/pages/student/variant-practice?itemId=${wrongId.value}` })
 }
 
 function exportPDF() {

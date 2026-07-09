@@ -2,6 +2,9 @@
 
 import uuid
 
+from django.db import transaction
+from django.db.models import Q
+
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -63,12 +66,13 @@ def _create_class_impl(request):
         context={'institution_id': institution_id, 'request': request},
     )
     serializer.is_valid(raise_exception=True)
-    cls = serializer.save()
+    with transaction.atomic():
+        cls = serializer.save()
 
-    # Create ClassTeacher relation
-    ClassTeacher.objects.create(
-        class_obj=cls, teacher=request.user, role='owner',
-    )
+        # Create ClassTeacher relation
+        ClassTeacher.objects.create(
+            class_obj=cls, teacher=request.user, role='owner',
+        )
 
     return Response({
         'code': 0,
@@ -99,8 +103,8 @@ def class_list_create(request):
 def _class_list_impl(request):
     """GET /api/v1/classes - List classes where user is a teacher."""
     qs = Class.objects.filter(
-        class_teachers__teacher=request.user,
-    ).order_by('-created_at')
+        Q(class_teachers__teacher=request.user) | Q(creator_teacher=request.user),
+    ).distinct().order_by('-created_at')
 
     status_filter = request.GET.get('status', '').strip()
     if status_filter:

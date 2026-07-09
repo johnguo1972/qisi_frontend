@@ -47,6 +47,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
 
 const questionId = ref(0)
@@ -57,15 +58,16 @@ const options = ref<string[]>([])
 const inputText = ref('')
 const isCompleted = ref(false)
 
-onMounted(async () => {
-  const pages = getCurrentPages()
-  const page = pages[pages.length - 1] as any
-  questionId.value = parseInt(page.options.questionId || '0')
-
+onLoad((options: any) => {
+  questionId.value = parseInt(options.questionId || '0')
   if (!questionId.value) {
     uni.showToast({ title: '缺少题目ID', icon: 'none' })
     return
   }
+})
+
+onMounted(async () => {
+  if (!questionId.value) return
 
   try {
     const res = await studentApi.startGuidance({ question_id: questionId.value, mode_type: 'B' })
@@ -100,15 +102,18 @@ function sendReply() {
 async function sendReplyInternal(reply: string) {
   try {
     const res = await studentApi.guidanceReply(sessionId.value, reply)
-    if (res.data?.next_hint) {
-      messages.value.push({ role: 'system', content: res.data.next_hint })
-    }
+    // C 模式：先显示真实 LLM 评价，再显示下一个引导问题
+    const seg: string[] = []
+    if (res.data?.evaluation) seg.push(`老师评价：${res.data.evaluation}`)
+    const hint = res.data?.next_hint || res.data?.next_question
+    if (hint) seg.push(hint)
+    if (seg.length) messages.value.push({ role: 'system', content: seg.join('\n\n') })
     if (res.data?.is_completed) {
       isCompleted.value = true
     }
     if (res.data?.mode === 'B' && res.data?.reason) {
       mode.value = 'B'
-      messages.value.push({ role: 'system', content: `已降级到B模式: ${res.data.reason}` })
+      messages.value.push({ role: 'system', content: `已降级到B模式：${res.data.reason}` })
     }
   } catch (e) {
     uni.showToast({ title: '发送失败', icon: 'none' })

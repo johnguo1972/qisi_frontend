@@ -7,13 +7,29 @@
         <text class="q-type">{{ currentQuestion.question_type }}</text>
       </view>
 
+      <!-- 题干（含 LaTeX 渲染） -->
+      <view class="question-stem" v-if="currentQuestion">
+        <!-- #ifdef H5 -->
+        <view v-html="renderedStem"></view>
+        <!-- #endif -->
+        <!-- #ifndef H5 -->
+        <rich-text v-if="currentQuestion.stem_html" :nodes="currentQuestion.stem_html"></rich-text>
+        <text v-else>{{ currentQuestion.stem || '暂无题干' }}</text>
+        <!-- #endif -->
+      </view>
+
       <!-- 客观题：选项 -->
       <view v-if="isObjective" class="options-grid">
         <view v-for="opt in currentQuestion.options" :key="opt.label"
               class="option-card" :class="{ selected: selectedOptions.includes(opt.label) }"
               @click="toggleOption(opt.label)">
           <view class="option-label">{{ opt.label }}</view>
+          <!-- #ifdef H5 -->
+          <view class="option-content" v-html="renderOptionHtml(opt.content)"></view>
+          <!-- #endif -->
+          <!-- #ifndef H5 -->
           <text class="option-content">{{ opt.content }}</text>
+          <!-- #endif -->
         </view>
       </view>
 
@@ -57,8 +73,8 @@
     <view class="feedback-panel">
       <view v-if="feedback" class="feedback-card" :class="feedbackType">
         <view class="feedback-header">
-          <text class="feedback-icon">{{ feedbackType === 'correct' ? '✅' : '❌' }}</text>
-          <text class="feedback-title">{{ feedbackType === 'correct' ? '回答正确' : '回答错误' }}</text>
+          <text class="feedback-icon">{{ feedbackType === 'correct' ? '✅' : (feedbackType === 'pending' ? '⏳' : '❌') }}</text>
+          <text class="feedback-title">{{ feedbackType === 'correct' ? '回答正确' : (feedbackType === 'pending' ? '已提交，待批阅' : '回答错误') }}</text>
         </view>
         <text class="feedback-text">{{ feedback }}</text>
         <view class="feedback-actions">
@@ -77,6 +93,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { studentApi } from '@/api/student.ts'
 import { chooseImage, uploadImage, checkCameraSupport } from '@/utils/image-upload'
+import { renderWithKatex } from '@/utils/katex-renderer'
 
 const levelId = ref(0)
 const questions = ref<any[]>([])
@@ -87,6 +104,8 @@ const feedback = ref('')
 const feedbackType = ref('')
 const suggestGuidance = ref(false)
 const submitting = ref(false)
+const renderedStem = ref('')
+const renderedOptions = ref<Record<string, string>>({})
 
 // 拍照上传相关
 const uploadedImages = ref<Array<{ previewUrl: string; serverUrl: string }>>([])
@@ -104,6 +123,27 @@ const isObjective = computed(() =>
 const hasNext = computed(() => currentIndex.value < questions.value.length - 1)
 const canAddPhoto = computed(() => uploadedImages.value.length < 3 && !uploadingPhoto.value)
 
+async function renderCurrentQuestion() {
+  const q = currentQuestion.value
+  if (!q) return
+  if (q.stem_html) {
+    const hasLatex = /\$|\$\$|\\\(|\\\[/.test(q.stem_html)
+    renderedStem.value = hasLatex ? await renderWithKatex(q.stem_html) : q.stem_html
+  } else if (q.stem) {
+    renderedStem.value = await renderWithKatex(q.stem)
+  } else {
+    renderedStem.value = '<span style="color:#999">暂无题干</span>'
+  }
+  renderedOptions.value = {}
+  for (const opt of (q.options || [])) {
+    if (opt.content) renderedOptions.value[opt.content] = await renderWithKatex(opt.content)
+  }
+}
+
+function renderOptionHtml(content: string): string {
+  return renderedOptions.value[content] || content
+}
+
 onMounted(async () => {
   const pages = getCurrentPages()
   const page = pages[pages.length - 1] as any
@@ -117,6 +157,7 @@ onMounted(async () => {
   try {
     const res = await studentApi.levelDetail(levelId.value)
     questions.value = res.data?.questions || []
+    await renderCurrentQuestion()
   } catch (e) {
     uni.showToast({ title: '加载题目失败', icon: 'none' })
   }
@@ -204,7 +245,8 @@ async function submitAnswer() {
       level_id: levelId.value,
     })
     feedback.value = res.data?.feedback || ''
-    feedbackType.value = res.data?.is_correct ? 'correct' : 'incorrect'
+    feedbackType.value = res.data?.is_pending ? 'pending'
+      : (res.data?.is_correct ? 'correct' : 'incorrect')
     suggestGuidance.value = res.data?.suggest_guidance || false
   } catch (e) {
     uni.showToast({ title: '提交失败', icon: 'none' })
@@ -219,7 +261,7 @@ function startGuidance() {
   })
 }
 
-function nextQuestion() {
+async function nextQuestion() {
   feedback.value = ''
   feedbackType.value = ''
   suggestGuidance.value = false
@@ -228,6 +270,7 @@ function nextQuestion() {
     selectedOptions.value = []
     textAnswer.value = ''
     uploadedImages.value = []
+    await renderCurrentQuestion()
   } else {
     uni.navigateBack()
   }
@@ -248,6 +291,13 @@ function nextQuestion() {
   display: flex;
   justify-content: space-between;
   margin-bottom: 30rpx;
+}
+.question-stem {
+  font-size: 28rpx;
+  color: #333;
+  line-height: 1.8;
+  margin-bottom: 20rpx;
+  padding: 8rpx 0;
 }
 .q-no {
   font-size: 24rpx;
@@ -416,6 +466,9 @@ function nextQuestion() {
 }
 .feedback-card.incorrect {
   background: #fff3e0;
+}
+.feedback-card.pending {
+  background: #eef6ff;
 }
 .feedback-header {
   display: flex;

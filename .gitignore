@@ -1,5 +1,41 @@
+# ============ 前端（uni-app / Node）============
 node_modules/
-.next/
 dist/
+build/
+.next/
+.DS_Store
+*.local
+
+# ============ Python / Django 后端 ============
+# 字节码与缓存（pyc 自动生成，不应提交）
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+# 虚拟环境
+venv/
+.venv/
+env/
+# 测试 / 覆盖率产物
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+test-report.json
+# 打包
+*.egg-info/
+
+# ============ Redis / 运行时数据 ============
+dump.rdb
+
+# ============ 环境变量与密钥 ============
 .env
+.env.local
+.env.*.local
+
+# ============ 日志 ============
 *.log
+
+# ============ 编辑器 / IDE ============
+.idea/
+.vscode/

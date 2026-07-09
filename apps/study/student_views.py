@@ -7,6 +7,7 @@ from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
+from apps.study.permissions import IsStudent
 from rest_framework.response import Response
 from apps.missions.models import LearningMission, MissionLevel, MissionQuestionRel
 from apps.study.models import StudentMissionProgress, StudentLevelProgress, AnswerAttempt
@@ -19,7 +20,7 @@ def make_trace_id():
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def student_home(request):
     """S-01: Student home - task list.
 
@@ -31,9 +32,8 @@ def student_home(request):
         student_user_id=request.user
     ).select_related('mission', 'mission__class_obj')
 
-    # Filter by class_id
     class_id = request.query_params.get('class_id')
-    if class_id:
+    if class_id and int(class_id) > 0:
         progresses = progresses.filter(mission__class_obj_id=class_id)
 
     # Filter by scope (date range on end_at)
@@ -70,13 +70,18 @@ def student_home(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def student_mission_detail(request, mission_id):
     """S-02: Student mission detail."""
     try:
         mission = LearningMission.objects.get(pk=mission_id, status='published')
     except LearningMission.DoesNotExist:
         return Response({'code': 404, 'message': '任务不存在或未发布', 'data': None, 'trace_id': make_trace_id()}, status=404)
+
+    # 校验学生有权访问（存在任务进度记录）
+    if not StudentMissionProgress.objects.filter(
+            mission=mission, student_user_id=request.user).exists():
+        return Response({'code': 403, 'message': '无权访问该任务', 'data': None, 'trace_id': make_trace_id()}, status=403)
 
     levels = []
     for lv in mission.levels.all():
@@ -101,13 +106,18 @@ def student_mission_detail(request, mission_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def student_level_detail(request, level_id):
     """S-03: Current level detail with questions."""
     try:
         level = MissionLevel.objects.get(pk=level_id)
     except MissionLevel.DoesNotExist:
         return Response({'code': 404, 'message': '关卡不存在', 'data': None, 'trace_id': make_trace_id()}, status=404)
+
+    # 校验该关卡所属任务学生有权访问
+    if level.mission_id and not StudentMissionProgress.objects.filter(
+            mission_id=level.mission_id, student_user_id=request.user).exists():
+        return Response({'code': 403, 'message': '无权访问该关卡', 'data': None, 'trace_id': make_trace_id()}, status=403)
 
     rels = MissionQuestionRel.objects.filter(level=level)
     questions = []
@@ -119,6 +129,8 @@ def student_level_detail(request, level_id):
                 'question_no': q.question_no,
                 'question_type': q.question_type,
                 'difficulty': float(q.difficulty) if q.difficulty else None,
+                'stem': q.stem,
+                'stem_html': q.stem_html,
                 'images': [{'url': img.file_path} for img in q.images.all()],
                 'options': [{'label': o.option_label, 'content': o.content}
                            for o in q.options.all()],
@@ -145,17 +157,14 @@ def student_level_detail(request, level_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def growth_summary(request):
     """S-12: Growth summary."""
     from apps.wrongbook.models import WrongBookItem, MasteryRecord
 
-    total_correct = AnswerAttempt.objects.filter(
-        student_user_id=request.user, is_correct=True
-    ).count()
-    total_attempts = AnswerAttempt.objects.filter(
-        student_user_id=request.user
-    ).count()
+    base = AnswerAttempt.objects.filter(student_user_id=request.user)
+    total_attempts = base.exclude(is_subjective_pending=True).count()   # 排除待批阅
+    total_correct = base.filter(is_correct=True).count()
     mastered_count = MasteryRecord.objects.filter(
         student_user_id=request.user, mastery_status='mastered'
     ).count()
@@ -178,7 +187,7 @@ def growth_summary(request):
 
 EXPORT_RATE_KEY = 'export_pdf_rate'
 EXPORT_RATE_WINDOW = 3600  # 1 hour
-EXPORT_RATE_LIMIT = 10
+EXPORT_RATE_LIMIT = 3
 
 
 def _check_export_rate(user_id: int) -> bool:
@@ -224,8 +233,51 @@ img {{ max-width: 100%; }}
 </body></html>'''
 
 
+def _build_pdf(export_type: str, questions: list, include_answers: bool) -> bytes:
+    """用 reportlab 生成 PDF（内置 STSong-Light 支持中文，无需字体文件）。"""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.lib.units import mm
+    import io
+
+    pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            topMargin=15*mm, bottomMargin=15*mm,
+                            leftMargin=15*mm, rightMargin=15*mm)
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle('ZhH1', parent=styles['Title'], fontName='STSong-Light', fontSize=18)
+    body = ParagraphStyle('ZhBody', parent=styles['Normal'], fontName='STSong-Light', fontSize=11, leading=18)
+    story = []
+
+    type_label = '错题本' if export_type == 'wrongbook' else '任务题目'
+    story.append(Paragraph(type_label, h1))
+    story.append(Spacer(1, 6*mm))
+    story.append(Paragraph(f'导出时间：{timezone.now().strftime("%Y-%m-%d %H:%M:%S")}　题目数：{len(questions)}', body))
+    story.append(Spacer(1, 6*mm))
+
+    for i, q in enumerate(questions, 1):
+        qtype = ExamQuestion.QUESTION_TYPE_LABELS.get(q['question_type'], q['question_type'])
+        story.append(Paragraph(f'第{i}题（{qtype}）', body))
+        story.append(Paragraph(q['stem'] or '', body))
+        for opt in q.get('options_html', []):
+            story.append(Paragraph(f'{opt["label"]}. {opt["content"]}', body))
+        if include_answers:
+            if q.get('answer'):
+                story.append(Paragraph(f'<b>答案：</b>{q["answer"]}', body))
+            if q.get('analysis'):
+                story.append(Paragraph(f'<b>解析：</b>{q["analysis"]}', body))
+        story.append(Spacer(1, 4*mm))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def export_pdf(request):
     """导出错题本或任务题目为 PDF（当前返回 HTML 占位，待 reportlab 可用后替换）。
 
@@ -311,14 +363,15 @@ def export_pdf(request):
         }, status=404)
 
     # --- generate file ---
+    questions_data = questions_data[:50]  # max 50 题/PDF
     export_dir = os.path.join(settings.MEDIA_ROOT, 'exports')
     os.makedirs(export_dir, exist_ok=True)
-    filename = f'{export_type}_{uuid.uuid4().hex[:12]}.html'
+    filename = f'{export_type}_{uuid.uuid4().hex[:12]}.pdf'
     filepath = os.path.join(export_dir, filename)
 
-    html = _build_html(export_type, questions_data, include_answers)
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(html)
+    pdf_bytes = _build_pdf(export_type, questions_data, include_answers)
+    with open(filepath, 'wb') as f:
+        f.write(pdf_bytes)
 
     download_url = f'{settings.MEDIA_URL}exports/{filename}'
 
@@ -330,7 +383,7 @@ def export_pdf(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def upload_attempt_image(request, attempt_id):
     """Upload a photo for a student's answer attempt.
 

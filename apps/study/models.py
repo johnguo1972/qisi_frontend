@@ -48,6 +48,7 @@ class AnswerAttempt(models.Model):
     attempt_no = models.IntegerField(default=1)
     answer_content = models.JSONField(default=dict)
     is_correct = models.BooleanField(default=False)
+    is_subjective_pending = models.BooleanField(default=False)
     score = models.DecimalField(max_digits=5, decimal_places=2, default=0.00)
     submit_source = models.CharField(max_length=20, default='manual')
     submitted_at = models.DateTimeField(auto_now_add=True)

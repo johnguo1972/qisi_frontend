@@ -2,6 +2,7 @@
 import uuid
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
+from apps.study.permissions import IsStudent
 from rest_framework.response import Response
 from .models import WrongBookItem, MasteryRecord
 from .serializers import WrongBookItemSerializer, WrongBookDetailSerializer, MasteryRecordSerializer
@@ -13,7 +14,7 @@ def make_trace_id():
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def wrongbook_list(request):
     """S-09: Wrong book list."""
     status_filter = request.GET.get('status')
@@ -30,7 +31,7 @@ def wrongbook_list(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def wrongbook_detail(request, item_id):
     """S-10: Wrong book item detail."""
     try:
@@ -49,7 +50,7 @@ def wrongbook_detail(request, item_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def wrongbook_variants(request, item_id):
     """S-11: Find variant questions for practice."""
     try:
@@ -69,7 +70,7 @@ def wrongbook_variants(request, item_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def mastery_list(request):
     """List mastery records for the current student."""
     records = MasteryRecord.objects.filter(

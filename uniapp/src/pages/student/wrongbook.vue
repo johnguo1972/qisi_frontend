@@ -28,7 +28,7 @@
         </view>
         <view class="wrong-list">
           <view v-for="item in items" :key="item.id" class="wrong-card"
-                @click="goDetail(item.id)">
+                @click="goDetail(item)">
             <view class="wrong-header">
               <text class="q-no">{{ item.question_no || '题目' + item.question_id }}</text>
               <view class="status-tag" :class="item.status">{{ statusText(item.status) }}</view>
@@ -74,8 +74,8 @@ function statusCount(status: string): number {
   return items.value.filter(i => i.status === status).length
 }
 
-function goDetail(id: number) {
-  uni.navigateTo({ url: `/pages/student/guidance?wrongId=${id}` })
+function goDetail(item: any) {
+  uni.navigateTo({ url: `/pages/student/guidance?questionId=${item.question_id}` })
 }
 
 async function goVariants(id: number) {
