@@ -1,4 +1,4 @@
-import { get, post } from '@/utils/request.ts'
+import { get, post, put } from '@/utils/request.ts'
 
 export const authApi = {
   login: (mobile: string, verifyCode: string, roleType?: string) => {
@@ -9,6 +9,7 @@ export const authApi = {
   sendCode: (mobile: string, scene: string = 'login') => post('/auth/send-code', { mobile, scene }),
   logout: () => post('/auth/logout'),
   getProfile: () => get<any>('/profile/me'),
+  updateProfile: (data: { display_name?: string; grade_level?: string | null }) => put<any>('/profile/me', data),
 }
 
 export { institutionApi, classApi, studentClassApi, teacherApi } from './institutions'

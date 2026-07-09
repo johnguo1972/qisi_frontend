@@ -27,13 +27,52 @@ def student_home(request):
         class_id: filter missions by class ID (optional)
         scope: date filter — 'today' (end_at covers today) or 'week' (end_at within 7 days)
     """
+    from apps.institutions.models import ClassStudent
+
+    # 获取学生所在的班级ID列表
+    student_class_ids = set(
+        ClassStudent.objects.filter(
+            student=request.user, status='active',
+        ).values_list('class_obj_id', flat=True)
+    )
+
+    if not student_class_ids:
+        return Response({
+            'code': 0, 'message': 'success', 'data': {'missions': []}, 'trace_id': make_trace_id(),
+        })
+
+    # 获取已发布的任务（属于学生所在班级的）
+    published_missions = LearningMission.objects.filter(
+        status='published',
+        class_obj_id__in=student_class_ids,
+    ).select_related('class_obj').order_by('-created_at')
+
+    # 自动为缺失的任务创建进度记录
+    existing_progress_ids = set(
+        StudentMissionProgress.objects.filter(
+            student_user_id=request.user
+        ).values_list('mission_id', flat=True)
+    )
+    to_create = []
+    for mission in published_missions:
+        if mission.id not in existing_progress_ids:
+            to_create.append(StudentMissionProgress(
+                mission=mission,
+                student_user_id=request.user,
+                progress_status='not_started',
+                progress_percent=0,
+            ))
+    if to_create:
+        StudentMissionProgress.objects.bulk_create(to_create)
+
+    # 查询进度记录（现在一定包含了所有已发布的任务）
     progresses = StudentMissionProgress.objects.filter(
         student_user_id=request.user
     ).select_related('mission', 'mission__class_obj')
 
     # Filter by class_id
     class_id = request.query_params.get('class_id')
-    if class_id:
+    if class_id and class_id != '0':
         progresses = progresses.filter(mission__class_obj_id=class_id)
 
     # Filter by scope (date range on end_at)
@@ -51,6 +90,8 @@ def student_home(request):
     for p in progresses:
         mission = p.mission
         class_obj = mission.class_obj
+        level_count = mission.levels.count()
+        question_count = MissionQuestionRel.objects.filter(mission=mission).count()
         missions.append({
             'mission': {
                 'id': mission.id,
@@ -59,8 +100,10 @@ def student_home(request):
             },
             'class_label': class_obj.class_name if class_obj else None,
             'deadline': mission.end_at.isoformat() if mission.end_at else None,
+            'level_count': level_count,
+            'question_count': question_count,
             'progress_status': p.progress_status,
-            'progress_percent': float(p.progress_percent),
+            'progress_percent': float(p.progress_percent) if p.progress_percent is not None else 0,
             'current_level_id': p.current_level_id,
         })
 
@@ -83,18 +126,32 @@ def student_mission_detail(request, mission_id):
         lp = StudentLevelProgress.objects.filter(
             level=lv, student_user_id=request.user
         ).first()
+        level_q_count = MissionQuestionRel.objects.filter(level=lv).count()
+
+        # 计算关卡进度：已答对的题目数 / 总题目数
+        correct_count = AnswerAttempt.objects.filter(
+            student_user_id=request.user,
+            level=lv,
+            is_correct=True,
+        ).values('question_id').distinct().count()
+        progress_pct = round(correct_count / max(level_q_count, 1) * 100, 0) if level_q_count > 0 else 0
+
         levels.append({
             'id': lv.id, 'level_no': lv.level_no, 'level_name': lv.level_name,
             'level_type': lv.level_type,
             'status': lp.status if lp else 'locked',
-            'question_count': MissionQuestionRel.objects.filter(level=lv).count(),
+            'question_count': level_q_count,
+            'progress_percent': progress_pct,
         })
 
+    class_obj = mission.class_obj
     return Response({
         'code': 0, 'message': 'success',
         'data': {
             'mission_name': mission.mission_name,
             'goal_text': mission.goal_text,
+            'class_name': class_obj.class_name if class_obj else None,
+            'deadline': mission.end_at.isoformat() if mission.end_at else None,
             'levels': levels,
         }, 'trace_id': make_trace_id(),
     })
@@ -119,7 +176,12 @@ def student_level_detail(request, level_id):
                 'question_no': q.question_no,
                 'question_type': q.question_type,
                 'difficulty': float(q.difficulty) if q.difficulty else None,
-                'images': [{'url': img.file_path} for img in q.images.all()],
+                'stem': q.stem or '',
+                'stem_html': q.stem_html or '',
+                'answer': q.answer or '',
+                'analysis': q.analysis or '',
+                'solution': q.solution or '',
+                'images': [{'id': img.id, 'file_path': img.file_path, 'url': img.file_path} for img in q.images.all()],
                 'options': [{'label': o.option_label, 'content': o.content}
                            for o in q.options.all()],
             })

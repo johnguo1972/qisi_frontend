@@ -61,6 +61,8 @@ onMounted(async () => {
   const pages = getCurrentPages()
   const page = pages[pages.length - 1] as any
   questionId.value = parseInt(page.options.questionId || '0')
+  // 从 URL 参数获取 mode，默认 B
+  const urlMode = page.options.mode || 'B'
 
   if (!questionId.value) {
     uni.showToast({ title: '缺少题目ID', icon: 'none' })
@@ -68,9 +70,9 @@ onMounted(async () => {
   }
 
   try {
-    const res = await studentApi.startGuidance({ question_id: questionId.value, mode_type: 'B' })
+    const res = await studentApi.startGuidance({ question_id: questionId.value, mode_type: urlMode })
     sessionId.value = res.data?.session_id || 0
-    mode.value = res.data?.mode || 'B'
+    mode.value = res.data?.mode || urlMode
     if (res.data?.hint) {
       messages.value.push({ role: 'system', content: res.data.hint })
     }

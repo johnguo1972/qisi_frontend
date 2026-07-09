@@ -64,8 +64,63 @@ def mission_detail(request, mission_id):
     # PUT: update
     for field in ['mission_name', 'goal_text', 'start_at', 'end_at', 'default_mode_policy']:
         if field in request.data:
-            setattr(mission, field, request.data[field])
+            val = request.data[field]
+            # 空字符串转 None（Django DateTimeField 不接受空字符串）
+            if field in ('start_at', 'end_at') and val == '':
+                val = None
+            setattr(mission, field, val)
+
+    # Handle class_id separately (ForeignKey field)
+    old_class_id = mission.class_obj_id
+    if 'class_id' in request.data:
+        class_id = request.data['class_id']
+        if class_id:
+            from apps.institutions.models import Class
+            try:
+                mission.class_obj = Class.objects.get(pk=class_id)
+            except Class.DoesNotExist:
+                pass
+        else:
+            mission.class_obj = None
+
     mission.save()
+
+    # Sync StudentMissionProgress if class changed
+    new_class_id = mission.class_obj_id
+    if old_class_id != new_class_id:
+        from apps.institutions.models import ClassStudent
+        from apps.study.models import StudentMissionProgress
+
+        if old_class_id:
+            # Remove progress records for students no longer in this class
+            old_student_ids = set(ClassStudent.objects.filter(
+                class_obj_id=old_class_id, status='active',
+            ).values_list('student_id', flat=True))
+            if new_class_id:
+                new_student_ids = set(ClassStudent.objects.filter(
+                    class_obj_id=new_class_id, status='active',
+                ).values_list('student_id', flat=True))
+                removed_ids = old_student_ids - new_student_ids
+            else:
+                removed_ids = old_student_ids
+            StudentMissionProgress.objects.filter(
+                mission=mission, student_user_id__in=removed_ids,
+            ).delete()
+
+        if new_class_id:
+            # Create progress records for new students in the class
+            new_student_ids = ClassStudent.objects.filter(
+                class_obj_id=new_class_id, status='active',
+            ).values_list('student_id', flat=True)
+            for student_id in new_student_ids:
+                StudentMissionProgress.objects.get_or_create(
+                    mission=mission,
+                    student_user_id_id=student_id,
+                    defaults={
+                        'progress_status': 'not_started',
+                        'progress_percent': 0,
+                    },
+                )
     return Response({'code': 0, 'message': '更新成功', 'data': None, 'trace_id': make_trace_id()})
 
 
@@ -127,6 +182,12 @@ def mission_levels_batch(request, mission_id):
     serializer = BatchCreateLevelsSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
+
+    # 编辑模式：先删除旧关卡和题目关联，再创建新的
+    old_levels = mission.levels.all()
+    for old_lv in old_levels:
+        MissionQuestionRel.objects.filter(level=old_lv).delete()
+    old_levels.delete()
 
     level_ids = []
     for i, lv_data in enumerate(data['levels']):

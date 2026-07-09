@@ -132,7 +132,7 @@ const classFilterText = computed(() => {
   return cls ? cls.class_name : '全部班级'
 })
 
-const statusFilterText = computed(() => statusOptions.value[statusFilterIndex.value] || '全部状态')
+const statusFilterText = computed(() => statusOptions[statusFilterIndex.value] || '全部状态')
 
 const sortText = computed(() => sortOptions[sortIndex.value])
 

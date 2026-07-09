@@ -9,6 +9,27 @@
       <view class="mission-card">
         <text class="title">{{ missionName }}</text>
         <text class="goal">{{ goalText || '暂无描述' }}</text>
+        <!-- 班级和截止日期 -->
+        <view class="mission-meta">
+          <view class="meta-item" v-if="className">
+            <text class="meta-icon">🏫</text>
+            <text class="meta-text">{{ className }}</text>
+          </view>
+          <view class="meta-item" v-if="deadline">
+            <text class="meta-icon">📅</text>
+            <text class="meta-text">截止：{{ deadlineText }}</text>
+          </view>
+        </view>
+        <!-- 整体进度 -->
+        <view class="overall-progress" v-if="overallProgressPercent > 0">
+          <view class="progress-label">
+            <text>总体进度</text>
+            <text>{{ overallProgressPercent }}%</text>
+          </view>
+          <view class="progress-bar">
+            <view class="progress-fill" :style="{ width: overallProgressPercent + '%' }"></view>
+          </view>
+        </view>
       </view>
     </view>
     <!-- 右侧关卡列表 -->
@@ -21,9 +42,21 @@
               @click="goLevel(lv.id)">
           <view class="level-left">
             <view class="level-badge">{{ lv.level_no }}</view>
-            <text class="level-name">{{ lv.level_name }}</text>
+            <view class="level-info">
+              <text class="level-name">{{ lv.level_name }}</text>
+              <text class="level-detail">{{ lv.question_count || 0 }} 题目</text>
+            </view>
           </view>
-          <text class="level-status">{{ lv.status }}</text>
+          <view class="level-right">
+            <!-- 关卡进度 -->
+            <view class="level-progress">
+              <view class="progress-bar-small">
+                <view class="progress-fill-small" :style="{ width: lv.progress_percent + '%' }"></view>
+              </view>
+              <text class="progress-text">{{ lv.progress_percent }}%</text>
+            </view>
+            <text class="level-status" :class="'status-' + lv.status">{{ statusText(lv.status) }}</text>
+          </view>
         </view>
       </view>
     </view>
@@ -31,13 +64,44 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { studentApi } from '@/api/student.ts'
 
 const missionId = ref(0)
 const missionName = ref('')
 const goalText = ref('')
+const className = ref('')
+const deadline = ref('')
 const levels = ref<any[]>([])
+
+const deadlineText = computed(() => {
+  if (!deadline.value) return ''
+  try {
+    const d = new Date(deadline.value)
+    const month = d.getMonth() + 1
+    const day = d.getDate()
+    return `${month}月${day}日`
+  } catch {
+    return deadline.value
+  }
+})
+
+// 计算总体进度（所有关卡进度的平均值）
+const overallProgressPercent = computed(() => {
+  if (levels.value.length === 0) return 0
+  const total = levels.value.reduce((sum, lv) => sum + (lv.progress_percent || 0), 0)
+  return Math.round(total / levels.value.length)
+})
+
+function statusText(status: string): string {
+  const map: Record<string, string> = {
+    locked: '未开始',
+    running: '进行中',
+    completed: '已完成',
+    passed: '已通过',
+  }
+  return map[status] || status
+}
 
 onMounted(async () => {
   const pages = getCurrentPages()
@@ -48,6 +112,8 @@ onMounted(async () => {
     const res = await studentApi.missionDetail(missionId.value)
     missionName.value = res.data?.mission_name || ''
     goalText.value = res.data?.goal_text || ''
+    className.value = res.data?.class_name || ''
+    deadline.value = res.data?.deadline || ''
     levels.value = res.data?.levels || []
   } catch (e) {
     uni.showToast({ title: '加载失败', icon: 'none' })
@@ -117,6 +183,50 @@ function goExport() {
   font-size: 24rpx;
   display: block;
   line-height: 1.6;
+  margin-bottom: 16rpx;
+}
+/* 班级和截止日期 */
+.mission-meta {
+  display: flex;
+  gap: 24rpx;
+  flex-wrap: wrap;
+  margin-bottom: 16rpx;
+}
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 6rpx;
+  font-size: 22rpx;
+  color: #888;
+}
+.meta-icon {
+  font-size: 24rpx;
+}
+.meta-text {
+  color: #555;
+}
+/* 总体进度 */
+.overall-progress {
+  margin-top: 8rpx;
+}
+.progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 22rpx;
+  color: #666;
+  margin-bottom: 6rpx;
+}
+.progress-bar {
+  height: 10rpx;
+  background: #eee;
+  border-radius: 5rpx;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #409eff, #67c23a);
+  border-radius: 5rpx;
+  transition: width 0.3s;
 }
 .levels-panel {
   flex: 1;
@@ -154,6 +264,11 @@ function goExport() {
   align-items: center;
   gap: 16rpx;
 }
+.level-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2rpx;
+}
 .level-badge {
   width: 48rpx;
   height: 48rpx;
@@ -170,9 +285,57 @@ function goExport() {
   font-size: 28rpx;
   color: #333;
 }
+.level-detail {
+  font-size: 22rpx;
+  color: #999;
+}
+.level-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8rpx;
+}
+/* 关卡进度 */
+.level-progress {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+.progress-bar-small {
+  width: 100rpx;
+  height: 8rpx;
+  background: #eee;
+  border-radius: 4rpx;
+  overflow: hidden;
+}
+.progress-fill-small {
+  height: 100%;
+  background: linear-gradient(90deg, #409eff, #67c23a);
+  border-radius: 4rpx;
+  transition: width 0.3s;
+}
+.progress-text {
+  font-size: 20rpx;
+  color: #999;
+  min-width: 40rpx;
+  text-align: right;
+}
 .level-status {
-  color: #ff9800;
-  font-size: 24rpx;
+  font-size: 20rpx;
+  padding: 2rpx 12rpx;
+  border-radius: 4rpx;
+}
+.status-locked {
+  color: #999;
+  background: #f0f0f0;
+}
+.status-running {
+  color: #409eff;
+  background: #ecf5ff;
+}
+.status-completed, .status-passed {
+  color: #67c23a;
+  background: #e8f5e9;
 }
 
 /* 小屏适配 */

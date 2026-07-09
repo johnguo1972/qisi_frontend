@@ -6,7 +6,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .serializers import LoginSerializer, ProfileSerializer, RefreshTokenSerializer
+from .serializers import LoginSerializer, ProfileSerializer, ProfileUpdateSerializer, RefreshTokenSerializer
 from .services import (
     verify_code, get_or_create_user, generate_tokens,
     generate_verify_code, send_sms_code,
@@ -112,12 +112,32 @@ def send_verify_code(request):
         }, status=500)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def profile_me(request):
-    """AUTH-06: Get current user profile."""
+    """AUTH-06: Get or update current user profile.
+
+    GET  — 返回当前用户资料
+    PUT/PATCH — 更新 display_name、grade_level、avatar_url
+    """
+    if request.method == 'GET':
+        return Response({
+            'code': 0, 'message': 'success',
+            'data': ProfileSerializer(request.user).data,
+            'trace_id': make_trace_id(),
+        })
+
+    # PUT / PATCH — 更新资料
+    serializer = ProfileUpdateSerializer(data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+
+    user = request.user
+    for field, value in serializer.validated_data.items():
+        setattr(user, field, value)
+    user.save(update_fields=serializer.validated_data.keys())
+
     return Response({
-        'code': 0, 'message': 'success',
-        'data': ProfileSerializer(request.user).data,
+        'code': 0, 'message': '更新成功',
+        'data': ProfileSerializer(user).data,
         'trace_id': make_trace_id(),
     })

@@ -32,12 +32,13 @@ class MissionDetailSerializer(serializers.ModelSerializer):
     levels = serializers.SerializerMethodField()
     creator_name = serializers.CharField(source='creator_teacher.display_name', read_only=True)
     creator_teacher = serializers.IntegerField(source='creator_teacher_id.id', read_only=True)
+    class_obj = serializers.IntegerField(source='class_obj_id', read_only=True, allow_null=True)
 
     class Meta:
         model = LearningMission
         fields = ['id', 'mission_no', 'mission_name', 'goal_text',
                   'creator_teacher', 'creator_name', 'start_at', 'end_at',
-                  'status', 'default_mode_policy', 'levels']
+                  'status', 'default_mode_policy', 'levels', 'class_obj']
 
     def get_levels(self, obj):
         levels = obj.levels.all()

@@ -1216,7 +1216,7 @@ async function loadMissionData(id: number) {
         questionIds: [], // 关卡题目需要从 mission_questions 接口加载
       }))
 
-      // 加载每个关卡的题目
+      // 加载每个关卡的题目（同时填充 selectedIds）
       for (let i = 0; i < data.levels.length; i++) {
         const lv = data.levels[i]
         if (lv.id) {
@@ -1225,26 +1225,17 @@ async function loadMissionData(id: number) {
             const qData = qRes.data
             if (qData && qData.questions) {
               levels.value[i].questionIds = qData.questions.map((q: any) => q.id)
+              // 同时将题目加入 selectedIds（避免重复）
+              for (const q of qData.questions) {
+                if (!selectedIds.value.includes(q.id)) {
+                  selectedIds.value.push(q.id)
+                }
+              }
             }
           } catch (e) {
             console.error(`加载关卡${i + 1}题目失败:`, e)
           }
         }
-      }
-
-      // 将所有题目加入 selectedIds（用于显示）
-      for (const lv of data.levels) {
-        try {
-          const qRes: any = await missionApi.levelDetail(id, lv.id)
-          const qData = qRes.data
-          if (qData && qData.questions) {
-            for (const q of qData.questions) {
-              if (!selectedIds.value.includes(q.id)) {
-                selectedIds.value.push(q.id)
-              }
-            }
-          }
-        } catch {}
       }
     }
   } catch (e) {

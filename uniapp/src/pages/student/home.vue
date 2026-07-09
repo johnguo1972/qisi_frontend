@@ -33,6 +33,17 @@
             <text class="mission-name">{{ m.mission.mission_name }}</text>
             <text class="mission-status">{{ m.progress_status }}</text>
           </view>
+          <!-- 关卡数和题目数 -->
+          <view class="mission-meta">
+            <text class="meta-item">
+              <text class="meta-icon">📋</text>
+              <text>{{ m.level_count || 0 }} 关卡</text>
+            </text>
+            <text class="meta-item">
+              <text class="meta-icon"></text>
+              <text>{{ m.question_count || 0 }} 题目</text>
+            </text>
+          </view>
           <view v-if="m.mission.deadline" class="deadline-row">
             <text class="deadline-text">截止：{{ formatDeadline(m.mission.deadline) }}</text>
           </view>
@@ -194,6 +205,22 @@ function formatDeadline(deadline: string): string {
 .mission-status {
   font-size: 22rpx;
   color: #ff9800;
+}
+/* 关卡数和题目数 */
+.mission-meta {
+  display: flex;
+  gap: 24rpx;
+  margin-bottom: 12rpx;
+}
+.meta-item {
+  font-size: 22rpx;
+  color: #888;
+  display: flex;
+  align-items: center;
+  gap: 4rpx;
+}
+.meta-icon {
+  font-size: 24rpx;
 }
 .deadline-row {
   margin-bottom: 12rpx;
