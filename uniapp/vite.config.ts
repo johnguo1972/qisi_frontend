@@ -42,7 +42,7 @@ export default defineConfig({
     __UNI_FEATURE_I__: 'false',
   },
   server: {
-    port: 5173,
+    port: 5273,
     headers: {
       'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://registry.npmmirror.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://registry.npmmirror.com; font-src 'self' https://cdn.jsdelivr.net https://registry.npmmirror.com data:; img-src 'self' data: blob: https:;",
     },

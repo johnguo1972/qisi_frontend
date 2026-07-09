@@ -36,6 +36,17 @@
         <text>暂无题干内容</text>
       </view>
 
+      <!-- 题干（含 LaTeX 渲染） -->
+      <view class="question-stem" v-if="currentQuestion">
+        <!-- #ifdef H5 -->
+        <view v-html="renderedStem"></view>
+        <!-- #endif -->
+        <!-- #ifndef H5 -->
+        <rich-text v-if="currentQuestion.stem_html" :nodes="currentQuestion.stem_html"></rich-text>
+        <text v-else>{{ currentQuestion.stem || '暂无题干' }}</text>
+        <!-- #endif -->
+      </view>
+
       <!-- 客观题：选项 -->
       <view v-if="isObjective" class="options-section">
         <view class="section-title">选项</view>
@@ -43,7 +54,12 @@
               class="option-card" :class="{ selected: selectedOptions.includes(opt.label) }"
               @click="selectOption(opt.label)">
           <view class="option-label">{{ opt.label }}</view>
+          <!-- #ifdef H5 -->
+          <view class="option-content" v-html="renderOptionHtml(opt.content)"></view>
+          <!-- #endif -->
+          <!-- #ifndef H5 -->
           <text class="option-content">{{ opt.content }}</text>
+          <!-- #endif -->
         </view>
       </view>
 
@@ -140,8 +156,13 @@
     <view class="feedback-panel">
       <view v-if="feedback" class="feedback-card" :class="feedbackType">
         <view class="feedback-header">
+<<<<<<< HEAD
           <text class="feedback-icon">{{ feedbackType === 'correct' ? '✅' : '' }}</text>
           <text class="feedback-title">{{ feedbackType === 'correct' ? '回答正确' : '回答错误' }}</text>
+=======
+          <text class="feedback-icon">{{ feedbackType === 'correct' ? '✅' : (feedbackType === 'pending' ? '⏳' : '❌') }}</text>
+          <text class="feedback-title">{{ feedbackType === 'correct' ? '回答正确' : (feedbackType === 'pending' ? '已提交，待批阅' : '回答错误') }}</text>
+>>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
         </view>
         <text class="feedback-text">{{ feedback }}</text>
       </view>
@@ -157,6 +178,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { studentApi } from '@/api/student.ts'
 import { chooseImage, uploadImage, checkCameraSupport } from '@/utils/image-upload'
 import { renderWithKatex } from '@/utils/katex-renderer'
+<<<<<<< HEAD
 
 // 将题目图片列表转换为渲染所需的格式
 function toImageMap(images: any[]): Map<number, { file_path: string }> {
@@ -200,6 +222,8 @@ async function renderSolution(q: any): Promise<string> {
   const source = q.solution || ''
   return renderWithKatex(source)
 }
+=======
+>>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
 
 const levelId = ref(0)
 const questions = ref<any[]>([])
@@ -210,10 +234,15 @@ const feedback = ref('')
 const feedbackType = ref('')
 const suggestGuidance = ref(false)
 const submitting = ref(false)
+<<<<<<< HEAD
 const hasSubmitted = ref(false)
 const showAnswer = ref(false)
 const modeAData = ref<any>(null)
 const isCorrect = ref(false)
+=======
+const renderedStem = ref('')
+const renderedOptions = ref<Record<string, string>>({})
+>>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
 
 // 拍照上传相关
 const uploadedImages = ref<Array<{ previewUrl: string; serverUrl: string }>>([])
@@ -248,6 +277,7 @@ const hasNext = computed(() => currentIndex.value < questions.value.length - 1)
 const hasPrev = computed(() => currentIndex.value > 0)
 const canAddPhoto = computed(() => uploadedImages.value.length < 3 && !uploadingPhoto.value)
 
+<<<<<<< HEAD
 // 题干渲染（KaTeX + 图片占位符）
 const stemRendered = ref('')
 const answerRendered = ref('')
@@ -262,6 +292,27 @@ async function renderQuestionContent() {
   answerRendered.value = await renderAnswer(q)
   analysisRendered.value = await renderAnalysis(q)
   solutionRendered.value = await renderSolution(q)
+=======
+async function renderCurrentQuestion() {
+  const q = currentQuestion.value
+  if (!q) return
+  if (q.stem_html) {
+    const hasLatex = /\$|\$\$|\\\(|\\\[/.test(q.stem_html)
+    renderedStem.value = hasLatex ? await renderWithKatex(q.stem_html) : q.stem_html
+  } else if (q.stem) {
+    renderedStem.value = await renderWithKatex(q.stem)
+  } else {
+    renderedStem.value = '<span style="color:#999">暂无题干</span>'
+  }
+  renderedOptions.value = {}
+  for (const opt of (q.options || [])) {
+    if (opt.content) renderedOptions.value[opt.content] = await renderWithKatex(opt.content)
+  }
+}
+
+function renderOptionHtml(content: string): string {
+  return renderedOptions.value[content] || content
+>>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
 }
 
 onMounted(async () => {
@@ -277,7 +328,11 @@ onMounted(async () => {
   try {
     const res = await studentApi.levelDetail(levelId.value)
     questions.value = res.data?.questions || []
+<<<<<<< HEAD
     await renderQuestionContent()
+=======
+    await renderCurrentQuestion()
+>>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
   } catch (e) {
     console.error('加载题目失败:', e)
     uni.showToast({ title: '加载题目失败', icon: 'none' })
@@ -396,7 +451,12 @@ async function submitAnswer() {
     })
     isCorrect.value = res.data?.is_correct || false
     feedback.value = res.data?.feedback || ''
+<<<<<<< HEAD
     feedbackType.value = isCorrect.value ? 'correct' : 'incorrect'
+=======
+    feedbackType.value = res.data?.is_pending ? 'pending'
+      : (res.data?.is_correct ? 'correct' : 'incorrect')
+>>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
     suggestGuidance.value = res.data?.suggest_guidance || false
     hasSubmitted.value = true
     showAnswer.value = false
@@ -434,6 +494,7 @@ function startGuidance(mode: string) {
   })
 }
 
+<<<<<<< HEAD
 // ---------------------------------------------------------------------------
 // 上一题
 // ---------------------------------------------------------------------------
@@ -451,6 +512,18 @@ function prevQuestion() {
 function nextQuestion() {
   if (hasNext.value) {
     currentIndex.value++
+=======
+async function nextQuestion() {
+  feedback.value = ''
+  feedbackType.value = ''
+  suggestGuidance.value = false
+  if (hasNext.value) {
+    currentIndex.value++
+    selectedOptions.value = []
+    textAnswer.value = ''
+    uploadedImages.value = []
+    await renderCurrentQuestion()
+>>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
   } else {
     uni.navigateBack()
   }
@@ -498,6 +571,13 @@ function nextQuestion() {
 }
 .btn-guide-mode:active {
   background: #fff3e0;
+}
+.question-stem {
+  font-size: 28rpx;
+  color: #333;
+  line-height: 1.8;
+  margin-bottom: 20rpx;
+  padding: 8rpx 0;
 }
 .q-no {
   font-size: 24rpx;
@@ -841,6 +921,9 @@ function nextQuestion() {
 }
 .feedback-card.incorrect {
   background: #fff3e0;
+}
+.feedback-card.pending {
+  background: #eef6ff;
 }
 .feedback-header {
   display: flex;

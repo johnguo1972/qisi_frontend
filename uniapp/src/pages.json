@@ -32,7 +32,8 @@
     { "path": "pages/student/wrongbook-variants", "style": { "navigationBarTitleText": "同类题练习" } },
     { "path": "pages/student/growth", "style": { "navigationBarTitleText": "成长" } },
     { "path": "pages/student/knowledge-graph", "style": { "navigationBarTitleText": "知识图谱" } },
-    { "path": "pages/student/export", "style": { "navigationBarTitleText": "导出 PDF" } }
+    { "path": "pages/student/export", "style": { "navigationBarTitleText": "导出 PDF" } },
+    { "path": "pages/student/variant-practice", "style": { "navigationBarTitleText": "同类题练习" } }
   ],
   "globalStyle": {
     "navigationBarTextStyle": "black",

@@ -14,12 +14,15 @@ export const studentApi = {
     post(`/student/guidance/sessions/${sessionId}/reply`, { reply }),
   getModeA: (questionId: number) => get(`/student/questions/${questionId}/mode-a`),
   growth: () => get('/student/growth'),
+  knowledgeMastery: () => get('/student/knowledge-mastery'),
 }
 
 export const wrongbookApi = {
   list: () => get('/student/wrong-book'),
   detail: (id: number) => get(`/student/wrong-book/${id}`),
   variants: (id: number) => get(`/student/wrong-book/${id}/variants`),
+  variantSubmit: (itemId: number, data: { question_id: number; answer_content: object }) =>
+    post(`/student/wrong-book/${itemId}/variant-submit`, data),
 }
 
 export const exportApi = {
