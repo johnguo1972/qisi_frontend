@@ -97,3 +97,31 @@ def batch_ai_process_questions(self, question_ids, model=None):
             'task_error': str(e),
         }), timeout=3600)
         return {'status': 'failed', 'error': str(e)}
+
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=30)
+def single_generate_ai_answers(self, question_id: int, model: str = None):
+    """为单道题生成 A/B/C 模式 AI 答案（轻量任务，不跑全流程）。
+
+    此任务被 auto_trigger_ai_generation signal 触发，也可手动调用。
+
+    Args:
+        question_id: 题目 ID
+        model: 可选 AI 模型覆盖（如 'qwen3.6-plus'），默认由 AIReviewService 决定
+    """
+    try:
+        service = AIReviewService()
+        results = service.process_question_full(question_id, model=model)
+        service.save_results_to_question(question_id, results)
+
+        # 记录失败信息（可选，需 ExamQuestion 有 ai_generation_error 字段）
+        if results.get('errors'):
+            question = ExamQuestion.objects.get(id=question_id)
+            if hasattr(question, 'ai_generation_error') or 'ai_generation_error' in [f.name for f in ExamQuestion._meta.get_fields()]:
+                question.ai_generation_error = json.dumps(results['errors'])
+                question.save(update_fields=['ai_generation_error'])
+
+        return {'status': 'success', 'question_id': question_id}
+    except Exception as e:
+        logger.exception(f'AI generation failed for question {question_id}: {e}')
+        raise self.retry(exc=e, countdown=30 * (2 ** self.request.retries))

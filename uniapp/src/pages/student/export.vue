@@ -42,6 +42,15 @@
         </view>
       </view>
 
+      <!-- 水印设置 -->
+      <view class="option-card">
+        <text class="card-title">水印设置</text>
+        <view class="input-row">
+          <text class="input-label">水印文字</text>
+          <input v-model="watermarkText" placeholder="留空则无水印" class="watermark-input" />
+        </view>
+      </view>
+
       <!-- 导出按钮 -->
       <button class="btn-export" :class="{ disabled: exporting }" @click="handleExport"
               :loading="exporting" :disabled="exporting">
@@ -60,6 +69,7 @@ const exporting = ref(false)
 const exportType = ref<'wrongbook' | 'mission'>('wrongbook')
 const itemIds = ref<number[]>([])
 const includeAnswers = ref(false)
+const watermarkText = ref('')
 
 const typeLabel = computed(() => exportType.value === 'wrongbook' ? '错题本' : '任务')
 const itemCount = computed(() => itemIds.value.length)
@@ -99,6 +109,7 @@ async function handleExport() {
       export_type: exportType.value,
       item_ids: itemIds.value,
       include_answers: includeAnswers.value,
+      watermark_text: watermarkText.value,
     })
 
     const downloadUrl = res.data?.download_url || res.data?.url

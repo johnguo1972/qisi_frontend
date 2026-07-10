@@ -1,12 +1,14 @@
 import json
 import uuid
+from datetime import timedelta
+from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from apps.study.permissions import IsStudent
 from rest_framework.response import Response
 from apps.parser.models import ExamQuestion
 from apps.study.models import AIGuidanceSession
-from .ai_helper import call_qwen_for_guidance
+from .ai_helper import call_qwen_for_guidance, call_qwen_for_guidance_with_question
 
 
 def make_trace_id():
@@ -24,16 +26,40 @@ def _as_dict(field):
         return {}
 
 
+def _is_invalid_reply(reply: str) -> bool:
+    """判断学生回答是否有效（简单规则，无需 LLM）。"""
+    if not reply or len(reply) < 3:
+        return True
+    INVALID_PATTERNS = ['不知道', '不会', '不懂', '没想法', '跳过', 'pass', '不会做', '不想做']
+    if any(p in reply for p in INVALID_PATTERNS):
+        return True
+    return False
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsStudent])
 def start_guidance(request):
-    """S-06: 启动引导，使用题目真实 ai_answer_b/c。"""
+    """S-06: 启动引导。当 mode_type 为空时根据题型自动推荐。"""
     question_id = request.data.get('question_id')
     mode_type = request.data.get('mode_type', 'B')
     try:
         q = ExamQuestion.objects.get(pk=question_id)
     except ExamQuestion.DoesNotExist:
         return Response({'code': 404, 'message': '题目不存在', 'data': None, 'trace_id': make_trace_id()}, status=404)
+
+    # 清理 24 小时前的运行中 session（避免堆积）
+    AIGuidanceSession.objects.filter(
+        student_user_id=request.user,
+        session_status='running',
+        created_at__lt=timezone.now() - timedelta(hours=24)
+    ).update(session_status='expired')
+
+    # 前端未指定模式时，根据题型自动推荐
+    if not mode_type:
+        if q.question_type in ('single_choice', 'multiple_choice'):
+            mode_type = 'B'
+        else:
+            mode_type = 'C'
 
     ai_b = _as_dict(q.ai_answer_b)
     ai_c = _as_dict(q.ai_answer_c)
@@ -50,7 +76,31 @@ def start_guidance(request):
         return Response({'code': 0, 'message': 'success', 'trace_id': make_trace_id(),
                          'data': {'session_id': session.id, 'mode': 'B', 'hint': hint, 'options': options}})
 
-    first_q = ai_c.get('first_question') or ai_c.get('question') or '请从题干中找出你认为最关键的一个条件，并说明理由。'
+    # C 模式：优先使用 ai_answer_c，为空时实时 LLM 生成，仍失败则降级 B
+    first_q = None
+    if ai_c:
+        first_q = (ai_c.get('first_question') or ai_c.get('question') or
+                   (ai_c.get('steps') or [{}])[0].get('question') if ai_c.get('steps') else None)
+
+    if not first_q:
+        try:
+            generated = call_qwen_for_guidance_with_question(q.stem, q.answer)
+            if generated and generated.get('steps'):
+                ai_c = generated
+                first_q = generated['steps'][0]['question']
+        except Exception:
+            pass
+
+    if not first_q:
+        mode_type = 'B'
+        session.mode_type = 'B'
+        session.session_status = 'downgraded'
+        session.save()
+        options = ai_b.get('options') or []
+        hint = ai_b.get('hint') or '请仔细阅读题干，思考关键条件。'
+        return Response({'code': 0, 'message': 'success', 'trace_id': make_trace_id(),
+                         'data': {'session_id': session.id, 'mode': 'B', 'hint': hint, 'options': options}})
+
     return Response({'code': 0, 'message': 'success', 'trace_id': make_trace_id(),
                      'data': {'session_id': session.id, 'mode': 'C', 'question': first_q}})
 
@@ -78,7 +128,7 @@ def guidance_reply(request, session_id):
     step_index = log['step_index']
 
     # C→B 降级（连续无效输入）
-    if session.mode_type == 'C' and len(user_reply) < 3:
+    if session.mode_type == 'C' and _is_invalid_reply(user_reply):
         session.invalid_input_count += 1
         if session.invalid_input_count >= 2:
             session.mode_type = 'B'

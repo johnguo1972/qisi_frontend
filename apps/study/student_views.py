@@ -3,7 +3,7 @@ import uuid
 from datetime import timedelta
 from django.conf import settings
 from django.core.cache import cache
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -13,6 +13,7 @@ from apps.missions.models import LearningMission, MissionLevel, MissionQuestionR
 from apps.study.models import StudentMissionProgress, StudentLevelProgress, AnswerAttempt
 from apps.parser.models import ExamQuestion
 from apps.parser.models import QuestionImage, QuestionOption
+from apps.common.batch_tasks import PROGRESS_KEY_PREFIX
 
 
 def make_trace_id():
@@ -72,11 +73,7 @@ def student_home(request):
     ).select_related('mission', 'mission__class_obj')
 
     class_id = request.query_params.get('class_id')
-<<<<<<< HEAD
-    if class_id and class_id != '0':
-=======
     if class_id and int(class_id) > 0:
->>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
         progresses = progresses.filter(mission__class_obj_id=class_id)
 
     # Filter by scope (date range on end_at)
@@ -190,18 +187,12 @@ def student_level_detail(request, level_id):
                 'question_no': q.question_no,
                 'question_type': q.question_type,
                 'difficulty': float(q.difficulty) if q.difficulty else None,
-<<<<<<< HEAD
                 'stem': q.stem or '',
                 'stem_html': q.stem_html or '',
                 'answer': q.answer or '',
                 'analysis': q.analysis or '',
                 'solution': q.solution or '',
                 'images': [{'id': img.id, 'file_path': img.file_path, 'url': img.file_path} for img in q.images.all()],
-=======
-                'stem': q.stem,
-                'stem_html': q.stem_html,
-                'images': [{'url': img.file_path} for img in q.images.all()],
->>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
                 'options': [{'label': o.option_label, 'content': o.content}
                            for o in q.options.all()],
             })
@@ -303,24 +294,58 @@ img {{ max-width: 100%; }}
 </body></html>'''
 
 
-def _build_pdf(export_type: str, questions: list, include_answers: bool) -> bytes:
-    """用 reportlab 生成 PDF（内置 STSong-Light 支持中文，无需字体文件）。"""
+def _build_pdf(export_type: str, questions: list, include_answers: bool,
+               watermark_text: str = "") -> bytes:
+    """增强版 PDF 生成：水印、知识点标签、页码、图片。"""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                     Image as RLImage, PageTemplate, Frame)
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
     from reportlab.lib.units import mm
+    from reportlab.lib import colors
     import io
 
     pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4,
-                            topMargin=15*mm, bottomMargin=15*mm,
-                            leftMargin=15*mm, rightMargin=15*mm)
+
+    # 使用 onPage 回调实现水印和页码（比子类化 afterPage 更可靠）
+    def on_page(canvas, doc):
+        if watermark_text:
+            canvas.saveState()
+            canvas.setFont('STSong-Light', 40)
+            canvas.setFillColor(colors.Color(0, 0, 0, alpha=0.08))
+            canvas.rotate(45)
+            canvas.drawString(200, -200, watermark_text)
+            canvas.restoreState()
+        # 页码
+        canvas.saveState()
+        canvas.setFont('STSong-Light', 9)
+        canvas.setFillColorRGB(0.5, 0.5, 0.5)
+        canvas.drawCentredString(A4[0] / 2, 15 * mm, f'- {doc.page} -')
+        canvas.restoreState()
+
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        topMargin=15*mm, bottomMargin=20*mm,
+        leftMargin=15*mm, rightMargin=15*mm,
+    )
+    # 应用 onPage 回调
+    frame = Frame(
+        doc.leftMargin, doc.bottomMargin,
+        doc.width, doc.height,
+        id='normal'
+    )
+    doc.addPageTemplates([
+        PageTemplate(frames=[frame], onPage=on_page),
+    ])
+
     styles = getSampleStyleSheet()
-    h1 = ParagraphStyle('ZhH1', parent=styles['Title'], fontName='STSong-Light', fontSize=18)
-    body = ParagraphStyle('ZhBody', parent=styles['Normal'], fontName='STSong-Light', fontSize=11, leading=18)
+    body = ParagraphStyle('ZhBody', parent=styles['Normal'],
+                          fontName='STSong-Light', fontSize=11, leading=18)
+    h1 = ParagraphStyle('ZhH1', parent=styles['Title'],
+                        fontName='STSong-Light', fontSize=18)
     story = []
 
     type_label = '错题本' if export_type == 'wrongbook' else '任务题目'
@@ -332,9 +357,30 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool) -> byte
     for i, q in enumerate(questions, 1):
         qtype = ExamQuestion.QUESTION_TYPE_LABELS.get(q['question_type'], q['question_type'])
         story.append(Paragraph(f'第{i}题（{qtype}）', body))
+
+        # 知识点标签
+        kps = q.get('knowledge_points') or []
+        if kps:
+            kp_text = "知识点：" + "、".join(
+                kp.get('module', '') if isinstance(kp, dict) else str(kp)
+                for kp in kps[:3]
+            )
+            story.append(Paragraph(f'<font color="#666666" size="9">{kp_text}</font>', body))
+
         story.append(Paragraph(q['stem'] or '', body))
         for opt in q.get('options_html', []):
             story.append(Paragraph(f'{opt["label"]}. {opt["content"]}', body))
+
+        # 图片
+        for img_url in q.get('image_urls', []):
+            img_path = str(settings.MEDIA_ROOT / img_url)
+            if os.path.exists(img_path):
+                try:
+                    img = RLImage(img_path, width=400, height=200)
+                    story.append(img)
+                except Exception:
+                    pass
+
         if include_answers:
             if q.get('answer'):
                 story.append(Paragraph(f'<b>答案：</b>{q["answer"]}', body))
@@ -367,6 +413,7 @@ def export_pdf(request):
     export_type = request.data.get('export_type')
     item_ids = request.data.get('item_ids')
     include_answers = request.data.get('include_answers', False)
+    watermark_text = request.data.get('watermark_text', '')
 
     if export_type not in ('wrongbook', 'mission'):
         return Response({
@@ -386,7 +433,7 @@ def export_pdf(request):
         ).values_list('question_id', flat=True)
         qs = ExamQuestion.objects.filter(id__in=list(items)).values(
             'id', 'question_no', 'question_type', 'stem', 'stem_html',
-            'answer', 'analysis',
+            'answer', 'analysis', 'knowledge_points',
         )
         for q in qs:
             options = list(QuestionOption.objects.filter(question_id=q['id']).values(
@@ -412,7 +459,7 @@ def export_pdf(request):
         rels = MissionQuestionRel.objects.filter(mission=mission).values_list('question_id', flat=True)
         qs = ExamQuestion.objects.filter(id__in=list(rels)).values(
             'id', 'question_no', 'question_type', 'stem', 'stem_html',
-            'answer', 'analysis',
+            'answer', 'analysis', 'knowledge_points',
         )
         for q in qs:
             options = list(QuestionOption.objects.filter(question_id=q['id']).values(
@@ -439,7 +486,7 @@ def export_pdf(request):
     filename = f'{export_type}_{uuid.uuid4().hex[:12]}.pdf'
     filepath = os.path.join(export_dir, filename)
 
-    pdf_bytes = _build_pdf(export_type, questions_data, include_answers)
+    pdf_bytes = _build_pdf(export_type, questions_data, include_answers, watermark_text)
     with open(filepath, 'wb') as f:
         f.write(pdf_bytes)
 
@@ -506,3 +553,41 @@ def upload_attempt_image(request, attempt_id):
         'data': {'image_url': image_url, 'filename': filename},
         'trace_id': trace_id,
     })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def task_progress_stream(request, task_id):
+    """SSE 端点：实时推送任务进度。
+
+    使用说明：前端通过 EventSource 或 fetch + ReadableStream 消费。
+    GET /api/v1/student/tasks/<task_id>/progress
+    """
+    import json
+    import time
+
+    def event_stream():
+        last_data = None
+        while True:
+            progress_data = cache.get(f'{PROGRESS_KEY_PREFIX}{task_id}')
+            if progress_data and progress_data != last_data:
+                last_data = progress_data
+                yield f'data: {progress_data}\n\n'
+                try:
+                    status = json.loads(progress_data).get('status')
+                    if status in ('completed', 'failed', 'cancelled'):
+                        break
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            # 没有新数据时，发送心跳保持连接
+            else:
+                yield ': heartbeat\n\n'
+            time.sleep(2)
+
+    response = StreamingHttpResponse(
+        event_stream(),
+        content_type='text/event-stream',
+    )
+    response['Cache-Control'] = 'no-cache'
+    response['X-Accel-Buffering'] = 'no'
+    return response

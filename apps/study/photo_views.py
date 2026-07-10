@@ -19,6 +19,7 @@ from apps.parser.models import ExamQuestion, QuestionOption, QuestionImage, AIPa
 from apps.papers.models import ExamPaper
 from apps.common.codegen import generate_question_system_id
 from apps.common.oss_service import upload_crop_image_safe
+from apps.common.batch_tasks import single_generate_ai_answers
 
 logger = logging.getLogger(__name__)
 
@@ -311,13 +312,17 @@ def photo_create_question(request):
             model_name='qwen3-vl-plus-photo',
         )
 
+        # 异步触发 AI 答案生成（不阻塞返回）
+        single_generate_ai_answers.delay(question.id)
+
         return Response({
             'code': 0,
-            'message': '识别成功',
+            'message': '识别成功，AI 答案正在生成中...',
             'data': {
                 'question_id': question.id,
                 'system_id': system_id,
                 'parsed': parsed,
+                'ai_generation_status': 'pending',
             },
             'trace_id': make_trace_id(),
         })
