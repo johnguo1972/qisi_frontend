@@ -60,14 +60,24 @@ def verify_code(mobile: str, code: str) -> bool:
 
 def get_or_create_user(mobile: str, role_type: str = 'student') -> UserAccount:
     """Get or create user by mobile, updating role_type on each login."""
-    user, created = UserAccount.objects.get_or_create(
-        mobile=mobile,
-        defaults={
-            'role_type': role_type,
-            'display_name': f"User{mobile[-4:]}",
-            'status': 'active',
-        },
-    )
+    from django.db import connection
+
+    # Use raw SQL for INSERT because the database has a legacy `username`
+    # column with a unique constraint that the model doesn't define.
+    user = UserAccount.objects.filter(mobile=mobile).first()
+    if user:
+        created = False
+    else:
+        display_name = f"User{mobile[-4:]}"
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'INSERT INTO user_account '
+                '(mobile, role_type, display_name, status, password, username) '
+                'VALUES (%s, %s, %s, %s, %s, %s)',
+                [mobile, role_type, display_name, 'active', '', mobile],
+            )
+        user = UserAccount.objects.get(mobile=mobile)
+        created = True
     # Update role_type on each login (user selected a different role tab)
     if user.role_type != role_type:
         user.role_type = role_type

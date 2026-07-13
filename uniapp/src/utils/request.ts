@@ -1,4 +1,12 @@
-const BASE_URL = '/api/v1'
+// #ifdef APP-PLUS
+// App 环境（APK）：使用完整域名
+const BASE_URL = 'https://qisi.chengxuelu.com/study/api/v1'
+// #endif
+// #ifndef APP-PLUS
+// H5 环境：根据当前路径自动判断是否在 /study/ 子路径下
+const isStudyPath = typeof window !== 'undefined' && window.location.pathname.startsWith('/study/')
+const BASE_URL = isStudyPath ? '/study/api/v1' : '/api/v1'
+// #endif
 
 interface ApiResponse<T = any> {
   code: number
