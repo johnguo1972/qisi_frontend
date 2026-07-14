@@ -20,7 +20,7 @@
 
       <!-- 题干展示 -->
       <view class="stem-section" v-if="currentQuestion.stem_html || currentQuestion.stem">
-        <view class="stem-content" v-html="stemRendered"></view>
+        <view class="stem-content" v-html="renderedStem"></view>
         <!-- 题目图片 -->
         <view v-if="currentQuestion.images && currentQuestion.images.length > 0" class="stem-images">
           <image
@@ -36,16 +36,6 @@
         <text>暂无题干内容</text>
       </view>
 
-      <!-- 题干（含 LaTeX 渲染） -->
-      <view class="question-stem" v-if="currentQuestion">
-        <!-- #ifdef H5 -->
-        <view v-html="renderedStem"></view>
-        <!-- #endif -->
-        <!-- #ifndef H5 -->
-        <rich-text v-if="currentQuestion.stem_html" :nodes="currentQuestion.stem_html"></rich-text>
-        <text v-else>{{ currentQuestion.stem || '暂无题干' }}</text>
-        <!-- #endif -->
-      </view>
 
       <!-- 客观题：选项 -->
       <view v-if="isObjective" class="options-section">
@@ -170,6 +160,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
 import { chooseImage, uploadImage, checkCameraSupport } from '@/utils/image-upload'
 import { renderWithKatex } from '@/utils/katex-renderer'
@@ -182,9 +173,16 @@ const textAnswer = ref('')
 const feedback = ref('')
 const feedbackType = ref('')
 const suggestGuidance = ref(false)
+const isCorrect = ref(false)
+const hasSubmitted = ref(false)
+const showAnswer = ref(false)
+const modeAData = ref<any>(null)
 const submitting = ref(false)
 const renderedStem = ref('')
 const renderedOptions = ref<Record<string, string>>({})
+
+// 每题状态缓存（切换题目时保存/恢复）
+const answersMap = ref<Record<number, any>>({})
 
 // 拍照上传相关
 const uploadedImages = ref<Array<{ previewUrl: string; serverUrl: string }>>([])
@@ -219,6 +217,10 @@ const hasNext = computed(() => currentIndex.value < questions.value.length - 1)
 const hasPrev = computed(() => currentIndex.value > 0)
 const canAddPhoto = computed(() => uploadedImages.value.length < 3 && !uploadingPhoto.value)
 
+const answerRendered = computed(() => currentQuestion.value.answer || '')
+const analysisRendered = computed(() => currentQuestion.value.analysis || '')
+const solutionRendered = computed(() => currentQuestion.value.solution || '')
+
 async function renderCurrentQuestion() {
   const q = currentQuestion.value
   if (!q) return
@@ -240,11 +242,11 @@ function renderOptionHtml(content: string): string {
   return renderedOptions.value[content] || content
 }
 
-onMounted(async () => {
-  const pages = getCurrentPages()
-  const page = pages[pages.length - 1] as any
-  levelId.value = parseInt(page.options.levelId || '0')
+onLoad((options: any) => {
+  levelId.value = parseInt(options?.levelId || '0')
+})
 
+onMounted(async () => {
   if (!levelId.value) {
     uni.showToast({ title: '缺少关卡ID', icon: 'none' })
     return
@@ -260,19 +262,56 @@ onMounted(async () => {
   }
 })
 
-// 题目切换时重新渲染内容
-watch(currentIndex, async () => {
-  // 重置状态
-  hasSubmitted.value = false
-  showAnswer.value = false
-  modeAData.value = null
-  feedback.value = ''
-  feedbackType.value = ''
-  selectedOptions.value = []
-  textAnswer.value = ''
-  uploadedImages.value = []
+// 保存当前题目的状态到缓存
+function saveQuestionState() {
+  const q = currentQuestion.value
+  if (!q || !q.id) return
+  answersMap.value[q.id] = {
+    selectedOptions: [...selectedOptions.value],
+    textAnswer: textAnswer.value,
+    uploadedImages: [...uploadedImages.value],
+    hasSubmitted: hasSubmitted.value,
+    showAnswer: showAnswer.value,
+    feedback: feedback.value,
+    feedbackType: feedbackType.value,
+    isCorrect: isCorrect.value,
+    modeAData: modeAData.value,
+    suggestGuidance: suggestGuidance.value,
+  }
+}
 
-  await renderQuestionContent()
+// 从缓存恢复指定题目的状态
+function restoreQuestionState(questionId: number) {
+  const saved = answersMap.value[questionId]
+  if (saved) {
+    selectedOptions.value = saved.selectedOptions || []
+    textAnswer.value = saved.textAnswer || ''
+    uploadedImages.value = saved.uploadedImages || []
+    hasSubmitted.value = saved.hasSubmitted || false
+    showAnswer.value = saved.showAnswer || false
+    feedback.value = saved.feedback || ''
+    feedbackType.value = saved.feedbackType || ''
+    isCorrect.value = saved.isCorrect || false
+    modeAData.value = saved.modeAData || null
+    suggestGuidance.value = saved.suggestGuidance || false
+  } else {
+    // 没做过：重置
+    hasSubmitted.value = false
+    showAnswer.value = false
+    modeAData.value = null
+    feedback.value = ''
+    feedbackType.value = ''
+    suggestGuidance.value = false
+    selectedOptions.value = []
+    textAnswer.value = ''
+    uploadedImages.value = []
+  }
+}
+
+// 题目切换时保存当前题状态，恢复目标题状态
+watch(currentIndex, async () => {
+  await renderCurrentQuestion()
+  restoreQuestionState(currentQuestion.value.id)
 })
 
 // ---------------------------------------------------------------------------
@@ -385,6 +424,8 @@ async function submitAnswer() {
     } catch (e) {
       console.warn('加载 AI 答案失败:', e)
     }
+    // 提交成功后保存状态到缓存
+    saveQuestionState()
   } catch (e) {
     console.error('提交失败:', e)
     uni.showToast({ title: '提交失败，请重试', icon: 'none' })
@@ -411,16 +452,17 @@ function startGuidance(mode: string) {
   })
 }
 
+async function prevQuestion() {
+  if (hasPrev.value) {
+    saveQuestionState()
+    currentIndex.value--
+  }
+}
+
 async function nextQuestion() {
-  feedback.value = ''
-  feedbackType.value = ''
-  suggestGuidance.value = false
   if (hasNext.value) {
+    saveQuestionState()
     currentIndex.value++
-    selectedOptions.value = []
-    textAnswer.value = ''
-    uploadedImages.value = []
-    await renderCurrentQuestion()
   } else {
     uni.navigateBack()
   }

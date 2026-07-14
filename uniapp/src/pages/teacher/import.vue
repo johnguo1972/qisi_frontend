@@ -1,6 +1,5 @@
 <template>
   <view class="import-page">
-    <TeacherSidebar activeItem="import" />
 
     <!-- 右侧内容区 -->
     <view class="main">
@@ -76,7 +75,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { questionApi, stopParse, reparsePaper, getParseProgress, deletePaper } from '@/api/questions.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 interface Batch {
   id: number
@@ -287,7 +285,7 @@ function goReviewList(paperId: number) {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }

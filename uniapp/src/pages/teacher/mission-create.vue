@@ -1,6 +1,5 @@
 <template>
   <view class="create-page">
-    <TeacherSidebar activeItem="missions" />
 
     <!-- 右侧内容区 -->
     <view class="main">
@@ -525,7 +524,6 @@ import { questionApi } from '@/api/questions.ts'
 import { knowledgeApi } from '@/api/knowledge.ts'
 import { classApi } from '@/api/institutions.ts'
 import { useUserStore } from '@/store/index.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 const userStore = useUserStore()
 
@@ -737,9 +735,7 @@ async function loadKnowledgeTree() {
   treeLoading.value = true
   try {
     const subject = userStore.userInfo?.subject || ''
-    const stages = userStore.userInfo?.stages
-    const stageList = Array.isArray(stages) && stages.length > 0 ? stages.join(',') : ''
-    const res: any = await knowledgeApi.getTree({ subject, stages: stageList })
+    const res: any = await knowledgeApi.getTree({ subject })
     const grades = res.data?.grades || res.data || []
     treeData.value = grades.map((g: any) => ({
       ...g,
@@ -1160,7 +1156,7 @@ async function publish() {
 
     uni.hideLoading()
     uni.showToast({ title: editMode.value ? '保存成功' : '发布成功', icon: 'success' })
-    setTimeout(() => uni.navigateTo({ url: '/pages/teacher/workbench' }), 1500)
+    setTimeout(() => uni.navigateTo({ url: '/pages/teacher/layout' }), 1500)
   } catch (e: any) {
     uni.hideLoading()
     console.error('发布任务失败:', e)
@@ -1267,7 +1263,7 @@ function selectClass(cls: any) {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }

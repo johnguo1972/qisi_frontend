@@ -1,6 +1,5 @@
 <template>
   <view class="detail-page">
-    <TeacherSidebar activeItem="missions" />
 
     <!-- 右侧内容区 -->
     <view class="main">
@@ -62,23 +61,24 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { missionApi } from '@/api/index.ts'
 import { type Mission } from '@/api/missions.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 const mission = ref<Mission | null>(null)
 const levels = ref<any[]>([])
 const missionId = ref<number>(0)
 
-onMounted(async () => {
-  const pages = getCurrentPages()
-  const page = pages[pages.length - 1] as any
-  const id = parseInt(page.options.id)
+onLoad((options: any) => {
+  const id = parseInt(options?.id)
   if (!id) {
     uni.showToast({ title: '缺少任务ID', icon: 'none' })
     return
   }
   missionId.value = id
+})
+
+onMounted(async () => {
   await loadMission()
 })
 
@@ -154,7 +154,7 @@ function goPractice(levelId: number) {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }

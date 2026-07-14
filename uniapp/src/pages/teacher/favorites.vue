@@ -1,6 +1,5 @@
 <template>
   <view class="favorites">
-    <TeacherSidebar activeItem="favorites" />
 
     <view class="main">
       <!-- Left: Knowledge tree (4-level: grade → semester → chapter → KP) -->
@@ -108,7 +107,6 @@ import { ref, onMounted } from 'vue'
 import { favoriteApi, type Favorite } from '@/api/favorites.ts'
 import { knowledgeApi } from '@/api/knowledge'
 import { useUserStore } from '@/store/index.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 const userStore = useUserStore()
 
@@ -157,9 +155,7 @@ async function loadKnowledgeTree() {
   treeLoading.value = true
   try {
     const subject = userStore.userInfo?.subject || ''
-    const stages = userStore.userInfo?.stages
-    const stageList = Array.isArray(stages) && stages.length > 0 ? stages.join(',') : ''
-    const res: any = await knowledgeApi.getTree({ subject, stages: stageList })
+    const res: any = await knowledgeApi.getTree({ subject })
     const grades = res.data?.grades || []
     tree.value = grades.map((g: any) => ({
       ...g,
@@ -175,6 +171,7 @@ async function loadKnowledgeTree() {
     }))
   } catch (e) {
     console.error('加载知识树失败:', e)
+    uni.showToast({ title: '加载知识树失败，请检查网络', icon: 'none' })
   } finally {
     treeLoading.value = false
   }
@@ -191,6 +188,7 @@ async function loadFavorites() {
     favorites.value = res.data || []
   } catch (e) {
     console.error('Failed to load favorites:', e)
+    uni.showToast({ title: '加载精选列表失败，请检查网络', icon: 'none' })
   } finally {
     loading.value = false
   }
@@ -237,7 +235,7 @@ function difficultyText(d: number | null): string {
 
 <style scoped>
 .favorites { display: flex; min-height: 100vh; background: #f5f7fa; }
-.main { margin-left: 240px; flex: 1; display: flex; gap: 16px; padding: 16px; overflow: hidden; }
+.main { margin-left: 0; flex: 1; display: flex; gap: 16px; padding: 16px; overflow: hidden; }
 
 /* Knowledge tree */
 .knowledge-tree { width: 240px; background: #fff; border-radius: 8px; padding: 16px; overflow-y: auto; flex-shrink: 0; }

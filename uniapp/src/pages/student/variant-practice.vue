@@ -44,6 +44,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { wrongbookApi } from '@/api/student.ts'
 
 interface Opt { label: string; content: string }
@@ -63,10 +64,11 @@ const isObjective = computed(() =>
   ['single_choice', 'multiple_choice'].includes(currentQuestion.value.question_type))
 const hasNext = computed(() => currentIndex.value < questions.value.length - 1)
 
+onLoad((options: any) => {
+  itemId.value = parseInt(options?.itemId || '0')
+})
+
 onMounted(async () => {
-  const pages = getCurrentPages()
-  const page = pages[pages.length - 1] as any
-  itemId.value = parseInt(page.options.itemId || '0')
   if (!itemId.value) { uni.showToast({ title: '缺少错题ID', icon: 'none' }); return }
   try {
     const res = await wrongbookApi.variants(itemId.value)

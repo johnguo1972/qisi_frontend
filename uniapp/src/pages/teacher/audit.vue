@@ -1,6 +1,5 @@
 <template>
   <view class="audit-page">
-    <TeacherSidebar activeItem="bank" />
 
     <!-- 右侧主内容区 -->
     <view class="main">
@@ -183,7 +182,6 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { questionApi } from '@/api/index.ts'
 import { knowledgeApi, type KnowledgePoint } from '@/api/knowledge.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 interface GradeNode { name: string; semesters: SemesterNode[]; expanded: boolean }
 interface SemesterNode { name: string; chapters: ChapterNode[]; expanded: boolean }
@@ -460,7 +458,7 @@ async function deleteQuestion(qId: number) {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   display: flex;
   gap: 20rpx;

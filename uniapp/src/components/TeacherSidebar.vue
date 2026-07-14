@@ -54,6 +54,8 @@ const props = defineProps<{
   activeItem: string
 }>()
 
+const emit = defineEmits(['navigate'])
+
 const userInfo = ref({ display_name: '老师' })
 const userStore = useUserStore()
 
@@ -64,13 +66,13 @@ onMounted(async () => {
   } catch {}
 })
 
-function goWorkbench() { uni.navigateTo({ url: '/pages/teacher/workbench' }) }
-function goImport() { uni.navigateTo({ url: '/pages/teacher/import' }) }
-function goNewQuestion() { uni.navigateTo({ url: '/pages/teacher/new-question' }) }
-function goBank() { uni.navigateTo({ url: '/pages/teacher/bank' }) }
-function goFavorites() { uni.navigateTo({ url: '/pages/teacher/favorites' }) }
-function goClasses() { uni.navigateTo({ url: '/pages/teacher/my-classes' }) }
-function goMissionList() { uni.navigateTo({ url: '/pages/teacher/workbench' }) }
+function goWorkbench() { emit('navigate', 'workbench') }
+function goImport() { emit('navigate', 'import') }
+function goNewQuestion() { emit('navigate', 'new-question') }
+function goBank() { emit('navigate', 'bank') }
+function goFavorites() { emit('navigate', 'favorites') }
+function goClasses() { emit('navigate', 'classes') }
+function goMissionList() { emit('navigate', 'missions') }
 
 async function handleLogout() {
   uni.showModal({

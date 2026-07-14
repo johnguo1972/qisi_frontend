@@ -1,9 +1,16 @@
 import { post, get, put, patch, del } from '@/utils/request.ts'
 
+// #ifdef APP-PLUS
+const UPLOAD_BASE = 'https://qisi.chengxuelu.com/study/api/v1'
+// #endif
+// #ifndef APP-PLUS
+const UPLOAD_BASE = '/api/v1'
+// #endif
+
 export const questionApi = {
   // GET /api/v1/questions
   list: (params?: { page?: number; page_size?: number; question_no?: string; status?: string }) =>
-    get<any>('/questions', params),
+    get<any>('/questions/', params),
 
   // GET /api/v1/questions/{id}
   detail: (id: number) => get<any>(`/questions/${id}`),
@@ -33,7 +40,7 @@ export const questionApi = {
       }
 
       try {
-        const res = await fetch('/api/v1/questions/import-batches', {
+        const res = await fetch(`${UPLOAD_BASE}/questions/import-batches`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -88,7 +95,7 @@ export const questionApi = {
     return new Promise<any>((resolve, reject) => {
       // @ts-ignore
       uni.uploadFile({
-        url: `/api/v1/questions/camera-paper/${paperId}/upload-page/`,
+        url: `${UPLOAD_BASE}/questions/camera-paper/${paperId}/upload-page/`,
         filePath: filePath,
         name: 'file',
         formData: { page_no: String(pageNo) },
@@ -124,7 +131,7 @@ export function deletePaper(paperId: number) {
   const token = uni.getStorageSync('accessToken')
   return new Promise<any>((resolve, reject) => {
     uni.request({
-      url: `/api/v1/papers/${paperId}/`,
+      url: `${UPLOAD_BASE}/papers/${paperId}/`,
       method: 'DELETE',
       header: {
         'Authorization': `Bearer ${token}`,
@@ -200,7 +207,7 @@ export function createQuestion(data: any) {
 export function uploadQuestionImage(questionId: number, imageFile: File) {
   return new Promise<any>((resolve, reject) => {
     uni.uploadFile({
-      url: '/api/v1/questions/upload-image/',
+      url: `${UPLOAD_BASE}/questions/upload-image/`,
       filePath: imageFile as any,
       name: 'image',
       formData: { question_id: String(questionId) },

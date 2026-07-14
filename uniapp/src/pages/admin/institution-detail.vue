@@ -154,7 +154,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
+import { onLoad, onShow } from '@dcloudio/uni-app'
 import { institutionApi } from '@/api/institutions.ts'
 
 const institutionId = ref<number>(0)
@@ -239,12 +239,13 @@ const editSubjectLabel = computed(() => {
 const roleLabels = computed(() => roleOptions.map(o => o.label))
 const subjectLabels = computed(() => subjectOptions.map(o => o.label))
 
-onMounted(() => {
-  const pages = getCurrentPages()
-  const currentPage = pages[pages.length - 1] as any
-  const id = parseInt(currentPage.options?.id || '0')
+onLoad((options: any) => {
+  const id = parseInt(options?.id || '0')
   institutionId.value = id
-  if (!id) {
+})
+
+onMounted(() => {
+  if (!institutionId.value) {
     uni.showToast({ title: '缺少机构ID', icon: 'none' })
     return
   }

@@ -1,6 +1,5 @@
 <template>
   <view class="class-detail">
-    <TeacherSidebar activeItem="classes" />
 
     <!-- 右侧内容区 -->
     <view class="main">
@@ -79,7 +78,6 @@
 import { ref, reactive, computed } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { classApi } from '@/api/index.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 interface ClassInfo {
   id: number
@@ -207,7 +205,7 @@ async function confirmDelete() {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }
