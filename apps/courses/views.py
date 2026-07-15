@@ -34,9 +34,9 @@ def _check_course_owner(course, user):
 
 
 def _get_course_or_404(course_id):
-    """获取课程，不存在则抛 404"""
+    """获取课程，不存在或已删除则抛 404"""
     try:
-        return Course.objects.get(id=course_id)
+        return Course.objects.get(id=course_id, is_deleted=False)
     except Course.DoesNotExist:
         raise NotFound(f'课程 {course_id} 不存在')
 
@@ -45,22 +45,19 @@ def _get_course_or_404(course_id):
 # 课程 CRUD
 # ============================================================
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
-def course_list(request):
-    """当前老师的课程列表（is_deleted=False）"""
-    courses = Course.objects.filter(
-        teacher=request.user,
-        is_deleted=False
-    ).order_by('-created_at')
-    serializer = CourseSerializer(courses, many=True, context={'request': request})
-    return Response({'success': True, 'data': serializer.data})
+def course_list_or_create(request):
+    """课程列表（GET）和创建（POST）"""
+    if request.method == 'GET':
+        courses = Course.objects.filter(
+            teacher=request.user,
+            is_deleted=False
+        ).order_by('-created_at')
+        serializer = CourseSerializer(courses, many=True, context={'request': request})
+        return Response({'success': True, 'data': serializer.data})
 
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def course_create(request):
-    """创建课程"""
+    # POST - 创建课程
     serializer = CourseSerializer(
         data=request.data,
         context={'request': request}
@@ -73,34 +70,24 @@ def course_create(request):
     )
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PUT', 'DELETE'])
 @permission_classes([IsAuthenticated])
-def course_detail(request, course_id):
-    """课程详情"""
+def course_detail_update_delete(request, course_id):
+    """课程详情（GET）、更新（PUT）、软删除（DELETE）"""
     course = _get_course_or_404(course_id)
     _check_course_owner(course, request.user)
-    serializer = CourseSerializer(course, context={'request': request})
-    return Response({'success': True, 'data': serializer.data})
 
+    if request.method == 'GET':
+        serializer = CourseSerializer(course, context={'request': request})
+        return Response({'success': True, 'data': serializer.data})
 
-@api_view(['PUT'])
-@permission_classes([IsAuthenticated])
-def course_update(request, course_id):
-    """修改课程"""
-    course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
-    serializer = CourseSerializer(course, data=request.data, partial=True, context={'request': request})
-    serializer.is_valid(raise_exception=True)
-    course = serializer.save()
-    return Response({'success': True, 'data': CourseSerializer(course, context={'request': request}).data, 'message': '课程更新成功'})
+    if request.method == 'PUT':
+        serializer = CourseSerializer(course, data=request.data, partial=True, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        course = serializer.save()
+        return Response({'success': True, 'data': CourseSerializer(course, context={'request': request}).data, 'message': '课程更新成功'})
 
-
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def course_delete(request, course_id):
-    """软删除课程"""
-    course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
+    # DELETE - 软删除
     course.is_deleted = True
     course.save(update_fields=['is_deleted'])
     return Response({'success': True, 'message': '课程已删除'})
@@ -264,28 +251,22 @@ def material_delete(request, course_id, material_id):
 # 目录树
 # ============================================================
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
-def tree_list(request, course_id):
-    """嵌套树形结构（根节点 parent=None）"""
-    course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
-    root_nodes = CourseTree.objects.filter(
-        course=course,
-        parent=None,
-    ).order_by('sort_order')
-    serializer = CourseTreeNestedSerializer(root_nodes, many=True, context={'request': request})
-    return Response({'success': True, 'data': serializer.data})
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def tree_node_create(request, course_id):
-    """新增树节点"""
+def tree_list_or_create(request, course_id):
+    """目录树列表（GET）和新增节点（POST）"""
     course = _get_course_or_404(course_id)
     _check_course_owner(course, request.user)
 
-    # 验证 parent 是否属于该课程
+    if request.method == 'GET':
+        root_nodes = CourseTree.objects.filter(
+            course=course,
+            parent=None,
+        ).order_by('sort_order')
+        serializer = CourseTreeNestedSerializer(root_nodes, many=True, context={'request': request})
+        return Response({'success': True, 'data': serializer.data})
+
+    # POST - 新增树节点
     parent_id = request.data.get('parent')
     if parent_id:
         try:
@@ -305,10 +286,10 @@ def tree_node_create(request, course_id):
     )
 
 
-@api_view(['PUT'])
+@api_view(['PUT', 'DELETE'])
 @permission_classes([IsAuthenticated])
-def tree_node_update(request, course_id, node_id):
-    """修改树节点"""
+def tree_node_update_or_delete(request, course_id, node_id):
+    """修改树节点（PUT）或递归删除（DELETE）"""
     course = _get_course_or_404(course_id)
     _check_course_owner(course, request.user)
 
@@ -317,35 +298,23 @@ def tree_node_update(request, course_id, node_id):
     except CourseTree.DoesNotExist:
         raise NotFound(f'节点 {node_id} 不存在')
 
-    # 验证新的 parent 是否属于该课程且不是自身
-    parent_id = request.data.get('parent')
-    if parent_id is not None:
-        if int(parent_id) == node_id:
-            raise ValidationError('节点不能将自身设为父节点')
-        try:
-            parent = CourseTree.objects.get(id=parent_id, course=course)
-        except CourseTree.DoesNotExist:
-            raise NotFound(f'父节点 {parent_id} 不存在或不属于此课程')
+    if request.method == 'PUT':
+        # 验证新的 parent 是否属于该课程且不是自身
+        parent_id = request.data.get('parent')
+        if parent_id is not None:
+            if int(parent_id) == node_id:
+                raise ValidationError('节点不能将自身设为父节点')
+            try:
+                parent = CourseTree.objects.get(id=parent_id, course=course)
+            except CourseTree.DoesNotExist:
+                raise NotFound(f'父节点 {parent_id} 不存在或不属于此课程')
 
-    serializer = CourseTreeSerializer(node, data=request.data, partial=True, context={'request': request})
-    serializer.is_valid(raise_exception=True)
-    node = serializer.save()
-    return Response({'success': True, 'data': CourseTreeSerializer(node, context={'request': request}).data, 'message': '节点更新成功'})
+        serializer = CourseTreeSerializer(node, data=request.data, partial=True, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        node = serializer.save()
+        return Response({'success': True, 'data': CourseTreeSerializer(node, context={'request': request}).data, 'message': '节点更新成功'})
 
-
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def tree_node_delete(request, course_id, node_id):
-    """递归删除树节点及其子节点（先删除关联的 CourseQuestionLink）"""
-    course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
-
-    try:
-        node = CourseTree.objects.get(id=node_id, course=course)
-    except CourseTree.DoesNotExist:
-        raise NotFound(f'节点 {node_id} 不存在')
-
-    # 收集要删除的所有节点（递归子节点）
+    # DELETE - 递归删除树节点及其子节点
     def collect_descendants(n):
         ids = [n.id]
         for child in n.children.all():
@@ -354,9 +323,9 @@ def tree_node_delete(request, course_id, node_id):
 
     node_ids = collect_descendants(node)
 
-    # 先删除关联的 CourseQuestionLink
+    # 软删除关联的 CourseQuestionLink（保留 is_deleted=False 过滤的一致性）
     from .models import CourseQuestionLink
-    CourseQuestionLink.objects.filter(tree_node_id__in=node_ids).delete()
+    CourseQuestionLink.objects.filter(tree_node_id__in=node_ids).update(is_deleted=True)
 
     # 递归删除节点
     CourseTree.objects.filter(id__in=node_ids).delete()
