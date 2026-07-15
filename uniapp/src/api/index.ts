@@ -15,3 +15,4 @@ export const authApi = {
 export { institutionApi, classApi, studentClassApi, teacherApi } from './institutions'
 export { questionApi } from './questions'
 export { missionApi } from './missions'
+export { courseApi, materialApi, treeApi, courseQuestionApi, variantApi } from './courses'
