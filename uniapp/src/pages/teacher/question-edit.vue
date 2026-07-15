@@ -1,6 +1,5 @@
 <template>
   <view class="edit-page">
-    <TeacherSidebar activeItem="bank" />
 
     <!-- 右侧内容区 -->
     <view class="main" v-if="question">
@@ -199,12 +198,12 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { getQuestionDetail, updateQuestion, confirmQuestion, cropQuestionImage, deleteQuestionImage, getQuestionAssets } from '@/api/questions'
 import { renderWithKatex } from '@/utils/katex-renderer'
 import { renderImagePlaceholders } from '@/utils/image-placeholder'
 import { filterKnowledgePoints, type KnowledgePoint } from '@/utils/knowledge-filter'
 import { get } from '@/utils/request'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 const question = ref<any>(null)
 const loading = ref(true)
@@ -261,7 +260,7 @@ async function updatePreviews() {
   }
   optionPreviews.value = newOptionPreviews
 }
-function getImageUrl(path: string) { if (!path) return ''; if (path.startsWith('http')) return path; const fixed = path.replace(/\\/g, '/'); return window.location.origin + '/media/' + (fixed.startsWith('/') ? fixed.slice(1) : fixed) }
+function getImageUrl(path: string) { if (!path) return ''; if (path.startsWith('http')) return path; const fixed = path.replace(/\\/g, '/'); return 'https://qisi.chengxuelu.com/media/' + (fixed.startsWith('/') ? fixed.slice(1) : fixed) }
 function previewPhotoImage(url: string) { uni.previewImage({ urls: [url] }) }
 function startAddNewQuestion() { addNewMode.value = true; clearCrop(); uni.showToast({ title: '请在原图上框选试题区域', icon: 'none', duration: 2000 }) }
 function cancelAddMode() { addNewMode.value = false; clearCrop() }
@@ -346,7 +345,7 @@ function handleInsertImage(imageId: number) {
 }
 function moveImageUp(index: number) { if (index <= 0) return; const temp = images.value[index]; images.value[index] = images.value[index - 1]; images.value[index - 1] = temp }
 function moveImageDown(index: number) { if (index >= images.value.length - 1) return; const temp = images.value[index]; images.value[index] = images.value[index + 1]; images.value[index + 1] = temp }
-async function loadQuestion(id: number) { loading.value = true; try { const res = await getQuestionDetail(id); if (res.success && res.data) { question.value = res.data; const q = res.data; paperId.value = q.paper || 0; if (paperId.value) { try { const { getPaperQuestions } = await import('@/api/questions'); const listRes = await getPaperQuestions(paperId.value); questionList.value = listRes.data?.data || listRes.data || []; currentQuestionIndex.value = questionList.value.findIndex((item: any) => item.id === id) } catch {} } form.value = { stem: q.stem || '', answer: q.answer || '', analysis: q.analysis || '', solution: q.solution || '', difficulty: q.difficulty || 1, question_type: q.question_type || '', question_no: q.question_no || '', page_start: q.page_start || 1, page_end: q.page_end || 1, options: q.options && q.options.length > 0 ? q.options.map((o: any) => ({ label: o.option_label || o.label || '', content: o.content || '' })) : [{ label: 'A', content: '' }, { label: 'B', content: '' }, { label: 'C', content: '' }, { label: 'D', content: '' }] }; images.value = q.images || [] } try { const assetsRes = await getQuestionAssets(id); if (assetsRes.code === 0 && assetsRes.data) { pages.value = assetsRes.data.pages || []; if (pages.value.length > 0) { totalPages.value = pages.value.length; currentPage.value = Math.min(question.value?.page_start || 1, totalPages.value) } if (assetsRes.data.images?.length > 0) images.value = assetsRes.data.images } } catch {} updateCurrentImage(); await updatePreviews() } catch { uni.showToast({ title: '加载失败', icon: 'none' }) } finally { loading.value = false } }
+async function loadQuestion(id: number) { loading.value = true; try { const res = await getQuestionDetail(id); const q = res.data || res; if (q && q.id) { question.value = q; paperId.value = q.paper || 0; if (paperId.value) { try { const { getPaperQuestions } = await import('@/api/questions'); const listRes = await getPaperQuestions(paperId.value); questionList.value = listRes.data?.data || listRes.data || []; currentQuestionIndex.value = questionList.value.findIndex((item: any) => item.id === id) } catch {} } form.value = { stem: q.stem || '', answer: q.answer || '', analysis: q.analysis || '', solution: q.solution || '', difficulty: q.difficulty || 1, question_type: q.question_type || '', question_no: q.question_no || '', page_start: q.page_start || 1, page_end: q.page_end || 1, options: q.options && q.options.length > 0 ? q.options.map((o: any) => ({ label: o.option_label || o.label || '', content: o.content || '' })) : [{ label: 'A', content: '' }, { label: 'B', content: '' }, { label: 'C', content: '' }, { label: 'D', content: '' }] }; images.value = q.images || [] } try { const assetsRes = await getQuestionAssets(id); if (assetsRes.code === 0 && assetsRes.data) { pages.value = assetsRes.data.pages || []; if (pages.value.length > 0) { totalPages.value = pages.value.length; currentPage.value = Math.min(question.value?.page_start || 1, totalPages.value) } if (assetsRes.data.images?.length > 0) images.value = assetsRes.data.images } } catch {} updateCurrentImage(); await updatePreviews() } catch (e: any) { console.error('加载失败:', e); uni.showToast({ title: '加载失败', icon: 'none' }) } finally { loading.value = false } }
 function updateCurrentImage() { const page = pages.value[currentPage.value - 1]; if (page?.image_path) currentImageSrc.value = getImageUrl(page.image_path); clearCrop() }
 function prevPage() { if (currentPage.value > 1) { currentPage.value--; updateCurrentImage() } }
 function nextPage() { if (currentPage.value < totalPages.value) { currentPage.value++; updateCurrentImage() } }
@@ -479,15 +478,16 @@ function onKeyDown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); handleConfirm() }
 }
 
+onLoad((options) => {
+  questionId = Number(options?.id || 0)
+})
+
 onMounted(async () => {
-  const pgs = getCurrentPages()
-  const pg = pgs[pgs.length - 1] as any
-  questionId = Number(pg.options?.id || 0)
   if (!questionId) {
     uni.showToast({ title: '缺少题目ID', icon: 'none' })
     return
   }
-  loadQuestion(questionId)
+  await loadQuestion(questionId)
   loadKnowledgePoints()
   window.addEventListener('keydown', onKeyDown)
 })
@@ -499,7 +499,7 @@ onUnmounted(() => {
 
 <style scoped>
 .edit-page { display: flex; min-height: 100vh; background: #f0f2f5; }
-.main { margin-left: 240px; flex: 1; padding: 0; min-height: 100vh; overflow: hidden; }
+.main { margin-left: 0; flex: 1; padding: 0; min-height: 100vh; overflow: hidden; }
 .split-layout { display: flex; height: 100%; }
 .image-panel { width: 50%; min-width: 300px; background: #fff; display: flex; flex-direction: column; border-right: 1px solid #e4e7ed; overflow: hidden; }
 .photo-images-section { margin-bottom: 12px; padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }

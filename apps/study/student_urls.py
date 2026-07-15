@@ -1,6 +1,7 @@
 from django.urls import path
 from .student_views import (
-    student_home, student_mission_detail, student_level_detail, growth_summary, export_pdf, upload_attempt_image
+    student_home, student_mission_detail, student_level_detail, growth_summary, export_pdf, upload_attempt_image,
+    task_progress_stream
 )
 from .answer_views import submit_answer, retry_answer, get_mode_a
 from .guidance_views import start_guidance, guidance_reply
@@ -20,4 +21,5 @@ urlpatterns = [
     path('export/pdf', export_pdf, name='export-pdf'),
     path('attempts/<int:attempt_id>/upload-image', upload_attempt_image, name='upload-attempt-image'),
     path('knowledge-mastery', knowledge_mastery, name='knowledge-mastery'),
+    path('tasks/<str:task_id>/progress', task_progress_stream, name='task-progress'),
 ]

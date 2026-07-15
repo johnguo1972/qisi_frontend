@@ -1,6 +1,5 @@
 <template>
   <view class="my-classes">
-    <TeacherSidebar activeItem="classes" />
 
     <!-- 右侧内容区 -->
     <view class="main">
@@ -44,7 +43,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { classApi } from '@/api/index.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 interface ClassItem {
   id: number
@@ -113,7 +111,7 @@ async function confirmDelete(cls: ClassItem) {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }

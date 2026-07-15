@@ -1,6 +1,5 @@
 <template>
   <view class="wrongbook">
-    <StudentSidebar activeItem="wrongbook" />
     <!-- 右侧内容区 -->
     <view class="main">
       <view class="page-header">
@@ -50,7 +49,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { wrongbookApi } from '@/api/student.ts'
-import StudentSidebar from '@/components/StudentSidebar.vue'
 
 const items = ref<any[]>([])
 
@@ -101,7 +99,7 @@ async function goVariants(id: number) {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }

@@ -1,6 +1,5 @@
 <template>
   <view class="workbench">
-    <TeacherSidebar activeItem="missions" />
 
     <!-- 右侧内容区 -->
     <view class="main">
@@ -79,7 +78,6 @@
 import { ref, computed, onMounted } from 'vue'
 import { missionApi, type Mission } from '@/api/missions.ts'
 import { classApi } from '@/api/institutions.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 interface MissionExtended extends Mission {
   class_name?: string
@@ -237,7 +235,7 @@ function confirmDelete(m: MissionExtended) {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }

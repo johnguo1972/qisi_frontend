@@ -1,6 +1,5 @@
 <template>
   <view class="class-requests">
-    <TeacherSidebar activeItem="classes" />
 
     <!-- 右侧内容区 -->
     <view class="main">
@@ -53,8 +52,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { classApi } from '@/api/index.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 interface JoinRequest {
   id: number
@@ -79,11 +78,11 @@ const allRequests = ref<JoinRequest[]>([])
 
 let classId = 0
 
+onLoad((options: any) => {
+  classId = Number(options?.classId || 0)
+})
+
 onMounted(async () => {
-  // Get classId from route params
-  const pages = getCurrentPages()
-  const currentPage = pages[pages.length - 1]
-  classId = Number(currentPage.options?.classId || 0)
   if (!classId) {
     uni.showToast({ title: '缺少班级ID', icon: 'none' })
     return
@@ -201,7 +200,7 @@ function goBack() { uni.navigateBack() }
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }

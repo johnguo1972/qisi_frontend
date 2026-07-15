@@ -150,17 +150,17 @@ async function handleLogin() {
 function navigateByRole(role: string) {
   switch (role) {
     case 'teacher':
-      uni.reLaunch({ url: '/pages/teacher/workbench' })
+      uni.reLaunch({ url: '/pages/teacher/layout' })
       break
     case 'student':
     case 'parent':
-      uni.reLaunch({ url: '/pages/student/home' })
+      uni.reLaunch({ url: '/pages/student/layout' })
       break
     case 'admin':
       uni.reLaunch({ url: '/pages/admin/home' })
       break
     default:
-      uni.reLaunch({ url: '/pages/student/home' })
+      uni.reLaunch({ url: '/pages/student/layout' })
   }
 }
 </script>

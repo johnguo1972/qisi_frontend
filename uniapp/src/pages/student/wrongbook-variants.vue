@@ -80,6 +80,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { wrongbookApi } from '@/api/student.ts'
 
 interface VariantItem {
@@ -96,11 +97,11 @@ const wrongId = ref(0)
 const variants = ref<VariantItem[]>([])
 const loading = ref(true)
 
-onMounted(async () => {
-  const pages = getCurrentPages()
-  const page = pages[pages.length - 1] as any
-  wrongId.value = parseInt(page.options.id || '0')
+onLoad((options: any) => {
+  wrongId.value = parseInt(options?.id || '0')
+})
 
+onMounted(async () => {
   if (!wrongId.value) {
     uni.showToast({ title: '缺少错题ID', icon: 'none' })
     loading.value = false

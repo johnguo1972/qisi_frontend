@@ -1,6 +1,5 @@
 <template>
   <view class="class-create">
-    <TeacherSidebar activeItem="classes" />
 
     <!-- 右侧内容区 -->
     <view class="main">
@@ -62,7 +61,6 @@
 import { ref, reactive, computed } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { classApi, teacherApi } from '@/api/index.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 interface CreateForm {
   institution_id: number
@@ -161,7 +159,7 @@ function goBack() { uni.navigateBack() }
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }

@@ -1,6 +1,5 @@
 <template>
   <view class="edit-page">
-    <TeacherSidebar activeItem="classes" />
 
     <!-- 右侧内容区 -->
     <view class="main">
@@ -66,7 +65,6 @@
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { classApi } from '@/api/index.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 const statusOptions = ['open', 'closed', 'archived']
 const statusTextMap: Record<string, string> = { open: '开放', closed: '已关闭', archived: '已归档' }
@@ -199,7 +197,7 @@ function handleCancel() {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }

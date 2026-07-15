@@ -65,6 +65,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
 
 const missionId = ref(0)
@@ -103,11 +104,11 @@ function statusText(status: string): string {
   return map[status] || status
 }
 
-onMounted(async () => {
-  const pages = getCurrentPages()
-  const page = pages[pages.length - 1] as any
-  missionId.value = parseInt(page.options.id)
+onLoad((options: any) => {
+  missionId.value = parseInt(options?.id)
+})
 
+onMounted(async () => {
   try {
     const res = await studentApi.missionDetail(missionId.value)
     missionName.value = res.data?.mission_name || ''

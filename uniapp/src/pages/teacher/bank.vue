@@ -1,6 +1,5 @@
 <template>
   <view class="bank">
-    <TeacherSidebar activeItem="bank" />
 
     <!-- Main content: knowledge tree + question list -->
     <view class="main">
@@ -138,7 +137,6 @@ import { questionApi, confirmAiAnswer as apiConfirmAiAnswer, aiProcessQuestion, 
 import { knowledgeApi } from '@/api/knowledge'
 import { favoriteApi } from '@/api/favorites'
 import { useUserStore } from '@/store/index.ts'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import { renderWithKatex } from '@/utils/katex-renderer'
 
 const userStore = useUserStore()
@@ -238,6 +236,7 @@ async function loadQuestions() {
     } catch { /* ignore favorite fetch errors */ }
   } catch (e) {
     console.error('加载题目列表失败:', e)
+    uni.showToast({ title: '加载题目列表失败，请检查网络', icon: 'none' })
   } finally {
     loading.value = false
   }
@@ -247,9 +246,7 @@ async function loadKnowledgeTree() {
   treeLoading.value = true
   try {
     const subject = userStore.userInfo?.subject || ''
-    const stages = userStore.userInfo?.stages
-    const stageList = Array.isArray(stages) && stages.length > 0 ? stages.join(',') : ''
-    const res: any = await knowledgeApi.getTree({ subject, stages: stageList })
+    const res: any = await knowledgeApi.getTree({ subject })
     const grades = res.data?.grades || []
     tree.value = grades.map((g: any) => ({
       ...g,
@@ -265,6 +262,7 @@ async function loadKnowledgeTree() {
     }))
   } catch (e) {
     console.error('加载知识树失败:', e)
+    uni.showToast({ title: '加载知识树失败，请检查网络', icon: 'none' })
   } finally {
     treeLoading.value = false
   }
@@ -447,7 +445,7 @@ onUnmounted(() => {
 
 <style scoped>
 .bank { display: flex; min-height: 100vh; background: #f5f7fa; }
-.main { margin-left: 240px; flex: 1; display: flex; gap: 16px; padding: 16px; overflow: hidden; }
+.main { margin-left: 0; flex: 1; display: flex; gap: 16px; padding: 16px; overflow: hidden; }
 .knowledge-tree { width: 240px; background: #fff; border-radius: 8px; padding: 16px; overflow-y: auto; flex-shrink: 0; }
 .tree-title { font-size: 14px; font-weight: 500; color: #303133; margin-bottom: 12px; display: block; }
 .tree-content .tree-node { padding: 4px 8px; cursor: pointer; font-size: 13px; color: #606266; display: flex; align-items: center; border-radius: 4px; }

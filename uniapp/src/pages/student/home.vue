@@ -1,6 +1,5 @@
 <template>
   <view class="student-home">
-    <StudentSidebar activeItem="home" />
     <!-- 右侧内容区 -->
     <view class="main">
       <view class="panel-header">
@@ -64,7 +63,6 @@ import { ref, computed, onMounted } from 'vue'
 import { studentApi } from '@/api/student.ts'
 import ClassSelector from '@/components/ClassSelector.vue'
 import TimeFilterBar from '@/components/TimeFilterBar.vue'
-import StudentSidebar from '@/components/StudentSidebar.vue'
 
 const missions = ref<any[]>([])
 
@@ -149,7 +147,7 @@ function formatDeadline(deadline: string): string {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }

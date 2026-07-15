@@ -42,6 +42,15 @@
         </view>
       </view>
 
+      <!-- 水印设置 -->
+      <view class="option-card">
+        <text class="card-title">水印设置</text>
+        <view class="input-row">
+          <text class="input-label">水印文字</text>
+          <input v-model="watermarkText" placeholder="留空则无水印" class="watermark-input" />
+        </view>
+      </view>
+
       <!-- 导出按钮 -->
       <button class="btn-export" :class="{ disabled: exporting }" @click="handleExport"
               :loading="exporting" :disabled="exporting">
@@ -53,6 +62,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { exportApi } from '@/api/student.ts'
 
 const loading = ref(true)
@@ -60,21 +70,21 @@ const exporting = ref(false)
 const exportType = ref<'wrongbook' | 'mission'>('wrongbook')
 const itemIds = ref<number[]>([])
 const includeAnswers = ref(false)
+const watermarkText = ref('')
 
 const typeLabel = computed(() => exportType.value === 'wrongbook' ? '错题本' : '任务')
 const itemCount = computed(() => itemIds.value.length)
 
+onLoad((options: any) => {
+  exportType.value = options?.type === 'mission' ? 'mission' : 'wrongbook'
+  if (options?.ids) {
+    itemIds.value = options.ids.split(',').map((s: string) => parseInt(s.trim(), 10)).filter((n: number) => !isNaN(n))
+  }
+})
+
 onMounted(() => {
   try {
-    const pages = getCurrentPages()
-    const currentPage = pages[pages.length - 1] as any
-    const options = currentPage.options || {}
-
-    exportType.value = options.type === 'mission' ? 'mission' : 'wrongbook'
-
-    if (options.ids) {
-      itemIds.value = options.ids.split(',').map((s: string) => parseInt(s.trim(), 10)).filter((n: number) => !isNaN(n))
-    }
+    // parameter parsing is now done in onLoad
   } catch (e) {
     console.error('解析路由参数失败:', e)
   } finally {
@@ -99,6 +109,7 @@ async function handleExport() {
       export_type: exportType.value,
       item_ids: itemIds.value,
       include_answers: includeAnswers.value,
+      watermark_text: watermarkText.value,
     })
 
     const downloadUrl = res.data?.download_url || res.data?.url

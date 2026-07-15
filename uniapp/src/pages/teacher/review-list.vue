@@ -1,6 +1,5 @@
 <template>
   <view class="container">
-    <TeacherSidebar activeItem="bank" />
 
     <!-- Main content -->
     <view class="main">
@@ -127,7 +126,6 @@ import {
   aiProcessSingleMode,
   getAiTaskStatus,
 } from '@/api/questions'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 interface Question {
   id: number
@@ -455,7 +453,7 @@ onLoad((options: any) => {
 
 <style scoped>
 .container { display: flex; min-height: 100vh; background: #f5f7fa; }
-.main { margin-left: 240px; flex: 1; padding: 24px; overflow-y: auto; }
+.main { margin-left: 0; flex: 1; padding: 24px; overflow-y: auto; }
 .paper-selector { display: flex; align-items: center; margin-bottom: 12px; background: #fff; padding: 12px 16px; border-radius: 8px; }
 .paper-selector .label { font-size: 14px; color: #606266; margin-right: 8px; }
 .picker-value { font-size: 14px; color: #409eff; }

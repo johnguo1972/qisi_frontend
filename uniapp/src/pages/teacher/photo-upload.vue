@@ -1,6 +1,5 @@
 <template>
   <view class="container">
-    <TeacherSidebar activeItem="new-question" />
     <view class="header">
       <text class="title">拍照新增试题</text>
       <text class="hint">对试题进行拍照，可连续拍多张</text>
@@ -36,7 +35,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
+import { useUserStore } from '@/store/index.ts'
 
 interface Photo {
   path: string
@@ -45,6 +44,7 @@ interface Photo {
 
 const photos = ref<Photo[]>([])
 const submitting = ref(false)
+const userStore = useUserStore()
 
 function goBack() { uni.navigateBack() }
 
@@ -125,7 +125,7 @@ async function handleRecognize() {
       }
     }
     const token = uni.getStorageSync('accessToken') || ''
-    const resp = await fetch('/api/v1/questions/photo-create/', {
+    const resp = await fetch('/study/api/v1/questions/photo-create/', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + token },
       body: formData,
@@ -134,19 +134,24 @@ async function handleRecognize() {
     // #endif
     // #ifndef H5
     const paths = photos.value.map(p => p.path)
-    const { token } = await import('@/utils/request')
-    const res: any = await new Promise((resolve, reject) => {
-      uni.uploadFile({
-        url: '/api/v1/questions/photo-create/',
-        filePaths: paths,
-        name: 'images',
-        header: { 'Authorization': 'Bearer ' + (token || '') },
-        success: (r) => {
-          try { resolve(JSON.parse(r.data)) } catch { reject(new Error('Parse error')) }
-        },
-        fail: reject,
+    const token = uni.getStorageSync('accessToken') || ''
+    // APP 端逐个上传图片，确保每张都用 name: 'images' 字段名
+    let lastRes: any = null
+    for (const p of paths) {
+      lastRes = await new Promise((resolve, reject) => {
+        uni.uploadFile({
+          url: 'https://qisi.chengxuelu.com/study/api/v1/questions/photo-create/',
+          filePath: p,
+          name: 'images',
+          header: { 'Authorization': 'Bearer ' + token },
+          success: (r) => {
+            try { resolve(JSON.parse(r.data)) } catch { reject(new Error('Parse error')) }
+          },
+          fail: reject,
+        })
       })
-    })
+    }
+    const res = lastRes
     // #endif
 
     if (res.code === 0) {
@@ -157,6 +162,10 @@ async function handleRecognize() {
       } else {
         uni.navigateBack()
       }
+    } else if (res.id) {
+      // 接口返回的是扁平数据（直接返回题目对象）
+      uni.showToast({ title: '识别成功', icon: 'success' })
+      uni.redirectTo({ url: `/pages/teacher/question-edit?id=${res.id}` })
     } else {
       uni.showToast({ title: res.message || '识别失败', icon: 'none' })
     }

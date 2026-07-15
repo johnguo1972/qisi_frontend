@@ -20,7 +20,7 @@
 
       <!-- 题干展示 -->
       <view class="stem-section" v-if="currentQuestion.stem_html || currentQuestion.stem">
-        <view class="stem-content" v-html="stemRendered"></view>
+        <view class="stem-content" v-html="renderedStem"></view>
         <!-- 题目图片 -->
         <view v-if="currentQuestion.images && currentQuestion.images.length > 0" class="stem-images">
           <image
@@ -36,16 +36,6 @@
         <text>暂无题干内容</text>
       </view>
 
-      <!-- 题干（含 LaTeX 渲染） -->
-      <view class="question-stem" v-if="currentQuestion">
-        <!-- #ifdef H5 -->
-        <view v-html="renderedStem"></view>
-        <!-- #endif -->
-        <!-- #ifndef H5 -->
-        <rich-text v-if="currentQuestion.stem_html" :nodes="currentQuestion.stem_html"></rich-text>
-        <text v-else>{{ currentQuestion.stem || '暂无题干' }}</text>
-        <!-- #endif -->
-      </view>
 
       <!-- 客观题：选项 -->
       <view v-if="isObjective" class="options-section">
@@ -156,8 +146,8 @@
     <view class="feedback-panel">
       <view v-if="feedback" class="feedback-card" :class="feedbackType">
         <view class="feedback-header">
-          <text class="feedback-icon">{{ feedbackType === 'correct' ? '✅' : '' }}</text>
-          <text class="feedback-title">{{ feedbackType === 'correct' ? '回答正确' : '回答错误' }}</text>
+          <text class="feedback-icon">{{ feedbackType === 'correct' ? '✅' : (feedbackType === 'pending' ? '⏳' : '❌') }}</text>
+          <text class="feedback-title">{{ feedbackType === 'correct' ? '回答正确' : (feedbackType === 'pending' ? '已提交，待批阅' : '回答错误') }}</text>
         </view>
         <text class="feedback-text">{{ feedback }}</text>
       </view>
@@ -170,52 +160,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
 import { chooseImage, uploadImage, checkCameraSupport } from '@/utils/image-upload'
 import { renderWithKatex } from '@/utils/katex-renderer'
-
-// 将题目图片列表转换为渲染所需的格式
-function toImageMap(images: any[]): Map<number, { file_path: string }> {
-  const map = new Map<number, { file_path: string }>()
-  if (!images) return map
-  images.forEach((img: any, idx: number) => {
-    const id = img.id || (idx + 1)
-    const path = img.url || img.file_path || ''
-    if (path) map.set(id, { file_path: path })
-  })
-  return map
-}
-
-// 渲染题干（KaTeX + 图片占位符 {{image_N}}）
-async function renderStem(q: any): Promise<string> {
-  const images = q.images || []
-  const imageMap = toImageMap(images)
-  const source = q.stem_html || q.stem || ''
-  const rendered = await renderWithKatex(source)
-  // 替换 {{image_N}} 占位符
-  return rendered.replace(/\{\{image_(\d+)\}\}/g, (match, idStr: string) => {
-    const id = Number(idStr)
-    const img = imageMap.get(id)
-    if (!img) return match
-    const src = img.file_path.startsWith('http') ? img.file_path : `/media/${img.file_path}`
-    return `<img src="${src}" alt="插图${id}" style="max-width:100%;border-radius:4px;margin:8px 0;" />`
-  })
-}
-
-async function renderAnswer(q: any): Promise<string> {
-  const source = q.answer || ''
-  return renderWithKatex(source)
-}
-
-async function renderAnalysis(q: any): Promise<string> {
-  const source = q.analysis || ''
-  return renderWithKatex(source)
-}
-
-async function renderSolution(q: any): Promise<string> {
-  const source = q.solution || ''
-  return renderWithKatex(source)
-}
 
 const levelId = ref(0)
 const questions = ref<any[]>([])
@@ -225,11 +173,16 @@ const textAnswer = ref('')
 const feedback = ref('')
 const feedbackType = ref('')
 const suggestGuidance = ref(false)
-const submitting = ref(false)
+const isCorrect = ref(false)
 const hasSubmitted = ref(false)
 const showAnswer = ref(false)
 const modeAData = ref<any>(null)
-const isCorrect = ref(false)
+const submitting = ref(false)
+const renderedStem = ref('')
+const renderedOptions = ref<Record<string, string>>({})
+
+// 每题状态缓存（切换题目时保存/恢复）
+const answersMap = ref<Record<number, any>>({})
 
 // 拍照上传相关
 const uploadedImages = ref<Array<{ previewUrl: string; serverUrl: string }>>([])
@@ -264,27 +217,36 @@ const hasNext = computed(() => currentIndex.value < questions.value.length - 1)
 const hasPrev = computed(() => currentIndex.value > 0)
 const canAddPhoto = computed(() => uploadedImages.value.length < 3 && !uploadingPhoto.value)
 
-// 题干渲染（KaTeX + 图片占位符）
-const stemRendered = ref('')
-const answerRendered = ref('')
-const analysisRendered = ref('')
-const solutionRendered = ref('')
+const answerRendered = computed(() => currentQuestion.value.answer || '')
+const analysisRendered = computed(() => currentQuestion.value.analysis || '')
+const solutionRendered = computed(() => currentQuestion.value.solution || '')
 
-async function renderQuestionContent() {
+async function renderCurrentQuestion() {
   const q = currentQuestion.value
   if (!q) return
-
-  stemRendered.value = await renderStem(q)
-  answerRendered.value = await renderAnswer(q)
-  analysisRendered.value = await renderAnalysis(q)
-  solutionRendered.value = await renderSolution(q)
+  if (q.stem_html) {
+    const hasLatex = /\$|\$\$|\\\(|\\\[/.test(q.stem_html)
+    renderedStem.value = hasLatex ? await renderWithKatex(q.stem_html) : q.stem_html
+  } else if (q.stem) {
+    renderedStem.value = await renderWithKatex(q.stem)
+  } else {
+    renderedStem.value = '<span style="color:#999">暂无题干</span>'
+  }
+  renderedOptions.value = {}
+  for (const opt of (q.options || [])) {
+    if (opt.content) renderedOptions.value[opt.content] = await renderWithKatex(opt.content)
+  }
 }
 
-onMounted(async () => {
-  const pages = getCurrentPages()
-  const page = pages[pages.length - 1] as any
-  levelId.value = parseInt(page.options.levelId || '0')
+function renderOptionHtml(content: string): string {
+  return renderedOptions.value[content] || content
+}
 
+onLoad((options: any) => {
+  levelId.value = parseInt(options?.levelId || '0')
+})
+
+onMounted(async () => {
   if (!levelId.value) {
     uni.showToast({ title: '缺少关卡ID', icon: 'none' })
     return
@@ -293,26 +255,63 @@ onMounted(async () => {
   try {
     const res = await studentApi.levelDetail(levelId.value)
     questions.value = res.data?.questions || []
-    await renderQuestionContent()
+    await renderCurrentQuestion()
   } catch (e) {
     console.error('加载题目失败:', e)
     uni.showToast({ title: '加载题目失败', icon: 'none' })
   }
 })
 
-// 题目切换时重新渲染内容
-watch(currentIndex, async () => {
-  // 重置状态
-  hasSubmitted.value = false
-  showAnswer.value = false
-  modeAData.value = null
-  feedback.value = ''
-  feedbackType.value = ''
-  selectedOptions.value = []
-  textAnswer.value = ''
-  uploadedImages.value = []
+// 保存当前题目的状态到缓存
+function saveQuestionState() {
+  const q = currentQuestion.value
+  if (!q || !q.id) return
+  answersMap.value[q.id] = {
+    selectedOptions: [...selectedOptions.value],
+    textAnswer: textAnswer.value,
+    uploadedImages: [...uploadedImages.value],
+    hasSubmitted: hasSubmitted.value,
+    showAnswer: showAnswer.value,
+    feedback: feedback.value,
+    feedbackType: feedbackType.value,
+    isCorrect: isCorrect.value,
+    modeAData: modeAData.value,
+    suggestGuidance: suggestGuidance.value,
+  }
+}
 
-  await renderQuestionContent()
+// 从缓存恢复指定题目的状态
+function restoreQuestionState(questionId: number) {
+  const saved = answersMap.value[questionId]
+  if (saved) {
+    selectedOptions.value = saved.selectedOptions || []
+    textAnswer.value = saved.textAnswer || ''
+    uploadedImages.value = saved.uploadedImages || []
+    hasSubmitted.value = saved.hasSubmitted || false
+    showAnswer.value = saved.showAnswer || false
+    feedback.value = saved.feedback || ''
+    feedbackType.value = saved.feedbackType || ''
+    isCorrect.value = saved.isCorrect || false
+    modeAData.value = saved.modeAData || null
+    suggestGuidance.value = saved.suggestGuidance || false
+  } else {
+    // 没做过：重置
+    hasSubmitted.value = false
+    showAnswer.value = false
+    modeAData.value = null
+    feedback.value = ''
+    feedbackType.value = ''
+    suggestGuidance.value = false
+    selectedOptions.value = []
+    textAnswer.value = ''
+    uploadedImages.value = []
+  }
+}
+
+// 题目切换时保存当前题状态，恢复目标题状态
+watch(currentIndex, async () => {
+  await renderCurrentQuestion()
+  restoreQuestionState(currentQuestion.value.id)
 })
 
 // ---------------------------------------------------------------------------
@@ -412,7 +411,8 @@ async function submitAnswer() {
     })
     isCorrect.value = res.data?.is_correct || false
     feedback.value = res.data?.feedback || ''
-    feedbackType.value = isCorrect.value ? 'correct' : 'incorrect'
+    feedbackType.value = res.data?.is_pending ? 'pending'
+      : (res.data?.is_correct ? 'correct' : 'incorrect')
     suggestGuidance.value = res.data?.suggest_guidance || false
     hasSubmitted.value = true
     showAnswer.value = false
@@ -424,6 +424,8 @@ async function submitAnswer() {
     } catch (e) {
       console.warn('加载 AI 答案失败:', e)
     }
+    // 提交成功后保存状态到缓存
+    saveQuestionState()
   } catch (e) {
     console.error('提交失败:', e)
     uni.showToast({ title: '提交失败，请重试', icon: 'none' })
@@ -450,22 +452,16 @@ function startGuidance(mode: string) {
   })
 }
 
-// ---------------------------------------------------------------------------
-// 上一题
-// ---------------------------------------------------------------------------
-
-function prevQuestion() {
+async function prevQuestion() {
   if (hasPrev.value) {
+    saveQuestionState()
     currentIndex.value--
   }
 }
 
-// ---------------------------------------------------------------------------
-// 下一题
-// ---------------------------------------------------------------------------
-
-function nextQuestion() {
+async function nextQuestion() {
   if (hasNext.value) {
+    saveQuestionState()
     currentIndex.value++
   } else {
     uni.navigateBack()

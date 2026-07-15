@@ -1,5 +1,6 @@
 # ============ 前端（uni-app / Node）============
 node_modules/
+uniapp/node_modules/
 dist/
 build/
 .next/

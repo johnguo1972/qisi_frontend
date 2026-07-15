@@ -1,6 +1,5 @@
 <template>
   <view class="join-class-page">
-    <StudentSidebar activeItem="join-class" />
     <!-- 右侧内容区 -->
     <view class="main">
       <view class="tab-bar">
@@ -96,7 +95,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { studentClassApi, classApi } from '@/api/index.ts'
-import StudentSidebar from '@/components/StudentSidebar.vue'
 import { useUserStore } from '@/store/index.ts'
 
 const userStore = useUserStore()
@@ -248,7 +246,7 @@ async function handleJoinByCode() {
   background: #f5f7fa;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 0;
 }

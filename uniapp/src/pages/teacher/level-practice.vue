@@ -1,6 +1,5 @@
 <template>
   <view class="practice-page">
-    <TeacherSidebar activeItem="missions" />
 
     <view class="main">
       <!-- 顶部导航 -->
@@ -237,10 +236,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { missionApi } from '@/api/index.ts'
 import { chooseImage } from '@/utils/image-upload'
 import { renderWithKatex } from '@/utils/katex-renderer'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 
 const missionId = ref(0)
 const levelId = ref(0)
@@ -343,12 +342,12 @@ async function renderCurrentQuestion() {
   }
 }
 
-onMounted(async () => {
-  const pages = getCurrentPages()
-  const page = pages[pages.length - 1] as any
-  missionId.value = parseInt(page.options.missionId || '0')
-  levelId.value = parseInt(page.options.levelId || '0')
+onLoad((options: any) => {
+  missionId.value = parseInt(options?.missionId || '0')
+  levelId.value = parseInt(options?.levelId || '0')
+})
 
+onMounted(async () => {
   if (!missionId.value || !levelId.value) {
     uni.showToast({ title: '缺少参数', icon: 'none' })
     return
@@ -644,7 +643,7 @@ function goBack() {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 20rpx 30rpx;
   max-width: 900px;

@@ -26,6 +26,11 @@ export const wrongbookApi = {
 }
 
 export const exportApi = {
-  exportPdf: (data: { export_type: string; item_ids: number[]; include_answers: boolean }) =>
+  exportPdf: (data: {
+    export_type: string
+    item_ids: number[]
+    include_answers: boolean
+    watermark_text?: string
+  }) =>
     post<{ download_url?: string; url?: string }>('/student/export/pdf', data),
 }

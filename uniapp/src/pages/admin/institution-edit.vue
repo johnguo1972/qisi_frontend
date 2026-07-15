@@ -47,6 +47,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { institutionApi } from '@/api/institutions.ts'
 
 const statusOptions = ['active', 'suspended', 'closed']
@@ -63,11 +64,11 @@ const form = ref({
 })
 const submitting = ref(false)
 
-onMounted(async () => {
-  const pages = getCurrentPages()
-  const page = pages[pages.length - 1] as any
-  institutionId.value = parseInt(page.options?.id || '0')
+onLoad((options: any) => {
+  institutionId.value = parseInt(options?.id || '0')
+})
 
+onMounted(async () => {
   if (!institutionId.value) {
     uni.showToast({ title: '缺少机构ID', icon: 'none' })
     return

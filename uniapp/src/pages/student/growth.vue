@@ -1,6 +1,5 @@
 <template>
   <view class="growth">
-    <StudentSidebar activeItem="growth" />
     <!-- 右侧内容区 -->
     <view class="main">
       <view class="page-header">
@@ -52,7 +51,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { studentApi } from '@/api/student.ts'
-import StudentSidebar from '@/components/StudentSidebar.vue'
 
 const summary = ref({
   total_attempts: 0,
@@ -79,7 +77,7 @@ onMounted(async () => {
   background: #f0f2f5;
 }
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 30rpx 40rpx;
 }

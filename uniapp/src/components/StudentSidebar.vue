@@ -79,6 +79,8 @@ const props = defineProps<{
   activeItem: string
 }>()
 
+const emit = defineEmits(['navigate'])
+
 const userInfo = ref({ display_name: '同学', grade_level: null as string | null })
 const userStore = useUserStore()
 
@@ -111,11 +113,11 @@ onMounted(async () => {
   } catch {}
 })
 
-function goHome() { uni.navigateTo({ url: '/pages/student/home' }) }
-function goWrongBook() { uni.navigateTo({ url: '/pages/student/wrongbook' }) }
+function goHome() { emit('navigate', 'home') }
+function goWrongBook() { emit('navigate', 'wrongbook') }
 function goKnowledgeGraph() { uni.navigateTo({ url: '/pages/student/knowledge-graph' }) }
-function goGrowth() { uni.navigateTo({ url: '/pages/student/growth' }) }
-function goJoinClass() { uni.navigateTo({ url: '/pages/student/join-class' }) }
+function goGrowth() { emit('navigate', 'growth') }
+function goJoinClass() { emit('navigate', 'join-class') }
 
 async function handleLogout() {
   uni.showModal({
