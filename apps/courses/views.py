@@ -443,11 +443,9 @@ def question_import(request, course_id):
         except CourseTree.DoesNotExist:
             raise NotFound(f'树节点 {tree_node_id} 不存在或不属于此课程')
 
-    # 批量创建关联，跳过已存在的
+    # 批量创建关联（已通过上方验证，所有 question_ids 均存在）
     imported_count = 0
     for qid in question_ids:
-        if qid not in existing_ids:
-            continue
         _, created = CourseQuestionLink.objects.get_or_create(
             course=course,
             question_id=qid,
@@ -533,34 +531,33 @@ def question_batch_move(request, course_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def question_ai_process(request, course_id):
-    """AI处理习题（委托给 review 模块的 Celery task）"""
+    """AI处理习题（委托给 review 模块的 view 函数）"""
     course = _get_course_or_404(course_id)
     _check_course_owner(course, request.user)
 
+    # 提取 question_id 并验证属于课程
     question_id = request.data.get('question_id')
     if not question_id:
         raise ValidationError('question_id 不能为空')
 
-    from apps.parser.models import ExamQuestion
-    try:
-        ExamQuestion.objects.get(id=question_id)
-    except ExamQuestion.DoesNotExist:
-        raise NotFound(f'题目 {question_id} 不存在')
+    question_id = int(question_id)
+    if not CourseQuestionLink.objects.filter(
+        course=course, question_id=question_id, is_deleted=False
+    ).exists():
+        raise NotFound('题目不在课程中')
 
-    # 复用 review 模块的 AIProcessRequestSerializer 和 Celery task
-    from apps.review.tasks import single_ai_process_question
-    from apps.review.serializers import AIProcessRequestSerializer
+    # 从 body 移除 question_id（review view 从 URL kwargs 获取）
+    if hasattr(request.data, '_mutable'):
+        request.data._mutable = True
+    if 'question_id' in request.data:
+        del request.data['question_id']
 
-    serializer = AIProcessRequestSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    model = serializer.validated_data.get('model')
-
-    task = single_ai_process_question.delay(question_id, model=model)
-
-    return Response({
-        'success': True,
-        'data': {'task_id': task.id, 'status': 'pending', 'question_id': question_id},
-    })
+    # 委托给 review 模块的 ai_process_question view
+    request.resolver_match = type(
+        'ResolverMatch', (), {'kwargs': {'question_id': question_id}}
+    )()
+    from apps.review.views import ai_process_question as review_process
+    return review_process(request, question_id)
 
 
 @api_view(['POST'])
@@ -573,6 +570,12 @@ def question_ai_confirm(request, course_id, question_id):
     mode = request.data.get('mode', '').upper()
     if mode not in ('A', 'B', 'C'):
         raise ValidationError('mode 必须是 A、B 或 C')
+
+    # 验证题目属于该课程
+    if not CourseQuestionLink.objects.filter(
+        course=course, question_id=question_id, is_deleted=False
+    ).exists():
+        raise NotFound('题目不在课程中')
 
     # 委托给 review 模块的 ai_confirm_answer
     from apps.review.views import ai_confirm_answer as review_ai_confirm
@@ -768,7 +771,6 @@ def variant_task_reject(request, course_id, task_id):
     reason = request.data.get('reason', '')
 
     # 更新任务状态
-    from django.utils import timezone
     task.status = 'failed'
     task.error_message = f'驳回: {reason}' if reason else '已驳回'
     task.completed_at = timezone.now()
