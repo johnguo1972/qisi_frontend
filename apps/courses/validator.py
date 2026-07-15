@@ -25,6 +25,29 @@ class VariantValidator:
         '单选题', '多选题', '填空题', '简答题', '作文题', '判断题', '计算题', '证明题',
     }
 
+    VALID_UNITS = {
+        # 长度
+        'mm', 'cm', 'm', 'km', '毫米', '厘米', '米', '千米', '公里',
+        # 面积
+        'mm²', 'cm²', 'm²', 'km²', '平方毫米', '平方厘米', '平方米', '平方千米',
+        # 体积/容积
+        'mm³', 'cm³', 'm³', 'L', 'mL', '立方毫米', '立方厘米', '立方米', '升', '毫升',
+        # 质量/重量
+        'g', 'kg', 't', 'mg', '克', '千克', '吨', '毫克',
+        # 时间
+        's', 'min', 'h', 'ms', '秒', '分钟', '小时', '毫秒',
+        # 角度
+        '°', 'rad', '度', '弧度',
+        # 货币
+        '元', '美元', '¥', '$',
+        # 百分比/比例
+        '%',
+        # 温度
+        '℃', '°F', 'K', '摄氏度', '华氏度', '开尔文',
+        # 速度
+        'm/s', 'km/h', '米/秒', '千米/小时',
+    }
+
     REQUIRED_FIELDS = ['stem', 'question_type', 'answer']
 
     def __init__(self):
@@ -49,6 +72,7 @@ class VariantValidator:
         self._check_question_type(variant_json)
         self._check_answer_count(variant_json)
         self._check_single_choice_uniqueness(variant_json)
+        self._check_units(variant_json)
         self._check_value_ranges(variant_json)
         self._check_stem_not_empty(variant_json)
 
@@ -126,6 +150,19 @@ class VariantValidator:
                 self.issues.append(f"单选题存在重复的选项内容: {c[:50]}")
                 break
             seen.add(c)
+
+    def _check_units(self, data: dict) -> None:
+        """检查变量声明中的单位是否合法。"""
+        variables = data.get('variables', [])
+        if not variables or not isinstance(variables, list):
+            return
+
+        for var in variables:
+            if not isinstance(var, dict):
+                continue
+            unit = var.get('unit', '').strip()
+            if unit and unit not in self.VALID_UNITS:
+                self.issues.append(f"变量 '{var.get('name', '?')}' 的单位无效: {unit}")
 
     def _check_value_ranges(self, data: dict) -> None:
         """检查数值范围是否合理（难度、选项等）。"""

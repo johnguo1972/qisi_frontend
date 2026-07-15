@@ -318,3 +318,132 @@ class TestVariantValidatorNotIdentical(TestCase):
         issues = self.validator.validate(data, FakeQuestion())
         identical_issues = [i for i in issues if '完全相同' in i]
         self.assertEqual(identical_issues, [])
+
+
+class TestVariantValidatorUnits(TestCase):
+    """Test units validation."""
+
+    def setUp(self):
+        self.validator = VariantValidator()
+
+    def test_valid_unit_cm(self):
+        """有效单位 cm 应该通过。"""
+        data = {
+            'stem': '一根线段长 x cm，求长度。',
+            'question_type': 'fill_blank',
+            'answer': '10',
+            'variables': [
+                {'name': 'x', 'value': 10, 'unit': 'cm'},
+            ],
+        }
+        issues = self.validator.validate(data)
+        unit_issues = [i for i in issues if '单位' in i]
+        self.assertEqual(unit_issues, [])
+
+    def test_valid_unit_chinese(self):
+        """有效中文单位 米 应该通过。"""
+        data = {
+            'stem': '一段路长 x 米。',
+            'question_type': 'fill_blank',
+            'answer': '100',
+            'variables': [
+                {'name': 'x', 'value': 100, 'unit': '米'},
+            ],
+        }
+        issues = self.validator.validate(data)
+        unit_issues = [i for i in issues if '单位' in i]
+        self.assertEqual(unit_issues, [])
+
+    def test_valid_multiple_units(self):
+        """多个有效单位应该通过。"""
+        data = {
+            'stem': '速度 v m/s 运行 t 小时。',
+            'question_type': 'computation',
+            'answer': 'vt',
+            'variables': [
+                {'name': 'v', 'value': 5, 'unit': 'm/s'},
+                {'name': 't', 'value': 2, 'unit': 'h'},
+            ],
+        }
+        issues = self.validator.validate(data)
+        unit_issues = [i for i in issues if '单位' in i]
+        self.assertEqual(unit_issues, [])
+
+    def test_invalid_unit(self):
+        """无效单位应该被捕获。"""
+        data = {
+            'stem': '距离为 x foobars。',
+            'question_type': 'fill_blank',
+            'answer': '42',
+            'variables': [
+                {'name': 'x', 'value': 42, 'unit': 'foobars'},
+            ],
+        }
+        issues = self.validator.validate(data)
+        self.assertTrue(any('单位' in i for i in issues))
+        self.assertTrue(any('foobars' in i for i in issues))
+
+    def test_no_variables(self):
+        """没有 variables 字段应该通过（跳过单位校验）。"""
+        data = {
+            'stem': '2 + 2 = ?',
+            'question_type': 'fill_blank',
+            'answer': '4',
+        }
+        issues = self.validator.validate(data)
+        unit_issues = [i for i in issues if '单位' in i]
+        self.assertEqual(unit_issues, [])
+
+    def test_empty_variables(self):
+        """空 variables 列表应该通过。"""
+        data = {
+            'stem': '2 + 2 = ?',
+            'question_type': 'fill_blank',
+            'answer': '4',
+            'variables': [],
+        }
+        issues = self.validator.validate(data)
+        unit_issues = [i for i in issues if '单位' in i]
+        self.assertEqual(unit_issues, [])
+
+    def test_valid_unit_with_percent(self):
+        """百分号 % 作为单位应该通过。"""
+        data = {
+            'stem': '某商品涨价 x%。',
+            'question_type': 'fill_blank',
+            'answer': '20',
+            'variables': [
+                {'name': 'x', 'value': 20, 'unit': '%'},
+            ],
+        }
+        issues = self.validator.validate(data)
+        unit_issues = [i for i in issues if '单位' in i]
+        self.assertEqual(unit_issues, [])
+
+    def test_valid_unit_kg(self):
+        """kg 作为单位应该通过。"""
+        data = {
+            'stem': '物体质量 m kg。',
+            'question_type': 'computation',
+            'answer': '10',
+            'variables': [
+                {'name': 'm', 'value': 10, 'unit': 'kg'},
+            ],
+        }
+        issues = self.validator.validate(data)
+        unit_issues = [i for i in issues if '单位' in i]
+        self.assertEqual(unit_issues, [])
+
+    def test_variable_without_unit(self):
+        """变量没有 unit 字段应该跳过（不报错）。"""
+        data = {
+            'stem': 'x 的值是多少？',
+            'question_type': 'fill_blank',
+            'answer': '5',
+            'variables': [
+                {'name': 'x', 'value': 5},
+            ],
+        }
+        issues = self.validator.validate(data)
+        unit_issues = [i for i in issues if '单位' in i]
+        self.assertEqual(unit_issues, [])
