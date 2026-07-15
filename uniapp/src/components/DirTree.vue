@@ -88,6 +88,10 @@ function doCtx(action: string) {
 }
 
 onMounted(() => {
+  // NOTE: window.dispatchEvent/listener is H5-only.
+  // This component currently runs on H5 (http://localhost:5273/) where `window` is available.
+  // For mini-program (App/MP) support, this would need to be replaced with a custom event
+  // mechanism (e.g., @longpress for context menu + mitt/event bus for cross-component communication).
   window.addEventListener('tree-node-contextmenu', onTreeNodeCtx as EventListener)
 })
 

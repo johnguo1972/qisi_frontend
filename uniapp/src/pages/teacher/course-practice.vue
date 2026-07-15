@@ -200,7 +200,21 @@ import { aiProcessQuestion, getAiTaskStatus } from '@/api/questions'
 // Course info
 // ============================================================
 const courseId = ref<number>(0)
-const courseName = ref('')
+const courseName = ref('课程加载中...')
+
+async function loadCourseInfo() {
+  try {
+    const res: any = await courseApi.detail(courseId.value)
+    if (res?.data?.name) {
+      courseName.value = res.data.name
+    } else if (res?.name) {
+      courseName.value = res.name
+    }
+  } catch (e) {
+    console.error('加载课程信息失败:', e)
+    courseName.value = `课程 #${courseId.value}`
+  }
+}
 
 onMounted(() => {
   const pages = getCurrentPages()
@@ -208,7 +222,7 @@ onMounted(() => {
   const id = currentPage.options?.id
   if (id) {
     courseId.value = parseInt(id, 10)
-    courseName.value = `课程 #${id}`
+    loadCourseInfo()
   }
   loadTree()
   loadQuestions()
@@ -439,12 +453,15 @@ function chooseImage() {
 // ============================================================
 const materials = ref<any[]>([])
 const materialsLoading = ref(false)
+let materialsLoaded = false // Cache flag: only fetch once per page load
 
 async function loadMaterials() {
+  if (materialsLoaded) return // Cached - skip redundant API call
   materialsLoading.value = true
   try {
     const res: any = await materialApi.list(courseId.value)
     materials.value = res.data || res || []
+    materialsLoaded = true
   } catch (e) {
     console.error('加载课程资料失败:', e)
   } finally {

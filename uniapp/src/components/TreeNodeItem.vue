@@ -76,6 +76,10 @@ function handleAddChild() {
 
 function onRightClick(e: any) {
   // Dispatch custom event for context menu
+  // NOTE: window.dispatchEvent is H5-only.
+  // This component currently runs on H5 (http://localhost:5273/) where `window` is available.
+  // For mini-program (App/MP) support, this would need to be replaced with @longpress
+  // for context menu + mitt/event bus for cross-component communication.
   const evt = new CustomEvent('tree-node-contextmenu', {
     detail: { node: props.node, x: e.clientX || 0, y: e.clientY || 0 },
   })
