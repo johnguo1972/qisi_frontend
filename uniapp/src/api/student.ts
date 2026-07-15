@@ -1,4 +1,4 @@
-import { get, post } from '@/utils/request.ts'
+import { get, post } from '@/utils/request'
 
 export const studentApi = {
   home: (params?: { class_id?: number; scope?: string }) => get('/student/home', params),

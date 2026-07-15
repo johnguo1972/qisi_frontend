@@ -1,4 +1,4 @@
-import { get, post, put, del } from '@/utils/request.ts'
+import { get, post, put, del } from '@/utils/request'
 
 // === Institution (Admin) ===
 export const institutionApi = {

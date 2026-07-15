@@ -36,7 +36,7 @@ function request<T>(
   return new Promise((resolve, reject) => {
     uni.request({
       url: fullUrl,
-      method,
+      method: method as any,
       data: (method === 'POST' || method === 'PUT' || method === 'PATCH') ? data : undefined,
       header: {
         'Content-Type': 'application/json',

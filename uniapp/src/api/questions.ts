@@ -1,4 +1,4 @@
-import { post, get, put, patch, del } from '@/utils/request.ts'
+import { post, get, put, patch, del } from '@/utils/request'
 
 export const questionApi = {
   // GET /api/v1/questions

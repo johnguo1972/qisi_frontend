@@ -1,4 +1,4 @@
-import { get } from '@/utils/request.ts'
+import { get } from '@/utils/request'
 
 export interface KnowledgePoint {
   id: number

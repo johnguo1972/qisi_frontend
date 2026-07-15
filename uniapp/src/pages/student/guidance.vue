@@ -58,26 +58,16 @@ const options = ref<string[]>([])
 const inputText = ref('')
 const isCompleted = ref(false)
 
-<<<<<<< HEAD
 onMounted(async () => {
   const pages = getCurrentPages()
   const page = pages[pages.length - 1] as any
   questionId.value = parseInt(page.options.questionId || '0')
   // 从 URL 参数获取 mode，默认 B
   const urlMode = page.options.mode || 'B'
-
-=======
-onLoad((options: any) => {
-  questionId.value = parseInt(options.questionId || '0')
->>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
   if (!questionId.value) {
     uni.showToast({ title: '缺少题目ID', icon: 'none' })
     return
   }
-})
-
-onMounted(async () => {
-  if (!questionId.value) return
 
   try {
     const res = await studentApi.startGuidance({ question_id: questionId.value, mode_type: urlMode })

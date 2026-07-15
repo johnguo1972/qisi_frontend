@@ -1,4 +1,4 @@
-import { get, post, put } from '@/utils/request.ts'
+import { get, post, put } from '@/utils/request'
 
 export const authApi = {
   login: (mobile: string, verifyCode: string, roleType?: string) => {

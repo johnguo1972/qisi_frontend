@@ -1,0 +1,206 @@
+diff --git a/uniapp/src/api/courses.ts b/uniapp/src/api/courses.ts
+new file mode 100644
+index 0000000..50b706e
+--- /dev/null
++++ b/uniapp/src/api/courses.ts
+@@ -0,0 +1,105 @@
++import { post, get, put, del } from '@/utils/request.ts'
++
++// ============================================================
++// 课程 CRUD
++// ============================================================
++export const courseApi = {
++  list: () => get<any[]>('/courses/'),
++  create: (data: { name: string; subject: string; grade_level: string; description?: string }) =>
++    post<any>('/courses/', data),
++  detail: (id: number) => get<any>(`/courses/${id}/`),
++  update: (id: number, data: any) => put<any>(`/courses/${id}/`, data),
++  remove: (id: number) => del<any>(`/courses/${id}/`),
++}
++
++// ============================================================
++// 课程资料
++// ============================================================
++export const materialApi = {
++  list: (courseId: number) => get<any[]>(`/courses/${courseId}/materials/`),
++  upload: (courseId: number, file: File) => {
++    return new Promise<any>(async (resolve, reject) => {
++      const token = uni.getStorageSync('accessToken')
++      const formData = new FormData()
++      formData.append('file', file)
++
++      try {
++        const res = await fetch(`/api/v1/courses/${courseId}/materials/upload/`, {
++          method: 'POST',
++          headers: {
++            'Authorization': `Bearer ${token}`,
++          },
++          body: formData,
++        })
++        const data = await res.json()
++        if (res.ok) {
++          resolve(data)
++        } else {
++          reject(new Error(data.message || `上传失败 (${res.status})`))
++        }
++      } catch (e) {
++        reject(e)
++      }
++    })
++  },
++  // 返回下载链接 URL（非请求）
++  download: (courseId: number, materialId: number) =>
++    `/api/v1/courses/${courseId}/materials/${materialId}/download/`,
++  preview: (courseId: number, materialId: number) =>
++    get<any>(`/courses/${courseId}/materials/${materialId}/preview/`),
++  remove: (courseId: number, materialId: number) =>
++    del<any>(`/courses/${courseId}/materials/${materialId}/`),
++}
++
++// ============================================================
++// 目录树
++// ============================================================
++export const treeApi = {
++  list: (courseId: number) => get<any[]>(`/courses/${courseId}/tree/`),
++  create: (courseId: number, data: { name: string; parent?: number }) =>
++    post<any>(`/courses/${courseId}/tree/`, data),
++  update: (courseId: number, nodeId: number, data: any) =>
++    put<any>(`/courses/${courseId}/tree/${nodeId}/`, data),
++  remove: (courseId: number, nodeId: number) =>
++    del<any>(`/courses/${courseId}/tree/${nodeId}/`),
++  move: (courseId: number, nodeId: number, data: { parent?: number }) =>
++    put<any>(`/courses/${courseId}/tree/${nodeId}/move/`, data),
++}
++
++// ============================================================
++// 课程习题
++// ============================================================
++export const courseQuestionApi = {
++  list: (courseId: number, params?: { tree_node_id?: number }) =>
++    get<any[]>(`/courses/${courseId}/questions/`, params),
++  import: (courseId: number, data: { question_ids: number[]; tree_node_id?: number }) =>
++    post<any>(`/courses/${courseId}/questions/import/`, data),
++  batchDelete: (courseId: number, questionIds: number[]) =>
++    post<any>(`/courses/${courseId}/questions/batch-delete/`, { question_ids: questionIds }),
++  batchMove: (courseId: number, questionIds: number[], targetNodeId: number) =>
++    post<any>(`/courses/${courseId}/questions/batch-move/`, {
++      question_ids: questionIds,
++      target_node_id: targetNodeId,
++    }),
++}
++
++// ============================================================
++// 变式题
++// ============================================================
++export const variantApi = {
++  generate: (courseId: number, questionId: number, mode?: string) =>
++    post<any>(`/courses/${courseId}/questions/${questionId}/generate-variant/`, {
++      variant_mode: mode,
++    }),
++  batchGenerate: (courseId: number, questionIds: number[], mode?: string) =>
++    post<any>(`/courses/${courseId}/questions/batch-generate-variant/`, {
++      question_ids: questionIds,
++      variant_mode: mode,
++    }),
++  getStatus: (courseId: number, taskId: number) =>
++    get<any>(`/courses/${courseId}/variant-tasks/${taskId}/`),
++  confirm: (courseId: number, taskId: number) =>
++    post<any>(`/courses/${courseId}/variant-tasks/${taskId}/confirm/`),
++  reject: (courseId: number, taskId: number) =>
++    post<any>(`/courses/${courseId}/variant-tasks/${taskId}/reject/`),
++}
+diff --git a/uniapp/src/api/index.ts b/uniapp/src/api/index.ts
+index a1f7166..b66c4d7 100644
+--- a/uniapp/src/api/index.ts
++++ b/uniapp/src/api/index.ts
+@@ -8,10 +8,11 @@ export const authApi = {
+   },
+   sendCode: (mobile: string, scene: string = 'login') => post('/auth/send-code', { mobile, scene }),
+   logout: () => post('/auth/logout'),
+   getProfile: () => get<any>('/profile/me'),
+   updateProfile: (data: { display_name?: string; grade_level?: string | null }) => put<any>('/profile/me', data),
+ }
+ 
+ export { institutionApi, classApi, studentClassApi, teacherApi } from './institutions'
+ export { questionApi } from './questions'
+ export { missionApi } from './missions'
++export { courseApi, materialApi, treeApi, courseQuestionApi, variantApi } from './courses'
+diff --git a/uniapp/src/components/TeacherSidebar.vue b/uniapp/src/components/TeacherSidebar.vue
+index 7ef3e6b..f56b64b 100644
+--- a/uniapp/src/components/TeacherSidebar.vue
++++ b/uniapp/src/components/TeacherSidebar.vue
+@@ -22,20 +22,24 @@
+         <view class="nav-group-title">题库管理</view>
+         <view class="nav-item" :class="{ active: activeItem === 'bank' }" @click="goBank">
+           <text class="nav-icon">&#128218;</text>
+           <text class="nav-text">题库列表</text>
+         </view>
+         <view class="nav-item" :class="{ active: activeItem === 'favorites' }" @click="goFavorites">
+           <text class="nav-icon">&#11088;</text>
+           <text class="nav-text">我的精选</text>
+         </view>
+       </view>
++      <view class="nav-item" :class="{ active: activeItem === 'course-list' }" @click="goCourseList">
++        <text class="nav-icon">&#127891;</text>
++        <text class="nav-text">课程列表</text>
++      </view>
+       <view class="nav-item" :class="{ active: activeItem === 'classes' }" @click="goClasses">
+         <text class="nav-icon">&#127963;</text>
+         <text class="nav-text">班级管理</text>
+       </view>
+       <view class="nav-item" :class="{ active: activeItem === 'missions' }" @click="goMissionList">
+         <text class="nav-icon">&#128203;</text>
+         <text class="nav-text">任务列表</text>
+       </view>
+       <view class="nav-item nav-logout" @click="handleLogout">
+         <text class="nav-icon">&#128682;</text>
+@@ -62,20 +66,21 @@ onMounted(async () => {
+     const profile = await authApi.getProfile()
+     if (profile.data) userInfo.value = profile.data
+   } catch {}
+ })
+ 
+ function goWorkbench() { uni.navigateTo({ url: '/pages/teacher/workbench' }) }
+ function goImport() { uni.navigateTo({ url: '/pages/teacher/import' }) }
+ function goNewQuestion() { uni.navigateTo({ url: '/pages/teacher/new-question' }) }
+ function goBank() { uni.navigateTo({ url: '/pages/teacher/bank' }) }
+ function goFavorites() { uni.navigateTo({ url: '/pages/teacher/favorites' }) }
++function goCourseList() { uni.navigateTo({ url: '/pages/teacher/course-list' }) }
+ function goClasses() { uni.navigateTo({ url: '/pages/teacher/my-classes' }) }
+ function goMissionList() { uni.navigateTo({ url: '/pages/teacher/workbench' }) }
+ 
+ async function handleLogout() {
+   uni.showModal({
+     title: '确认退出',
+     content: '确定要退出登录吗？',
+     success: async (res) => {
+       if (res.confirm) {
+         try { await authApi.logout() } catch {}
+diff --git a/uniapp/src/pages.json b/uniapp/src/pages.json
+index 723bd65..e9fd10b 100644
+--- a/uniapp/src/pages.json
++++ b/uniapp/src/pages.json
+@@ -16,20 +16,23 @@
+     { "path": "pages/teacher/new-question", "style": { "navigationBarTitleText": "新增试题" } },
+     { "path": "pages/teacher/photo-upload", "style": { "navigationBarTitleText": "拍照新增试题" } },
+     { "path": "pages/teacher/mission-create", "style": { "navigationBarTitleText": "创建任务" } },
+     { "path": "pages/teacher/mission-detail", "style": { "navigationBarTitleText": "任务详情" } },
+     { "path": "pages/teacher/level-practice", "style": { "navigationBarTitleText": "关卡练习" } },
+     { "path": "pages/teacher/my-classes", "style": { "navigationBarTitleText": "我的班级" } },
+     { "path": "pages/teacher/class-create", "style": { "navigationBarTitleText": "创建班级" } },
+     { "path": "pages/teacher/class-edit", "style": { "navigationBarTitleText": "编辑班级" } },
+     { "path": "pages/teacher/class-detail", "style": { "navigationBarTitleText": "班级详情" } },
+     { "path": "pages/teacher/class-requests", "style": { "navigationBarTitleText": "申请审批" } },
++    { "path": "pages/teacher/course-list", "style": { "navigationBarTitleText": "课程列表" } },
++    { "path": "pages/teacher/course-materials", "style": { "navigationBarTitleText": "课程资料" } },
++    { "path": "pages/teacher/course-practice", "style": { "navigationBarTitleText": "课程练习" } },
+     { "path": "pages/student/home", "style": { "navigationBarTitleText": "今日任务" } },
+     { "path": "pages/student/join-class", "style": { "navigationBarTitleText": "加入班级" } },
+     { "path": "pages/student/mission", "style": { "navigationBarTitleText": "关卡" } },
+     { "path": "pages/student/answer", "style": { "navigationBarTitleText": "做题" } },
+     { "path": "pages/student/guidance", "style": { "navigationBarTitleText": "引导式解题" } },
+     { "path": "pages/student/wrongbook", "style": { "navigationBarTitleText": "错题本" } },
+     { "path": "pages/student/wrongbook-variants", "style": { "navigationBarTitleText": "同类题练习" } },
+     { "path": "pages/student/growth", "style": { "navigationBarTitleText": "成长" } },
+     { "path": "pages/student/knowledge-graph", "style": { "navigationBarTitleText": "知识图谱" } },
+     { "path": "pages/student/export", "style": { "navigationBarTitleText": "导出 PDF" } },

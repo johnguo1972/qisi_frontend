@@ -72,11 +72,7 @@ def student_home(request):
     ).select_related('mission', 'mission__class_obj')
 
     class_id = request.query_params.get('class_id')
-<<<<<<< HEAD
     if class_id and class_id != '0':
-=======
-    if class_id and int(class_id) > 0:
->>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
         progresses = progresses.filter(mission__class_obj_id=class_id)
 
     # Filter by scope (date range on end_at)
@@ -190,18 +186,12 @@ def student_level_detail(request, level_id):
                 'question_no': q.question_no,
                 'question_type': q.question_type,
                 'difficulty': float(q.difficulty) if q.difficulty else None,
-<<<<<<< HEAD
                 'stem': q.stem or '',
                 'stem_html': q.stem_html or '',
                 'answer': q.answer or '',
                 'analysis': q.analysis or '',
                 'solution': q.solution or '',
                 'images': [{'id': img.id, 'file_path': img.file_path, 'url': img.file_path} for img in q.images.all()],
-=======
-                'stem': q.stem,
-                'stem_html': q.stem_html,
-                'images': [{'url': img.file_path} for img in q.images.all()],
->>>>>>> c39c149702ee1b34309a8b0675bb400fbacd2398
                 'options': [{'label': o.option_label, 'content': o.content}
                            for o in q.options.all()],
             })

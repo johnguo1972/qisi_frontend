@@ -1,0 +1,1648 @@
+diff --git a/uniapp/src/components/DirTree.vue b/uniapp/src/components/DirTree.vue
+new file mode 100644
+index 0000000..0340002
+--- /dev/null
++++ b/uniapp/src/components/DirTree.vue
+@@ -0,0 +1,176 @@
++<template>
++  <view class="dir-tree">
++    <view class="root-actions">
++      <button class="btn-add-root" size="mini" @click="$emit('add-root')">+ 根节点</button>
++    </view>
++    <view v-if="loading" class="loading">加载中...</view>
++    <view v-else-if="nodes.length === 0" class="empty">暂无目录，请点击上方按钮添加</view>
++    <view v-else class="tree-list">
++      <tree-node-item
++        v-for="node in nodes"
++        :key="node.id"
++        :node="node"
++        :selected-id="selectedId"
++        @select="handleSelect"
++        @add-child="$emit('add-child', $event)"
++        @rename="$emit('rename', $event)"
++        @delete-node="$emit('delete-node', $event)"
++      />
++    </view>
++
++    <!-- Context menu -->
++    <view v-if="contextVisible" class="ctx-overlay" @click="hideCtx">
++      <view class="ctx-menu" :style="{ top: ctxY + 'px', left: ctxX + 'px' }" @click.stop @contextmenu.prevent.stop>
++        <view class="ctx-item" @click="doCtx('add')">+ 添加子节点</view>
++        <view class="ctx-item" @click="doCtx('rename')">&#9998; 重命名</view>
++        <view class="ctx-item danger" @click="doCtx('delete')">&#128465; 删除</view>
++      </view>
++    </view>
++  </view>
++</template>
++
++<script setup lang="ts">
++import { ref, onMounted, onUnmounted } from 'vue'
++import TreeNodeItem from './TreeNodeItem.vue'
++
++interface TreeNodeData {
++  id: number
++  name: string
++  children?: TreeNodeData[]
++  _expanded?: boolean
++  [key: string]: any
++}
++
++defineProps<{
++  nodes: TreeNodeData[]
++  loading?: boolean
++}>()
++
++const emit = defineEmits<{
++  select: [node: TreeNodeData]
++  'add-root': []
++  'add-child': [node: TreeNodeData]
++  rename: [node: TreeNodeData]
++  'delete-node': [node: TreeNodeData]
++}>()
++
++const selectedId = ref<number | null>(null)
++const contextVisible = ref(false)
++const ctxX = ref(0)
++const ctxY = ref(0)
++const ctxNode = ref<TreeNodeData | null>(null)
++
++function handleSelect(node: TreeNodeData) {
++  selectedId.value = node.id
++  emit('select', node)
++}
++
++function onTreeNodeCtx(e: Event) {
++  const detail = (e as CustomEvent).detail
++  ctxX.value = detail.x
++  ctxY.value = detail.y
++  ctxNode.value = detail.node
++  contextVisible.value = true
++}
++
++function hideCtx() {
++  contextVisible.value = false
++  ctxNode.value = null
++}
++
++function doCtx(action: string) {
++  const node = ctxNode.value
++  if (!node) return
++  hideCtx()
++  if (action === 'add') emit('add-child', node)
++  else if (action === 'rename') emit('rename', node)
++  else if (action === 'delete') emit('delete-node', node)
++}
++
++onMounted(() => {
++  window.addEventListener('tree-node-contextmenu', onTreeNodeCtx as EventListener)
++})
++
++onUnmounted(() => {
++  window.removeEventListener('tree-node-contextmenu', onTreeNodeCtx as EventListener)
++})
++</script>
++
++<style scoped>
++.dir-tree {
++  width: 100%;
++  height: 100%;
++  display: flex;
++  flex-direction: column;
++  overflow: hidden;
++}
++
++.root-actions {
++  padding: 8px 12px;
++  border-bottom: 1px solid #f0f0f0;
++}
++
++.btn-add-root {
++  width: 100%;
++  background: #409eff;
++  color: #fff;
++  border: none;
++  border-radius: 4px;
++  font-size: 12px;
++}
++
++.btn-add-root::after {
++  border: none;
++}
++
++.loading,
++.empty {
++  text-align: center;
++  color: #909399;
++  padding: 40px 0;
++  font-size: 13px;
++}
++
++.tree-list {
++  flex: 1;
++  overflow-y: auto;
++  padding: 8px 0;
++}
++
++/* Context menu */
++.ctx-overlay {
++  position: fixed;
++  inset: 0;
++  z-index: 9999;
++}
++
++.ctx-menu {
++  position: fixed;
++  background: #fff;
++  border-radius: 8px;
++  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
++  padding: 4px 0;
++  min-width: 160px;
++  z-index: 10000;
++}
++
++.ctx-item {
++  padding: 10px 16px;
++  font-size: 13px;
++  color: #303133;
++  cursor: pointer;
++  transition: background 0.15s;
++}
++
++.ctx-item:hover {
++  background: #f5f7fa;
++}
++
++.ctx-item.danger {
++  color: #f56c6c;
++}
++
++.ctx-item.danger:hover {
++  background: #fef0f0;
++}
++</style>
+diff --git a/uniapp/src/components/TreeNodeItem.vue b/uniapp/src/components/TreeNodeItem.vue
+new file mode 100644
+index 0000000..09ce1c5
+--- /dev/null
++++ b/uniapp/src/components/TreeNodeItem.vue
+@@ -0,0 +1,163 @@
++<template>
++  <view class="tree-node-wrapper">
++    <view
++      :class="['tree-node', { active: isSelected }]"
++      @click="handleClick"
++      @contextmenu.prevent="onRightClick"
++    >
++      <view class="expand-btn" @click.stop="toggleExpand">
++        <text class="expand-arrow">{{ arrow }}</text>
++      </view>
++      <text class="node-name">{{ node.name || '未命名' }}</text>
++      <view class="node-actions">
++        <view class="btn-plus" @click.stop="handleAddChild">+</view>
++      </view>
++    </view>
++
++    <view v-if="isExpanded && hasChildren" class="tree-children">
++      <tree-node-item
++        v-for="child in node.children"
++        :key="child.id"
++        :node="child"
++        :selected-id="selectedId"
++        @select="$emit('select', $event)"
++        @add-child="$emit('add-child', $event)"
++        @rename="$emit('rename', $event)"
++        @delete-node="$emit('delete-node', $event)"
++      />
++    </view>
++  </view>
++</template>
++
++<script setup lang="ts">
++import { computed } from 'vue'
++
++interface TreeNodeData {
++  id: number
++  name: string
++  children?: TreeNodeData[]
++  _expanded?: boolean
++  [key: string]: any
++}
++
++const props = defineProps<{
++  node: TreeNodeData
++  selectedId: number | null
++}>()
++
++const emit = defineEmits<{
++  select: [node: TreeNodeData]
++  'add-child': [node: TreeNodeData]
++  rename: [node: TreeNodeData]
++  'delete-node': [node: TreeNodeData]
++}>()
++
++const isSelected = computed(() => props.selectedId === props.node.id)
++const hasChildren = computed(() => Array.isArray(props.node.children) && props.node.children.length > 0)
++const isExpanded = computed(() => !!props.node._expanded)
++const arrow = computed(() => {
++  if (!hasChildren.value) return ' '
++  return isExpanded.value ? '▼' : '▶'
++})
++
++function handleClick() {
++  emit('select', props.node)
++}
++
++function toggleExpand() {
++  if (hasChildren.value) {
++    props.node._expanded = !props.node._expanded
++  }
++}
++
++function handleAddChild() {
++  emit('add-child', props.node)
++}
++
++function onRightClick(e: any) {
++  // Dispatch custom event for context menu
++  const evt = new CustomEvent('tree-node-contextmenu', {
++    detail: { node: props.node, x: e.clientX || 0, y: e.clientY || 0 },
++  })
++  window.dispatchEvent(evt)
++}
++</script>
++
++<style scoped>
++.tree-node-wrapper {
++  user-select: none;
++}
++
++.tree-node {
++  display: flex;
++  align-items: center;
++  padding: 6px 8px;
++  cursor: pointer;
++  border-radius: 4px;
++  margin: 2px 4px;
++  font-size: 13px;
++  color: #606266;
++  transition: background 0.15s;
++}
++
++.tree-node:hover {
++  background: #f5f7fa;
++}
++
++.tree-node.active {
++  background: #ecf5ff;
++  color: #409eff;
++  font-weight: 500;
++}
++
++.expand-btn {
++  width: 20px;
++  height: 20px;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  flex-shrink: 0;
++  cursor: pointer;
++}
++
++.expand-arrow {
++  font-size: 10px;
++  color: #909399;
++}
++
++.node-name {
++  flex: 1;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  margin: 0 4px;
++}
++
++.node-actions {
++  display: flex;
++  align-items: center;
++  flex-shrink: 0;
++}
++
++.btn-plus {
++  width: 20px;
++  height: 20px;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  font-size: 14px;
++  color: #909399;
++  cursor: pointer;
++  border-radius: 4px;
++  transition: all 0.15s;
++}
++
++.btn-plus:hover {
++  background: #409eff;
++  color: #fff;
++}
++
++.tree-children {
++  padding-left: 12px;
++}
++</style>
+diff --git a/uniapp/src/pages/teacher/course-practice.vue b/uniapp/src/pages/teacher/course-practice.vue
+new file mode 100644
+index 0000000..1d9d852
+--- /dev/null
++++ b/uniapp/src/pages/teacher/course-practice.vue
+@@ -0,0 +1,1291 @@
++<template>
++  <view class="course-practice">
++    <TeacherSidebar activeItem="course-practice" />
++
++    <view class="main">
++      <!-- Left: Directory tree -->
++      <view class="sidebar-tree">
++        <view class="tree-header">
++          <text class="tree-title">课程目录</text>
++          <text class="course-name">{{ courseName }}</text>
++        </view>
++        <DirTree
++          :nodes="treeNodes"
++          :loading="treeLoading"
++          @select="onSelectNode"
++          @add-root="onAddRoot"
++          @add-child="onAddChild"
++          @rename="onRename"
++          @delete-node="onDeleteNode"
++        />
++      </view>
++
++      <!-- Center: Question list -->
++      <view class="question-panel">
++        <view class="panel-header">
++          <text class="panel-title">习题列表</text>
++          <view class="header-actions">
++            <button class="btn-action" size="mini" @click="showAddPanel">+ 新增习题</button>
++            <button class="btn-action" size="mini" type="primary" @click="batchAiProcess" :disabled="selectedIds.length === 0">批量AI处理</button>
++            <button class="btn-action" size="mini" type="success" @click="batchGenerateVariant" :disabled="selectedIds.length === 0">批量生成变式题</button>
++          </view>
++        </view>
++
++        <!-- Batch action bar -->
++        <view v-if="selectedIds.length > 0" class="batch-bar">
++          <text class="batch-text">已选 {{ selectedIds.length }} 题</text>
++          <button size="mini" @click="showMoveDialog">移动节点</button>
++          <button size="mini" type="warn" @click="batchRemove">从课程移除</button>
++          <button size="mini" @click="selectedIds = []">取消选择</button>
++        </view>
++
++        <!-- Question table -->
++        <view v-if="loading" class="loading">加载中...</view>
++        <view v-else-if="questions.length === 0" class="empty">暂无题目{{ !selectedNode ? '，请选择目录节点' : '' }}</view>
++        <view v-else class="question-table">
++          <view class="table-header">
++            <view class="col col-check">
++              <view class="check-all" @click="toggleSelectAll"><text>{{ isAllSelected ? '☑' : '☐' }}</text></view>
++            </view>
++            <text class="col-stem">题干</text>
++            <text class="col-diff">难度</text>
++            <text class="col-kp">知识点</text>
++            <text class="col-confirm">内容确认</text>
++            <text class="col-ai">AI答案</text>
++            <text class="col-actions">操作</text>
++          </view>
++          <view v-for="q in questions" :key="q.id"
++                :class="['table-row', { 'row-selected': selectedIds.includes(q.id) }]"
++                @click="toggleSelect(q.id)">
++            <view class="col col-check" @click.stop="toggleSelect(q.id)">
++              <text>{{ selectedIds.includes(q.id) ? '☑' : '☐' }}</text>
++            </view>
++            <text class="col-stem" @click.stop="goEdit(q.id)">{{ q.stem_preview }}</text>
++            <text :class="['col-diff', 'diff-' + q.difficulty]">L{{ q.difficulty }}</text>
++            <text class="col-kp">{{ q.knowledge_points_count || '-' }}</text>
++            <text :class="['col-confirm', q.review_status === 'confirmed' ? 'confirmed' : 'pending']">
++              {{ q.review_status === 'confirmed' ? '✓' : '待审核' }}
++            </text>
++            <view class="col-ai" @click.stop>
++              <text :class="['badge', q.ai_answer_a_confirmed ? 'done' : q.ai_answer_a ? 'blank' : '']">A</text>
++              <text :class="['badge', q.ai_answer_b_confirmed ? 'done' : q.ai_answer_b ? 'blank' : '']">B</text>
++              <text :class="['badge', q.ai_answer_c_confirmed ? 'done' : q.ai_answer_c ? 'blank' : '']">C</text>
++            </view>
++            <view class="col-actions" @click.stop>
++              <button size="mini" @click="goEdit(q.id)">编辑</button>
++              <button size="mini" type="primary" @click="handleAiProcess(q.id)">AI处理</button>
++              <button size="mini" type="success" @click="handleGenerateVariant(q.id)">生成变式</button>
++              <button size="mini" type="warn" @click="handleRemove(q.id)">移除</button>
++            </view>
++          </view>
++        </view>
++      </view>
++    </view>
++
++    <!-- Add question panel (slide-in) -->
++    <view v-if="addPanelVisible" class="panel-overlay" @click.self="closeAddPanel">
++      <view class="add-panel">
++        <view class="add-panel-header">
++          <text class="add-panel-title">新增习题</text>
++          <view class="btn-close" @click="closeAddPanel">×</view>
++        </view>
++
++        <!-- Tabs -->
++        <view class="tab-bar">
++          <view :class="['tab', { active: activeTab === 'upload' }]" @click="activeTab = 'upload'">拍照/上传</view>
++          <view :class="['tab', { active: activeTab === 'material' }]" @click="activeTab = 'material'; loadMaterials()">从课程资料选择</view>
++          <view :class="['tab', { active: activeTab === 'bank' }]" @click="activeTab = 'bank'; loadBankQuestions()">从题库引入</view>
++        </view>
++
++        <!-- Tab: Upload -->
++        <scroll-view v-show="activeTab === 'upload'" class="tab-content" scroll-y>
++          <view class="upload-area">
++            <text class="upload-hint">拍照或上传图片创建新试题</text>
++            <view class="upload-buttons">
++              <button class="btn-upload" @click="openCamera">📷 拍照新增</button>
++              <button class="btn-upload" @click="chooseImage">📁 上传图片</button>
++            </view>
++            <text class="upload-note">将跳转至新增试题页面完成编辑</text>
++          </view>
++        </scroll-view>
++
++        <!-- Tab: From materials -->
++        <scroll-view v-show="activeTab === 'material'" class="tab-content" scroll-y>
++          <view v-if="materialsLoading" class="loading-sm">加载中...</view>
++          <view v-else-if="materials.length === 0" class="empty-sm">暂无课程资料</view>
++          <view v-else class="material-list">
++            <view v-for="m in materials" :key="m.id" class="material-item">
++              <view class="material-info">
++                <text class="material-icon">📄</text>
++                <text class="material-name">{{ m.name }}</text>
++              </view>
++              <button size="mini" type="primary" @click="importFromMaterial(m)">引入</button>
++            </view>
++          </view>
++        </scroll-view>
++
++        <!-- Tab: From bank -->
++        <scroll-view v-show="activeTab === 'bank'" class="tab-content" scroll-y>
++          <view class="bank-search">
++            <input class="search-input" placeholder="搜索题干或题号..." v-model="bankSearchText" @confirm="searchBank" />
++            <button size="mini" type="primary" @click="searchBank">搜索</button>
++          </view>
++          <view v-if="bankLoading" class="loading-sm">加载中...</view>
++          <view v-else-if="bankQuestions.length === 0" class="empty-sm">未找到题目</view>
++          <view v-else class="bank-list">
++            <view v-for="q in bankQuestions" :key="q.id" class="bank-item">
++              <view class="bank-check" @click="toggleBankSelect(q.id)">
++                <text>{{ bankSelectedIds.includes(q.id) ? '☑' : '☐' }}</text>
++              </view>
++              <view class="bank-info" @click="toggleBankSelect(q.id)">
++                <text class="bank-stem">{{ q.stem_preview }}</text>
++                <text class="bank-meta">难度 L{{ q.difficulty }} | 知识点 {{ q.knowledge_points_count || '-' }}</text>
++              </view>
++            </view>
++          </view>
++          <view v-if="bankSelectedIds.length > 0" class="bank-footer">
++            <text>已选 {{ bankSelectedIds.length }} 题</text>
++            <button size="mini" type="primary" @click="importFromBank">引入到课程</button>
++          </view>
++        </scroll-view>
++      </view>
++    </view>
++
++    <!-- Add/Rename node dialog -->
++    <view v-if="nodeDialogVisible" class="modal-overlay" @click.self="nodeDialogVisible = false">
++      <view class="modal">
++        <text class="modal-title">{{ nodeDialogTitle }}</text>
++        <view class="form-group">
++          <text class="form-label">节点名称</text>
++          <input class="form-input" v-model="nodeFormName" placeholder="请输入节点名称" maxlength="50" @confirm="confirmNodeAction" />
++        </view>
++        <view class="modal-footer">
++          <button size="default" @click="nodeDialogVisible = false">取消</button>
++          <button size="default" type="primary" @click="confirmNodeAction">确定</button>
++        </view>
++      </view>
++    </view>
++
++    <!-- Move dialog -->
++    <view v-if="moveDialogVisible" class="modal-overlay" @click.self="moveDialogVisible = false">
++      <view class="modal">
++        <text class="modal-title">移动习题</text>
++        <view class="form-group">
++          <text class="form-label">目标节点</text>
++          <picker :range="moveTargetOptions" range-key="label" @change="onMoveTargetChange">
++            <view class="picker-value">
++              <text :class="moveTarget ? 'picker-text' : 'picker-placeholder'">
++                {{ moveTargetLabel || '请选择目标节点' }}
++              </text>
++            </view>
++          </picker>
++        </view>
++        <view class="modal-footer">
++          <button size="default" @click="moveDialogVisible = false">取消</button>
++          <button size="default" type="primary" @click="confirmMove" :disabled="!moveTarget">确定移动</button>
++        </view>
++      </view>
++    </view>
++  </view>
++</template>
++
++<script setup lang="ts">
++import { ref, computed, onMounted, onUnmounted } from 'vue'
++import TeacherSidebar from '@/components/TeacherSidebar.vue'
++import DirTree from '@/components/DirTree.vue'
++import { treeApi, courseQuestionApi, variantApi, materialApi } from '@/api/courses'
++import { aiProcessQuestion, getAiTaskStatus } from '@/api/questions'
++
++// ============================================================
++// Course info
++// ============================================================
++const courseId = ref<number>(0)
++const courseName = ref('')
++
++onMounted(() => {
++  const pages = getCurrentPages()
++  const currentPage = pages[pages.length - 1] as any
++  const id = currentPage.options?.id
++  if (id) {
++    courseId.value = parseInt(id, 10)
++    courseName.value = `课程 #${id}`
++  }
++  loadTree()
++  loadQuestions()
++})
++
++// ============================================================
++// Tree
++// ============================================================
++interface TreeNodeData {
++  id: number
++  name: string
++  children?: TreeNodeData[]
++  _expanded?: boolean
++  parent_id?: number | null
++}
++
++const treeNodes = ref<TreeNodeData[]>([])
++const treeLoading = ref(false)
++const selectedNode = ref<TreeNodeData | null>(null)
++
++async function loadTree() {
++  treeLoading.value = true
++  try {
++    const res: any = await treeApi.list(courseId.value)
++    treeNodes.value = (res.data || res || []).map(flattenTree)
++  } catch (e) {
++    console.error('加载目录树失败:', e)
++  } finally {
++    treeLoading.value = false
++  }
++}
++
++function flattenTree(node: any): TreeNodeData {
++  return {
++    ...node,
++    _expanded: false,
++    children: (node.children || []).map(flattenTree),
++  }
++}
++
++function onSelectNode(node: TreeNodeData) {
++  selectedNode.value = node
++  loadQuestions()
++}
++
++// Node actions
++const nodeDialogVisible = ref(false)
++const nodeDialogTitle = ref('')
++const nodeFormName = ref('')
++let nodeActionType: 'add-root' | 'add-child' | 'rename' = 'add-root'
++let nodeActionParent: TreeNodeData | null = null
++
++function onAddRoot() {
++  nodeActionType = 'add-root'
++  nodeActionParent = null
++  nodeDialogTitle.value = '添加根节点'
++  nodeFormName.value = ''
++  nodeDialogVisible.value = true
++}
++
++function onAddChild(parent: TreeNodeData) {
++  nodeActionType = 'add-child'
++  nodeActionParent = parent
++  nodeDialogTitle.value = `添加子节点 → ${parent.name}`
++  nodeFormName.value = ''
++  nodeDialogVisible.value = true
++}
++
++function onRename(node: TreeNodeData) {
++  nodeActionType = 'rename'
++  nodeActionParent = node
++  nodeDialogTitle.value = '重命名'
++  nodeFormName.value = node.name
++  nodeDialogVisible.value = true
++}
++
++function onDeleteNode(node: TreeNodeData) {
++  uni.showModal({
++    title: '确认删除',
++    content: `确定要删除目录「${node.name}」及其所有子目录吗？`,
++    success: async (res) => {
++      if (res.confirm) {
++        try {
++          await treeApi.remove(courseId.value, node.id)
++          uni.showToast({ title: '已删除', icon: 'success' })
++          await loadTree()
++          if (selectedNode.value?.id === node.id) {
++            selectedNode.value = null
++            loadQuestions()
++          }
++        } catch (e: any) {
++          uni.showToast({ title: e?.message || '删除失败', icon: 'none' })
++        }
++      }
++    },
++  })
++}
++
++async function confirmNodeAction() {
++  if (!nodeFormName.value.trim()) {
++    uni.showToast({ title: '请输入节点名称', icon: 'none' })
++    return
++  }
++  try {
++    if (nodeActionType === 'add-root') {
++      await treeApi.create(courseId.value, { name: nodeFormName.value.trim() })
++    } else if (nodeActionType === 'add-child' && nodeActionParent) {
++      await treeApi.create(courseId.value, {
++        name: nodeFormName.value.trim(),
++        parent: nodeActionParent.id,
++      })
++    } else if (nodeActionType === 'rename' && nodeActionParent) {
++      await treeApi.update(courseId.value, nodeActionParent.id, {
++        name: nodeFormName.value.trim(),
++      })
++    }
++    uni.showToast({ title: '操作成功', icon: 'success' })
++    nodeDialogVisible.value = false
++    await loadTree()
++  } catch (e: any) {
++    uni.showToast({ title: e?.message || '操作失败', icon: 'none' })
++  }
++}
++
++// ============================================================
++// Questions
++// ============================================================
++interface Question {
++  id: number
++  stem_preview: string
++  difficulty: number
++  knowledge_points_count?: number
++  review_status: string
++  ai_answer_a: boolean
++  ai_answer_b: boolean
++  ai_answer_c: boolean
++  ai_answer_a_confirmed: boolean
++  ai_answer_b_confirmed: boolean
++  ai_answer_c_confirmed: boolean
++}
++
++const questions = ref<Question[]>([])
++const loading = ref(false)
++const selectedIds = ref<number[]>([])
++
++async function loadQuestions() {
++  loading.value = true
++  try {
++    const params: any = {}
++    if (selectedNode.value) {
++      params.tree_node_id = selectedNode.value.id
++    }
++    const res: any = await courseQuestionApi.list(courseId.value, params)
++    questions.value = res.data || res || []
++    selectedIds.value = []
++  } catch (e) {
++    console.error('加载习题列表失败:', e)
++  } finally {
++    loading.value = false
++  }
++}
++
++// Selection
++const isAllSelected = computed(() =>
++  questions.value.length > 0 && selectedIds.value.length === questions.value.length
++)
++
++function toggleSelect(id: number) {
++  const idx = selectedIds.value.indexOf(id)
++  if (idx >= 0) selectedIds.value.splice(idx, 1)
++  else selectedIds.value.push(id)
++}
++
++function toggleSelectAll() {
++  if (isAllSelected.value) selectedIds.value = []
++  else selectedIds.value = questions.value.map((q) => q.id)
++}
++
++function goEdit(id: number) {
++  uni.navigateTo({ url: `/pages/teacher/question-edit?id=${id}` })
++}
++
++// ============================================================
++// Add question panel
++// ============================================================
++const addPanelVisible = ref(false)
++const activeTab = ref('upload')
++
++function showAddPanel() {
++  addPanelVisible.value = true
++  activeTab.value = 'upload'
++}
++
++function closeAddPanel() {
++  addPanelVisible.value = false
++}
++
++function openCamera() {
++  // Navigate to existing new-question page
++  uni.navigateTo({
++    url: `/pages/teacher/new-question?courseId=${courseId.value}`,
++    fail: () => {
++      console.error('跳转新增试题页面失败')
++    },
++  })
++  closeAddPanel()
++}
++
++function chooseImage() {
++  // @ts-ignore
++  uni.chooseImage({
++    count: 1,
++    sourceType: ['album'],
++    success: (res: any) => {
++      uni.navigateTo({
++        url: `/pages/teacher/new-question?courseId=${courseId.value}&filePath=${res.tempFilePaths[0]}`,
++        fail: () => {
++          console.error('跳转新增试题页面失败')
++        },
++      })
++      closeAddPanel()
++    },
++  })
++}
++
++// ============================================================
++// Materials tab
++// ============================================================
++const materials = ref<any[]>([])
++const materialsLoading = ref(false)
++
++async function loadMaterials() {
++  materialsLoading.value = true
++  try {
++    const res: any = await materialApi.list(courseId.value)
++    materials.value = res.data || res || []
++  } catch (e) {
++    console.error('加载课程资料失败:', e)
++  } finally {
++    materialsLoading.value = false
++  }
++}
++
++function importFromMaterial(material: any) {
++  uni.showToast({ title: `资料「${material.name}」引入功能开发中`, icon: 'none' })
++}
++
++// ============================================================
++// Bank tab
++// ============================================================
++const bankQuestions = ref<any[]>([])
++const bankLoading = ref(false)
++const bankSearchText = ref('')
++const bankSelectedIds = ref<number[]>([])
++
++async function loadBankQuestions() {
++  bankLoading.value = true
++  bankSelectedIds.value = []
++  try {
++    // Use questionApi list to get all bank questions
++    const { questionApi } = await import('@/api/questions')
++    const res: any = await questionApi.list({ page: 1, page_size: 100 })
++    bankQuestions.value = res.data?.items || res.data || []
++  } catch (e) {
++    console.error('加载题库失败:', e)
++  } finally {
++    bankLoading.value = false
++  }
++}
++
++function searchBank() {
++  if (!bankSearchText.value.trim()) {
++    loadBankQuestions()
++    return
++  }
++  // Simple client-side filter
++  const text = bankSearchText.value.trim().toLowerCase()
++  // Reload then filter
++  loadBankQuestions().then(() => {
++    bankQuestions.value = bankQuestions.value.filter((q: any) =>
++      (q.stem_preview || '').toLowerCase().includes(text) ||
++      (q.system_id || '').toLowerCase().includes(text) ||
++      (q.question_no || '').toLowerCase().includes(text)
++    )
++  })
++}
++
++function toggleBankSelect(id: number) {
++  const idx = bankSelectedIds.value.indexOf(id)
++  if (idx >= 0) bankSelectedIds.value.splice(idx, 1)
++  else bankSelectedIds.value.push(id)
++}
++
++async function importFromBank() {
++  if (bankSelectedIds.value.length === 0) return
++  try {
++    await courseQuestionApi.import(courseId.value, {
++      question_ids: bankSelectedIds.value,
++      tree_node_id: selectedNode.value?.id,
++    })
++    uni.showToast({ title: `已引入 ${bankSelectedIds.value.length} 题`, icon: 'success' })
++    bankSelectedIds.value = []
++    closeAddPanel()
++    loadQuestions()
++  } catch (e: any) {
++    uni.showToast({ title: e?.message || '引入失败', icon: 'none' })
++  }
++}
++
++// ============================================================
++// AI processing (polling pattern from bank.vue)
++// ============================================================
++const aiPollTimers: Array<{ taskId: string; timer: ReturnType<typeof setInterval> }> = []
++
++async function handleAiProcess(questionId: number) {
++  uni.showToast({ title: `已开始AI处理（题${questionId}），可继续其他操作`, icon: 'none', duration: 2000 })
++  try {
++    const res: any = await aiProcessQuestion(questionId)
++    const taskId = res.data?.task_id
++    if (!taskId) throw new Error('No task ID')
++    const timer = setInterval(async () => {
++      try {
++        const statusRes: any = await getAiTaskStatus(taskId)
++        if (statusRes.success === false || !statusRes.data) {
++          clearInterval(timer)
++          const idx = aiPollTimers.findIndex(t => t.taskId === taskId)
++          if (idx >= 0) aiPollTimers.splice(idx, 1)
++          uni.showToast({ title: `任务进度已失效（题${questionId}），请重新AI处理`, icon: 'none' })
++          loadQuestions()
++          return
++        }
++        const data = statusRes.data
++        if (data.status === 'complete' || data.status === 'failed' || data.status === 'partial') {
++          clearInterval(timer)
++          const idx = aiPollTimers.findIndex(t => t.taskId === taskId)
++          if (idx >= 0) aiPollTimers.splice(idx, 1)
++          if (data.status === 'complete') {
++            uni.showToast({ title: `AI处理完成（题${questionId}）`, icon: 'success' })
++          } else if (data.status === 'partial') {
++            uni.showToast({ title: `AI处理完成，部分步骤失败（题${questionId}）`, icon: 'none' })
++          } else {
++            uni.showToast({ title: data.error || `AI处理失败（题${questionId}）`, icon: 'none' })
++          }
++          loadQuestions()
++        }
++      } catch (e) { /* silent */ }
++    }, 2000)
++    aiPollTimers.push({ taskId, timer })
++  } catch (e: any) {
++    uni.showToast({ title: e?.message || '启动失败', icon: 'none' })
++  }
++}
++
++async function batchAiProcess() {
++  const ids = [...selectedIds.value]
++  if (ids.length === 0) return
++  for (const id of ids) {
++    handleAiProcess(id)
++  }
++  uni.showToast({ title: `已启动 ${ids.length} 题AI处理`, icon: 'none' })
++}
++
++// ============================================================
++// Variant generation
++// ============================================================
++const variantPollTimers: Array<{ taskId: number; timer: ReturnType<typeof setInterval> }> = []
++
++async function handleGenerateVariant(questionId: number) {
++  try {
++    const res: any = await variantApi.generate(courseId.value, questionId)
++    const taskId = res.data?.task_id || res.data?.id
++    if (!taskId) {
++      uni.showToast({ title: '变式题生成成功', icon: 'success' })
++      loadQuestions()
++      return
++    }
++    uni.showToast({ title: `变式题生成中（题${questionId}）`, icon: 'none', duration: 2000 })
++    const timer = setInterval(async () => {
++      try {
++        const statusRes: any = await variantApi.getStatus(courseId.value, taskId)
++        const status = statusRes.data?.status
++        if (status === 'complete' || status === 'success') {
++          clearInterval(timer)
++          const idx = variantPollTimers.findIndex(t => t.taskId === taskId)
++          if (idx >= 0) variantPollTimers.splice(idx, 1)
++          uni.showToast({ title: `变式题已生成（题${questionId}）`, icon: 'success' })
++          loadQuestions()
++        } else if (status === 'failed') {
++          clearInterval(timer)
++          const idx = variantPollTimers.findIndex(t => t.taskId === taskId)
++          if (idx >= 0) variantPollTimers.splice(idx, 1)
++          uni.showToast({ title: `变式题生成失败（题${questionId}）`, icon: 'none' })
++        }
++      } catch (e) { /* silent */ }
++    }, 3000)
++    variantPollTimers.push({ taskId, timer })
++  } catch (e: any) {
++    uni.showToast({ title: e?.message || '生成失败', icon: 'none' })
++  }
++}
++
++async function batchGenerateVariant() {
++  const ids = [...selectedIds.value]
++  if (ids.length === 0) return
++  try {
++    const res: any = await variantApi.batchGenerate(courseId.value, ids)
++    const taskIds = res.data?.task_ids || []
++    if (taskIds.length > 0) {
++      uni.showToast({ title: `已启动 ${taskIds.length} 题变式生成`, icon: 'none' })
++      // Poll each task
++      for (const tid of taskIds) {
++        const timer = setInterval(async () => {
++          try {
++            const statusRes: any = await variantApi.getStatus(courseId.value, tid)
++            const status = statusRes.data?.status
++            if (status === 'complete' || status === 'success' || status === 'failed') {
++              clearInterval(timer)
++              const idx = variantPollTimers.findIndex(t => t.taskId === tid)
++              if (idx >= 0) variantPollTimers.splice(idx, 1)
++              if (status !== 'failed') loadQuestions()
++            }
++          } catch (e) { /* silent */ }
++        }, 3000)
++        variantPollTimers.push({ taskId: tid, timer })
++      }
++    } else {
++      uni.showToast({ title: '批量变式生成已启动', icon: 'none' })
++    }
++  } catch (e: any) {
++    uni.showToast({ title: e?.message || '批量生成失败', icon: 'none' })
++  }
++}
++
++// ============================================================
++// Remove questions
++// ============================================================
++async function handleRemove(questionId: number) {
++  uni.showModal({
++    title: '确认移除',
++    content: '确定要从课程中移除此题目吗？',
++    success: async (res) => {
++      if (res.confirm) {
++        try {
++          await courseQuestionApi.batchDelete(courseId.value, [questionId])
++          uni.showToast({ title: '已移除', icon: 'success' })
++          loadQuestions()
++        } catch (e: any) {
++          uni.showToast({ title: e?.message || '移除失败', icon: 'none' })
++        }
++      }
++    },
++  })
++}
++
++async function batchRemove() {
++  const ids = [...selectedIds.value]
++  if (ids.length === 0) return
++  uni.showModal({
++    title: '确认批量移除',
++    content: `确定要从课程中移除选中的 ${ids.length} 道题目吗？`,
++    success: async (res) => {
++      if (res.confirm) {
++        try {
++          await courseQuestionApi.batchDelete(courseId.value, ids)
++          uni.showToast({ title: `已移除 ${ids.length} 题`, icon: 'success' })
++          selectedIds.value = []
++          loadQuestions()
++        } catch (e: any) {
++          uni.showToast({ title: e?.message || '批量移除失败', icon: 'none' })
++        }
++      }
++    },
++  })
++}
++
++// ============================================================
++// Move dialog
++// ============================================================
++const moveDialogVisible = ref(false)
++const moveTarget = ref<number | null>(null)
++const moveTargetLabel = ref('')
++
++function showMoveDialog() {
++  moveTarget.value = null
++  moveTargetLabel.value = ''
++  moveDialogVisible.value = true
++}
++
++const moveTargetOptions = computed(() => {
++  const result: Array<{ label: string; value: number }> = []
++  function walk(nodes: TreeNodeData[]) {
++    for (const n of nodes) {
++      result.push({ label: n.name, value: n.id })
++      if (n.children) walk(n.children)
++    }
++  }
++  walk(treeNodes.value)
++  return result
++})
++
++function onMoveTargetChange(e: any) {
++  const idx = e.detail.value
++  const opt = moveTargetOptions.value[idx]
++  if (opt) {
++    moveTarget.value = opt.value
++    moveTargetLabel.value = opt.label
++  }
++}
++
++async function confirmMove() {
++  if (!moveTarget.value) return
++  const ids = [...selectedIds.value]
++  if (ids.length === 0) return
++  try {
++    await courseQuestionApi.batchMove(courseId.value, ids, moveTarget.value)
++    uni.showToast({ title: `已移动 ${ids.length} 题`, icon: 'success' })
++    selectedIds.value = []
++    moveDialogVisible.value = false
++    loadQuestions()
++  } catch (e: any) {
++    uni.showToast({ title: e?.message || '移动失败', icon: 'none' })
++  }
++}
++
++// ============================================================
++// Cleanup
++// ============================================================
++onUnmounted(() => {
++  aiPollTimers.forEach(t => clearInterval(t.timer))
++  aiPollTimers.length = 0
++  variantPollTimers.forEach(t => clearInterval(t.timer))
++  variantPollTimers.length = 0
++})
++</script>
++
++<style scoped>
++.course-practice {
++  display: flex;
++  min-height: 100vh;
++  background: #f5f7fa;
++}
++
++.main {
++  margin-left: 240px;
++  flex: 1;
++  display: flex;
++  gap: 16px;
++  padding: 16px;
++  overflow: hidden;
++  height: 100vh;
++}
++
++/* Left sidebar tree */
++.sidebar-tree {
++  width: 260px;
++  background: #fff;
++  border-radius: 8px;
++  display: flex;
++  flex-direction: column;
++  flex-shrink: 0;
++  overflow: hidden;
++}
++
++.tree-header {
++  padding: 12px 16px;
++  border-bottom: 1px solid #f0f0f0;
++}
++
++.tree-title {
++  font-size: 14px;
++  font-weight: 500;
++  color: #303133;
++  display: block;
++}
++
++.course-name {
++  font-size: 12px;
++  color: #909399;
++  margin-top: 4px;
++  display: block;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++/* Question panel */
++.question-panel {
++  flex: 1;
++  background: #fff;
++  border-radius: 8px;
++  padding: 16px;
++  display: flex;
++  flex-direction: column;
++  overflow: hidden;
++  min-width: 0;
++}
++
++.panel-header {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  margin-bottom: 12px;
++}
++
++.panel-title {
++  font-size: 16px;
++  font-weight: 500;
++  color: #303133;
++}
++
++.header-actions {
++  display: flex;
++  gap: 8px;
++}
++
++.btn-action {
++  font-size: 12px;
++  margin: 0;
++}
++
++.btn-action::after {
++  border: none;
++}
++
++/* Batch bar */
++.batch-bar {
++  display: flex;
++  gap: 8px;
++  align-items: center;
++  padding: 8px 12px;
++  background: #ecf5ff;
++  border-radius: 8px;
++  margin-bottom: 12px;
++}
++
++.batch-text {
++  font-size: 13px;
++  color: #409eff;
++  margin-right: 8px;
++}
++
++/* Question table */
++.question-table {
++  flex: 1;
++  overflow-y: auto;
++}
++
++.table-header {
++  display: flex;
++  align-items: center;
++  padding: 8px 12px;
++  background: #f5f7fa;
++  font-size: 12px;
++  color: #909399;
++  font-weight: 500;
++}
++
++.table-row {
++  display: flex;
++  align-items: center;
++  padding: 8px 12px;
++  border-bottom: 1px solid #f0f0f0;
++  font-size: 13px;
++  cursor: pointer;
++}
++
++.table-row:hover {
++  background: #fafafa;
++}
++
++.table-row.row-selected {
++  background: #ecf5ff;
++}
++
++.col-check {
++  width: 30px;
++  text-align: center;
++  cursor: pointer;
++  flex-shrink: 0;
++}
++
++.check-all {
++  cursor: pointer;
++}
++
++.col-stem {
++  flex: 2;
++  min-width: 100px;
++}
++
++.col-diff {
++  width: 50px;
++  text-align: center;
++}
++
++.col-kp {
++  width: 60px;
++  text-align: center;
++}
++
++.col-confirm {
++  width: 80px;
++  text-align: center;
++}
++
++.col-ai {
++  width: 80px;
++  display: flex;
++  gap: 4px;
++  justify-content: center;
++}
++
++.col-actions {
++  display: flex;
++  gap: 4px;
++  flex-wrap: wrap;
++}
++
++.diff-1 { color: #67c23a; }
++.diff-2 { color: #409eff; }
++.diff-3 { color: #e6a23c; }
++.diff-4 { color: #f56c6c; }
++.diff-5 { color: #9924ff; }
++
++.confirmed { color: #67c23a; }
++.pending { color: #e6a23c; }
++
++.badge {
++  width: 18px;
++  height: 18px;
++  border-radius: 50%;
++  background: #f0f0f0;
++  color: #909399;
++  font-size: 9px;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++}
++
++.badge.done {
++  background: #67c23a;
++  color: #fff;
++}
++
++.badge.blank {
++  opacity: 0.3;
++}
++
++.loading, .empty {
++  text-align: center;
++  color: #909399;
++  padding: 40px 0;
++}
++
++/* Add question panel overlay */
++.panel-overlay {
++  position: fixed;
++  inset: 0;
++  background: rgba(0, 0, 0, 0.5);
++  display: flex;
++  align-items: stretch;
++  justify-content: flex-end;
++  z-index: 1000;
++}
++
++.add-panel {
++  width: 480px;
++  background: #fff;
++  display: flex;
++  flex-direction: column;
++  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.1);
++}
++
++.add-panel-header {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  padding: 16px 20px;
++  border-bottom: 1px solid #f0f0f0;
++}
++
++.add-panel-title {
++  font-size: 16px;
++  font-weight: 500;
++  color: #303133;
++}
++
++.btn-close {
++  width: 28px;
++  height: 28px;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  font-size: 20px;
++  color: #909399;
++  cursor: pointer;
++  border-radius: 50%;
++  transition: background 0.15s;
++}
++
++.btn-close:hover {
++  background: #f5f7fa;
++}
++
++/* Tabs */
++.tab-bar {
++  display: flex;
++  border-bottom: 1px solid #ebeef5;
++}
++
++.tab {
++  flex: 1;
++  padding: 12px 8px;
++  text-align: center;
++  font-size: 13px;
++  color: #606266;
++  cursor: pointer;
++  border-bottom: 2px solid transparent;
++  transition: all 0.15s;
++}
++
++.tab.active {
++  color: #409eff;
++  border-bottom-color: #409eff;
++}
++
++.tab-content {
++  flex: 1;
++  padding: 16px;
++  overflow-y: auto;
++}
++
++/* Upload tab */
++.upload-area {
++  text-align: center;
++  padding: 20px 0;
++}
++
++.upload-hint {
++  font-size: 14px;
++  color: #606266;
++  display: block;
++  margin-bottom: 24px;
++}
++
++.upload-buttons {
++  display: flex;
++  flex-direction: column;
++  gap: 12px;
++}
++
++.btn-upload {
++  background: #409eff;
++  color: #fff;
++  border: none;
++  border-radius: 8px;
++  font-size: 14px;
++  padding: 16px;
++}
++
++.btn-upload::after {
++  border: none;
++}
++
++.upload-note {
++  font-size: 12px;
++  color: #909399;
++  display: block;
++  margin-top: 16px;
++}
++
++/* Material list */
++.material-list {
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++}
++
++.material-item {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  padding: 10px 12px;
++  background: #f5f7fa;
++  border-radius: 8px;
++}
++
++.material-info {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  flex: 1;
++  min-width: 0;
++}
++
++.material-icon {
++  font-size: 18px;
++}
++
++.material-name {
++  font-size: 13px;
++  color: #303133;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++/* Bank search */
++.bank-search {
++  display: flex;
++  gap: 8px;
++  margin-bottom: 12px;
++}
++
++.search-input {
++  flex: 1;
++  height: 36px;
++  padding: 0 12px;
++  background: #f5f7fa;
++  border: 1px solid #e4e7ed;
++  border-radius: 6px;
++  font-size: 13px;
++  color: #303133;
++}
++
++.search-input:focus {
++  border-color: #409eff;
++  background: #fff;
++}
++
++.bank-list {
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++}
++
++.bank-item {
++  display: flex;
++  align-items: flex-start;
++  gap: 8px;
++  padding: 10px;
++  background: #f5f7fa;
++  border-radius: 6px;
++  cursor: pointer;
++}
++
++.bank-check {
++  width: 24px;
++  text-align: center;
++  font-size: 14px;
++  flex-shrink: 0;
++}
++
++.bank-info {
++  flex: 1;
++  min-width: 0;
++}
++
++.bank-stem {
++  font-size: 13px;
++  color: #303133;
++  display: block;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.bank-meta {
++  font-size: 11px;
++  color: #909399;
++  display: block;
++  margin-top: 4px;
++}
++
++.bank-footer {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  padding: 12px 0;
++  margin-top: 12px;
++  border-top: 1px solid #f0f0f0;
++  font-size: 13px;
++  color: #606266;
++}
++
++.loading-sm {
++  text-align: center;
++  color: #909399;
++  padding: 24px 0;
++  font-size: 13px;
++}
++
++.empty-sm {
++  text-align: center;
++  color: #c0c4cc;
++  padding: 40px 0;
++  font-size: 13px;
++}
++
++/* Modal */
++.modal-overlay {
++  position: fixed;
++  inset: 0;
++  background: rgba(0, 0, 0, 0.5);
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  z-index: 1000;
++}
++
++.modal {
++  background: #fff;
++  border-radius: 8px;
++  padding: 24px;
++  width: 400px;
++}
++
++.modal-title {
++  font-size: 16px;
++  font-weight: 500;
++  color: #303133;
++  display: block;
++  margin-bottom: 16px;
++}
++
++.form-group {
++  margin-bottom: 16px;
++}
++
++.form-label {
++  font-size: 13px;
++  color: #606266;
++  display: block;
++  margin-bottom: 8px;
++}
++
++.form-input {
++  width: 100%;
++  height: 40px;
++  padding: 0 12px;
++  background: #f5f7fa;
++  border: 1px solid #e4e7ed;
++  border-radius: 6px;
++  font-size: 13px;
++  color: #303133;
++  box-sizing: border-box;
++}
++
++.form-input:focus {
++  border-color: #409eff;
++  background: #fff;
++}
++
++.picker-value {
++  height: 40px;
++  padding: 0 12px;
++  background: #f5f7fa;
++  border: 1px solid #e4e7ed;
++  border-radius: 6px;
++  display: flex;
++  align-items: center;
++}
++
++.picker-text {
++  font-size: 13px;
++  color: #303133;
++}
++
++.picker-placeholder {
++  font-size: 13px;
++  color: #c0c4cc;
++}
++
++.modal-footer {
++  display: flex;
++  gap: 8px;
++  justify-content: flex-end;
++  margin-top: 20px;
++}
++</style>

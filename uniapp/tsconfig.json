@@ -8,9 +8,11 @@
     "esModuleInterop": true,
     "lib": ["esnext", "dom"],
     "types": ["@dcloudio/types"],
+    "skipLibCheck": true,
     "paths": {
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.vue"]
+  "include": ["src/**/*.ts", "src/**/*.vue"],
+  "exclude": ["node_modules"]
 }

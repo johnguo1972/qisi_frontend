@@ -1,0 +1,305 @@
+diff --git a/apps/courses/urls.py b/apps/courses/urls.py
+index fede944..3e9117e 100644
+--- a/apps/courses/urls.py
++++ b/apps/courses/urls.py
+@@ -1,29 +1,24 @@
+ """课程管理 URL 路由"""
+ from django.urls import path
+ from . import views
+ 
+ urlpatterns = [
+-    # 课程 CRUD
+-    path('courses/', views.course_list, name='course-list'),
+-    path('courses/', views.course_create, name='course-create'),
+-    path('courses/<int:course_id>/', views.course_detail, name='course-detail'),
+-    path('courses/<int:course_id>/', views.course_update, name='course-update'),
+-    path('courses/<int:course_id>/', views.course_delete, name='course-delete'),
++    # 课程 CRUD（合并视图：GET/POST 共用一个 path）
++    path('courses/', views.course_list_or_create, name='course-list-create'),
++    path('courses/<int:course_id>/', views.course_detail_update_delete, name='course-detail-update-delete'),
+ 
+     # 课程资料
+     path('courses/<int:course_id>/materials/', views.material_list, name='material-list'),
+     path('courses/<int:course_id>/materials/upload/', views.material_upload, name='material-upload'),
+     path('courses/<int:course_id>/materials/<int:material_id>/download/', views.material_download, name='material-download'),
+     path('courses/<int:course_id>/materials/<int:material_id>/preview/', views.material_preview, name='material-preview'),
+     path('courses/<int:course_id>/materials/<int:material_id>/', views.material_delete, name='material-delete'),
+ 
+-    # 目录树
+-    path('courses/<int:course_id>/tree/', views.tree_list, name='tree-list'),
+-    path('courses/<int:course_id>/tree/', views.tree_node_create, name='tree-node-create'),
+-    path('courses/<int:course_id>/tree/<int:node_id>/', views.tree_node_update, name='tree-node-update'),
+-    path('courses/<int:course_id>/tree/<int:node_id>/', views.tree_node_delete, name='tree-node-delete'),
++    # 目录树（合并视图：GET/POST 共用一个 path）
++    path('courses/<int:course_id>/tree/', views.tree_list_or_create, name='tree-list-create'),
++    path('courses/<int:course_id>/tree/<int:node_id>/', views.tree_node_update_or_delete, name='tree-node-update-delete'),
+     path('courses/<int:course_id>/tree/<int:node_id>/move/', views.tree_node_move, name='tree-node-move'),
+ 
+     # 变式任务查询
+     path('courses/<int:course_id>/variant-tasks/<int:task_id>/', views.variant_task_detail, name='variant-task-detail'),
+ ]
+diff --git a/apps/courses/views.py b/apps/courses/views.py
+index edadca1..f2e22e4 100644
+--- a/apps/courses/views.py
++++ b/apps/courses/views.py
+@@ -27,87 +27,74 @@ logger = logging.getLogger(__name__)
+ # 权限辅助函数
+ # ============================================================
+ 
+ def _check_course_owner(course, user):
+     """验证用户是否为课程创建者（老师）"""
+     if course.teacher != user:
+         raise PermissionDenied('您没有权限操作此课程')
+ 
+ 
+ def _get_course_or_404(course_id):
+-    """获取课程，不存在则抛 404"""
++    """获取课程，不存在或已删除则抛 404"""
+     try:
+-        return Course.objects.get(id=course_id)
++        return Course.objects.get(id=course_id, is_deleted=False)
+     except Course.DoesNotExist:
+         raise NotFound(f'课程 {course_id} 不存在')
+ 
+ 
+ # ============================================================
+ # 课程 CRUD
+ # ============================================================
+ 
+-@api_view(['GET'])
+-@permission_classes([IsAuthenticated])
+-def course_list(request):
+-    """当前老师的课程列表（is_deleted=False）"""
+-    courses = Course.objects.filter(
+-        teacher=request.user,
+-        is_deleted=False
+-    ).order_by('-created_at')
+-    serializer = CourseSerializer(courses, many=True, context={'request': request})
+-    return Response({'success': True, 'data': serializer.data})
+-
+-
+-@api_view(['POST'])
++@api_view(['GET', 'POST'])
+ @permission_classes([IsAuthenticated])
+-def course_create(request):
+-    """创建课程"""
++def course_list_or_create(request):
++    """课程列表（GET）和创建（POST）"""
++    if request.method == 'GET':
++        courses = Course.objects.filter(
++            teacher=request.user,
++            is_deleted=False
++        ).order_by('-created_at')
++        serializer = CourseSerializer(courses, many=True, context={'request': request})
++        return Response({'success': True, 'data': serializer.data})
++
++    # POST - 创建课程
+     serializer = CourseSerializer(
+         data=request.data,
+         context={'request': request}
+     )
+     serializer.is_valid(raise_exception=True)
+     course = serializer.save()
+     return Response(
+         {'success': True, 'data': CourseSerializer(course, context={'request': request}).data, 'message': '课程创建成功'},
+         status=status.HTTP_201_CREATED,
+     )
+ 
+ 
+-@api_view(['GET'])
++@api_view(['GET', 'PUT', 'DELETE'])
+ @permission_classes([IsAuthenticated])
+-def course_detail(request, course_id):
+-    """课程详情"""
++def course_detail_update_delete(request, course_id):
++    """课程详情（GET）、更新（PUT）、软删除（DELETE）"""
+     course = _get_course_or_404(course_id)
+     _check_course_owner(course, request.user)
+-    serializer = CourseSerializer(course, context={'request': request})
+-    return Response({'success': True, 'data': serializer.data})
+ 
++    if request.method == 'GET':
++        serializer = CourseSerializer(course, context={'request': request})
++        return Response({'success': True, 'data': serializer.data})
+ 
+-@api_view(['PUT'])
+-@permission_classes([IsAuthenticated])
+-def course_update(request, course_id):
+-    """修改课程"""
+-    course = _get_course_or_404(course_id)
+-    _check_course_owner(course, request.user)
+-    serializer = CourseSerializer(course, data=request.data, partial=True, context={'request': request})
+-    serializer.is_valid(raise_exception=True)
+-    course = serializer.save()
+-    return Response({'success': True, 'data': CourseSerializer(course, context={'request': request}).data, 'message': '课程更新成功'})
+-
++    if request.method == 'PUT':
++        serializer = CourseSerializer(course, data=request.data, partial=True, context={'request': request})
++        serializer.is_valid(raise_exception=True)
++        course = serializer.save()
++        return Response({'success': True, 'data': CourseSerializer(course, context={'request': request}).data, 'message': '课程更新成功'})
+ 
+-@api_view(['DELETE'])
+-@permission_classes([IsAuthenticated])
+-def course_delete(request, course_id):
+-    """软删除课程"""
+-    course = _get_course_or_404(course_id)
+-    _check_course_owner(course, request.user)
++    # DELETE - 软删除
+     course.is_deleted = True
+     course.save(update_fields=['is_deleted'])
+     return Response({'success': True, 'message': '课程已删除'})
+ 
+ 
+ # ============================================================
+ # 课程资料
+ # ============================================================
+ 
+ @api_view(['GET'])
+@@ -257,113 +244,95 @@ def material_delete(request, course_id, material_id):
+ 
+     material.is_deleted = True
+     material.save(update_fields=['is_deleted'])
+     return Response({'success': True, 'message': '资料已删除'})
+ 
+ 
+ # ============================================================
+ # 目录树
+ # ============================================================
+ 
+-@api_view(['GET'])
++@api_view(['GET', 'POST'])
+ @permission_classes([IsAuthenticated])
+-def tree_list(request, course_id):
+-    """嵌套树形结构（根节点 parent=None）"""
++def tree_list_or_create(request, course_id):
++    """目录树列表（GET）和新增节点（POST）"""
+     course = _get_course_or_404(course_id)
+     _check_course_owner(course, request.user)
+-    root_nodes = CourseTree.objects.filter(
+-        course=course,
+-        parent=None,
+-    ).order_by('sort_order')
+-    serializer = CourseTreeNestedSerializer(root_nodes, many=True, context={'request': request})
+-    return Response({'success': True, 'data': serializer.data})
+-
+ 
+-@api_view(['POST'])
+-@permission_classes([IsAuthenticated])
+-def tree_node_create(request, course_id):
+-    """新增树节点"""
+-    course = _get_course_or_404(course_id)
+-    _check_course_owner(course, request.user)
++    if request.method == 'GET':
++        root_nodes = CourseTree.objects.filter(
++            course=course,
++            parent=None,
++        ).order_by('sort_order')
++        serializer = CourseTreeNestedSerializer(root_nodes, many=True, context={'request': request})
++        return Response({'success': True, 'data': serializer.data})
+ 
+-    # 验证 parent 是否属于该课程
++    # POST - 新增树节点
+     parent_id = request.data.get('parent')
+     if parent_id:
+         try:
+             parent = CourseTree.objects.get(id=parent_id, course=course)
+         except CourseTree.DoesNotExist:
+             raise NotFound(f'父节点 {parent_id} 不存在或不属于此课程')
+ 
+     data = request.data.copy()
+     data['course'] = course_id
+ 
+     serializer = CourseTreeSerializer(data=data, context={'request': request})
+     serializer.is_valid(raise_exception=True)
+     node = serializer.save()
+     return Response(
+         {'success': True, 'data': CourseTreeSerializer(node, context={'request': request}).data, 'message': '节点创建成功'},
+         status=status.HTTP_201_CREATED,
+     )
+ 
+ 
+-@api_view(['PUT'])
+-@permission_classes([IsAuthenticated])
+-def tree_node_update(request, course_id, node_id):
+-    """修改树节点"""
+-    course = _get_course_or_404(course_id)
+-    _check_course_owner(course, request.user)
+-
+-    try:
+-        node = CourseTree.objects.get(id=node_id, course=course)
+-    except CourseTree.DoesNotExist:
+-        raise NotFound(f'节点 {node_id} 不存在')
+-
+-    # 验证新的 parent 是否属于该课程且不是自身
+-    parent_id = request.data.get('parent')
+-    if parent_id is not None:
+-        if int(parent_id) == node_id:
+-            raise ValidationError('节点不能将自身设为父节点')
+-        try:
+-            parent = CourseTree.objects.get(id=parent_id, course=course)
+-        except CourseTree.DoesNotExist:
+-            raise NotFound(f'父节点 {parent_id} 不存在或不属于此课程')
+-
+-    serializer = CourseTreeSerializer(node, data=request.data, partial=True, context={'request': request})
+-    serializer.is_valid(raise_exception=True)
+-    node = serializer.save()
+-    return Response({'success': True, 'data': CourseTreeSerializer(node, context={'request': request}).data, 'message': '节点更新成功'})
+-
+-
+-@api_view(['DELETE'])
++@api_view(['PUT', 'DELETE'])
+ @permission_classes([IsAuthenticated])
+-def tree_node_delete(request, course_id, node_id):
+-    """递归删除树节点及其子节点（先删除关联的 CourseQuestionLink）"""
++def tree_node_update_or_delete(request, course_id, node_id):
++    """修改树节点（PUT）或递归删除（DELETE）"""
+     course = _get_course_or_404(course_id)
+     _check_course_owner(course, request.user)
+ 
+     try:
+         node = CourseTree.objects.get(id=node_id, course=course)
+     except CourseTree.DoesNotExist:
+         raise NotFound(f'节点 {node_id} 不存在')
+ 
+-    # 收集要删除的所有节点（递归子节点）
++    if request.method == 'PUT':
++        # 验证新的 parent 是否属于该课程且不是自身
++        parent_id = request.data.get('parent')
++        if parent_id is not None:
++            if int(parent_id) == node_id:
++                raise ValidationError('节点不能将自身设为父节点')
++            try:
++                parent = CourseTree.objects.get(id=parent_id, course=course)
++            except CourseTree.DoesNotExist:
++                raise NotFound(f'父节点 {parent_id} 不存在或不属于此课程')
++
++        serializer = CourseTreeSerializer(node, data=request.data, partial=True, context={'request': request})
++        serializer.is_valid(raise_exception=True)
++        node = serializer.save()
++        return Response({'success': True, 'data': CourseTreeSerializer(node, context={'request': request}).data, 'message': '节点更新成功'})
++
++    # DELETE - 递归删除树节点及其子节点
+     def collect_descendants(n):
+         ids = [n.id]
+         for child in n.children.all():
+             ids.extend(collect_descendants(child))
+         return ids
+ 
+     node_ids = collect_descendants(node)
+ 
+-    # 先删除关联的 CourseQuestionLink
++    # 软删除关联的 CourseQuestionLink（保留 is_deleted=False 过滤的一致性）
+     from .models import CourseQuestionLink
+-    CourseQuestionLink.objects.filter(tree_node_id__in=node_ids).delete()
++    CourseQuestionLink.objects.filter(tree_node_id__in=node_ids).update(is_deleted=True)
+ 
+     # 递归删除节点
+     CourseTree.objects.filter(id__in=node_ids).delete()
+ 
+     return Response({'success': True, 'message': '节点及子节点已删除'})
+ 
+ 
+ @api_view(['PUT'])
+ @permission_classes([IsAuthenticated])
+ def tree_node_move(request, course_id, node_id):

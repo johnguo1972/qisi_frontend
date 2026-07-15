@@ -1,0 +1,546 @@
+diff --git a/apps/courses/serializers.py b/apps/courses/serializers.py
+index 360a4c1..77438b8 100644
+--- a/apps/courses/serializers.py
++++ b/apps/courses/serializers.py
+@@ -1,13 +1,13 @@
+ """课程管理模块序列化器"""
+ from rest_framework import serializers
+-from .models import Course, CourseMaterial, CourseTree, VariantTask
++from .models import Course, CourseMaterial, CourseTree, CourseQuestionLink, VariantTask
+ 
+ 
+ class CourseSerializer(serializers.ModelSerializer):
+     """课程序列化器，包含统计字段"""
+     teacher_name = serializers.CharField(source='teacher.display_name', read_only=True)
+     material_count = serializers.SerializerMethodField()
+     question_count = serializers.SerializerMethodField()
+     class_count = serializers.SerializerMethodField()
+ 
+     class Meta:
+@@ -78,10 +78,49 @@ class CourseTreeSerializer(serializers.ModelSerializer):
+ class VariantTaskSerializer(serializers.ModelSerializer):
+     """变式任务序列化器（只读）"""
+     class Meta:
+         model = VariantTask
+         fields = [
+             'id', 'original_question', 'variant_mode', 'status',
+             'generator_result', 'verifier_result', 'generated_question',
+             'error_message', 'created_at', 'completed_at',
+         ]
+         read_only_fields = fields
++
++
++class CourseQuestionLinkSerializer(serializers.ModelSerializer):
++    """课程习题关联序列化器，包含题目详情"""
++    question_id = serializers.IntegerField(source='question.id', read_only=True)
++    system_id = serializers.CharField(source='question.system_id', read_only=True)
++    question_no = serializers.CharField(source='question.question_no', read_only=True)
++    question_type = serializers.CharField(source='question.question_type', read_only=True)
++    stem_preview = serializers.SerializerMethodField(read_only=True)
++    difficulty = serializers.DecimalField(source='question.difficulty', max_digits=4, decimal_places=2, read_only=True)
++    knowledge_points_count = serializers.SerializerMethodField(read_only=True)
++    review_status = serializers.CharField(source='question.review_status', read_only=True)
++    ai_answer_a = serializers.JSONField(source='question.ai_answer_a', read_only=True)
++    ai_answer_b = serializers.JSONField(source='question.ai_answer_b', read_only=True)
++    ai_answer_c = serializers.JSONField(source='question.ai_answer_c', read_only=True)
++    source = serializers.CharField(read_only=True)
++    tree_node_id = serializers.IntegerField(read_only=True)
++
++    class Meta:
++        model = CourseQuestionLink
++        fields = [
++            'id', 'question_id', 'system_id', 'question_no', 'question_type',
++            'stem_preview', 'difficulty', 'knowledge_points_count',
++            'review_status', 'ai_answer_a', 'ai_answer_b', 'ai_answer_c',
++            'source', 'tree_node_id', 'created_at',
++        ]
++        read_only_fields = fields
++
++    def get_stem_preview(self, obj):
++        """截取题干前200字符作为预览"""
++        stem = obj.question.stem or ''
++        return stem[:200] + ('...' if len(stem) > 200 else '')
++
++    def get_knowledge_points_count(self, obj):
++        """知识点数量"""
++        kp = obj.question.knowledge_points
++        if isinstance(kp, (list, tuple)):
++            return len(kp)
++        return 0
+diff --git a/apps/courses/urls.py b/apps/courses/urls.py
+index 3e9117e..baec723 100644
+--- a/apps/courses/urls.py
++++ b/apps/courses/urls.py
+@@ -14,11 +14,31 @@ urlpatterns = [
+     path('courses/<int:course_id>/materials/<int:material_id>/preview/', views.material_preview, name='material-preview'),
+     path('courses/<int:course_id>/materials/<int:material_id>/', views.material_delete, name='material-delete'),
+ 
+     # 目录树（合并视图：GET/POST 共用一个 path）
+     path('courses/<int:course_id>/tree/', views.tree_list_or_create, name='tree-list-create'),
+     path('courses/<int:course_id>/tree/<int:node_id>/', views.tree_node_update_or_delete, name='tree-node-update-delete'),
+     path('courses/<int:course_id>/tree/<int:node_id>/move/', views.tree_node_move, name='tree-node-move'),
+ 
+     # 变式任务查询
+     path('courses/<int:course_id>/variant-tasks/<int:task_id>/', views.variant_task_detail, name='variant-task-detail'),
++
++    # ============================================================
++    # 习题管理
++    # ============================================================
++    path('courses/<int:course_id>/questions/', views.question_list, name='question-list'),
++    path('courses/<int:course_id>/questions/import/', views.question_import, name='question-import'),
++    path('courses/<int:course_id>/questions/batch-delete/', views.question_batch_delete, name='question-batch-delete'),
++    path('courses/<int:course_id>/questions/batch-move/', views.question_batch_move, name='question-batch-move'),
++
++    # AI 处理
++    path('courses/<int:course_id>/questions/ai-process/', views.question_ai_process, name='question-ai-process'),
++    path('courses/<int:course_id>/questions/<int:question_id>/ai-confirm/', views.question_ai_confirm, name='question-ai-confirm'),
++
++    # 变式题生成
++    path('courses/<int:course_id>/questions/<int:question_id>/generate-variant/', views.question_generate_variant, name='question-generate-variant'),
++    path('courses/<int:course_id>/questions/batch-generate-variant/', views.question_batch_generate_variant, name='question-batch-generate-variant'),
++
++    # 变式题确认/驳回
++    path('courses/<int:course_id>/variant-tasks/<int:task_id>/confirm/', views.variant_task_confirm, name='variant-task-confirm'),
++    path('courses/<int:course_id>/variant-tasks/<int:task_id>/reject/', views.variant_task_reject, name='variant-task-reject'),
+ ]
+diff --git a/apps/courses/views.py b/apps/courses/views.py
+index f2e22e4..cc50d92 100644
+--- a/apps/courses/views.py
++++ b/apps/courses/views.py
+@@ -1,30 +1,32 @@
+ """课程管理 REST API Views"""
+ import os
+ import uuid
+ import logging
+ import mimetypes
+ from django.conf import settings
+ from django.http import FileResponse
++from django.utils import timezone
+ from rest_framework.decorators import api_view, permission_classes
+ from rest_framework.permissions import IsAuthenticated
+ from rest_framework.response import Response
+ from rest_framework import status
+ from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
+ 
+-from .models import Course, CourseMaterial, CourseTree, VariantTask
++from .models import Course, CourseMaterial, CourseTree, CourseQuestionLink, VariantTask
+ from .serializers import (
+     CourseSerializer,
+     CourseMaterialSerializer,
+     CourseTreeSerializer,
+     CourseTreeNestedSerializer,
+     VariantTaskSerializer,
++    CourseQuestionLinkSerializer,
+ )
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ # ============================================================
+ # 权限辅助函数
+ # ============================================================
+ 
+ def _check_course_owner(course, user):
+@@ -377,10 +379,402 @@ def variant_task_detail(request, course_id, task_id):
+     course = _get_course_or_404(course_id)
+     _check_course_owner(course, request.user)
+ 
+     try:
+         task = VariantTask.objects.get(id=task_id)
+     except VariantTask.DoesNotExist:
+         raise NotFound(f'变式任务 {task_id} 不存在')
+ 
+     serializer = VariantTaskSerializer(task, context={'request': request})
+     return Response({'success': True, 'data': serializer.data})
++
++
++# ============================================================
++# 习题管理
++# ============================================================
++
++@api_view(['GET'])
++@permission_classes([IsAuthenticated])
++def question_list(request, course_id):
++    """课程习题列表（按 tree_node_id 筛选）"""
++    course = _get_course_or_404(course_id)
++    _check_course_owner(course, request.user)
++
++    links = CourseQuestionLink.objects.filter(
++        course=course,
++        is_deleted=False,
++    ).select_related('question').order_by('-created_at')
++
++    # 按 tree_node_id 筛选
++    tree_node_id = request.query_params.get('tree_node_id')
++    if tree_node_id:
++        links = links.filter(tree_node_id=tree_node_id)
++
++    serializer = CourseQuestionLinkSerializer(links, many=True, context={'request': request})
++    return Response({'success': True, 'data': serializer.data})
++
++
++@api_view(['POST'])
++@permission_classes([IsAuthenticated])
++def question_import(request, course_id):
++    """从题库引入习题"""
++    course = _get_course_or_404(course_id)
++    _check_course_owner(course, request.user)
++
++    question_ids = request.data.get('question_ids')
++    tree_node_id = request.data.get('tree_node_id')
++
++    if not question_ids or not isinstance(question_ids, list):
++        raise ValidationError('question_ids 必须是非空数组')
++
++    # 验证题目存在
++    from apps.parser.models import ExamQuestion
++    existing_questions = ExamQuestion.objects.filter(id__in=question_ids)
++    existing_ids = set(existing_questions.values_list('id', flat=True))
++
++    missing_ids = set(question_ids) - existing_ids
++    if missing_ids:
++        raise ValidationError(f'以下题目不存在: {", ".join(map(str, missing_ids))}')
++
++    # 验证 tree_node 存在（如果提供）
++    tree_node = None
++    if tree_node_id:
++        try:
++            tree_node = CourseTree.objects.get(id=tree_node_id, course=course)
++        except CourseTree.DoesNotExist:
++            raise NotFound(f'树节点 {tree_node_id} 不存在或不属于此课程')
++
++    # 批量创建关联，跳过已存在的
++    imported_count = 0
++    for qid in question_ids:
++        if qid not in existing_ids:
++            continue
++        _, created = CourseQuestionLink.objects.get_or_create(
++            course=course,
++            question_id=qid,
++            defaults={
++                'tree_node': tree_node,
++                'source': 'import',
++            }
++        )
++        if created:
++            imported_count += 1
++
++    return Response({
++        'success': True,
++        'data': {'imported_count': imported_count},
++        'message': f'成功引入 {imported_count} 道习题',
++    })
++
++
++@api_view(['POST'])
++@permission_classes([IsAuthenticated])
++def question_batch_delete(request, course_id):
++    """批量从课程移除习题（软删除 CourseQuestionLink）"""
++    course = _get_course_or_404(course_id)
++    _check_course_owner(course, request.user)
++
++    question_ids = request.data.get('question_ids')
++    if not question_ids or not isinstance(question_ids, list):
++        raise ValidationError('question_ids 必须是非空数组')
++
++    # 软删除关联
++    updated = CourseQuestionLink.objects.filter(
++        course=course,
++        question_id__in=question_ids,
++        is_deleted=False,
++    ).update(is_deleted=True)
++
++    return Response({
++        'success': True,
++        'data': {'removed_count': updated},
++        'message': f'已移除 {updated} 道习题',
++    })
++
++
++@api_view(['POST'])
++@permission_classes([IsAuthenticated])
++def question_batch_move(request, course_id):
++    """批量移动习题所属节点"""
++    course = _get_course_or_404(course_id)
++    _check_course_owner(course, request.user)
++
++    question_ids = request.data.get('question_ids')
++    target_node_id = request.data.get('target_node_id')
++
++    if not question_ids or not isinstance(question_ids, list):
++        raise ValidationError('question_ids 必须是非空数组')
++    if target_node_id is None:
++        raise ValidationError('target_node_id 不能为空')
++
++    # 验证目标节点存在且属于此课程
++    try:
++        target_node = CourseTree.objects.get(id=target_node_id, course=course)
++    except CourseTree.DoesNotExist:
++        raise NotFound(f'目标节点 {target_node_id} 不存在或不属于此课程')
++
++    # 批量更新 tree_node_id
++    updated = CourseQuestionLink.objects.filter(
++        course=course,
++        question_id__in=question_ids,
++        is_deleted=False,
++    ).update(tree_node=target_node)
++
++    return Response({
++        'success': True,
++        'data': {'moved_count': updated},
++        'message': f'已移动 {updated} 道习题',
++    })
++
++
++# ============================================================
++# AI 处理（复用 review API）
++# ============================================================
++
++@api_view(['POST'])
++@permission_classes([IsAuthenticated])
++def question_ai_process(request, course_id):
++    """AI处理习题（委托给 review 模块的 Celery task）"""
++    course = _get_course_or_404(course_id)
++    _check_course_owner(course, request.user)
++
++    question_id = request.data.get('question_id')
++    if not question_id:
++        raise ValidationError('question_id 不能为空')
++
++    from apps.parser.models import ExamQuestion
++    try:
++        ExamQuestion.objects.get(id=question_id)
++    except ExamQuestion.DoesNotExist:
++        raise NotFound(f'题目 {question_id} 不存在')
++
++    # 复用 review 模块的 AIProcessRequestSerializer 和 Celery task
++    from apps.review.tasks import single_ai_process_question
++    from apps.review.serializers import AIProcessRequestSerializer
++
++    serializer = AIProcessRequestSerializer(data=request.data)
++    serializer.is_valid(raise_exception=True)
++    model = serializer.validated_data.get('model')
++
++    task = single_ai_process_question.delay(question_id, model=model)
++
++    return Response({
++        'success': True,
++        'data': {'task_id': task.id, 'status': 'pending', 'question_id': question_id},
++    })
++
++
++@api_view(['POST'])
++@permission_classes([IsAuthenticated])
++def question_ai_confirm(request, course_id, question_id):
++    """AI答案确认（委托给 review 模块）"""
++    course = _get_course_or_404(course_id)
++    _check_course_owner(course, request.user)
++
++    mode = request.data.get('mode', '').upper()
++    if mode not in ('A', 'B', 'C'):
++        raise ValidationError('mode 必须是 A、B 或 C')
++
++    # 委托给 review 模块的 ai_confirm_answer
++    from apps.review.views import ai_confirm_answer as review_ai_confirm
++
++    return review_ai_confirm(request, question_id, mode)
++
++
++# ============================================================
++# 变式题生成
++# ============================================================
++
++@api_view(['POST'])
++@permission_classes([IsAuthenticated])
++def question_generate_variant(request, course_id, question_id):
++    """发起变式题生成任务"""
++    course = _get_course_or_404(course_id)
++    _check_course_owner(course, request.user)
++
++    from apps.parser.models import ExamQuestion
++    try:
++        question = ExamQuestion.objects.get(id=question_id)
++    except ExamQuestion.DoesNotExist:
++        raise NotFound(f'题目 {question_id} 不存在')
++
++    # 检查题目 review_status
++    if question.review_status != 'confirmed':
++        raise ValidationError(f'题目 review_status 为 "{question.review_status}"，必须为 "confirmed" 才能生成变式题')
++
++    variant_mode = request.data.get('variant_mode')
++    tree_node_id = request.data.get('tree_node_id')
++
++    if not variant_mode:
++        raise ValidationError('variant_mode 不能为空')
++
++    # 调用 Celery 任务
++    from .tasks import generate_variant_task as celery_generate_variant
++    task = celery_generate_variant.delay(
++        question_id=question_id,
++        variant_mode=variant_mode,
++        tree_node_id=tree_node_id,
++    )
++
++    return Response({
++        'success': True,
++        'data': {'task_id': task.id, 'status': 'pending', 'question_id': question_id},
++        'message': '变式题生成任务已提交',
++    })
++
++
++@api_view(['POST'])
++@permission_classes([IsAuthenticated])
++def question_batch_generate_variant(request, course_id):
++    """批量生成变式题"""
++    course = _get_course_or_404(course_id)
++    _check_course_owner(course, request.user)
++
++    question_ids = request.data.get('question_ids')
++    variant_mode = request.data.get('variant_mode')
++    tree_node_id = request.data.get('tree_node_id')
++
++    if not question_ids or not isinstance(question_ids, list):
++        raise ValidationError('question_ids 必须是非空数组')
++    if not variant_mode:
++        raise ValidationError('variant_mode 不能为空')
++
++    from .tasks import batch_generate_variants_task as celery_batch_generate
++    task = celery_batch_generate.delay(
++        question_ids=question_ids,
++        variant_mode=variant_mode,
++        tree_node_id=tree_node_id,
++    )
++
++    return Response({
++        'success': True,
++        'data': {'task_id': task.id, 'status': 'pending', 'question_count': len(question_ids)},
++        'message': f'已提交 {len(question_ids)} 道变式题生成任务',
++    })
++
++
++# ============================================================
++# 变式题确认/驳回
++# ============================================================
++
++@api_view(['POST'])
++@permission_classes([IsAuthenticated])
++def variant_task_confirm(request, course_id, task_id):
++    """确认变式题入库"""
++    course = _get_course_or_404(course_id)
++    _check_course_owner(course, request.user)
++
++    try:
++        task = VariantTask.objects.get(id=task_id, original_question__course_links__course=course)
++    except VariantTask.DoesNotExist:
++        raise NotFound(f'变式任务 {task_id} 不存在或不属于此课程')
++
++    if task.status != 'success':
++        raise ValidationError(f'变式任务状态为 "{task.status}"，只有成功状态的任务可以确认')
++
++    if not task.generated_question:
++        return Response({
++            'success': False,
++            'error': '任务没有生成结果',
++        }, status=400)
++
++    # Celery 任务已保存 ExamQuestion（review_status='need_review'），此处更新为 confirmed
++    from apps.parser.models import ExamQuestion, QuestionOption
++
++    # 查找已保存的变式题（通过 question_no 前缀匹配）
++    try:
++        variant_q = ExamQuestion.objects.get(
++            question_no=f"VAR-{task.id}",
++            original_question=task.original_question,
++        )
++    except ExamQuestion.DoesNotExist:
++        # 如果未找到，说明 Celery 任务尚未保存或失败，手动保存
++        try:
++            variant_q = _save_variant_as_question(task, task.generated_question)
++        except Exception as e:
++            logger.exception(f"Failed to save variant for task {task_id}")
++            return Response({
++                'success': False,
++                'error': f'保存变式题失败: {str(e)}',
++            }, status=500)
++
++    # 更新 review_status 为 confirmed
++    variant_q.review_status = 'confirmed'
++    variant_q.need_review = False
++    variant_q.save(update_fields=['review_status', 'need_review'])
++
++    task.status = 'confirmed'
++    task.completed_at = task.completed_at or timezone.now()
++    task.save(update_fields=['status', 'completed_at'])
++
++    return Response({
++        'success': True,
++        'data': {'question_id': variant_q.id},
++        'message': '变式题已确认入库',
++    })
++
++
++def _save_variant_as_question(task, variant_data):
++    """将生成的变式题保存为 ExamQuestion 记录。"""
++    from apps.parser.models import ExamQuestion, QuestionOption
++
++    original = task.original_question
++
++    # 检查是否已保存过（通过 system_id 前缀判断）
++    variant_q = ExamQuestion.objects.create(
++        paper=original.paper,
++        question_no=f"VAR-{task.id}",
++        question_type=variant_data.get('question_type', original.question_type),
++        subject=original.subject,
++        stem=variant_data.get('stem', ''),
++        answer=variant_data.get('answer', ''),
++        analysis=variant_data.get('analysis', ''),
++        solution=variant_data.get('solution', ''),
++        difficulty=variant_data.get('difficulty', original.difficulty),
++        knowledge_points=variant_data.get('knowledge_points', original.knowledge_points),
++        original_question=original,
++        confidence=0.8,
++        need_review=False,
++        review_status='confirmed',
++        parse_status='auto_parsed',
++    )
++
++    # 保存选项（如果是选择题）
++    options = variant_data.get('options', [])
++    if options and isinstance(options, list):
++        for idx, opt in enumerate(options):
++            if isinstance(opt, dict):
++                QuestionOption.objects.create(
++                    question=variant_q,
++                    option_label=opt.get('label', ''),
++                    content=opt.get('content', ''),
++                    sort_order=idx,
++                )
++
++    return variant_q
++
++
++@api_view(['POST'])
++@permission_classes([IsAuthenticated])
++def variant_task_reject(request, course_id, task_id):
++    """驳回变式题"""
++    course = _get_course_or_404(course_id)
++    _check_course_owner(course, request.user)
++
++    try:
++        task = VariantTask.objects.get(id=task_id, original_question__course_links__course=course)
++    except VariantTask.DoesNotExist:
++        raise NotFound(f'变式任务 {task_id} 不存在或不属于此课程')
++
++    reason = request.data.get('reason', '')
++
++    # 更新任务状态
++    from django.utils import timezone
++    task.status = 'failed'
++    task.error_message = f'驳回: {reason}' if reason else '已驳回'
++    task.completed_at = timezone.now()
++    task.save(update_fields=['status', 'error_message', 'completed_at'])
++
++    return Response({
++        'success': True,
++        'message': '变式题已驳回',
++    })

@@ -1,4 +1,4 @@
-import { post, get, put, del } from '@/utils/request.ts'
+import { post, get, put, del } from '@/utils/request'
 
 // ============================================================
 // 课程 CRUD

@@ -1,4 +1,4 @@
-import { post, get, del } from '@/utils/request.ts'
+import { post, get, del } from '@/utils/request'
 
 export interface Favorite {
   id: number

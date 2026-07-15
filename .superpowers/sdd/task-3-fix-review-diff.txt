@@ -1,0 +1,672 @@
+diff --git a/apps/courses/ai_service.py b/apps/courses/ai_service.py
+index 11a670b..8e80772 100644
+--- a/apps/courses/ai_service.py
++++ b/apps/courses/ai_service.py
+@@ -1,119 +1,141 @@
+ """AI service for variant question generation and verification."""
+ import json
+ import logging
+ import time
+ import os
+ import httpx
+ 
++from django.conf import settings
++from apps.common.exceptions import AIRequestError
++from apps.common.utils import repair_json_string
++
+ logger = logging.getLogger(__name__)
+ 
+ QWEN_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+ 
+ # DeepSeek API endpoint
+ DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+ 
+ 
+-def get_api_key() -> str:
+-    """获取通义千问 API Key。"""
+-    api_key = os.environ.get('QWEN_API_KEY', '')
+-    if not api_key:
+-        raise ValueError("QWEN_API_KEY is not set")
+-    return api_key
++class VariantAIService:
++    """变式题生成 AI 服务，与 AIReviewService 模式一致。"""
++
++    def __init__(self):
++        self.qwen_api_key = os.environ.get('QWEN_API_KEY', '')
++        if not self.qwen_api_key:
++            raise AIRequestError("QWEN_API_KEY is not set")
++        self.deepseek_api_key = os.environ.get('DEEPSEEK_API_KEY', '')
++
++    def call_ai(self, system_prompt: str, user_prompt: str,
++                model: str, api_url: str = QWEN_API_URL,
++                api_key: str = None,
++                max_tokens: int = 8000, temperature: float = 0.1) -> str:
++        """调用 AI API，带重试逻辑（最多 3 次）。
++
++        Returns:
++            AI 响应文本
++        Raises:
++            AIRequestError: 调用失败时抛出异常
++        """
++        if api_key is None:
++            api_key = self.qwen_api_key
++
++        retry_delays = [5, 8, 10]
++        messages = [
++            {"role": "system", "content": system_prompt},
++            {"role": "user", "content": user_prompt},
++        ]
++        payload = {
++            "model": model,
++            "messages": messages,
++            "max_tokens": max_tokens,
++            "temperature": temperature,
++            "response_format": {"type": "json_object"},
++        }
++        headers = {
++            "Authorization": f"Bearer {api_key}",
++            "Content-Type": "application/json",
++        }
++
++        last_error = None
++        for attempt in range(1, 4):
++            try:
++                with httpx.Client(timeout=300.0, trust_env=False) as client:
++                    response = client.post(api_url, json=payload, headers=headers)
++                    response.raise_for_status()
++                result = response.json()
++                choices = result.get("choices", [])
++                if not choices:
++                    raise AIRequestError("No choices in AI response")
++                return choices[0]["message"]["content"]
++            except httpx.ReadTimeout as e:
++                last_error = e
++                wait = retry_delays[attempt - 1]
++                logger.warning(f"AI API timeout (attempt {attempt}/3), retrying in {wait}s: {e}")
++                time.sleep(wait)
++            except httpx.HTTPError as e:
++                last_error = e
++                wait = retry_delays[attempt - 1]
++                logger.warning(f"AI API HTTP error (attempt {attempt}/3), retrying in {wait}s: {e}")
++                time.sleep(wait)
++            except Exception as e:
++                raise AIRequestError(f"Unexpected AI API error: {e}")
++
++        raise AIRequestError(f"AI API call failed after 3 attempts: {last_error}")
++
++    def get_deepseek_api_key(self) -> str:
++        """获取 DeepSeek API Key。"""
++        if not self.deepseek_api_key:
++            raise AIRequestError("DEEPSEEK_API_KEY is not set")
++        return self.deepseek_api_key
++
++    @staticmethod
++    def parse_json_response(text: str) -> dict:
++        """解析 AI 返回的 JSON 响应，处理 markdown 代码块。
++
++        Returns:
++            解析后的 dict
++        Raises:
++            AIRequestError: JSON 解析失败时抛出异常
++        """
++        cleaned = repair_json_string(text)
++        try:
++            return json.loads(cleaned)
++        except json.JSONDecodeError as e:
++            raise AIRequestError(f"Failed to parse AI JSON response: {e}\nRaw: {text[:500]}")
+ 
+ 
+-def get_deepseek_api_key() -> str:
+-    """获取 DeepSeek API Key。"""
+-    api_key = os.environ.get('DEEPSEEK_API_KEY', '')
+-    if not api_key:
+-        raise ValueError("DEEPSEEK_API_KEY is not set")
+-    return api_key
++# ------------------------------------------------------------------ #
++#  向后兼容：模块级函数包装器（供 tasks.py 直接调用）                    #
++# ------------------------------------------------------------------ #
++
++_default_service: VariantAIService = None
++
++
++def _get_service() -> VariantAIService:
++    """Lazy-initialize the singleton service."""
++    global _default_service
++    if _default_service is None:
++        _default_service = VariantAIService()
++    return _default_service
+ 
+ 
+ def call_ai(system_prompt: str, user_prompt: str,
+             model: str, api_url: str = QWEN_API_URL,
+             api_key: str = None,
+             max_tokens: int = 8000, temperature: float = 0.1) -> str:
+-    """调用 AI API，带重试逻辑（最多 3 次）。
+-
+-    Args:
+-        system_prompt: 系统提示词
+-        user_prompt: 用户提示词
+-        model: 模型名称
+-        api_url: API 端点 URL
+-        api_key: API Key（默认从环境变量获取）
+-        max_tokens: 最大输出 token 数
+-        temperature: 温度参数
+-
+-    Returns:
+-        AI 响应文本
+-
+-    Raises:
+-        ValueError: 调用失败时抛出异常
+-    """
+-    if api_key is None:
+-        api_key = get_api_key()
+-
+-    retry_delays = [5, 8, 10]
+-    messages = [
+-        {"role": "system", "content": system_prompt},
+-        {"role": "user", "content": user_prompt},
+-    ]
+-    payload = {
+-        "model": model,
+-        "messages": messages,
+-        "max_tokens": max_tokens,
+-        "temperature": temperature,
+-        "response_format": {"type": "json_object"},
+-    }
+-    headers = {
+-        "Authorization": f"Bearer {api_key}",
+-        "Content-Type": "application/json",
+-    }
+-
+-    last_error = None
+-    for attempt in range(1, 4):
+-        try:
+-            with httpx.Client(timeout=300.0, trust_env=False) as client:
+-                response = client.post(api_url, json=payload, headers=headers)
+-                response.raise_for_status()
+-            result = response.json()
+-            choices = result.get("choices", [])
+-            if not choices:
+-                raise ValueError("No choices in AI response")
+-            return choices[0]["message"]["content"]
+-        except httpx.ReadTimeout as e:
+-            last_error = e
+-            wait = retry_delays[attempt - 1]
+-            logger.warning(f"AI API timeout (attempt {attempt}/3), retrying in {wait}s: {e}")
+-            time.sleep(wait)
+-        except httpx.HTTPError as e:
+-            last_error = e
+-            wait = retry_delays[attempt - 1]
+-            logger.warning(f"AI API HTTP error (attempt {attempt}/3), retrying in {wait}s: {e}")
+-            time.sleep(wait)
+-        except Exception as e:
+-            raise ValueError(f"Unexpected AI API error: {e}")
+-
+-    raise ValueError(f"AI API call failed after 3 attempts: {last_error}")
++    """Module-level wrapper around VariantAIService.call_ai for backward compat."""
++    return _get_service().call_ai(
++        system_prompt, user_prompt, model, api_url, api_key,
++        max_tokens, temperature
++    )
+ 
+ 
+ def parse_json_response(text: str) -> dict:
+-    """解析 AI 返回的 JSON 响应，处理 markdown 代码块。
+-
+-    Args:
+-        text: AI 返回的原始文本
++    """Module-level wrapper around VariantAIService.parse_json_response for backward compat."""
++    return VariantAIService.parse_json_response(text)
+ 
+-    Returns:
+-        解析后的 dict
+ 
+-    Raises:
+-        ValueError: JSON 解析失败时抛出异常
+-    """
+-    import re
+-    from apps.common.utils import repair_json_string
+-
+-    cleaned = repair_json_string(text)
+-    try:
+-        return json.loads(cleaned)
+-    except json.JSONDecodeError as e:
+-        raise ValueError(f"Failed to parse AI JSON response: {e}\nRaw: {text[:500]}")
++def get_deepseek_api_key() -> str:
++    """Module-level wrapper for backward compat."""
++    return _get_service().get_deepseek_api_key()
+diff --git a/apps/courses/tasks.py b/apps/courses/tasks.py
+index d26da80..d05c8e6 100644
+--- a/apps/courses/tasks.py
++++ b/apps/courses/tasks.py
+@@ -1,40 +1,41 @@
+ """Celery tasks for variant question generation."""
+ import json
+ import logging
+ import time
+ from celery import shared_task
++from django.conf import settings
+ from django.utils import timezone
+ 
+ from apps.courses.models import VariantTask, CourseQuestionLink
+ from apps.courses.prompts import (
+     VARIANT_SYSTEM_PROMPT,
+     VERIFIER_SYSTEM_PROMPT,
+     build_variant_user_prompt,
+     build_verifier_user_prompt,
+ )
+ from apps.courses.validator import VariantValidator
+-from apps.courses.ai_service import call_ai, parse_json_response
++from apps.courses.ai_service import call_ai, parse_json_response, get_deepseek_api_key
++from apps.common.exceptions import AIRequestError
+ from apps.parser.models import ExamQuestion, QuestionOption
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ def _get_ai_model(model_key: str) -> str:
+-    """从环境变量获取 AI 模型名称。"""
+-    import os
++    """从 Django settings 获取 AI 模型名称。"""
+     model_map = {
+-        'qwen3.6-flash': os.environ.get('AI_MODEL_QWEN_36_FLASH', 'qwen3.6-flash'),
+-        'qwen3.6-plus': os.environ.get('AI_MODEL_QWEN_36_PLUS', 'qwen3.6-plus'),
+-        'qwen3.7-flash': os.environ.get('AI_MODEL_QWEN_37_FLASH', 'qwen3.7-flash'),
+-        'qwen3.7-plus': os.environ.get('AI_MODEL_QWEN_37_PLUS', 'qwen3.7-plus'),
+-        'deepseek': os.environ.get('DEEPSEEK_MODEL', 'deepseek-v4-pro'),
++        'qwen3.6-flash': getattr(settings, 'AI_MODEL_QWEN_36_FLASH', 'qwen3.6-flash'),
++        'qwen3.6-plus': getattr(settings, 'AI_MODEL_QWEN_36_PLUS', 'qwen3.6-plus'),
++        'qwen3.7-flash': getattr(settings, 'AI_MODEL_QWEN_37_FLASH', 'qwen3.7-flash'),
++        'qwen3.7-plus': getattr(settings, 'AI_MODEL_QWEN_37_PLUS', 'qwen3.7-plus'),
++        'deepseek': getattr(settings, 'DEEPSEEK_MODEL', 'deepseek-v4-pro'),
+     }
+     return model_map.get(model_key, model_key)
+ 
+ 
+ def _build_question_data(question: ExamQuestion) -> dict:
+     """从 ExamQuestion 构建 AI 所需的题目数据。"""
+     data = {
+         'stem': question.stem or '',
+         'question_type': question.question_type or 'unknown',
+         'answer': question.answer or '',
+@@ -167,91 +168,91 @@ def generate_variant_task(self, question_id: int, variant_mode: str,
+             system_prompt=VARIANT_SYSTEM_PROMPT,
+             user_prompt=user_prompt,
+             model=qwen_model,
+             max_tokens=8000,
+             temperature=0.1,
+         )
+         generation_time_ms = int((time.time() - generator_start) * 1000)
+ 
+         try:
+             variant_data = parse_json_response(raw_response)
+-        except ValueError as e:
++        except AIRequestError as e:
+             raise ValueError(f"AI 生成结果 JSON 解析失败: {e}")
+ 
+         logger.info(f"[VariantTask] Generation complete in {generation_time_ms}ms")
+         variant_task.generator_result = {
+             'status': 'generated',
+             'model': qwen_model,
+             'latency_ms': generation_time_ms,
+             'raw_response': raw_response[:2000],
+             'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
+         }
+         variant_task.save(update_fields=['generator_result'])
+ 
+-        # 5. 程序校验
++        # 5. 程序校验（校验失败为硬失败，不消耗 Celery 重试配额）
+         validator = VariantValidator()
+         validation_issues = validator.validate(variant_data, original)
+ 
+         if validation_issues:
+             logger.warning(f"[VariantTask] Validation issues: {validation_issues}")
+-            # 校验失败，重试一次
+-            if self.request.retries == 0:
+-                variant_task.generator_result['validation_issues'] = validation_issues
+-                variant_task.save(update_fields=['generator_result'])
+-                logger.info(f"[VariantTask] Retrying after validation failure (attempt {self.request.retries + 1})")
+-                self.retry(countdown=15)
+-            else:
+-                # 重试后仍然失败，记录错误
+-                raise ValueError(f"变式题校验不通过: {', '.join(validation_issues)}")
++            variant_task.generator_result['validation_issues'] = validation_issues
++            variant_task.save(update_fields=['generator_result'])
++            raise ValueError(f"变式题校验不通过: {', '.join(validation_issues)}")
+ 
+         # 6. DeepSeek 校验器验证
+         logger.info(f"[VariantTask] Calling DeepSeek verifier...")
+         deepseek_model = _get_ai_model('deepseek')
+         verifier_prompt = build_verifier_user_prompt(variant_data, question_data)
+ 
+         verifier_start = time.time()
++        verifier_api_key = None
+         try:
+-            verifier_api_key = None
+-            from apps.courses.ai_service import get_deepseek_api_key
+             verifier_api_key = get_deepseek_api_key()
+-        except ValueError:
++        except AIRequestError:
+             logger.warning("[VariantTask] DeepSeek API key not configured, skipping AI verification")
+ 
+         verifier_result = None
++        verifier_retry_budget = 1  # DeepSeek 校验器至少有 1 次重试，独立于 Celery 重试
+         if verifier_api_key:
+-            try:
+-                raw_verifier = call_ai(
+-                    system_prompt=VERIFIER_SYSTEM_PROMPT,
+-                    user_prompt=verifier_prompt,
+-                    model=deepseek_model,
+-                    api_url="https://api.deepseek.com/v1/chat/completions",
+-                    api_key=verifier_api_key,
+-                    max_tokens=2000,
+-                    temperature=0.1,
+-                )
+-                verifier_time_ms = int((time.time() - verifier_start) * 1000)
+-                verifier_result = parse_json_response(raw_verifier)
+-                verifier_result['latency_ms'] = verifier_time_ms
+-                verifier_result['model'] = deepseek_model
+-
+-                logger.info(f"[VariantTask] Verifier result: passed={verifier_result.get('passed')}, "
+-                           f"score={verifier_result.get('score')}")
+-
+-                # 如果 DeepSeek 校验不通过且无重试次数，记录问题
+-                if not verifier_result.get('passed') and self.request.retries == 0:
+-                    variant_task.verifier_result = verifier_result
+-                    variant_task.save(update_fields=['verifier_result', 'generated_question'])
+-                    self.retry(countdown=15)
+-
+-            except Exception as e:
+-                logger.warning(f"[VariantTask] DeepSeek verification failed: {e}")
+-                verifier_result = {'error': str(e), 'model': deepseek_model}
++            for _attempt in range(verifier_retry_budget + 1):
++                try:
++                    raw_verifier = call_ai(
++                        system_prompt=VERIFIER_SYSTEM_PROMPT,
++                        user_prompt=verifier_prompt,
++                        model=deepseek_model,
++                        api_url="https://api.deepseek.com/v1/chat/completions",
++                        api_key=verifier_api_key,
++                        max_tokens=2000,
++                        temperature=0.1,
++                    )
++                    verifier_time_ms = int((time.time() - verifier_start) * 1000)
++                    verifier_result = parse_json_response(raw_verifier)
++                    verifier_result['latency_ms'] = verifier_time_ms
++                    verifier_result['model'] = deepseek_model
++
++                    logger.info(f"[VariantTask] Verifier result: passed={verifier_result.get('passed')}, "
++                               f"score={verifier_result.get('score')}")
++
++                    # DeepSeek 校验不通过，重试一次
++                    if not verifier_result.get('passed'):
++                        logger.warning("[VariantTask] DeepSeek verifier failed, retrying once...")
++                        continue
++
++                    break  # 校验通过，退出重试
++
++                except AIRequestError as e:
++                    logger.warning(f"[VariantTask] DeepSeek verification failed (AIRequestError): {e}")
++                    verifier_result = {'error': str(e), 'model': deepseek_model}
++                    if _attempt < verifier_retry_budget:
++                        time.sleep(15)
++                        continue
++                    break
+ 
+         variant_task.verifier_result = verifier_result
+         variant_task.generated_question = variant_data
+         variant_task.status = 'success'
+         variant_task.completed_at = timezone.now()
+         variant_task.save(update_fields=['verifier_result', 'generated_question', 'status', 'completed_at'])
+ 
+         # 7. 保存为 ExamQuestion
+         try:
+             variant_q = _save_variant_as_question(variant_task, variant_data)
+diff --git a/apps/courses/tests/test_validator.py b/apps/courses/tests/test_validator.py
+index 04aadec..aa516ac 100644
+--- a/apps/courses/tests/test_validator.py
++++ b/apps/courses/tests/test_validator.py
+@@ -311,10 +311,139 @@ class TestVariantValidatorNotIdentical(TestCase):
+             'question_type': 'fill_blank',
+             'answer': '42',
+         }
+ 
+         class FakeQuestion:
+             stem = 'This is the original question text'
+ 
+         issues = self.validator.validate(data, FakeQuestion())
+         identical_issues = [i for i in issues if '完全相同' in i]
+         self.assertEqual(identical_issues, [])
++
++
++class TestVariantValidatorUnits(TestCase):
++    """Test units validation."""
++
++    def setUp(self):
++        self.validator = VariantValidator()
++
++    def test_valid_unit_cm(self):
++        """有效单位 cm 应该通过。"""
++        data = {
++            'stem': '一根线段长 x cm，求长度。',
++            'question_type': 'fill_blank',
++            'answer': '10',
++            'variables': [
++                {'name': 'x', 'value': 10, 'unit': 'cm'},
++            ],
++        }
++        issues = self.validator.validate(data)
++        unit_issues = [i for i in issues if '单位' in i]
++        self.assertEqual(unit_issues, [])
++
++    def test_valid_unit_chinese(self):
++        """有效中文单位 米 应该通过。"""
++        data = {
++            'stem': '一段路长 x 米。',
++            'question_type': 'fill_blank',
++            'answer': '100',
++            'variables': [
++                {'name': 'x', 'value': 100, 'unit': '米'},
++            ],
++        }
++        issues = self.validator.validate(data)
++        unit_issues = [i for i in issues if '单位' in i]
++        self.assertEqual(unit_issues, [])
++
++    def test_valid_multiple_units(self):
++        """多个有效单位应该通过。"""
++        data = {
++            'stem': '速度 v m/s 运行 t 小时。',
++            'question_type': 'computation',
++            'answer': 'vt',
++            'variables': [
++                {'name': 'v', 'value': 5, 'unit': 'm/s'},
++                {'name': 't', 'value': 2, 'unit': 'h'},
++            ],
++        }
++        issues = self.validator.validate(data)
++        unit_issues = [i for i in issues if '单位' in i]
++        self.assertEqual(unit_issues, [])
++
++    def test_invalid_unit(self):
++        """无效单位应该被捕获。"""
++        data = {
++            'stem': '距离为 x foobars。',
++            'question_type': 'fill_blank',
++            'answer': '42',
++            'variables': [
++                {'name': 'x', 'value': 42, 'unit': 'foobars'},
++            ],
++        }
++        issues = self.validator.validate(data)
++        self.assertTrue(any('单位' in i for i in issues))
++        self.assertTrue(any('foobars' in i for i in issues))
++
++    def test_no_variables(self):
++        """没有 variables 字段应该通过（跳过单位校验）。"""
++        data = {
++            'stem': '2 + 2 = ?',
++            'question_type': 'fill_blank',
++            'answer': '4',
++        }
++        issues = self.validator.validate(data)
++        unit_issues = [i for i in issues if '单位' in i]
++        self.assertEqual(unit_issues, [])
++
++    def test_empty_variables(self):
++        """空 variables 列表应该通过。"""
++        data = {
++            'stem': '2 + 2 = ?',
++            'question_type': 'fill_blank',
++            'answer': '4',
++            'variables': [],
++        }
++        issues = self.validator.validate(data)
++        unit_issues = [i for i in issues if '单位' in i]
++        self.assertEqual(unit_issues, [])
++
++    def test_valid_unit_with_percent(self):
++        """百分号 % 作为单位应该通过。"""
++        data = {
++            'stem': '某商品涨价 x%。',
++            'question_type': 'fill_blank',
++            'answer': '20',
++            'variables': [
++                {'name': 'x', 'value': 20, 'unit': '%'},
++            ],
++        }
++        issues = self.validator.validate(data)
++        unit_issues = [i for i in issues if '单位' in i]
++        self.assertEqual(unit_issues, [])
++
++    def test_valid_unit_kg(self):
++        """kg 作为单位应该通过。"""
++        data = {
++            'stem': '物体质量 m kg。',
++            'question_type': 'computation',
++            'answer': '10',
++            'variables': [
++                {'name': 'm', 'value': 10, 'unit': 'kg'},
++            ],
++        }
++        issues = self.validator.validate(data)
++        unit_issues = [i for i in issues if '单位' in i]
++        self.assertEqual(unit_issues, [])
++
++    def test_variable_without_unit(self):
++        """变量没有 unit 字段应该跳过（不报错）。"""
++        data = {
++            'stem': 'x 的值是多少？',
++            'question_type': 'fill_blank',
++            'answer': '5',
++            'variables': [
++                {'name': 'x', 'value': 5},
++            ],
++        }
++        issues = self.validator.validate(data)
++        unit_issues = [i for i in issues if '单位' in i]
++        self.assertEqual(unit_issues, [])
+diff --git a/apps/courses/validator.py b/apps/courses/validator.py
+index 7bdd19a..f510195 100644
+--- a/apps/courses/validator.py
++++ b/apps/courses/validator.py
+@@ -18,20 +18,43 @@ class VariantValidator:
+     """
+ 
+     VALID_QUESTION_TYPES = {
+         'single_choice', 'multiple_choice', 'fill_blank',
+         'short_answer', 'essay', 'true_false',
+         'computation', 'proof',
+         # 中文别名
+         '单选题', '多选题', '填空题', '简答题', '作文题', '判断题', '计算题', '证明题',
+     }
+ 
++    VALID_UNITS = {
++        # 长度
++        'mm', 'cm', 'm', 'km', '毫米', '厘米', '米', '千米', '公里',
++        # 面积
++        'mm²', 'cm²', 'm²', 'km²', '平方毫米', '平方厘米', '平方米', '平方千米',
++        # 体积/容积
++        'mm³', 'cm³', 'm³', 'L', 'mL', '立方毫米', '立方厘米', '立方米', '升', '毫升',
++        # 质量/重量
++        'g', 'kg', 't', 'mg', '克', '千克', '吨', '毫克',
++        # 时间
++        's', 'min', 'h', 'ms', '秒', '分钟', '小时', '毫秒',
++        # 角度
++        '°', 'rad', '度', '弧度',
++        # 货币
++        '元', '美元', '¥', '$',
++        # 百分比/比例
++        '%',
++        # 温度
++        '℃', '°F', 'K', '摄氏度', '华氏度', '开尔文',
++        # 速度
++        'm/s', 'km/h', '米/秒', '千米/小时',
++    }
++
+     REQUIRED_FIELDS = ['stem', 'question_type', 'answer']
+ 
+     def __init__(self):
+         self.issues: list[str] = []
+ 
+     def validate(self, variant_json: dict, original_question: Any = None) -> list[str]:
+         """校验变式题 JSON。
+ 
+         Args:
+             variant_json: AI 生成的变式题 dict
+@@ -42,20 +65,21 @@ class VariantValidator:
+         """
+         self.issues = []
+ 
+         self._check_schema(variant_json)
+         if self.issues:
+             return self.issues
+ 
+         self._check_question_type(variant_json)
+         self._check_answer_count(variant_json)
+         self._check_single_choice_uniqueness(variant_json)
++        self._check_units(variant_json)
+         self._check_value_ranges(variant_json)
+         self._check_stem_not_empty(variant_json)
+ 
+         if original_question:
+             self._check_not_identical(variant_json, original_question)
+ 
+         return self.issues
+ 
+     # ------------------------------------------------------------------ #
+     #  内部校验方法                                                        #
+@@ -120,20 +144,33 @@ class VariantValidator:
+ 
+         # 检查选项内容是否重复
+         contents = [opt.get('content', '').strip() for opt in options if isinstance(opt, dict)]
+         seen = set()
+         for c in contents:
+             if c in seen and c:
+                 self.issues.append(f"单选题存在重复的选项内容: {c[:50]}")
+                 break
+             seen.add(c)
+ 
++    def _check_units(self, data: dict) -> None:
++        """检查变量声明中的单位是否合法。"""
++        variables = data.get('variables', [])
++        if not variables or not isinstance(variables, list):
++            return
++
++        for var in variables:
++            if not isinstance(var, dict):
++                continue
++            unit = var.get('unit', '').strip()
++            if unit and unit not in self.VALID_UNITS:
++                self.issues.append(f"变量 '{var.get('name', '?')}' 的单位无效: {unit}")
++
+     def _check_value_ranges(self, data: dict) -> None:
+         """检查数值范围是否合理（难度、选项等）。"""
+         difficulty = data.get('difficulty')
+         if difficulty is not None:
+             try:
+                 d = int(difficulty)
+                 if d < 1 or d > 5:
+                     self.issues.append(f"难度应在 1-5 范围内，当前为: {difficulty}")
+             except (ValueError, TypeError):
+                 self.issues.append(f"难度应为数字，当前为: {difficulty}")

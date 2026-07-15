@@ -101,7 +101,8 @@ export function chooseImage(options?: {
       sizeType: ['compressed'],
       sourceType: normalizedSourceType,
       success: (res) => {
-        const results: ChooseImageResult[] = res.tempFilePaths.map((p) => ({ path: p }))
+        const tempPaths = res.tempFilePaths as string[]
+        const results: ChooseImageResult[] = tempPaths.map((p) => ({ path: p }))
         resolve(results)
       },
       fail: (err) => reject(err),
@@ -217,7 +218,7 @@ export function checkCameraSupport(): { supported: boolean; hint?: string } {
     }
   }
   // Check MediaDevices API
-  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+  if (navigator.mediaDevices) {
     return { supported: true }
   }
   return {
