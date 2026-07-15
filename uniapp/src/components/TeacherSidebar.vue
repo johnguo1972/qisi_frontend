@@ -29,6 +29,10 @@
           <text class="nav-text">我的精选</text>
         </view>
       </view>
+      <view class="nav-item" :class="{ active: activeItem === 'course-list' }" @click="goCourseList">
+        <text class="nav-icon">&#127891;</text>
+        <text class="nav-text">课程列表</text>
+      </view>
       <view class="nav-item" :class="{ active: activeItem === 'classes' }" @click="goClasses">
         <text class="nav-icon">&#127963;</text>
         <text class="nav-text">班级管理</text>
@@ -69,6 +73,7 @@ function goImport() { uni.navigateTo({ url: '/pages/teacher/import' }) }
 function goNewQuestion() { uni.navigateTo({ url: '/pages/teacher/new-question' }) }
 function goBank() { uni.navigateTo({ url: '/pages/teacher/bank' }) }
 function goFavorites() { uni.navigateTo({ url: '/pages/teacher/favorites' }) }
+function goCourseList() { uni.navigateTo({ url: '/pages/teacher/course-list' }) }
 function goClasses() { uni.navigateTo({ url: '/pages/teacher/my-classes' }) }
 function goMissionList() { uni.navigateTo({ url: '/pages/teacher/workbench' }) }
 
