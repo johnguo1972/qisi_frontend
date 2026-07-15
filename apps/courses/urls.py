@@ -21,4 +21,24 @@ urlpatterns = [
 
     # 变式任务查询
     path('courses/<int:course_id>/variant-tasks/<int:task_id>/', views.variant_task_detail, name='variant-task-detail'),
+
+    # ============================================================
+    # 习题管理
+    # ============================================================
+    path('courses/<int:course_id>/questions/', views.question_list, name='question-list'),
+    path('courses/<int:course_id>/questions/import/', views.question_import, name='question-import'),
+    path('courses/<int:course_id>/questions/batch-delete/', views.question_batch_delete, name='question-batch-delete'),
+    path('courses/<int:course_id>/questions/batch-move/', views.question_batch_move, name='question-batch-move'),
+
+    # AI 处理
+    path('courses/<int:course_id>/questions/ai-process/', views.question_ai_process, name='question-ai-process'),
+    path('courses/<int:course_id>/questions/<int:question_id>/ai-confirm/', views.question_ai_confirm, name='question-ai-confirm'),
+
+    # 变式题生成
+    path('courses/<int:course_id>/questions/<int:question_id>/generate-variant/', views.question_generate_variant, name='question-generate-variant'),
+    path('courses/<int:course_id>/questions/batch-generate-variant/', views.question_batch_generate_variant, name='question-batch-generate-variant'),
+
+    # 变式题确认/驳回
+    path('courses/<int:course_id>/variant-tasks/<int:task_id>/confirm/', views.variant_task_confirm, name='variant-task-confirm'),
+    path('courses/<int:course_id>/variant-tasks/<int:task_id>/reject/', views.variant_task_reject, name='variant-task-reject'),
 ]

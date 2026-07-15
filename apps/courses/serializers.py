@@ -1,6 +1,6 @@
 """课程管理模块序列化器"""
 from rest_framework import serializers
-from .models import Course, CourseMaterial, CourseTree, VariantTask
+from .models import Course, CourseMaterial, CourseTree, CourseQuestionLink, VariantTask
 
 
 class CourseSerializer(serializers.ModelSerializer):
@@ -85,3 +85,42 @@ class VariantTaskSerializer(serializers.ModelSerializer):
             'error_message', 'created_at', 'completed_at',
         ]
         read_only_fields = fields
+
+
+class CourseQuestionLinkSerializer(serializers.ModelSerializer):
+    """课程习题关联序列化器，包含题目详情"""
+    question_id = serializers.IntegerField(source='question.id', read_only=True)
+    system_id = serializers.CharField(source='question.system_id', read_only=True)
+    question_no = serializers.CharField(source='question.question_no', read_only=True)
+    question_type = serializers.CharField(source='question.question_type', read_only=True)
+    stem_preview = serializers.SerializerMethodField(read_only=True)
+    difficulty = serializers.DecimalField(source='question.difficulty', max_digits=4, decimal_places=2, read_only=True)
+    knowledge_points_count = serializers.SerializerMethodField(read_only=True)
+    review_status = serializers.CharField(source='question.review_status', read_only=True)
+    ai_answer_a = serializers.JSONField(source='question.ai_answer_a', read_only=True)
+    ai_answer_b = serializers.JSONField(source='question.ai_answer_b', read_only=True)
+    ai_answer_c = serializers.JSONField(source='question.ai_answer_c', read_only=True)
+    source = serializers.CharField(read_only=True)
+    tree_node_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = CourseQuestionLink
+        fields = [
+            'id', 'question_id', 'system_id', 'question_no', 'question_type',
+            'stem_preview', 'difficulty', 'knowledge_points_count',
+            'review_status', 'ai_answer_a', 'ai_answer_b', 'ai_answer_c',
+            'source', 'tree_node_id', 'created_at',
+        ]
+        read_only_fields = fields
+
+    def get_stem_preview(self, obj):
+        """截取题干前200字符作为预览"""
+        stem = obj.question.stem or ''
+        return stem[:200] + ('...' if len(stem) > 200 else '')
+
+    def get_knowledge_points_count(self, obj):
+        """知识点数量"""
+        kp = obj.question.knowledge_points
+        if isinstance(kp, (list, tuple)):
+            return len(kp)
+        return 0
