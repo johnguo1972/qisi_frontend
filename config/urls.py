@@ -13,6 +13,7 @@ urlpatterns = [
     # Institutions must come before /student/ to avoid prefix collision
     path('api/v1/', include('apps.institutions.urls')),
     path('api/v1/', include('apps.review.urls')),  # Review API (before questions)
+    path('api/v1/', include('apps.courses.urls')),  # Courses API
     path('api/v1/papers/', include('apps.papers.urls')),  # Papers API
     path('api/v1/questions/', include('apps.study.urls')),
     path('api/v1/missions/', include('apps.missions.urls')),
