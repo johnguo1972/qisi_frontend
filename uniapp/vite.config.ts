@@ -43,9 +43,6 @@ export default defineConfig({
   },
   server: {
     port: 5273,
-    headers: {
-      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://registry.npmmirror.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://registry.npmmirror.com; font-src 'self' https://cdn.jsdelivr.net https://registry.npmmirror.com data:; img-src 'self' data: blob: https:;",
-    },
     proxy: {
       '/api': {
         target: 'http://localhost:8001',
