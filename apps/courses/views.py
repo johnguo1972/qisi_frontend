@@ -217,11 +217,6 @@ def material_preview(request, course_id, material_id):
     response['Content-Disposition'] = f'inline; filename="{material.name}"'
     response['Access-Control-Allow-Origin'] = '*'
     return response
-            'name': material.name,
-            'file_type': material.file_type,
-            'preview_url': preview_url,
-        },
-    })
 
 
 @api_view(['DELETE'])
