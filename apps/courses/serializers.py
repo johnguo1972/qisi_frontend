@@ -69,7 +69,7 @@ class CourseTreeSerializer(serializers.ModelSerializer):
     class Meta:
         model = CourseTree
         fields = ['id', 'course', 'parent', 'name', 'sort_order', 'has_children', 'created_at']
-        read_only_fields = ['id', 'course', 'created_at']
+        read_only_fields = ['id', 'created_at']
 
     def get_has_children(self, obj):
         return obj.children.exists()
