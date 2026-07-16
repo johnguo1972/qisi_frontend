@@ -42,7 +42,7 @@
           :key="item.id"
           class="table-row"
         >
-          <text class="col-name file-name" :title="item.file_name">{{ item.file_name }}</text>
+          <text class="col-name file-name" :title="item.name">{{ item.name }}</text>
           <text class="col-type">
             <text :class="['type-badge', fileTypeClass(item.file_type)]">{{ fileTypeLabel(item.file_type) }}</text>
           </text>
@@ -61,7 +61,7 @@
     <view v-if="deleteDialogVisible" class="modal-overlay" @click.self="deleteDialogVisible = false">
       <view class="modal delete-modal">
         <text class="modal-title">确认删除</text>
-        <text class="delete-warning">确定要删除资料「{{ materialToDelete?.file_name }}」吗？此操作不可撤销。</text>
+        <text class="delete-warning">确定要删除资料「{{ materialToDelete?.name }}」吗？此操作不可撤销。</text>
         <view class="modal-footer">
           <button size="default" @click="deleteDialogVisible = false">取消</button>
           <button size="default" type="warn" @click="handleDelete" :disabled="deleting">
@@ -101,7 +101,7 @@ const courseName = ref<string>('课程资料')
 // ============================================================
 interface Material {
   id: number
-  file_name: string
+  name: string
   file_type: string
   file_size: number
   created_at: string
@@ -114,7 +114,8 @@ async function loadMaterials() {
   loading.value = true
   try {
     const res = await materialApi.list(courseId.value)
-    materials.value = res.data || []
+    // courseFetch 返回 {success: true, data: [...]}，所以数组在 res.data.data
+    materials.value = res.data?.data || res.data || []
   } catch (e) {
     console.error('加载课程资料失败:', e)
     uni.showToast({ title: '加载失败，请重试', icon: 'none' })
@@ -238,7 +239,7 @@ function handleDownload(item: Material) {
   const url = materialApi.download(courseId.value, item.id)
   const a = document.createElement('a')
   a.href = url
-  a.download = item.file_name
+  a.download = item.name
   a.style.display = 'none'
   document.body.appendChild(a)
   a.click()
@@ -251,7 +252,8 @@ function handleDownload(item: Material) {
 async function handlePreview(item: Material) {
   try {
     const res = await materialApi.preview(courseId.value, item.id)
-    const previewUrl = res.data?.preview_url || res.data?.url
+    // courseFetch 返回 {success: true, data: {preview_url: ...}}
+    const previewUrl = res.data?.data?.preview_url || res.data?.preview_url || res.data?.url
 
     if (!previewUrl) {
       uni.showToast({ title: '无法获取预览链接', icon: 'none' })
@@ -259,16 +261,17 @@ async function handlePreview(item: Material) {
     }
 
     const fileType = item.file_type || ''
+    // 确保 URL 是绝对路径
+    const fullUrl = previewUrl.startsWith('http') ? previewUrl : `${window.location.origin}${previewUrl}`
+
     // Images open in a simple image viewer; PDFs/Office docs open in new tab
     if (fileType.startsWith('image/')) {
-      // For images, we can use uni.previewImage
       uni.previewImage({
-        urls: [previewUrl],
-        current: previewUrl,
+        urls: [fullUrl],
+        current: fullUrl,
       })
     } else {
-      // PDF/Word/Excel etc open in new tab
-      window.open(previewUrl, '_blank')
+      window.open(fullUrl, '_blank')
     }
   } catch (e) {
     console.error('预览失败:', e)
