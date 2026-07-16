@@ -17,16 +17,6 @@
         </button>
       </view>
 
-      <!-- Hidden file input -->
-      <input
-        ref="fileInputRef"
-        type="file"
-        class="hidden-input"
-        accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.bmp,.webp"
-        @change="onFileSelected"
-        :multiple="false"
-      />
-
       <!-- Loading state -->
       <view v-if="loading" class="loading">
         <text>加载中...</text>
@@ -163,38 +153,64 @@ const ALLOWED_TYPES = [
 ]
 const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB
 
-const fileInputRef = ref<HTMLInputElement | null>(null)
 const uploading = ref(false)
 const uploadProgress = ref(0)
 const uploadFileName = ref('')
 
 function triggerFileUpload() {
-  if (fileInputRef.value) {
-    fileInputRef.value.click()
+  // #ifdef H5
+  // H5 环境：创建临时 input 触发选择
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.bmp,.webp'
+  input.style.display = 'none'
+  input.onchange = (e: Event) => {
+    const target = e.target as HTMLInputElement
+    const file = target.files?.[0]
+    if (file) handleFileSelected(file)
+    document.body.removeChild(input)
   }
+  document.body.appendChild(input)
+  input.click()
+  // #endif
+  // #ifndef H5
+  uni.chooseFile({
+    count: 1,
+    extension: ['.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg'],
+    success: (res) => {
+      if (res.tempFiles?.length > 0) {
+        handleFileSelected(res.tempFiles[0] as any)
+      }
+    },
+  })
+  // #endif
 }
 
-function onFileSelected(e: Event) {
-  const target = e.target as HTMLInputElement
-  const file = target.files?.[0]
-  if (!file) return
+function handleFileSelected(file: File | { name: string; size: number; path: string }) {
+  const fileName = file.name
+  const fileSize = file.size
 
-  // Validate file type
-  if (!ALLOWED_TYPES.includes(file.type)) {
-    uni.showToast({ title: '不支持的文件类型，请上传 PDF/Word/图片 文件', icon: 'none' })
-    target.value = ''
+  // Validate file type by extension
+  const ext = fileName.split('.').pop()?.toLowerCase() || ''
+  const allowedExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']
+  if (!allowedExts.includes(ext)) {
+    uni.showToast({ title: '不支持的文件类型', icon: 'none' })
     return
   }
 
   // Validate file size
-  if (file.size > MAX_FILE_SIZE) {
+  if (fileSize > MAX_FILE_SIZE) {
     uni.showToast({ title: '文件大小不能超过 50MB', icon: 'none' })
-    target.value = ''
     return
   }
 
-  uploadFile(file)
-  target.value = '' // Reset input
+  // #ifdef H5
+  uploadFile(file as File)
+  // #endif
+  // #ifndef H5
+  // 非 H5 环境需要转换文件
+  uni.showToast({ title: '请使用 H5 浏览器上传文件', icon: 'none' })
+  // #endif
 }
 
 async function uploadFile(file: File) {
