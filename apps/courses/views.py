@@ -196,7 +196,7 @@ def material_download(request, course_id, material_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def material_preview(request, course_id, material_id):
-    """预览课程资料（所有类型直接返回文件内容）"""
+    """预览课程资料（所有类型直接返回文件内容，Word自动转为PDF）"""
     course = _get_course_or_404(course_id)
     _check_course_owner(course, request.user)
 
@@ -209,12 +209,34 @@ def material_preview(request, course_id, material_id):
     if not os.path.exists(full_path):
         raise NotFound('文件不存在')
 
-    # 所有类型都直接返回文件内容（inline 方式让浏览器直接显示）
+    # Word文档（.doc/.docx）转为PDF再预览
+    word_extensions = ['doc', 'docx', 'word']
+    preview_path = full_path
+    content_type = material.mime_type
+    filename = material.name
+
+    if material.file_type.lower() in word_extensions:
+        from .convert_service import convert_word_to_pdf
+        pdf_path = convert_word_to_pdf(full_path)
+        if pdf_path:
+            preview_path = pdf_path
+            content_type = 'application/pdf'
+            filename = os.path.splitext(material.name)[0] + '.pdf'
+        else:
+            # 转换失败，返回下载链接让用户下载后用Office打开
+            preview_url = f'/api/v1/courses/{course_id}/materials/{material_id}/download/'
+            return Response({
+                'success': False,
+                'message': 'Word文档预览不可用，请下载后用Office/WPS打开',
+                'data': {'download_url': preview_url},
+            })
+
+    # 返回文件内容（inline 方式让浏览器直接显示）
     response = FileResponse(
-        open(full_path, 'rb'),
-        content_type=material.mime_type,
+        open(preview_path, 'rb'),
+        content_type=content_type,
     )
-    response['Content-Disposition'] = f'inline; filename="{material.name}"'
+    response['Content-Disposition'] = f'inline; filename="{filename}"'
     response['Access-Control-Allow-Origin'] = '*'
     return response
 
