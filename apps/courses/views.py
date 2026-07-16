@@ -196,7 +196,7 @@ def material_download(request, course_id, material_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def material_preview(request, course_id, material_id):
-    """预览课程资料（图片直出，PDF/Word 返回 URL）"""
+    """预览课程资料（所有类型直接返回文件内容）"""
     course = _get_course_or_404(course_id)
     _check_course_owner(course, request.user)
 
@@ -209,22 +209,14 @@ def material_preview(request, course_id, material_id):
     if not os.path.exists(full_path):
         raise NotFound('文件不存在')
 
-    # 图片类型直接返回文件内容
-    image_types = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
-    if material.file_type.lower() in image_types:
-        response = FileResponse(
-            open(full_path, 'rb'),
-            content_type=material.mime_type,
-        )
-        response['Content-Disposition'] = f'inline; filename="{material.name}"'
-        return response
-
-    # PDF/Word 等返回 URL
-    preview_url = f'{settings.MEDIA_URL}{material.file_path}'
-    return Response({
-        'success': True,
-        'data': {
-            'id': material.id,
+    # 所有类型都直接返回文件内容（inline 方式让浏览器直接显示）
+    response = FileResponse(
+        open(full_path, 'rb'),
+        content_type=material.mime_type,
+    )
+    response['Content-Disposition'] = f'inline; filename="{material.name}"'
+    response['Access-Control-Allow-Origin'] = '*'
+    return response
             'name': material.name,
             'file_type': material.file_type,
             'preview_url': preview_url,

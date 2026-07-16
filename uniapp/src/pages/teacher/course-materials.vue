@@ -251,28 +251,11 @@ function handleDownload(item: Material) {
 // ============================================================
 async function handlePreview(item: Material) {
   try {
-    const res = await materialApi.preview(courseId.value, item.id)
-    // courseFetch 返回 {success: true, data: {preview_url: ...}}
-    const previewUrl = res.data?.data?.preview_url || res.data?.preview_url || res.data?.url
-
-    if (!previewUrl) {
-      uni.showToast({ title: '无法获取预览链接', icon: 'none' })
-      return
-    }
-
-    const fileType = item.file_type || ''
-    // 确保 URL 是绝对路径
-    const fullUrl = previewUrl.startsWith('http') ? previewUrl : `${window.location.origin}${previewUrl}`
-
-    // Images open in a simple image viewer; PDFs/Office docs open in new tab
-    if (fileType.startsWith('image/')) {
-      uni.previewImage({
-        urls: [fullUrl],
-        current: fullUrl,
-      })
-    } else {
-      window.open(fullUrl, '_blank')
-    }
+    // 直接打开预览 URL，后端会通过 FileResponse 返回文件内容
+    const previewUrl = `/api/v1/courses/${courseId.value}/materials/${item.id}/preview/`
+    const token = uni.getStorageSync('accessToken')
+    const fullUrl = `${window.location.origin}${previewUrl}`
+    window.open(fullUrl, '_blank')
   } catch (e) {
     console.error('预览失败:', e)
     uni.showToast({ title: '预览失败，请重试', icon: 'none' })
