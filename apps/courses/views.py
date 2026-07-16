@@ -194,20 +194,9 @@ def material_download(request, course_id, material_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def material_preview(request, course_id, material_id):
     """预览课程资料（所有类型直接返回文件内容）"""
-    # 手动验证认证（因为该视图被 window.open 调用，不支持 Bearer header）
-    from rest_framework_simplejwt.authentication import JWTAuthentication
-    auth_token = request.GET.get('auth_token')
-    if auth_token:
-        try:
-            validated_token = JWTAuthentication().get_validated_token(auth_token)
-            request.user = JWTAuthentication().get_user(validated_token)
-        except Exception:
-            raise PermissionDenied('认证信息无效')
-    elif not request.user.is_authenticated:
-        raise PermissionDenied('身份认证信息未提供')
-
     course = _get_course_or_404(course_id)
     _check_course_owner(course, request.user)
 

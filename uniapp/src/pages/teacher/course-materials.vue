@@ -252,9 +252,19 @@ function handleDownload(item: Material) {
 async function handlePreview(item: Material) {
   try {
     const token = uni.getStorageSync('accessToken')
-    const previewUrl = `/api/v1/courses/${courseId.value}/materials/${item.id}/preview/?auth_token=${token}`
-    const fullUrl = `${window.location.origin}${previewUrl}`
-    window.open(fullUrl, '_blank')
+    const previewUrl = `/api/v1/courses/${courseId.value}/materials/${item.id}/preview/`
+    // 使用 fetch 带认证头获取文件，然后创建 blob URL 打开
+    const response = await fetch(previewUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    const blob = await response.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    window.open(blobUrl, '_blank')
   } catch (e) {
     console.error('预览失败:', e)
     uni.showToast({ title: '预览失败，请重试', icon: 'none' })
