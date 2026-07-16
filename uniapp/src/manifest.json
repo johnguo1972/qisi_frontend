@@ -5,6 +5,9 @@
     "versionName" : "1.0.0",
     "versionCode" : "100",
     "transformPx" : false,
+    "sdkConfigs" : {
+        "statistics" : null
+    },
     "app-plus" : {
         "compatible" : {
             "ignoreVersion" : true
