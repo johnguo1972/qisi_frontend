@@ -10,6 +10,8 @@
       </view>
       <text class="node-name">{{ node.name || '未命名' }}</text>
       <view class="node-actions">
+        <view class="btn-sort" @click.stop="handleMoveUp" title="上移">↑</view>
+        <view class="btn-sort" @click.stop="handleMoveDown" title="下移">↓</view>
         <view class="btn-plus" @click.stop="handleAddChild">+</view>
       </view>
     </view>
@@ -24,6 +26,8 @@
         @add-child="$emit('add-child', $event)"
         @rename="$emit('rename', $event)"
         @delete-node="$emit('delete-node', $event)"
+        @move-up="$emit('move-up', $event)"
+        @move-down="$emit('move-down', $event)"
       />
     </view>
   </view>
@@ -50,6 +54,8 @@ const emit = defineEmits<{
   'add-child': [node: TreeNodeData]
   rename: [node: TreeNodeData]
   'delete-node': [node: TreeNodeData]
+  'move-up': [node: TreeNodeData]
+  'move-down': [node: TreeNodeData]
 }>()
 
 const isSelected = computed(() => props.selectedId === props.node.id)
@@ -72,6 +78,14 @@ function toggleExpand() {
 
 function handleAddChild() {
   emit('add-child', props.node)
+}
+
+function handleMoveUp() {
+  emit('move-up', props.node)
+}
+
+function handleMoveDown() {
+  emit('move-down', props.node)
 }
 
 function onRightClick(e: any) {
@@ -157,6 +171,25 @@ function onRightClick(e: any) {
 }
 
 .btn-plus:hover {
+  background: #409eff;
+  color: #fff;
+}
+
+.btn-sort {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #c0c4cc;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+  margin-right: 2px;
+}
+
+.btn-sort:hover {
   background: #409eff;
   color: #fff;
 }

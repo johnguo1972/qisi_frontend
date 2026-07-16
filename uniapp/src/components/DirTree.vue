@@ -15,6 +15,8 @@
         @add-child="$emit('add-child', $event)"
         @rename="$emit('rename', $event)"
         @delete-node="$emit('delete-node', $event)"
+        @move-up="$emit('move-up', $event)"
+        @move-down="$emit('move-down', $event)"
       />
     </view>
 
@@ -52,6 +54,8 @@ const emit = defineEmits<{
   'add-child': [node: TreeNodeData]
   rename: [node: TreeNodeData]
   'delete-node': [node: TreeNodeData]
+  'move-up': [node: TreeNodeData]
+  'move-down': [node: TreeNodeData]
 }>()
 
 const selectedId = ref<number | null>(null)

@@ -87,7 +87,7 @@ export const treeApi = {
     courseFetch<any>(`/courses/${courseId}/tree/${nodeId}/`, { method: 'PUT', body: JSON.stringify(data) }),
   remove: (courseId: number, nodeId: number) =>
     courseFetch<any>(`/courses/${courseId}/tree/${nodeId}/`, { method: 'DELETE' }),
-  move: (courseId: number, nodeId: number, data: { parent?: number }) =>
+  move: (courseId: number, nodeId: number, data: { parent?: number; sort_order?: number }) =>
     courseFetch<any>(`/courses/${courseId}/tree/${nodeId}/move/`, { method: 'PUT', body: JSON.stringify(data) }),
 }
 

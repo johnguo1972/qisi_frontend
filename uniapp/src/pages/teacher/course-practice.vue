@@ -17,6 +17,8 @@
           @add-child="onAddChild"
           @rename="onRename"
           @delete-node="onDeleteNode"
+          @move-up="onMoveUp"
+          @move-down="onMoveDown"
         />
       </view>
 
@@ -319,6 +321,84 @@ function onDeleteNode(node: TreeNodeData) {
       }
     },
   })
+}
+
+// ── 同级节点排序 ──
+
+/** 收集所有同级节点（展平树查找相同 parent 的节点） */
+function findSiblings(nodes: TreeNodeData[], targetId: number, parentId: number | null): TreeNodeData[] {
+  const result: TreeNodeData[] = []
+  for (const n of nodes) {
+    // 根节点（parent=null）
+    if (parentId === null && n.parent === undefined) {
+      result.push(n)
+    }
+    // 子节点（parent 匹配）
+    if (parentId !== null && n.parent === parentId) {
+      result.push(n)
+    }
+    if (n.children) {
+      result.push(...findSiblings(n.children, targetId, n.id))
+    }
+  }
+  return result
+}
+
+async function onMoveUp(node: TreeNodeData) {
+  try {
+    // 获取所有同级节点，按 sort_order 排序
+    const res: any = await treeApi.list(courseId.value)
+    const allNodes = flattenTree(res.data || [])
+    const parentId = node.parent || null
+    const siblings = allNodes
+      .filter((n: any) => (n.parent || null) === parentId)
+      .sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0))
+
+    const idx = siblings.findIndex((n: any) => n.id === node.id)
+    if (idx <= 0) return // 已经是第一个
+
+    // 与前一个节点交换 sort_order
+    const prev = siblings[idx - 1]
+    await treeApi.move(courseId.value, node.id, { sort_order: prev.sort_order })
+    await treeApi.move(courseId.value, prev.id, { sort_order: node.sort_order })
+    await loadTree()
+  } catch (e: any) {
+    uni.showToast({ title: '上移失败', icon: 'none' })
+  }
+}
+
+async function onMoveDown(node: TreeNodeData) {
+  try {
+    const res: any = await treeApi.list(courseId.value)
+    const allNodes = flattenTree(res.data || [])
+    const parentId = node.parent || null
+    const siblings = allNodes
+      .filter((n: any) => (n.parent || null) === parentId)
+      .sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0))
+
+    const idx = siblings.findIndex((n: any) => n.id === node.id)
+    if (idx < 0 || idx >= siblings.length - 1) return // 已经是最后一个
+
+    // 与后一个节点交换 sort_order
+    const next = siblings[idx + 1]
+    await treeApi.move(courseId.value, node.id, { sort_order: next.sort_order })
+    await treeApi.move(courseId.value, next.id, { sort_order: node.sort_order })
+    await loadTree()
+  } catch (e: any) {
+    uni.showToast({ title: '下移失败', icon: 'none' })
+  }
+}
+
+/** 将嵌套树展平为扁平节点列表 */
+function flattenTree(nodes: any[]): any[] {
+  const result: any[] = []
+  for (const n of nodes) {
+    result.push(n)
+    if (n.children) {
+      result.push(...flattenTree(n.children))
+    }
+  }
+  return result
 }
 
 async function confirmNodeAction() {
