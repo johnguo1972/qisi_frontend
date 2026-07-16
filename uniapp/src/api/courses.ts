@@ -4,14 +4,28 @@ const COURSE_BASE = '/api/v1'
 
 // Helper: 直接使用 fetch 绕过 request.ts 的 BASE_URL
 function courseFetch<T>(url: string, options?: RequestInit): Promise<T> {
+  const token = uni.getStorageSync('accessToken')
+  console.log(`[courseFetch] ${options?.method || 'GET'} ${COURSE_BASE + url}`, { hasToken: !!token })
   return fetch(COURSE_BASE + url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${uni.getStorageSync('accessToken')}`,
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       ...options?.headers,
     },
-  }).then(res => res.json())
+  }).then(res => {
+    if (res.status === 401) {
+      // Token 过期，清除并跳转登录
+      uni.removeStorageSync('accessToken')
+      uni.removeStorageSync('refreshToken')
+      uni.reLaunch({ url: '/pages/login/index' })
+      throw new Error('登录已过期，请重新登录')
+    }
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    return res.json()
+  })
 }
 
 export const courseApi = {
