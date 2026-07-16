@@ -42,7 +42,7 @@
           :key="item.id"
           class="table-row"
         >
-          <text class="col-name file-name" :title="item.name">{{ item.name }}</text>
+          <text class="col-name file-name" :title="item.name || item.file_path">{{ item.name || item.file_path?.split('/').pop() || '未知文件' }}</text>
           <text class="col-type">
             <text :class="['type-badge', fileTypeClass(item.file_type)]">{{ fileTypeLabel(item.file_type) }}</text>
           </text>
