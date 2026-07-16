@@ -124,9 +124,12 @@ async function loadCourses() {
   try {
     const res = await courseApi.list()
     courses.value = res.data || []
-  } catch (e) {
+  } catch (e: any) {
     console.error('加载课程列表失败:', e)
-    uni.showToast({ title: '加载失败，请重试', icon: 'none' })
+    // 401 错误 courseFetch 已处理跳转登录，这里只处理其他错误
+    if (!e.message?.includes('401') && !e.message?.includes('登录')) {
+      uni.showToast({ title: '加载失败，请重试', icon: 'none' })
+    }
   } finally {
     loading.value = false
   }
@@ -223,7 +226,12 @@ async function handleCreate() {
     await loadCourses()
   } catch (e: any) {
     console.error('创建课程失败:', e)
-    uni.showToast({ title: e?.message || '创建失败，请重试', icon: 'none' })
+    const msg = e?.message || ''
+    if (msg.includes('401') || msg.includes('登录')) {
+      // courseFetch 已处理跳转，这里不重复提示
+    } else {
+      uni.showToast({ title: msg || '创建失败，请重试', icon: 'none' })
+    }
   } finally {
     creating.value = false
   }
