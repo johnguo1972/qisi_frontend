@@ -251,9 +251,8 @@ function handleDownload(item: Material) {
 // ============================================================
 async function handlePreview(item: Material) {
   try {
-    // 直接打开预览 URL，后端会通过 FileResponse 返回文件内容
-    const previewUrl = `/api/v1/courses/${courseId.value}/materials/${item.id}/preview/`
     const token = uni.getStorageSync('accessToken')
+    const previewUrl = `/api/v1/courses/${courseId.value}/materials/${item.id}/preview/?auth_token=${token}`
     const fullUrl = `${window.location.origin}${previewUrl}`
     window.open(fullUrl, '_blank')
   } catch (e) {

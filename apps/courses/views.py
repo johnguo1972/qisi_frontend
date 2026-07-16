@@ -197,6 +197,17 @@ def material_download(request, course_id, material_id):
 @permission_classes([IsAuthenticated])
 def material_preview(request, course_id, material_id):
     """预览课程资料（所有类型直接返回文件内容）"""
+    # 支持 token 作为 query 参数传递（用于 window.open 时的新窗口认证）
+    auth_token = request.GET.get('auth_token')
+    if auth_token:
+        # 手动验证 token
+        from rest_framework_simplejwt.authentication import JWTAuthentication
+        try:
+            validated_token = JWTAuthentication().get_validated_token(auth_token)
+            request.user = JWTAuthentication().get_user(validated_token)
+        except Exception:
+            raise PermissionDenied('认证信息无效')
+
     course = _get_course_or_404(course_id)
     _check_course_owner(course, request.user)
 
