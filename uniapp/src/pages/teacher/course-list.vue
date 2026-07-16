@@ -6,9 +6,7 @@
       <!-- Header with create button -->
       <view class="page-header">
         <text class="page-title">课程管理</text>
-        <button class="create-btn" size="small" @click="showCreateDialog = true">
-          <text class="btn-icon">+</text> 新建课程
-        </button>
+        <button class="create-btn" @click="showCreateDialog = true">+ 新建课程</button>
       </view>
 
       <!-- Loading state -->
@@ -52,35 +50,17 @@
         <view class="form-row">
           <view class="form-group half">
             <text class="form-label">学科 <text class="required">*</text></text>
-            <picker
-              class="form-picker"
-              :value="subjectIndex"
-              :range="subjectOptions"
-              @change="onSubjectChange"
-            >
-              <view class="picker-value">
-                <text :class="createForm.subject ? 'picker-text' : 'picker-placeholder'">
-                  {{ createForm.subject || '请选择学科' }}
-                </text>
-                <text class="picker-arrow">▼</text>
-              </view>
-            </picker>
+            <select v-model="createForm.subject" class="form-select">
+              <option value="" disabled>请选择学科</option>
+              <option v-for="s in subjectOptions" :key="s.value" :value="s.value">{{ s.label }}</option>
+            </select>
           </view>
           <view class="form-group half">
             <text class="form-label">年级 <text class="required">*</text></text>
-            <picker
-              class="form-picker"
-              :value="gradeIndex"
-              :range="gradeOptions"
-              @change="onGradeChange"
-            >
-              <view class="picker-value">
-                <text :class="createForm.grade_level ? 'picker-text' : 'picker-placeholder'">
-                  {{ createForm.grade_level || '请选择年级' }}
-                </text>
-                <text class="picker-arrow">▼</text>
-              </view>
-            </picker>
+            <select v-model="createForm.grade_level" class="form-select">
+              <option value="" disabled>请选择年级</option>
+              <option v-for="g in gradeOptions" :key="g.value" :value="g.value">{{ g.label }}</option>
+            </select>
           </view>
         </view>
         <view class="form-group">
@@ -183,27 +163,36 @@ const showCreateDialog = ref(false)
 const creating = ref(false)
 const createForm = ref({ name: '', subject: '', grade_level: '', description: '' })
 
-const subjectOptions = ['数学', '语文', '英语', '物理', '化学', '生物', '历史', '地理', '政治']
-const subjectIndex = ref(-1)
+const subjectOptions = [
+  { value: '数学', label: '数学' },
+  { value: '语文', label: '语文' },
+  { value: '英语', label: '英语' },
+  { value: '物理', label: '物理' },
+  { value: '化学', label: '化学' },
+  { value: '生物', label: '生物' },
+  { value: '历史', label: '历史' },
+  { value: '地理', label: '地理' },
+  { value: '政治', label: '政治' },
+]
 
-const gradeOptions = ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级', '七年级', '八年级', '九年级', '高一', '高二', '高三']
-const gradeIndex = ref(-1)
-
-function onSubjectChange(e: any) {
-  subjectIndex.value = e.detail.value
-  createForm.value.subject = subjectOptions[e.detail.value]
-}
-
-function onGradeChange(e: any) {
-  gradeIndex.value = e.detail.value
-  createForm.value.grade_level = gradeOptions[e.detail.value]
-}
+const gradeOptions = [
+  { value: '一年级', label: '一年级' },
+  { value: '二年级', label: '二年级' },
+  { value: '三年级', label: '三年级' },
+  { value: '四年级', label: '四年级' },
+  { value: '五年级', label: '五年级' },
+  { value: '六年级', label: '六年级' },
+  { value: '七年级', label: '七年级' },
+  { value: '八年级', label: '八年级' },
+  { value: '九年级', label: '九年级' },
+  { value: '高一', label: '高一' },
+  { value: '高二', label: '高二' },
+  { value: '高三', label: '高三' },
+]
 
 function closeCreateDialog() {
   showCreateDialog.value = false
   createForm.value = { name: '', subject: '', grade_level: '', description: '' }
-  subjectIndex.value = -1
-  gradeIndex.value = -1
 }
 
 async function handleCreate() {
@@ -287,44 +276,14 @@ onMounted(() => {
 .main {
   margin-left: 240px;
   flex: 1;
-  padding: 24rpx;
+  padding: 48rpx;
+  overflow: visible;
 }
 
 /* Page header */
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24rpx;
-}
-
-.page-title {
-  font-size: 32rpx;
-  font-weight: 600;
-  color: #303133;
-}
-
-.create-btn {
-  margin: 0;
-  font-size: 26rpx;
-  padding: 8rpx 24rpx;
-  background: #409eff;
-  color: #fff;
-  border: none;
-  border-radius: 8rpx;
-  display: flex;
-  align-items: center;
-  gap: 4rpx;
-}
-
-.create-btn::after {
-  border: none;
-}
-
-.btn-icon {
-  font-size: 30rpx;
-  font-weight: 300;
-}
+.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24rpx; }
+.page-title { font-size: 32rpx; font-weight: 600; color: #303133; }
+.create-btn { background: #409eff; color: #fff; border: none; border-radius: 4px; padding: 6px 16px; font-size: 13px; cursor: pointer; }
 
 /* Loading / Empty */
 .loading {
@@ -441,6 +400,24 @@ onMounted(() => {
 }
 
 .form-textarea:focus {
+  border-color: #409eff;
+  background: #fff;
+}
+
+.form-select {
+  width: 100%;
+  height: 64rpx;
+  padding: 0 20rpx;
+  background: #f5f7fa;
+  border: 1px solid #e4e7ed;
+  border-radius: 8rpx;
+  font-size: 26rpx;
+  color: #303133;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.form-select:focus {
   border-color: #409eff;
   background: #fff;
 }

@@ -17,6 +17,7 @@ import BankPage from './bank.vue'
 import FavoritesPage from './favorites.vue'
 import MyClassesPage from './my-classes.vue'
 import MissionListPage from './mission-list.vue'
+import CourseListPage from './course-list.vue'
 
 const currentPage = ref('workbench')
 
@@ -26,6 +27,7 @@ const components: Record<string, any> = {
   'new-question': NewQuestionPage,
   bank: BankPage,
   favorites: FavoritesPage,
+  'course-list': CourseListPage,
   classes: MyClassesPage,
   missions: MissionListPage,
 }
