@@ -348,7 +348,7 @@ async function onMoveUp(node: TreeNodeData) {
   try {
     // 获取所有同级节点，按 sort_order 排序
     const res: any = await treeApi.list(courseId.value)
-    const allNodes = flattenTree(res.data || [])
+    const allNodes = flatTreeToArray(res.data || [])
     const parentId = node.parent || null
     const siblings = allNodes
       .filter((n: any) => (n.parent || null) === parentId)
@@ -370,7 +370,7 @@ async function onMoveUp(node: TreeNodeData) {
 async function onMoveDown(node: TreeNodeData) {
   try {
     const res: any = await treeApi.list(courseId.value)
-    const allNodes = flattenTree(res.data || [])
+    const allNodes = flatTreeToArray(res.data || [])
     const parentId = node.parent || null
     const siblings = allNodes
       .filter((n: any) => (n.parent || null) === parentId)
@@ -390,12 +390,12 @@ async function onMoveDown(node: TreeNodeData) {
 }
 
 /** 将嵌套树展平为扁平节点列表 */
-function flattenTree(nodes: any[]): any[] {
+function flatTreeToArray(nodes: any[]): any[] {
   const result: any[] = []
   for (const n of nodes) {
     result.push(n)
     if (n.children) {
-      result.push(...flattenTree(n.children))
+      result.push(...flatTreeToArray(n.children))
     }
   }
   return result
