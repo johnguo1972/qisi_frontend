@@ -30,6 +30,7 @@
             <button class="btn-action" size="mini" @click="showAddPanel">+ 新增习题</button>
             <button class="btn-action" size="mini" type="primary" @click="batchAiProcess" :disabled="selectedIds.length === 0">批量AI处理</button>
             <button class="btn-action" size="mini" type="success" @click="batchGenerateVariant" :disabled="selectedIds.length === 0">批量生成变式题</button>
+            <button class="btn-action" size="mini" type="warning" @click="showGenerateMission">生成任务</button>
           </view>
         </view>
 
@@ -185,6 +186,39 @@
         <view class="modal-footer">
           <button size="default" @click="moveDialogVisible = false">取消</button>
           <button size="default" type="primary" @click="confirmMove" :disabled="!moveTarget">确定移动</button>
+        </view>
+      </view>
+    </view>
+
+    <!-- Generate mission dialog -->
+    <view v-if="missionDialogVisible" class="modal-overlay" @click.self="missionDialogVisible = false">
+      <view class="modal">
+        <text class="modal-title">生成任务关卡</text>
+        <view class="form-group">
+          <text class="form-label">任务名称</text>
+          <input class="form-input" v-model="missionForm.name" placeholder="请输入任务名称" />
+        </view>
+        <view class="form-group">
+          <text class="form-label">关卡类型</text>
+          <picker :range="levelTypeOptions" range-key="label" @change="onLevelTypeChange">
+            <view class="picker-value">
+              <text>{{ missionForm.levelTypeLabel }}</text>
+            </view>
+          </picker>
+        </view>
+        <view class="form-group">
+          <text class="form-label">通过条件（正确率）</text>
+          <input class="form-input" type="number" v-model="missionForm.correctRate" placeholder="0.6" />
+        </view>
+        <view class="selected-nodes" v-if="selectedNodeIds.length > 0">
+          <text class="form-label">已选节点（{{ selectedNodeIds.length }}）：</text>
+          <text class="node-list">{{ selectedNodeNames }}</text>
+        </view>
+        <view class="modal-footer">
+          <button size="default" @click="missionDialogVisible = false">取消</button>
+          <button size="default" type="primary" @click="confirmGenerateMission" :disabled="selectedNodeIds.length === 0">
+            确认生成
+          </button>
         </view>
       </view>
     </view>
@@ -865,6 +899,90 @@ async function confirmMove() {
 }
 
 // ============================================================
+// Generate Mission
+// ============================================================
+const missionDialogVisible = ref(false)
+const missionForm = ref({
+  name: '',
+  levelType: 'practice',
+  levelTypeLabel: '练习',
+  correctRate: '0.6',
+})
+
+const levelTypeOptions = [
+  { label: '练习', value: 'practice' },
+  { label: '复习', value: 'review' },
+  { label: '补做', value: 'retry' },
+  { label: '变式', value: 'variant' },
+  { label: '测验', value: 'check' },
+]
+
+const selectedNodeIds = ref<number[]>([])
+const selectedNodeNames = computed(() => {
+  return selectedNodeIds.value
+    .map(id => {
+      const node = flatTreeToArray(treeNodes.value).find((n: any) => n.id === id)
+      return node?.name || ''
+    })
+    .filter(Boolean)
+    .join('、')
+})
+
+function showGenerateMission() {
+  missionForm.value = {
+    name: `${courseName.value} - 任务`,
+    levelType: 'practice',
+    levelTypeLabel: '练习',
+    correctRate: '0.6',
+  }
+  // 默认选中当前选中的节点
+  selectedNodeIds.value = selectedNode.value ? [selectedNode.value.id] : []
+  missionDialogVisible.value = true
+}
+
+function onLevelTypeChange(e: any) {
+  const idx = e.detail.value
+  const opt = levelTypeOptions[idx]
+  missionForm.value.levelType = opt.value
+  missionForm.value.levelTypeLabel = opt.label
+}
+
+async function confirmGenerateMission() {
+  if (selectedNodeIds.value.length === 0) {
+    uni.showToast({ title: '请至少选择一个目录节点', icon: 'none' })
+    return
+  }
+
+  const token = uni.getStorageSync('accessToken')
+  try {
+    const response = await fetch(`/api/v1/courses/${courseId.value}/generate-mission/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        node_ids: selectedNodeIds.value,
+        mission_name: missionForm.value.name,
+        level_type: missionForm.value.levelType,
+        pass_rule: { correct_rate: parseFloat(missionForm.value.correctRate) || 0.6 },
+      }),
+    })
+
+    const data = await response.json()
+    if (!response.ok) {
+      throw new Error(data.message || '生成任务失败')
+    }
+
+    uni.showToast({ title: data.message || '任务生成成功', icon: 'success' })
+    missionDialogVisible.value = false
+  } catch (e: any) {
+    console.error('生成任务失败:', e)
+    uni.showToast({ title: e?.message || '生成任务失败', icon: 'none' })
+  }
+}
+
+// ============================================================
 // Cleanup
 // ============================================================
 onUnmounted(() => {
@@ -1418,5 +1536,36 @@ onUnmounted(() => {
   gap: 8px;
   justify-content: flex-end;
   margin-top: 20px;
+}
+
+/* Mission dialog */
+.selected-nodes {
+  margin-top: 12px;
+  padding: 8px;
+  background: #f5f7fa;
+  border-radius: 4px;
+}
+
+.node-list {
+  font-size: 12px;
+  color: #606266;
+  margin-top: 4px;
+  display: block;
+}
+
+.form-label {
+  font-size: 13px;
+  color: #303133;
+  margin-bottom: 4px;
+  display: block;
+}
+
+.form-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  font-size: 13px;
+  box-sizing: border-box;
 }
 </style>

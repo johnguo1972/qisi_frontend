@@ -41,4 +41,5 @@ urlpatterns = [
     # 变式题确认/驳回
     path('courses/<int:course_id>/variant-tasks/<int:task_id>/confirm/', views.variant_task_confirm, name='variant-task-confirm'),
     path('courses/<int:course_id>/variant-tasks/<int:task_id>/reject/', views.variant_task_reject, name='variant-task-reject'),
+    path('courses/<int:course_id>/generate-mission/', views.generate_mission, name='generate-mission'),
 ]

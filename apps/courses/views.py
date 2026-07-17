@@ -795,3 +795,71 @@ def variant_task_reject(request, course_id, task_id):
         'success': True,
         'message': '变式题已驳回',
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def generate_mission(request, course_id):
+    """从课程目录节点批量生成任务关卡"""
+    from apps.missions.models import LearningMission, MissionLevel, MissionQuestionRel
+    from apps.accounts.models import UserAccount
+
+    course = _get_course_or_404(course_id)
+    _check_course_owner(course, request.user)
+
+    node_ids = request.data.get('node_ids', [])
+    mission_name = request.data.get('mission_name', f'{course.name} - 任务')
+    level_type = request.data.get('level_type', 'practice')
+    pass_rule = request.data.get('pass_rule', {'correct_rate': 0.6})
+
+    if not node_ids:
+        raise ValidationError('未选择目录节点')
+
+    # 创建任务
+    mission = LearningMission.objects.create(
+        mission_name=mission_name,
+        creator_teacher_id=request.user,
+        status='draft',
+    )
+
+    created_levels = []
+    for idx, node_id in enumerate(node_ids, 1):
+        try:
+            node = CourseTree.objects.get(id=node_id, course=course)
+        except CourseTree.DoesNotExist:
+            continue
+
+        # 创建关卡
+        level = MissionLevel.objects.create(
+            mission=mission,
+            level_no=idx,
+            level_name=node.name,
+            level_type=level_type,
+            pass_rule_json=pass_rule,
+        )
+
+        # 关联节点下的习题
+        question_links = CourseQuestionLink.objects.filter(
+            course=course, tree_node=node, is_deleted=False
+        )
+        for sort_no, link in enumerate(question_links, 1):
+            MissionQuestionRel.objects.create(
+                mission=mission,
+                level=level,
+                question_id=link.question_id,
+                sort_no=sort_no,
+                source_type='course_sync',
+            )
+
+        created_levels.append(level.id)
+
+    return Response({
+        'success': True,
+        'data': {
+            'mission_id': mission.id,
+            'mission_no': mission.mission_no,
+            'level_ids': created_levels,
+            'level_count': len(created_levels),
+        },
+        'message': f'任务创建成功，共 {len(created_levels)} 个关卡',
+    }, status=status.HTTP_201_CREATED)
