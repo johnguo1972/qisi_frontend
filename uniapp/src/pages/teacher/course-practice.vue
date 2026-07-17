@@ -249,11 +249,24 @@ async function loadTree() {
   treeLoading.value = true
   try {
     const res: any = await treeApi.list(courseId.value)
-    treeNodes.value = (res.data || res || []).map(flattenTree)
+    const data = res.data || res || []
+    // 递归排序所有节点
+    sortTree(data)
+    treeNodes.value = data.map(flattenTree)
   } catch (e) {
     console.error('加载目录树失败:', e)
   } finally {
     treeLoading.value = false
+  }
+}
+
+/** 递归按 sort_order 排序树节点 */
+function sortTree(nodes: any[]) {
+  nodes.sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0))
+  for (const n of nodes) {
+    if (n.children && n.children.length > 0) {
+      sortTree(n.children)
+    }
   }
 }
 
@@ -368,18 +381,8 @@ async function onMoveUp(node: TreeNodeData) {
     await treeApi.move(courseId.value, node.id, { sort_order: prevOrder })
     await treeApi.move(courseId.value, prev.id, { sort_order: currOrder })
 
-    // 直接在前端重建树结构（不依赖后端返回顺序）
-    // 更新 treeNodes 中每个节点的 sort_order
-    const nodeMap = new Map<number, any>()
-    flatTreeToArray(treeNodes.value).forEach((n: any) => nodeMap.set(n.id, n))
-    const nodeInTree = nodeMap.get(node.id)
-    const prevInTree = nodeMap.get(prev.id)
-    if (nodeInTree && prevInTree) {
-      nodeInTree.sort_order = prevOrder
-      prevInTree.sort_order = currOrder
-    }
-    // 强制触发重新渲染
-    treeNodes.value = [...treeNodes.value]
+    // 重新加载树（后端已更新 sort_order）
+    await loadTree()
   } catch (e: any) {
     console.error('[onMoveUp] error:', e)
     uni.showToast({ title: '上移失败', icon: 'none' })
@@ -410,17 +413,8 @@ async function onMoveDown(node: TreeNodeData) {
     await treeApi.move(courseId.value, node.id, { sort_order: nextOrder })
     await treeApi.move(courseId.value, next.id, { sort_order: currOrder })
 
-    // 直接在前端重建树结构
-    const nodeMap = new Map<number, any>()
-    flatTreeToArray(treeNodes.value).forEach((n: any) => nodeMap.set(n.id, n))
-    const nodeInTree = nodeMap.get(node.id)
-    const nextInTree = nodeMap.get(next.id)
-    if (nodeInTree && nextInTree) {
-      nodeInTree.sort_order = nextOrder
-      nextInTree.sort_order = currOrder
-    }
-    // 强制触发重新渲染
-    treeNodes.value = [...treeNodes.value]
+    // 重新加载树（后端已更新 sort_order）
+    await loadTree()
   } catch (e: any) {
     console.error('[onMoveDown] error:', e)
     uni.showToast({ title: '下移失败', icon: 'none' })
