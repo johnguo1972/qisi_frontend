@@ -896,11 +896,12 @@ def material_pages(request, course_id, material_id):
             # PDF 直接转图片
             from apps.parser.services.convert_service import pdf_to_images
             images = pdf_to_images(full_path, output_dir=pages_dir)
-            for img_path in images:
-                rel_path = os.path.relpath(img_path, settings.MEDIA_ROOT)
+            for img in images:
+                # img is a dict with keys: page_no, path, width, height
+                img_path = img.get('path') if isinstance(img, dict) else img
                 page_images.append({
-                    'url': f'{settings.MEDIA_URL}{rel_path}',
-                    'page': len(page_images) + 1,
+                    'url': f'{settings.MEDIA_URL}{img_path}',
+                    'page': img.get('page_no', len(page_images) + 1) if isinstance(img, dict) else len(page_images) + 1,
                 })
         elif file_type in ['word', 'docx', 'doc']:
             # Word 先转 PDF 再转图片
@@ -908,11 +909,11 @@ def material_pages(request, course_id, material_id):
             pdf_path = word_to_pdf(full_path, output_dir=pages_dir)
             if pdf_path:
                 images = pdf_to_images(pdf_path, output_dir=pages_dir)
-                for img_path in images:
-                    rel_path = os.path.relpath(img_path, settings.MEDIA_ROOT)
+                for img in images:
+                    img_path = img.get('path') if isinstance(img, dict) else img
                     page_images.append({
-                        'url': f'{settings.MEDIA_URL}{rel_path}',
-                        'page': len(page_images) + 1,
+                        'url': f'{settings.MEDIA_URL}{img_path}',
+                        'page': img.get('page_no', len(page_images) + 1) if isinstance(img, dict) else len(page_images) + 1,
                     })
         elif file_type in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']:
             # 图片直接返回
