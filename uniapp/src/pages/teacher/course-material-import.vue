@@ -20,11 +20,12 @@
               <text>文档加载中...</text>
             </view>
             <view v-else class="doc-page" @mousedown="onSelectionStart" @mousemove="onSelectionMove" @mouseup="onSelectionEnd">
-              <image
+              <img
                 :src="pages[currentPage]?.url"
-                mode="widthFix"
                 class="page-image"
                 @load="onImageLoad"
+                @error="onImageError"
+                style="max-width: 100%; height: auto;"
               />
               <!-- Box selection overlay -->
               <view
@@ -303,7 +304,12 @@ function toggleSelection() {
 }
 
 function onImageLoad(e: any) {
-  // Image loaded, ready for selection
+  console.log('[ImportPage] Image loaded:', e.target?.src)
+}
+
+function onImageError(e: any) {
+  console.error('[ImportPage] Image load error:', e.target?.src)
+  uni.showToast({ title: '图片加载失败', icon: 'none' })
 }
 
 function getMousePosition(e: MouseEvent) {
