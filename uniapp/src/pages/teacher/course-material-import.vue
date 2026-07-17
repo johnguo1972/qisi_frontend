@@ -251,8 +251,10 @@ onMounted(async () => {
   const pages_list = getCurrentPages()
   const currentPage_obj = pages_list[pages_list.length - 1] as any
   const options = currentPage_obj.options || {}
+  console.log('[ImportPage] options:', options)
   courseId.value = Number(options.course_id || options.id)
   materialId.value = Number(options.material_id)
+  console.log('[ImportPage] courseId:', courseId.value, 'materialId:', materialId.value)
 
   if (!courseId.value || !materialId.value) {
     uni.showToast({ title: '参数错误', icon: 'none' })
@@ -265,13 +267,16 @@ onMounted(async () => {
 
 async function loadMaterialPages() {
   try {
+    console.log('[ImportPage] Loading pages for courseId:', courseId.value, 'materialId:', materialId.value)
     const res: any = await materialApi.pages(courseId.value, materialId.value)
+    console.log('[ImportPage] API response:', res)
     if (res.data) {
       pages.value = res.data.pages || []
       materialName.value = res.data.material_name || ''
+      console.log('[ImportPage] pages:', pages.value.length, 'materialName:', materialName.value)
     }
   } catch (e: any) {
-    console.error('加载文档页面失败:', e)
+    console.error('[ImportPage] loadMaterialPages error:', e)
     uni.showToast({ title: e?.message || '加载失败', icon: 'none' })
   }
 }
