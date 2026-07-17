@@ -889,7 +889,10 @@ def material_pages(request, course_id, material_id):
     page_images = []
 
     try:
-        if material.file_type.lower() in ['pdf']:
+        file_type = material.file_type.lower()
+        logger.info(f'文档类型：{file_type}, 文件路径：{full_path}')
+
+        if file_type == 'pdf':
             # PDF 直接转图片
             from apps.parser.services.convert_service import pdf_to_images
             images = pdf_to_images(full_path, output_dir=pages_dir)
@@ -899,7 +902,7 @@ def material_pages(request, course_id, material_id):
                     'url': f'{settings.MEDIA_URL}{rel_path}',
                     'page': len(page_images) + 1,
                 })
-        elif material.file_type.lower() in ['word', 'docx', 'doc']:
+        elif file_type in ['word', 'docx', 'doc']:
             # Word 先转 PDF 再转图片
             from apps.parser.services.convert_service import word_to_pdf, pdf_to_images
             pdf_path = word_to_pdf(full_path, output_dir=pages_dir)
@@ -911,13 +914,15 @@ def material_pages(request, course_id, material_id):
                         'url': f'{settings.MEDIA_URL}{rel_path}',
                         'page': len(page_images) + 1,
                     })
-        elif material.file_type.lower().startswith('image'):
+        elif file_type in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']:
             # 图片直接返回
             rel_path = os.path.relpath(full_path, settings.MEDIA_ROOT)
             page_images.append({
                 'url': f'{settings.MEDIA_URL}{rel_path}',
                 'page': 1,
             })
+        else:
+            raise ValidationError(f'不支持的文件类型：{file_type}，仅支持 PDF、Word 和图片格式')
     except Exception as e:
         logger.error(f'文档转图片失败: {e}')
         raise ValidationError(f'文档转换失败: {str(e)}')
