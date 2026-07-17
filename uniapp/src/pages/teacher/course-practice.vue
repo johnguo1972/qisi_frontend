@@ -250,8 +250,10 @@ async function loadTree() {
   try {
     const res: any = await treeApi.list(courseId.value)
     const data = res.data || res || []
+    console.log('[loadTree] raw data:', data.map((n: any) => ({ id: n.id, name: n.name, sort_order: n.sort_order, children: n.children?.length })))
     // 递归排序所有节点
     sortTree(data)
+    console.log('[loadTree] sorted data:', data.map((n: any) => ({ id: n.id, name: n.name, sort_order: n.sort_order })))
     treeNodes.value = data.map(flattenTree)
   } catch (e) {
     console.error('加载目录树失败:', e)
