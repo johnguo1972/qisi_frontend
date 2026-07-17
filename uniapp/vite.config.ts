@@ -52,6 +52,12 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
         },
+        '/study/api': {
+          target: env.VITE_API_TARGET,
+          changeOrigin: true,
+          secure: false,
+          rewrite: (path) => path.replace(/^\/study/, ''),
+        },
         '/media': {
           target: env.VITE_API_TARGET,
           changeOrigin: true,
@@ -61,6 +67,7 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_API_TARGET,
           changeOrigin: true,
           secure: false,
+          rewrite: (path) => path.replace(/^\/study/, ''),
         }
       }
     }
