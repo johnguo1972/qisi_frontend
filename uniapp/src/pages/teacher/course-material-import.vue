@@ -274,6 +274,9 @@ async function loadMaterialPages() {
       pages.value = res.data.pages || []
       materialName.value = res.data.material_name || ''
       console.log('[ImportPage] pages:', pages.value.length, 'materialName:', materialName.value)
+      if (pages.value.length > 0) {
+        console.log('[ImportPage] First page URL:', pages.value[0].url)
+      }
     }
   } catch (e: any) {
     console.error('[ImportPage] loadMaterialPages error:', e)
