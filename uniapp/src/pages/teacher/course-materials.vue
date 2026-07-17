@@ -283,8 +283,13 @@ function canImport(item: Material): boolean {
 }
 
 function handleImport(item: Material) {
+  console.log('[Materials] handleImport called:', item)
   uni.navigateTo({
     url: `/pages/teacher/course-material-import?course_id=${courseId.value}&material_id=${item.id}`,
+    fail: (err) => {
+      console.error('[Materials] navigateTo failed:', err)
+      uni.showToast({ title: '页面跳转失败', icon: 'none' })
+    },
   })
 }
 
