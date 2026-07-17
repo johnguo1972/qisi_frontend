@@ -249,9 +249,7 @@ async function loadTree() {
   treeLoading.value = true
   try {
     const res: any = await treeApi.list(courseId.value)
-    const data = res.data || res || []
-    console.log('[loadTree] data:', JSON.stringify(data.map((n: any) => ({ id: n.id, name: n.name, sort_order: n.sort_order, children: n.children?.length }))))
-    treeNodes.value = data.map(flattenTree)
+    treeNodes.value = (res.data || res || []).map(flattenTree)
   } catch (e) {
     console.error('加载目录树失败:', e)
   } finally {
@@ -363,8 +361,10 @@ async function onMoveUp(node: TreeNodeData) {
 
     // 与前一个节点交换 sort_order
     const prev = siblings[idx - 1]
-    await treeApi.move(courseId.value, node.id, { sort_order: prev.sort_order })
-    await treeApi.move(courseId.value, prev.id, { sort_order: node.sort_order })
+    const prevOrder = prev.sort_order
+    const currOrder = siblings[idx].sort_order
+    await treeApi.move(courseId.value, node.id, { sort_order: prevOrder })
+    await treeApi.move(courseId.value, prev.id, { sort_order: currOrder })
     await loadTree()
   } catch (e: any) {
     console.error('[onMoveUp] error:', e)
@@ -389,8 +389,10 @@ async function onMoveDown(node: TreeNodeData) {
 
     // 与后一个节点交换 sort_order
     const next = siblings[idx + 1]
-    await treeApi.move(courseId.value, node.id, { sort_order: next.sort_order })
-    await treeApi.move(courseId.value, next.id, { sort_order: node.sort_order })
+    const nextOrder = next.sort_order
+    const currOrder = siblings[idx].sort_order
+    await treeApi.move(courseId.value, node.id, { sort_order: nextOrder })
+    await treeApi.move(courseId.value, next.id, { sort_order: currOrder })
     await loadTree()
   } catch (e: any) {
     console.error('[onMoveDown] error:', e)
