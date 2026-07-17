@@ -986,9 +986,9 @@ def material_ai_recognize(request, course_id, material_id):
             img_data = base64.b64encode(f.read()).decode('utf-8')
 
         # 使用视觉模型识别
-        response_text = ai_service._call_ai(
+        response_text = ai_service._call_ai_multimodal(
             system_prompt="你是试题识别专家，请准确识别图片中的试题内容。",
-            user_prompt=prompt,
+            user_text=prompt,
             model='qwen3.7-plus',
             images=[f'data:image/png;base64,{img_data}'],
         )

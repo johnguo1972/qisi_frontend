@@ -19,7 +19,7 @@
             <view v-if="pages.length === 0" class="doc-empty">
               <text>文档加载中...</text>
             </view>
-            <view v-else class="doc-page">
+            <view v-else class="doc-page" @mousedown="onSelectionStart" @mousemove="onSelectionMove" @mouseup="onSelectionEnd">
               <image
                 :src="pages[currentPage]?.url"
                 mode="widthFix"
@@ -28,11 +28,11 @@
               />
               <!-- Box selection overlay -->
               <view
-                v-if="isSelecting"
+                v-if="hasSelection"
                 class="selection-box"
                 :style="{
-                  left: selectionStart.x + 'px',
-                  top: selectionStart.y + 'px',
+                  left: Math.min(selectionStart.x, selectionEnd.x) + 'px',
+                  top: Math.min(selectionStart.y, selectionEnd.y) + 'px',
                   width: Math.abs(selectionEnd.x - selectionStart.x) + 'px',
                   height: Math.abs(selectionEnd.y - selectionStart.y) + 'px',
                 }"
@@ -296,6 +296,35 @@ function toggleSelection() {
 
 function onImageLoad(e: any) {
   // Image loaded, ready for selection
+}
+
+function getMousePosition(e: MouseEvent) {
+  const target = e.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  return {
+    x: e.clientX - rect.left,
+    y: e.clientY - rect.top,
+  }
+}
+
+function onSelectionStart(e: MouseEvent) {
+  if (!isSelecting.value) return
+  const pos = getMousePosition(e)
+  selectionStart.value = pos
+  selectionEnd.value = pos
+}
+
+function onSelectionMove(e: MouseEvent) {
+  if (!isSelecting.value || !hasSelection.value && selectionStart.value.x === 0) return
+  if (selectionStart.value.x === 0 && selectionStart.value.y === 0) return
+  const pos = getMousePosition(e)
+  selectionEnd.value = pos
+}
+
+function onSelectionEnd(e: MouseEvent) {
+  if (!isSelecting.value) return
+  const pos = getMousePosition(e)
+  selectionEnd.value = pos
 }
 
 // AI recognition
