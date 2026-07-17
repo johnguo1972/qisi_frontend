@@ -57,7 +57,7 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
         },
-        '/study': {
+        '/study/media': {
           target: env.VITE_API_TARGET,
           changeOrigin: true,
           secure: false,
