@@ -40,3 +40,5 @@ dump.rdb
 # ============ 编辑器 / IDE ============
 .idea/
 .vscode/
+media/
+node_modules/
