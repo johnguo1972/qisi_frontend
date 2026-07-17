@@ -56,7 +56,8 @@
       <!-- 主观题：文本输入 + 拍照上传 -->
       <view v-else class="subjective-area">
         <view class="section-title">我的答案</view>
-        <textarea v-model="textAnswer" placeholder="请输入答案..." class="text-input" />
+        <textarea v-model="textAnswer" :placeholder="textPlaceholder" class="text-input" />
+        <text v-if="currentQuestion.question_type === 'fill_blank'" class="fill-hint">多个空位请用中文分号（；）分隔每个答案，例如：2；-3</text>
 
         <!-- 拍照上传 -->
         <view class="photo-section">
@@ -210,9 +211,25 @@ const questionTypeLabel = computed(() => {
   return typeMap[currentQuestion.value.question_type] || currentQuestion.value.question_type || '题目'
 })
 
-const isObjective = computed(() =>
-  ['single_choice', 'multiple_choice'].includes(currentQuestion.value.question_type)
-)
+const isObjective = computed(() => {
+  const q = currentQuestion.value
+  if (q.question_type === 'fill_blank') return false
+  if (['single_choice', 'multiple_choice'].includes(q.question_type)) {
+    // 容错：标记为多选题但没有选项，且题干含 ____，按填空题处理
+    if (!q.options || q.options.length === 0) {
+      if (q.stem && q.stem.includes('____')) return false
+    }
+    return true
+  }
+  return false
+})
+
+const textPlaceholder = computed(() => {
+  if (currentQuestion.value.question_type === 'fill_blank') {
+    return '请在此输入答案，多个空位请用中文分号（；）分隔'
+  }
+  return '请输入答案...'
+})
 const hasNext = computed(() => currentIndex.value < questions.value.length - 1)
 const hasPrev = computed(() => currentIndex.value > 0)
 const canAddPhoto = computed(() => uploadedImages.value.length < 3 && !uploadingPhoto.value)
@@ -635,7 +652,15 @@ async function nextQuestion() {
   box-sizing: border-box;
   background: #fff;
   font-size: 26rpx;
+  margin-bottom: 8rpx;
+}
+
+.fill-hint {
+  display: block;
+  font-size: 22rpx;
+  color: #999;
   margin-bottom: 24rpx;
+  line-height: 1.5;
 }
 
 /* 拍照上传 */

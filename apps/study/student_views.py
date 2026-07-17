@@ -93,6 +93,29 @@ def student_home(request):
         class_obj = mission.class_obj
         level_count = mission.levels.count()
         question_count = MissionQuestionRel.objects.filter(mission=mission).count()
+
+        # 实时计算各关卡进度，取平均值作为任务整体进度
+        levels = mission.levels.all()
+        total_progress = 0
+        for lv in levels:
+            level_q_count = MissionQuestionRel.objects.filter(level=lv).count()
+            correct_count = AnswerAttempt.objects.filter(
+                student_user_id=request.user,
+                level=lv,
+                is_correct=True,
+            ).values('question_id').distinct().count()
+            level_pct = round(correct_count / max(level_q_count, 1) * 100, 0) if level_q_count > 0 else 0
+            total_progress += level_pct
+        overall_progress = round(total_progress / max(level_count, 1), 2)
+
+        # 同步更新数据库
+        p.progress_percent = overall_progress
+        if overall_progress >= 100:
+            p.progress_status = 'completed'
+        elif overall_progress > 0:
+            p.progress_status = 'in_progress'
+        p.save(update_fields=['progress_percent', 'progress_status'])
+
         missions.append({
             'mission': {
                 'id': mission.id,
@@ -104,7 +127,7 @@ def student_home(request):
             'level_count': level_count,
             'question_count': question_count,
             'progress_status': p.progress_status,
-            'progress_percent': float(p.progress_percent) if p.progress_percent is not None else 0,
+            'progress_percent': float(overall_progress),
             'current_level_id': p.current_level_id,
         })
 
@@ -128,6 +151,7 @@ def student_mission_detail(request, mission_id):
         return Response({'code': 403, 'message': '无权访问该任务', 'data': None, 'trace_id': make_trace_id()}, status=403)
 
     levels = []
+    total_progress = 0
     for lv in mission.levels.all():
         lp = StudentLevelProgress.objects.filter(
             level=lv, student_user_id=request.user
@@ -149,6 +173,23 @@ def student_mission_detail(request, mission_id):
             'question_count': level_q_count,
             'progress_percent': progress_pct,
         })
+        total_progress += progress_pct
+
+    # 更新任务整体进度到数据库（供首页展示）
+    level_count = max(len(levels), 1)
+    overall_progress = round(total_progress / level_count, 2)
+    try:
+        sp = StudentMissionProgress.objects.get(
+            mission=mission, student_user_id=request.user
+        )
+        sp.progress_percent = overall_progress
+        if overall_progress >= 100:
+            sp.progress_status = 'completed'
+        elif sp.progress_status == 'not_started' and overall_progress > 0:
+            sp.progress_status = 'in_progress'
+        sp.save()
+    except StudentMissionProgress.DoesNotExist:
+        pass
 
     class_obj = mission.class_obj
     return Response({
@@ -204,6 +245,15 @@ def student_level_detail(request, level_id):
         level=level, student_user_id=request.user,
         defaults={'status': 'running'}
     )
+
+    # 更新任务进度状态为进行中
+    if level.mission_id:
+        StudentMissionProgress.objects.filter(
+            mission_id=level.mission_id, student_user_id=request.user
+        ).exclude(progress_status='in_progress').exclude(progress_status='completed').update(
+            progress_status='in_progress',
+            current_level_id=level.id,
+        )
 
     return Response({
         'code': 0, 'message': 'success',
