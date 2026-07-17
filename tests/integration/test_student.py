@@ -111,6 +111,15 @@ class TestStudentLearning:
             'mode_type': 'B',
         })
         assert resp.status_code in [200, 201, 400, 404], f"Response: {resp.json()}"
+        if resp.status_code == 200:
+            data = resp.json()['data']
+            assert data['mode'] == 'B'
+            assert 'session_id' in data
+            assert 'step_index' in data
+            assert 'total_steps' in data
+            assert 'hint' in data
+            assert 'options' in data
+            assert 'question_info' in data
 
     def test_start_guidance_c(self, student_client, student_user, sample_question):
         """Start C mode guidance."""
@@ -119,6 +128,12 @@ class TestStudentLearning:
             'mode_type': 'C',
         })
         assert resp.status_code in [200, 201, 400, 404], f"Response: {resp.json()}"
+        if resp.status_code == 200:
+            data = resp.json()['data']
+            assert data['mode'] in ('B', 'C')  # C may downgrade to B
+            assert 'session_id' in data
+            assert 'step_index' in data
+            assert 'total_steps' in data
 
     def test_guidance_reply(self, student_client, student_user, sample_question):
         """Reply in guidance session."""
@@ -132,10 +147,15 @@ class TestStudentLearning:
             # Reply
             resp2 = student_client.post(
                 f'/api/v1/student/guidance/sessions/{session_id}/reply',
-                {'reply': '我认为选A'},
+                {'reply': 'A'},
                 content_type='application/json'
             )
             assert resp2.status_code in [200, 400], f"Response: {resp2.json()}"
+            if resp2.status_code == 200:
+                data = resp2.json()['data']
+                assert 'mode' in data
+                assert 'step_index' in data
+                assert 'is_completed' in data
 
     def test_guidance_downgrade_c_to_b(self, student_client, student_user, sample_question):
         """C mode with invalid input should downgrade to B."""
