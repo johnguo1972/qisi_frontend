@@ -618,7 +618,13 @@ async function loadMaterials() {
 }
 
 function importFromMaterial(material: any) {
-  uni.showToast({ title: `资料「${material.name}」引入功能开发中`, icon: 'none' })
+  uni.navigateTo({
+    url: `/pages/teacher/course-material-import?course_id=${courseId.value}&material_id=${material.id}`,
+    fail: (err) => {
+      console.error('跳转导入页面失败:', err)
+      uni.showToast({ title: '页面跳转失败', icon: 'none' })
+    },
+  })
 }
 
 // ============================================================
