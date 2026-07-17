@@ -359,13 +359,27 @@ async function onMoveUp(node: TreeNodeData) {
     const idx = siblings.findIndex((n: any) => n.id === node.id)
     if (idx <= 0) return
 
-    // 直接交换两个节点的 sort_order 值
+    // 与前一个节点交换 sort_order
     const prev = siblings[idx - 1]
     const prevOrder = Number(prev.sort_order) || 0
     const currOrder = Number(siblings[idx].sort_order) || 0
-    await treeApi.update(courseId.value, node.id, { sort_order: prevOrder })
-    await treeApi.update(courseId.value, prev.id, { sort_order: currOrder })
-    await loadTree()
+
+    // 调用后端 API 更新 sort_order
+    await treeApi.move(courseId.value, node.id, { sort_order: prevOrder })
+    await treeApi.move(courseId.value, prev.id, { sort_order: currOrder })
+
+    // 直接在前端重建树结构（不依赖后端返回顺序）
+    // 更新 treeNodes 中每个节点的 sort_order
+    const nodeMap = new Map<number, any>()
+    flatTreeToArray(treeNodes.value).forEach((n: any) => nodeMap.set(n.id, n))
+    const nodeInTree = nodeMap.get(node.id)
+    const prevInTree = nodeMap.get(prev.id)
+    if (nodeInTree && prevInTree) {
+      nodeInTree.sort_order = prevOrder
+      prevInTree.sort_order = currOrder
+    }
+    // 强制触发重新渲染
+    treeNodes.value = [...treeNodes.value]
   } catch (e: any) {
     console.error('[onMoveUp] error:', e)
     uni.showToast({ title: '上移失败', icon: 'none' })
@@ -387,13 +401,26 @@ async function onMoveDown(node: TreeNodeData) {
     const idx = siblings.findIndex((n: any) => n.id === node.id)
     if (idx < 0 || idx >= siblings.length - 1) return
 
-    // 直接交换两个节点的 sort_order 值
+    // 与后一个节点交换 sort_order
     const next = siblings[idx + 1]
     const nextOrder = Number(next.sort_order) || 0
     const currOrder = Number(siblings[idx].sort_order) || 0
-    await treeApi.update(courseId.value, node.id, { sort_order: nextOrder })
-    await treeApi.update(courseId.value, next.id, { sort_order: currOrder })
-    await loadTree()
+
+    // 调用后端 API 更新 sort_order
+    await treeApi.move(courseId.value, node.id, { sort_order: nextOrder })
+    await treeApi.move(courseId.value, next.id, { sort_order: currOrder })
+
+    // 直接在前端重建树结构
+    const nodeMap = new Map<number, any>()
+    flatTreeToArray(treeNodes.value).forEach((n: any) => nodeMap.set(n.id, n))
+    const nodeInTree = nodeMap.get(node.id)
+    const nextInTree = nodeMap.get(next.id)
+    if (nodeInTree && nextInTree) {
+      nodeInTree.sort_order = nextOrder
+      nextInTree.sort_order = currOrder
+    }
+    // 强制触发重新渲染
+    treeNodes.value = [...treeNodes.value]
   } catch (e: any) {
     console.error('[onMoveDown] error:', e)
     uni.showToast({ title: '下移失败', icon: 'none' })
