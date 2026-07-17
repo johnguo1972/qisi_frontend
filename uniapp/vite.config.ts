@@ -56,6 +56,11 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_API_TARGET,
           changeOrigin: true,
           secure: false,
+        },
+        '/study': {
+          target: env.VITE_API_TARGET,
+          changeOrigin: true,
+          secure: false,
         }
       }
     }
