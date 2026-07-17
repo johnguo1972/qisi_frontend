@@ -150,12 +150,38 @@ def _pdf_to_images_pymupdf(pdf_path: str, output_dir: str, dpi: int, fitz) -> li
     zoom = dpi / 72.0
     mat = fitz.Matrix(zoom, zoom)
 
+    # Check if images already exist (cache)
+    existing_images = []
     for i in range(len(doc)):
-        page = doc[i]
-        pix = page.get_pixmap(matrix=mat)
         image_path = os.path.join(output_dir, f'page_{i+1:03d}.png')
-        pix.save(image_path)
-        width, height = pix.width, pix.height
+        if os.path.exists(image_path):
+            width, height = _get_image_size(image_path)
+            rel_path = os.path.relpath(image_path, settings.MEDIA_ROOT)
+            existing_images.append({
+                'page_no': i + 1,
+                'path': rel_path,
+                'width': width,
+                'height': height,
+            })
+
+    # If all images exist, return cached results
+    if len(existing_images) == len(doc):
+        logger.info(f'Using cached images from {output_dir}')
+        doc.close()
+        return existing_images
+
+    # Render missing pages
+    for i in range(len(doc)):
+        image_path = os.path.join(output_dir, f'page_{i+1:03d}.png')
+        if not os.path.exists(image_path):
+            page = doc[i]
+            pix = page.get_pixmap(matrix=mat)
+            pix.save(image_path)
+            width, height = pix.width, pix.height
+            logger.info(f'Saved page image: {image_path} ({width}x{height})')
+        else:
+            width, height = _get_image_size(image_path)
+
         rel_path = os.path.relpath(image_path, settings.MEDIA_ROOT)
         image_paths.append({
             'page_no': i + 1,
@@ -163,10 +189,20 @@ def _pdf_to_images_pymupdf(pdf_path: str, output_dir: str, dpi: int, fitz) -> li
             'width': width,
             'height': height,
         })
-        logger.info(f'Saved page image: {image_path} ({width}x{height})')
 
     doc.close()
     return image_paths
+
+
+def _get_image_size(image_path: str):
+    """Get image width and height without opening with GUI libraries."""
+    try:
+        from PIL import Image
+        with Image.open(image_path) as img:
+            return img.size
+    except ImportError:
+        # Fallback: return default size
+        return 1200, 1600
 
 
 def _pdf_to_images_pdf2image(pdf_path: str, output_dir: str, dpi: int, convert_from_path) -> list:
