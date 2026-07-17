@@ -74,6 +74,27 @@ export const materialApi = {
     courseFetch<any>(`/courses/${courseId}/materials/${materialId}/preview/`),
   remove: (courseId: number, materialId: number) =>
     courseFetch<any>(`/courses/${courseId}/materials/${materialId}/`, { method: 'DELETE' }),
+  // 获取文档页面图片列表
+  pages: (courseId: number, materialId: number) =>
+    courseFetch<any>(`/courses/${courseId}/materials/${materialId}/pages/`),
+  // AI 识别框选区域
+  aiRecognize: (courseId: number, materialId: number, data: { image_url: string; page?: number }) =>
+    courseFetch<any>(`/courses/${courseId}/materials/${materialId}/ai-recognize/`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+}
+
+// ============================================================
+// 题目导入
+// ============================================================
+export const importApi = {
+  // 保存从课程资料导入的题目
+  saveQuestion: (courseId: number, data: { question: any; tree_node_id?: number }) =>
+    courseFetch<any>(`/courses/${courseId}/import-question/`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 }
 
 // ============================================================

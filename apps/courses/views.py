@@ -864,3 +864,213 @@ def generate_mission(request, course_id):
         },
         'message': f'任务创建成功，共 {len(created_levels)} 个关卡',
     }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def material_pages(request, course_id, material_id):
+    """获取资料文档的页面图片列表（用于预览）"""
+    course = _get_course_or_404(course_id)
+    _check_course_owner(course, request.user)
+
+    try:
+        material = CourseMaterial.objects.get(id=material_id, course=course, is_deleted=False)
+    except CourseMaterial.DoesNotExist:
+        raise NotFound(f'资料 {material_id} 不存在')
+
+    full_path = os.path.join(settings.MEDIA_ROOT, material.file_path)
+    if not os.path.exists(full_path):
+        raise NotFound('文件不存在')
+
+    # 确保输出目录存在
+    pages_dir = os.path.join(settings.MEDIA_ROOT, 'courses', str(course_id), 'materials', f'{material_id}_pages')
+    os.makedirs(pages_dir, exist_ok=True)
+
+    page_images = []
+
+    try:
+        if material.file_type.lower() in ['pdf']:
+            # PDF 直接转图片
+            from apps.parser.services.convert_service import pdf_to_images
+            images = pdf_to_images(full_path, output_dir=pages_dir)
+            for img_path in images:
+                rel_path = os.path.relpath(img_path, settings.MEDIA_ROOT)
+                page_images.append({
+                    'url': f'{settings.MEDIA_URL}{rel_path}',
+                    'page': len(page_images) + 1,
+                })
+        elif material.file_type.lower() in ['word', 'docx', 'doc']:
+            # Word 先转 PDF 再转图片
+            from apps.parser.services.convert_service import word_to_pdf, pdf_to_images
+            pdf_path = word_to_pdf(full_path, output_dir=pages_dir)
+            if pdf_path:
+                images = pdf_to_images(pdf_path, output_dir=pages_dir)
+                for img_path in images:
+                    rel_path = os.path.relpath(img_path, settings.MEDIA_ROOT)
+                    page_images.append({
+                        'url': f'{settings.MEDIA_URL}{rel_path}',
+                        'page': len(page_images) + 1,
+                    })
+        elif material.file_type.lower().startswith('image'):
+            # 图片直接返回
+            rel_path = os.path.relpath(full_path, settings.MEDIA_ROOT)
+            page_images.append({
+                'url': f'{settings.MEDIA_URL}{rel_path}',
+                'page': 1,
+            })
+    except Exception as e:
+        logger.error(f'文档转图片失败: {e}')
+        raise ValidationError(f'文档转换失败: {str(e)}')
+
+    return Response({
+        'success': True,
+        'data': {
+            'material_id': material.id,
+            'material_name': material.name,
+            'pages': page_images,
+        },
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def material_ai_recognize(request, course_id, material_id):
+    """框选区域 AI 识别（qwen3.7-plus 多模态）"""
+    from apps.common.ai_service import AIReviewService
+
+    course = _get_course_or_404(course_id)
+    _check_course_owner(course, request.user)
+
+    try:
+        material = CourseMaterial.objects.get(id=material_id, course=course, is_deleted=False)
+    except CourseMaterial.DoesNotExist:
+        raise NotFound(f'资料 {material_id} 不存在')
+
+    # 获取请求参数
+    image_url = request.data.get('image_url', '')
+    page = request.data.get('page', 1)
+
+    if not image_url:
+        raise ValidationError('未提供图片 URL')
+
+    # 构建图片完整路径
+    if image_url.startswith(settings.MEDIA_URL):
+        rel_path = image_url[len(settings.MEDIA_URL):]
+        image_path = os.path.join(settings.MEDIA_ROOT, rel_path)
+    else:
+        image_path = image_url
+
+    if not os.path.exists(image_path):
+        raise NotFound('图片文件不存在')
+
+    # 调用 AI 识别
+    try:
+        ai_service = AIReviewService()
+        # 使用 qwen3.7-plus 模型进行多模态识别
+        prompt = """请识别图片中的试题内容，并以 JSON 格式返回：
+{
+  "question_type": "single_choice|multiple_choice|fill_blank|solution",
+  "stem": "题干内容（支持 LaTeX 公式）",
+  "options": {"A": "选项A", "B": "选项B", "C": "选项C", "D": "选项D"},
+  "answer": "正确答案",
+  "analysis": "解析",
+  "difficulty": 3,
+  "knowledge_points": ["知识点1", "知识点2"],
+  "images": [{"description": "图片描述", "url": "图片路径"}]
+}
+如果图片中没有试题，返回 {"error": "未识别到试题"}"""
+
+        # 读取图片并发送给 AI
+        with open(image_path, 'rb') as f:
+            import base64
+            img_data = base64.b64encode(f.read()).decode('utf-8')
+
+        # 使用视觉模型识别
+        response_text = ai_service._call_ai(
+            system_prompt="你是试题识别专家，请准确识别图片中的试题内容。",
+            user_prompt=prompt,
+            model='qwen3.7-plus',
+            images=[f'data:image/png;base64,{img_data}'],
+        )
+
+        import json
+        result = json.loads(response_text) if response_text else {}
+
+        if 'error' in result:
+            return Response({
+                'success': False,
+                'message': result['error'],
+            })
+
+        return Response({
+            'success': True,
+            'data': result,
+        })
+
+    except json.JSONDecodeError:
+        raise ValidationError('AI 返回格式错误')
+    except Exception as e:
+        logger.error(f'AI 识别失败: {e}')
+        raise ValidationError(f'AI 识别失败: {str(e)}')
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def import_question(request, course_id):
+    """保存从课程资料导入的题目"""
+    from apps.parser.models import ExamQuestion, QuestionImage
+
+    course = _get_course_or_404(course_id)
+    _check_course_owner(course, request.user)
+
+    # 获取题目数据
+    question_data = request.data.get('question', {})
+    tree_node_id = request.data.get('tree_node_id')
+
+    if not question_data.get('stem'):
+        raise ValidationError('题干不能为空')
+
+    # 创建题目
+    question = ExamQuestion.objects.create(
+        question_no=request.data.get('question_no', 'imported'),
+        question_type=question_data.get('question_type', 'single_choice'),
+        subject=course.subject,
+        stem=question_data.get('stem', ''),
+        stem_html=question_data.get('stem_html', ''),
+        answer=question_data.get('answer', ''),
+        analysis=question_data.get('analysis', ''),
+        solution=question_data.get('solution', ''),
+        difficulty=question_data.get('difficulty', 3),
+        knowledge_points=question_data.get('knowledge_points', []),
+        review_status='unreviewed',
+        parse_status='auto_parsed',
+    )
+
+    # 创建选项
+    options = question_data.get('options', {})
+    for label, content in options.items():
+        if content:
+            from apps.parser.models import QuestionOption
+            QuestionOption.objects.create(
+                question=question,
+                option_label=label,
+                content=content,
+            )
+
+    # 关联到课程目录节点
+    if tree_node_id:
+        CourseQuestionLink.objects.create(
+            course=course,
+            tree_node_id=tree_node_id,
+            question=question,
+            source='imported_from_material',
+            source_course_name=course.name,
+        )
+
+    return Response({
+        'success': True,
+        'data': {
+            'question_id': question.id,
+        },
+        'message': '题目导入成功',
+    }, status=status.HTTP_201_CREATED)

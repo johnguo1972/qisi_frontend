@@ -42,4 +42,7 @@ urlpatterns = [
     path('courses/<int:course_id>/variant-tasks/<int:task_id>/confirm/', views.variant_task_confirm, name='variant-task-confirm'),
     path('courses/<int:course_id>/variant-tasks/<int:task_id>/reject/', views.variant_task_reject, name='variant-task-reject'),
     path('courses/<int:course_id>/generate-mission/', views.generate_mission, name='generate-mission'),
+    path('courses/<int:course_id>/materials/<int:material_id>/pages/', views.material_pages, name='material-pages'),
+    path('courses/<int:course_id>/materials/<int:material_id>/ai-recognize/', views.material_ai_recognize, name='material-ai-recognize'),
+    path('courses/<int:course_id>/import-question/', views.import_question, name='import-question'),
 ]

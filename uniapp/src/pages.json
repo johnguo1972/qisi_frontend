@@ -24,6 +24,7 @@
     { "path": "pages/teacher/course-list", "style": { "navigationBarTitleText": "课程列表" } },
     { "path": "pages/teacher/course-materials", "style": { "navigationBarTitleText": "课程资料" } },
     { "path": "pages/teacher/course-practice", "style": { "navigationBarTitleText": "课程练习" } },
+    { "path": "pages/teacher/course-material-import", "style": { "navigationBarTitleText": "从资料导入习题" } },
 
     { "path": "pages/student/home", "style": { "navigationBarTitleText": "今日任务" } },
     { "path": "pages/student/join-class", "style": { "navigationBarTitleText": "加入班级" } },

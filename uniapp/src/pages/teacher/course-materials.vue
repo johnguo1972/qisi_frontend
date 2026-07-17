@@ -51,6 +51,7 @@
           <view class="col-actions">
             <button size="mini" type="primary" @click="handleDownload(item)">下载</button>
             <button size="mini" @click="handlePreview(item)">预览</button>
+            <button size="mini" type="success" @click="handleImport(item)" v-if="canImport(item)">引入</button>
             <button size="mini" type="warn" @click="handleDeleteConfirm(item)">删除</button>
           </view>
         </view>
@@ -269,6 +270,22 @@ async function handlePreview(item: Material) {
     console.error('预览失败:', e)
     uni.showToast({ title: '预览失败，请重试', icon: 'none' })
   }
+}
+
+// ============================================================
+// Import question from material
+// ============================================================
+const IMPORTABLE_TYPES = ['pdf', 'word', 'docx', 'doc', 'image']
+
+function canImport(item: Material): boolean {
+  if (!item.file_type) return false
+  return IMPORTABLE_TYPES.some(t => item.file_type.toLowerCase().includes(t))
+}
+
+function handleImport(item: Material) {
+  uni.navigateTo({
+    url: `/pages/teacher/course-material-import?course_id=${courseId.value}&material_id=${item.id}`,
+  })
 }
 
 // ============================================================
