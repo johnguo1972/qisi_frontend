@@ -899,6 +899,8 @@ def material_pages(request, course_id, material_id):
             for img in images:
                 # img is a dict with keys: page_no, path, width, height
                 img_path = img.get('path') if isinstance(img, dict) else img
+                # Convert Windows backslashes to forward slashes for URL
+                img_path = img_path.replace('\\', '/')
                 page_images.append({
                     'url': f'{settings.MEDIA_URL}{img_path}',
                     'page': img.get('page_no', len(page_images) + 1) if isinstance(img, dict) else len(page_images) + 1,
@@ -911,13 +913,14 @@ def material_pages(request, course_id, material_id):
                 images = pdf_to_images(pdf_path, output_dir=pages_dir)
                 for img in images:
                     img_path = img.get('path') if isinstance(img, dict) else img
+                    img_path = img_path.replace('\\', '/')
                     page_images.append({
                         'url': f'{settings.MEDIA_URL}{img_path}',
                         'page': img.get('page_no', len(page_images) + 1) if isinstance(img, dict) else len(page_images) + 1,
                     })
         elif file_type in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']:
             # 图片直接返回
-            rel_path = os.path.relpath(full_path, settings.MEDIA_ROOT)
+            rel_path = os.path.relpath(full_path, settings.MEDIA_ROOT).replace('\\', '/')
             page_images.append({
                 'url': f'{settings.MEDIA_URL}{rel_path}',
                 'page': 1,
