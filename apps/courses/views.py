@@ -288,6 +288,12 @@ def tree_list_or_create(request, course_id):
     data = request.data.copy()
     data['course'] = course_id
 
+    # 自动分配 sort_order（同级节点中最大值 + 1）
+    if not data.get('sort_order'):
+        siblings = CourseTree.objects.filter(course=course, parent_id=parent_id)
+        max_order = siblings.aggregate(models.Max('sort_order'))['sort_order__max']
+        data['sort_order'] = (max_order or 0) + 1
+
     serializer = CourseTreeSerializer(data=data, context={'request': request})
     serializer.is_valid(raise_exception=True)
     node = serializer.save()
