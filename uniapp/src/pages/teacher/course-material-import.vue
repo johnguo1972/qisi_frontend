@@ -19,7 +19,7 @@
             <view v-if="pages.length === 0" class="doc-empty">
               <text>文档加载中...</text>
             </view>
-            <view v-else class="doc-page" @mousedown="onSelectionStart" @mousemove="onSelectionMove" @mouseup="onSelectionEnd">
+            <view v-else class="doc-page" ref="docPageRef" @mousedown="onSelectionStart" @mousemove="onSelectionMove" @mouseup="onSelectionEnd">
               <img
                 :src="pages[currentPage]?.url"
                 class="page-image"
@@ -188,6 +188,9 @@ const materialName = ref('')
 const pages = ref<Array<{ url: string; page: number }>>([])
 const currentPage = ref(0)
 
+// Container ref for position calculation
+const docPageRef = ref<HTMLElement | null>(null)
+
 // Selection state
 const isSelecting = ref(false)
 const selectionStart = ref({ x: 0, y: 0 })
@@ -313,8 +316,9 @@ function onImageError(e: any) {
 }
 
 function getMousePosition(e: MouseEvent) {
-  const target = e.currentTarget as HTMLElement
-  const rect = target.getBoundingClientRect()
+  const container = docPageRef.value
+  if (!container) return { x: 0, y: 0 }
+  const rect = container.getBoundingClientRect()
   return {
     x: e.clientX - rect.left,
     y: e.clientY - rect.top,
