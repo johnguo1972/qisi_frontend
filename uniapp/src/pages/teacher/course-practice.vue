@@ -359,12 +359,12 @@ async function onMoveUp(node: TreeNodeData) {
     const idx = siblings.findIndex((n: any) => n.id === node.id)
     if (idx <= 0) return
 
-    // 与前一个节点交换 sort_order
+    // 直接交换两个节点的 sort_order 值
     const prev = siblings[idx - 1]
-    const prevOrder = prev.sort_order
-    const currOrder = siblings[idx].sort_order
-    await treeApi.move(courseId.value, node.id, { sort_order: prevOrder })
-    await treeApi.move(courseId.value, prev.id, { sort_order: currOrder })
+    const prevOrder = Number(prev.sort_order) || 0
+    const currOrder = Number(siblings[idx].sort_order) || 0
+    await treeApi.update(courseId.value, node.id, { sort_order: prevOrder })
+    await treeApi.update(courseId.value, prev.id, { sort_order: currOrder })
     await loadTree()
   } catch (e: any) {
     console.error('[onMoveUp] error:', e)
@@ -387,12 +387,12 @@ async function onMoveDown(node: TreeNodeData) {
     const idx = siblings.findIndex((n: any) => n.id === node.id)
     if (idx < 0 || idx >= siblings.length - 1) return
 
-    // 与后一个节点交换 sort_order
+    // 直接交换两个节点的 sort_order 值
     const next = siblings[idx + 1]
-    const nextOrder = next.sort_order
-    const currOrder = siblings[idx].sort_order
-    await treeApi.move(courseId.value, node.id, { sort_order: nextOrder })
-    await treeApi.move(courseId.value, next.id, { sort_order: currOrder })
+    const nextOrder = Number(next.sort_order) || 0
+    const currOrder = Number(siblings[idx].sort_order) || 0
+    await treeApi.update(courseId.value, node.id, { sort_order: nextOrder })
+    await treeApi.update(courseId.value, next.id, { sort_order: currOrder })
     await loadTree()
   } catch (e: any) {
     console.error('[onMoveDown] error:', e)
