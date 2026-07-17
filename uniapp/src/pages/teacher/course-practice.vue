@@ -346,22 +346,21 @@ function findSiblings(nodes: TreeNodeData[], targetId: number, parentId: number 
 
 async function onMoveUp(node: TreeNodeData) {
   try {
-    console.log('[onMoveUp] node:', { id: node.id, name: node.name, parent: node.parent, sort_order: node.sort_order })
     const res: any = await treeApi.list(courseId.value)
     const allNodes = flatTreeToArray(res.data || [])
-    console.log('[onMoveUp] allNodes:', allNodes.map((n: any) => ({ id: n.id, name: n.name, parent: n.parent, sort_order: n.sort_order })))
-    const parentId = node.parent || null
+    const parentId = node.parent !== undefined && node.parent !== null ? node.parent : null
     const siblings = allNodes
-      .filter((n: any) => (n.parent || null) === parentId)
+      .filter((n: any) => {
+        const nParent = n.parent !== undefined && n.parent !== null ? n.parent : null
+        return nParent === parentId
+      })
       .sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0))
-    console.log('[onMoveUp] siblings:', siblings.map((n: any) => ({ id: n.id, name: n.name, sort_order: n.sort_order })))
 
     const idx = siblings.findIndex((n: any) => n.id === node.id)
-    console.log('[onMoveUp] idx:', idx)
-    if (idx <= 0) return // 已经是第一个
+    if (idx <= 0) return
 
+    // 与前一个节点交换 sort_order
     const prev = siblings[idx - 1]
-    console.log('[onMoveUp] swapping:', { node: { id: node.id, sort_order: prev.sort_order }, prev: { id: prev.id, sort_order: node.sort_order } })
     await treeApi.move(courseId.value, node.id, { sort_order: prev.sort_order })
     await treeApi.move(courseId.value, prev.id, { sort_order: node.sort_order })
     await loadTree()
@@ -375,13 +374,16 @@ async function onMoveDown(node: TreeNodeData) {
   try {
     const res: any = await treeApi.list(courseId.value)
     const allNodes = flatTreeToArray(res.data || [])
-    const parentId = node.parent || null
+    const parentId = node.parent !== undefined && node.parent !== null ? node.parent : null
     const siblings = allNodes
-      .filter((n: any) => (n.parent || null) === parentId)
+      .filter((n: any) => {
+        const nParent = n.parent !== undefined && n.parent !== null ? n.parent : null
+        return nParent === parentId
+      })
       .sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0))
 
     const idx = siblings.findIndex((n: any) => n.id === node.id)
-    if (idx < 0 || idx >= siblings.length - 1) return // 已经是最后一个
+    if (idx < 0 || idx >= siblings.length - 1) return
 
     // 与后一个节点交换 sort_order
     const next = siblings[idx + 1]
@@ -389,6 +391,7 @@ async function onMoveDown(node: TreeNodeData) {
     await treeApi.move(courseId.value, next.id, { sort_order: node.sort_order })
     await loadTree()
   } catch (e: any) {
+    console.error('[onMoveDown] error:', e)
     uni.showToast({ title: '下移失败', icon: 'none' })
   }
 }
