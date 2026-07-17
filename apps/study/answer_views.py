@@ -13,7 +13,27 @@ def make_trace_id():
     return uuid.uuid4().hex[:16]
 
 
-SUBJECTIVE_TYPES = ('fill_blank', 'short_answer', 'essay', 'true_false', 'computation', 'proof')
+import re
+
+SUBJECTIVE_TYPES = ('short_answer', 'essay', 'computation', 'proof')
+
+
+def _normalize_answer(text: str) -> str:
+    """标准化答案文本：去除空格、转小写、全角转半角。"""
+    text = text.strip()
+    text = text.replace(' ', '').replace('　', '')
+    text = text.lower()
+    # 全角转半角
+    result = []
+    for c in text:
+        code = ord(c)
+        if 0xFF01 <= code <= 0xFF5E:
+            result.append(chr(code - 0xFEE0))
+        elif code == 0x3000:
+            result.append(' ')
+        else:
+            result.append(c)
+    return ''.join(result)
 
 
 def _check_answer(question, answer_content: dict):
@@ -28,6 +48,25 @@ def _check_answer(question, answer_content: dict):
             ai_a = question.ai_answer_a or {}
             correct = set(str(ai_a.get('answer', '')).replace(' ', '').upper())
         return selected == correct
+    if question.question_type == 'true_false':
+        selected = answer_content.get('selected', '') or ''
+        correct_str = getattr(question, 'answer', '') or ''
+        return selected.strip().upper() == correct_str.strip().upper()
+    if question.question_type == 'fill_blank':
+        student_text = answer_content.get('text', '') or ''
+        correct_str = getattr(question, 'answer', '') or ''
+        # 按中文分号或逗号分隔多个空位的答案
+        student_answers = re.split(r'[；;，,、|]+', _normalize_answer(student_text))
+        correct_answers = re.split(r'[；;，,、|]+', _normalize_answer(correct_str))
+        # 过滤空值
+        student_answers = [a for a in student_answers if a]
+        correct_answers = [a for a in correct_answers if a]
+        if not correct_answers:
+            return False
+        # 逐一比对
+        if len(student_answers) != len(correct_answers):
+            return False
+        return all(s == c for s, c in zip(student_answers, correct_answers))
     # 主观题无法自动判分 → None
     return None
 

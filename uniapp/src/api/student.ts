@@ -18,11 +18,11 @@ export const studentApi = {
 }
 
 export const wrongbookApi = {
-  list: () => get('/student/wrong-book'),
-  detail: (id: number) => get(`/student/wrong-book/${id}`),
-  variants: (id: number) => get(`/student/wrong-book/${id}/variants`),
+  list: () => get('/student/wrong-book/'),
+  detail: (id: number) => get(`/student/wrong-book/${id}/`),
+  variants: (id: number) => get(`/student/wrong-book/${id}/variants/`),
   variantSubmit: (itemId: number, data: { question_id: number; answer_content: object }) =>
-    post(`/student/wrong-book/${itemId}/variant-submit`, data),
+    post(`/student/wrong-book/${itemId}/variant-submit/`, data),
 }
 
 export const exportApi = {

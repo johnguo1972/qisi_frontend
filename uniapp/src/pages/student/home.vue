@@ -30,7 +30,7 @@
           </view>
           <view class="card-top">
             <text class="mission-name">{{ m.mission.mission_name }}</text>
-            <text class="mission-status">{{ m.progress_status }}</text>
+            <text class="mission-status" :class="'status-' + m.progress_status">{{ statusText(m.progress_status) }}</text>
           </view>
           <!-- 关卡数和题目数 -->
           <view class="mission-meta">
@@ -138,6 +138,16 @@ function formatDeadline(deadline: string): string {
     return deadline
   }
 }
+
+// 任务状态中文映射
+function statusText(status: string): string {
+  const map: Record<string, string> = {
+    'not_started': '未开始',
+    'in_progress': '进行中',
+    'completed': '已完成',
+  }
+  return map[status] || status
+}
 </script>
 
 <style scoped>
@@ -203,6 +213,15 @@ function formatDeadline(deadline: string): string {
 .mission-status {
   font-size: 22rpx;
   color: #ff9800;
+}
+.status-not_started {
+  color: #999;
+}
+.status-in_progress {
+  color: #409eff;
+}
+.status-completed {
+  color: #67c23a;
 }
 /* 关卡数和题目数 */
 .mission-meta {

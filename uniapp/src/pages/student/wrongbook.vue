@@ -56,8 +56,12 @@ onMounted(async () => {
   try {
     const res = await wrongbookApi.list()
     items.value = res.data || []
+    if (items.value.length === 0) {
+      console.log('错题本为空，可能原因：1) 答错的题为主观题（不会自动进错题本） 2) 答对的题不会进入错题本 3) 数据还未落库')
+    }
   } catch (e) {
     console.error('Failed to load wrong book:', e)
+    uni.showToast({ title: '加载错题本失败', icon: 'none', duration: 3000 })
   }
 })
 

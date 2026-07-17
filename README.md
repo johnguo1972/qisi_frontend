@@ -170,7 +170,19 @@ cp .env.example .env
 
 按需修改 `.env` 中的数据库、Redis、`QWEN_API_KEY`、腾讯云 SMS 等配置（字段说明见 `.env.example`）。
 
-### 5.2 启动后端（Django）
+### 5.2 启动依赖服务
+
+确保 PostgreSQL 和 Redis 已运行：
+
+```bash
+# PostgreSQL（Docker 容器）
+docker start qisi-postgres
+
+# Redis（本地）
+redis-server --port 6379 --requirepass "Redis_2026_StrongPwd"
+```
+
+### 5.3 启动后端（Django）
 
 ```bash
 # 1. 创建并激活虚拟环境
@@ -191,7 +203,7 @@ python manage.py createsuperuser
 python manage.py runserver
 ```
 
-### 5.3 启动 Celery Worker（AI 解析等异步任务需要）
+### 5.4 启动 Celery Worker（AI 解析等异步任务需要）
 
 新开一个终端，激活同一虚拟环境后：
 
@@ -201,7 +213,7 @@ celery -A config worker -l info
 
 > 试卷 AI 解析走异步流水线，不启动 Celery 将导致解析任务卡住。
 
-### 5.4 启动前端（uni-app H5）
+### 5.5 启动前端（uni-app H5）
 
 ```bash
 cd uniapp
@@ -209,11 +221,53 @@ cd uniapp
 # 1. 安装依赖
 npm install
 
-# 2. 启动 H5 开发服务器（默认 http://localhost:5173）
+# 2. 启动 H5 开发服务器（默认 http://localhost:5273）
 npm run dev:h5
 ```
 
-前端默认通过 `http://localhost:8000` 访问后端 API，CORS 已在 `.env` 的 `CORS_ALLOWED_ORIGINS`（默认 `http://localhost:5173`）中放行。如端口或后端地址不同，请同步修改。
+#### 切换 API 后端地址
+
+前端通过 Vite 代理转发 API 请求，默认指向本地后端。可通过以下方式切换：
+
+**方式一：使用默认模式（访问本地后端）**
+
+```bash
+npm run dev:h5
+```
+
+自动加载 `uniapp/.env.development`，代理到 `http://localhost:8001`。
+
+**方式二：使用生产模式（访问远程服务器）**
+
+```bash
+npm run dev:h5 -- --mode production
+```
+
+自动加载 `uniapp/.env.production`，代理到 `https://qisi.chengxuelu.com/study`。
+
+**方式三：临时覆盖（自定义地址）**
+
+```bash
+# Windows (CMD)
+set VITE_API_TARGET=https://your-domain.com/study && npm run dev:h5
+
+# Windows (Git Bash / PowerShell)
+VITE_API_TARGET=https://your-domain.com/study npm run dev:h5
+```
+
+**方式四：直接修改配置文件**
+
+编辑 `uniapp/.env.development`（本地）或 `uniapp/.env.production`（生产）中的 `VITE_API_TARGET` 值：
+
+```env
+# 本地后端
+VITE_API_TARGET=http://localhost:8001
+
+# 远程服务器
+VITE_API_TARGET=https://qisi.chengxuelu.com/study
+```
+
+> 前端默认端口为 5273，后端默认端口为 8001，可在 `uniapp/vite.config.ts` 的 `server.port` 中修改。
 
 ---
 
