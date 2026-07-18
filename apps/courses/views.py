@@ -958,6 +958,7 @@ def material_ai_recognize(request, course_id, material_id):
     # 获取请求参数
     image_url = request.data.get('image_url', '')
     page = request.data.get('page', 1)
+    crop_region = request.data.get('crop_region')  # {x1, y1, x2, y2}
 
     if not image_url:
         raise ValidationError('未提供图片 URL')
@@ -993,6 +994,25 @@ def material_ai_recognize(request, course_id, material_id):
         with open(image_path, 'rb') as f:
             import base64
             img_data = base64.b64encode(f.read()).decode('utf-8')
+
+        # 如果有框选区域，裁剪图片
+        if crop_region:
+            from PIL import Image
+            import io
+            img = Image.open(io.BytesIO(base64.b64decode(img_data)))
+            x1, y1, x2, y2 = crop_region.get('x1', 0), crop_region.get('y1', 0), crop_region.get('x2', 0), crop_region.get('y2', 0)
+            # 确保坐标在图片范围内
+            x1 = max(0, min(x1, img.width))
+            y1 = max(0, min(y1, img.height))
+            x2 = max(0, min(x2, img.width))
+            y2 = max(0, min(y2, img.height))
+            if x2 > x1 and y2 > y1:
+                cropped = img.crop((x1, y1, x2, y2))
+                # 转换为 base64
+                buffer = io.BytesIO()
+                cropped.save(buffer, format='PNG')
+                img_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                logger.info(f'Cropped image from {img.size} to {cropped.size}')
 
         # 使用视觉模型识别
         response_text = ai_service._call_ai_multimodal(

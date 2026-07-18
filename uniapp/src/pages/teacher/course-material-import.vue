@@ -401,9 +401,34 @@ async function doAiRecognize() {
     // Get the image URL for current page
     const imageUrl = pages.value[currentPage.value]?.url
 
+    // 计算框选区域在原图中的坐标
+    const imgEl = document.querySelector('.doc-page .page-image') as HTMLImageElement
+    let cropRegion = null
+    if (imgEl && hasSelection.value) {
+      const rect = imgEl.getBoundingClientRect()
+      const imgWidth = imgEl.naturalWidth
+      const imgHeight = imgEl.naturalHeight
+      const displayWidth = rect.width
+      const displayHeight = rect.height
+
+      // 计算缩放比例
+      const scaleX = imgWidth / displayWidth
+      const scaleY = imgHeight / displayHeight
+
+      // 计算框选区域在原图中的坐标
+      const x1 = Math.round(Math.min(selectionStart.value.x, selectionEnd.value.x) * scaleX)
+      const y1 = Math.round(Math.min(selectionStart.value.y, selectionEnd.value.y) * scaleY)
+      const x2 = Math.round(Math.max(selectionStart.value.x, selectionEnd.value.x) * scaleX)
+      const y2 = Math.round(Math.max(selectionStart.value.y, selectionEnd.value.y) * scaleY)
+
+      cropRegion = { x1, y1, x2, y2 }
+      console.log('[ImportPage] Crop region:', cropRegion, 'Image size:', { imgWidth, imgHeight, displayWidth, displayHeight })
+    }
+
     const res: any = await materialApi.aiRecognize(courseId.value, materialId.value, {
       image_url: imageUrl,
       page: currentPage.value + 1,
+      crop_region: cropRegion,
     })
 
     if (res.success && res.data) {
