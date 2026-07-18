@@ -1070,7 +1070,7 @@ def material_ai_recognize(request, course_id, material_id):
 @permission_classes([IsAuthenticated])
 def import_question(request, course_id):
     """保存从课程资料导入的题目"""
-    from apps.parser.models import ExamQuestion, QuestionImage
+    from apps.parser.models import ExamQuestion, ExamPaper, QuestionImage, QuestionOption
 
     course = _get_course_or_404(course_id)
     _check_course_owner(course, request.user)
@@ -1082,8 +1082,19 @@ def import_question(request, course_id):
     if not question_data.get('stem'):
         raise ValidationError('题干不能为空')
 
+    # 创建或获取试卷（导入的题目需要一个关联的试卷）
+    paper, _ = ExamPaper.objects.get_or_create(
+        title=f'课程导入 - {course.name}',
+        defaults={
+            'subject': course.subject,
+            'grade_level': course.grade_level or '',
+            'status': 'published',
+        }
+    )
+
     # 创建题目
     question = ExamQuestion.objects.create(
+        paper=paper,
         question_no=request.data.get('question_no', 'imported'),
         question_type=question_data.get('question_type', 'single_choice'),
         subject=course.subject,
