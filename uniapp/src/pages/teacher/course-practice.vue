@@ -210,13 +210,27 @@
           <text class="form-label">通过条件（正确率）</text>
           <input class="form-input" type="number" v-model="missionForm.correctRate" placeholder="0.6" />
         </view>
+        <view class="form-group">
+          <text class="form-label">分配班级</text>
+          <picker :range="classList" range-key="name" @change="onClassChange">
+            <view class="picker-value">
+              <text :class="missionForm.classId ? 'picker-text' : 'picker-placeholder'">
+                {{ missionForm.classId ? classList.find(c => c.id === missionForm.classId)?.name : '请选择班级（可选）' }}
+              </text>
+            </view>
+          </picker>
+        </view>
+        <view class="form-group">
+          <text class="form-label">截止日期</text>
+          <input class="form-input" type="datetime-local" v-model="missionForm.deadline" placeholder="可选" />
+        </view>
         <view class="selected-nodes" v-if="selectedNodeIds.length > 0">
           <text class="form-label">已选节点（{{ selectedNodeIds.length }}）：</text>
           <text class="node-list">{{ selectedNodeNames }}</text>
         </view>
         <view class="modal-footer">
           <button size="default" @click="missionDialogVisible = false">取消</button>
-          <button size="default" type="primary" @click="confirmGenerateMission" :disabled="selectedNodeIds.length === 0">
+          <button size="default" type="primary" @click="confirmGenerateMission">
             确认生成
           </button>
         </view>
@@ -913,6 +927,8 @@ const missionForm = ref({
   levelType: 'practice',
   levelTypeLabel: '练习',
   correctRate: '0.6',
+  classId: null as number | null,
+  deadline: '',
 })
 
 const levelTypeOptions = [
@@ -934,16 +950,38 @@ const selectedNodeNames = computed(() => {
     .join('、')
 })
 
+// 班级列表
+const classList = ref<any[]>([])
+
 function showGenerateMission() {
   missionForm.value = {
     name: `${courseName.value} - 任务`,
     levelType: 'practice',
     levelTypeLabel: '练习',
     correctRate: '0.6',
+    classId: null,
+    deadline: '',
   }
   // 默认选中当前选中的节点
   selectedNodeIds.value = selectedNode.value ? [selectedNode.value.id] : []
+  // 加载班级列表
+  loadClassList()
   missionDialogVisible.value = true
+}
+
+async function loadClassList() {
+  try {
+    const token = uni.getStorageSync('accessToken')
+    const response = await fetch('/api/v1/classes/simple', {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+    if (response.ok) {
+      const data = await response.json()
+      classList.value = data.data || []
+    }
+  } catch (e) {
+    console.error('加载班级列表失败:', e)
+  }
 }
 
 function onLevelTypeChange(e: any) {
@@ -953,12 +991,15 @@ function onLevelTypeChange(e: any) {
   missionForm.value.levelTypeLabel = opt.label
 }
 
-async function confirmGenerateMission() {
-  if (selectedNodeIds.value.length === 0) {
-    uni.showToast({ title: '请至少选择一个目录节点', icon: 'none' })
-    return
+function onClassChange(e: any) {
+  const idx = e.detail.value
+  const cls = classList.value[idx]
+  if (cls) {
+    missionForm.value.classId = cls.id
   }
+}
 
+async function confirmGenerateMission() {
   const token = uni.getStorageSync('accessToken')
   try {
     const response = await fetch(`/api/v1/courses/${courseId.value}/generate-mission/`, {
@@ -972,6 +1013,8 @@ async function confirmGenerateMission() {
         mission_name: missionForm.value.name,
         level_type: missionForm.value.levelType,
         pass_rule: { correct_rate: parseFloat(missionForm.value.correctRate) || 0.6 },
+        class_id: missionForm.value.classId,
+        deadline: missionForm.value.deadline || null,
       }),
     })
 
