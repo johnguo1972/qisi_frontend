@@ -317,8 +317,11 @@ function onImageError(e: any) {
 }
 
 function getMousePosition(e: MouseEvent) {
-  // Get position relative to the image element (like question-edit does)
-  const imgEl = document.querySelector('.doc-page .page-image') as HTMLElement
+  // Get position relative to the image element
+  // Use the image inside the current doc-page to handle multiple pages correctly
+  const imgEl = (e.currentTarget as HTMLElement)?.querySelector('.page-image') as HTMLElement
+    || document.querySelector('.doc-page .page-image') as HTMLElement
+
   if (imgEl) {
     const rect = imgEl.getBoundingClientRect()
     return {
@@ -326,6 +329,7 @@ function getMousePosition(e: MouseEvent) {
       y: e.clientY - rect.top,
     }
   }
+
   // Fallback to container
   const container = docPageRef.value
   if (!container) return { x: 0, y: 0 }
@@ -341,7 +345,7 @@ function onSelectionStart(e: MouseEvent) {
   e.preventDefault()
   const pos = getMousePosition(e)
   selectionStart.value = pos
-  selectionEnd.value = pos
+  selectionEnd.value = { ...pos }
   console.log('[ImportPage] Selection start:', pos)
 }
 
@@ -356,7 +360,21 @@ function onSelectionEnd(e: MouseEvent) {
   if (!isSelecting.value) return
   const pos = getMousePosition(e)
   selectionEnd.value = pos
-  console.log('[ImportPage] Selection end:', selectionStart.value, selectionEnd.value)
+
+  const width = Math.abs(selectionEnd.value.x - selectionStart.value.x)
+  const height = Math.abs(selectionEnd.value.y - selectionStart.value.y)
+
+  console.log('[ImportPage] Selection end:', {
+    start: selectionStart.value,
+    end: selectionEnd.value,
+    width,
+    height,
+  })
+
+  // Show feedback if selection is too small
+  if (width < 10 || height < 10) {
+    uni.showToast({ title: '框选区域太小', icon: 'none' })
+  }
 }
 
 // AI recognition
@@ -545,7 +563,7 @@ function goBack() {
 .doc-viewer {
   flex: 1;
   overflow: auto;
-  padding: 16px;
+  padding: 0;
   display: flex;
   justify-content: center;
   align-items: flex-start;
