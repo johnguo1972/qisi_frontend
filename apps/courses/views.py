@@ -1003,6 +1003,19 @@ def material_ai_recognize(request, course_id, material_id):
         )
 
         import json
+        import re
+        # Try to extract JSON from response (handle markdown formatting)
+        response_text = response_text.strip() if response_text else ''
+        # Remove markdown code blocks if present
+        json_match = re.search(r'```json\s*\n?(.*?)\n?```', response_text, re.DOTALL)
+        if json_match:
+            response_text = json_match.group(1).strip()
+        # Try to find JSON object if not already parsed
+        if not response_text.startswith('{'):
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                response_text = json_match.group(0).strip()
+
         result = json.loads(response_text) if response_text else {}
 
         if 'error' in result:
