@@ -321,11 +321,8 @@ function onImageError(e: any) {
 
 function getMousePosition(e: MouseEvent) {
   // Get position relative to the image element
-  // Find the image inside the doc-page container
-  const container = docPageRef.value
-  if (!container) return { x: 0, y: 0 }
-
-  const imgEl = container.querySelector('.page-image') as HTMLElement
+  // In uni-app H5, ref might return Vue component, so use querySelector directly
+  const imgEl = document.querySelector('.doc-page .page-image') as HTMLElement
   if (imgEl) {
     const rect = imgEl.getBoundingClientRect()
     return {
@@ -334,11 +331,10 @@ function getMousePosition(e: MouseEvent) {
     }
   }
 
-  // Fallback to container position
-  const rect = container.getBoundingClientRect()
+  // Fallback: use mouse event coordinates directly
   return {
-    x: e.clientX - rect.left,
-    y: e.clientY - rect.top,
+    x: e.clientX,
+    y: e.clientY,
   }
 }
 
