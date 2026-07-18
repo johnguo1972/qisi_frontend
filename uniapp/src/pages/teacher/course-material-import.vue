@@ -194,6 +194,7 @@ const docPageRef = ref<HTMLElement | null>(null)
 
 // Selection state
 const isSelecting = ref(false)
+const isDragging = ref(false)  // True only when mouse button is pressed
 const hasStartedSelection = ref(false)
 const selectionStart = ref({ x: 0, y: 0 })
 const selectionEnd = ref({ x: 0, y: 0 })
@@ -306,6 +307,7 @@ function toggleSelection() {
     selectionStart.value = { x: 0, y: 0 }
     selectionEnd.value = { x: 0, y: 0 }
     hasStartedSelection.value = false
+    isDragging.value = false
   }
   console.log('[ImportPage] toggleSelection, isSelecting:', isSelecting.value)
 }
@@ -347,22 +349,24 @@ function getMousePosition(e: MouseEvent) {
 function onSelectionStart(e: MouseEvent) {
   if (!isSelecting.value) return
   e.preventDefault()
+  isDragging.value = true  // Start dragging
   const pos = getMousePosition(e)
   selectionStart.value = pos
   selectionEnd.value = { ...pos }
   hasStartedSelection.value = true
-  console.log('[ImportPage] Selection start:', pos, 'isSelecting:', isSelecting.value)
+  console.log('[ImportPage] Selection start:', pos)
 }
 
 function onSelectionMove(e: MouseEvent) {
-  if (!isSelecting.value) return
-  if (!hasStartedSelection.value) return
+  // Only update position when actively dragging (mouse button pressed)
+  if (!isSelecting.value || !isDragging.value) return
   const pos = getMousePosition(e)
   selectionEnd.value = pos
 }
 
 function onSelectionEnd(e: MouseEvent) {
   if (!isSelecting.value) return
+  isDragging.value = false  // Stop dragging
   const pos = getMousePosition(e)
   selectionEnd.value = pos
 
