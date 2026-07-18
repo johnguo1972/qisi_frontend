@@ -22,7 +22,9 @@ function courseFetch<T>(url: string, options?: RequestInit): Promise<T> {
       throw new Error('登录已过期，请重新登录')
     }
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+      return res.text().then(text => {
+        throw new Error(`HTTP ${res.status}: ${text || res.statusText}`)
+      })
     }
     return res.json()
   })
