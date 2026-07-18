@@ -1006,6 +1006,7 @@ def material_ai_recognize(request, course_id, material_id):
         import re
         # Try to extract JSON from response (handle markdown formatting)
         response_text = response_text.strip() if response_text else ''
+        logger.info(f'AI response (first 500 chars): {response_text[:500]}')
         # Remove markdown code blocks if present
         json_match = re.search(r'```json\s*\n?(.*?)\n?```', response_text, re.DOTALL)
         if json_match:
@@ -1029,8 +1030,9 @@ def material_ai_recognize(request, course_id, material_id):
             'data': result,
         })
 
-    except json.JSONDecodeError:
-        raise ValidationError('AI 返回格式错误')
+    except json.JSONDecodeError as e:
+        logger.error(f'JSON decode error. Response: {response_text[:200] if response_text else "empty"}')
+        raise ValidationError(f'AI 返回格式错误：{str(e)[:100]}')
     except Exception as e:
         logger.error(f'AI 识别失败: {e}')
         raise ValidationError(f'AI 识别失败: {str(e)}')
