@@ -67,7 +67,6 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_API_TARGET,
           changeOrigin: true,
           secure: false,
-          rewrite: (path) => path.replace(/^\/study/, ''),
         }
       }
     }
