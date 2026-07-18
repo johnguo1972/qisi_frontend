@@ -321,14 +321,20 @@ function onImageError(e: any) {
 
 function getMousePosition(e: MouseEvent) {
   // Get position relative to the image element
-  // In uni-app H5, ref might return Vue component, so use querySelector directly
   const imgEl = document.querySelector('.doc-page .page-image') as HTMLElement
   if (imgEl) {
     const rect = imgEl.getBoundingClientRect()
-    return {
+    const pos = {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
     }
+    console.log('[ImportPage] getMousePosition:', {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      imgRect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      pos,
+    })
+    return pos
   }
 
   // Fallback: use mouse event coordinates directly
@@ -585,12 +591,16 @@ function goBack() {
   position: relative;
   display: inline-block;
   max-width: 100%;
+  margin: 0;
+  padding: 0;
 }
 
 .page-image {
   max-width: 100%;
   height: auto;
   display: block;
+  margin: 0;
+  padding: 0;
 }
 
 .selection-box {
@@ -599,6 +609,7 @@ function goBack() {
   background: rgba(64, 158, 255, 0.2);
   pointer-events: none;
   z-index: 10;
+  box-sizing: border-box;
 }
 
 .page-nav {
