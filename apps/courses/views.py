@@ -804,6 +804,7 @@ def generate_mission(request, course_id):
     """从课程目录节点批量生成任务关卡"""
     from apps.missions.models import LearningMission, MissionLevel, MissionQuestionRel
     from apps.accounts.models import UserAccount
+    from django.utils import timezone as tz
 
     course = _get_course_or_404(course_id)
     _check_course_owner(course, request.user)
@@ -812,6 +813,8 @@ def generate_mission(request, course_id):
     mission_name = request.data.get('mission_name', f'{course.name} - 任务')
     level_type = request.data.get('level_type', 'practice')
     pass_rule = request.data.get('pass_rule', {'correct_rate': 0.6})
+    class_id = request.data.get('class_id')
+    deadline = request.data.get('deadline')
 
     if not node_ids:
         raise ValidationError('未选择目录节点')
@@ -821,6 +824,8 @@ def generate_mission(request, course_id):
         mission_name=mission_name,
         creator_teacher_id=request.user,
         status='draft',
+        class_obj_id=class_id if class_id else None,
+        end_at=deadline if deadline else None,
     )
 
     created_levels = []
