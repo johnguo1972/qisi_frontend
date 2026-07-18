@@ -29,7 +29,7 @@
                 />
                 <!-- Box selection overlay - show when selecting mode is active -->
                 <view
-                  v-if="isSelecting && (selectionStart.x > 0 || selectionEnd.x > 0)"
+                  v-if="isSelecting && hasStartedSelection"
                   class="selection-box"
                   :style="{
                     left: Math.min(selectionStart.x, selectionEnd.x) + 'px',
@@ -194,6 +194,7 @@ const docPageRef = ref<HTMLElement | null>(null)
 
 // Selection state
 const isSelecting = ref(false)
+const hasStartedSelection = ref(false)
 const selectionStart = ref({ x: 0, y: 0 })
 const selectionEnd = ref({ x: 0, y: 0 })
 const hasSelection = computed(() => {
@@ -304,7 +305,9 @@ function toggleSelection() {
   if (!isSelecting.value) {
     selectionStart.value = { x: 0, y: 0 }
     selectionEnd.value = { x: 0, y: 0 }
+    hasStartedSelection.value = false
   }
+  console.log('[ImportPage] toggleSelection, isSelecting:', isSelecting.value)
 }
 
 function onImageLoad(e: any) {
@@ -345,12 +348,13 @@ function onSelectionStart(e: MouseEvent) {
   const pos = getMousePosition(e)
   selectionStart.value = pos
   selectionEnd.value = { ...pos }
-  console.log('[ImportPage] Selection start:', pos)
+  hasStartedSelection.value = true
+  console.log('[ImportPage] Selection start:', pos, 'isSelecting:', isSelecting.value)
 }
 
 function onSelectionMove(e: MouseEvent) {
   if (!isSelecting.value) return
-  if (selectionStart.value.x === 0 && selectionStart.value.y === 0) return
+  if (!hasStartedSelection.value) return
   const pos = getMousePosition(e)
   selectionEnd.value = pos
 }
@@ -368,10 +372,12 @@ function onSelectionEnd(e: MouseEvent) {
     end: selectionEnd.value,
     width,
     height,
+    hasSelection: hasSelection.value,
   })
 
   // Show feedback if selection is too small
   if (width < 10 || height < 10) {
+    hasStartedSelection.value = false
     uni.showToast({ title: '框选区域太小', icon: 'none' })
   }
 }
