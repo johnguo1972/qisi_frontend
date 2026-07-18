@@ -6,7 +6,7 @@
         <text class="q-type">{{ typeLabel(currentQuestion.question_type) }}</text>
       </view>
 
-      <view v-if="currentQuestion.stem" class="stem">{{ currentQuestion.stem }}</view>
+      <view class="stem" v-html="renderedStem"></view>
       <image v-for="(img,i) in (currentQuestion.images||[])" :key="i"
              :src="img.url" class="stem-img" mode="widthFix" />
 
@@ -15,7 +15,7 @@
               class="option-card" :class="{ selected: selectedOptions.includes(opt.label) }"
               @click="toggleOption(opt.label)">
           <view class="option-label">{{ opt.label }}</view>
-          <text class="option-content">{{ opt.content }}</text>
+          <view class="option-content" v-html="renderedOptions[opt.label] || opt.content"></view>
         </view>
       </view>
       <view v-else class="subjective-area">
@@ -43,9 +43,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { wrongbookApi } from '@/api/student.ts'
+import { renderWithKatex } from '@/utils/katex-renderer'
 
 interface Opt { label: string; content: string }
 interface Q { id: number; question_type: string; stem?: string; options?: Opt[]; images?: { url: string }[] }
@@ -58,6 +59,10 @@ const textAnswer = ref('')
 const feedback = ref('')
 const feedbackType = ref('')
 const submitting = ref(false)
+
+// LaTeX 渲染
+const renderedStem = ref('')
+const renderedOptions = ref<Record<string, string>>({})
 
 const currentQuestion = computed(() => questions.value[currentIndex.value] || ({} as Q))
 const isObjective = computed(() =>
@@ -73,9 +78,21 @@ onMounted(async () => {
   try {
     const res = await wrongbookApi.variants(itemId.value)
     questions.value = res.data || []
+    // 渲染当前题目的 LaTeX 公式
+    await renderCurrentQuestion()
     if (!questions.value.length) uni.showToast({ title: '暂无同类题', icon: 'none' })
   } catch { uni.showToast({ title: '加载失败', icon: 'none' }) }
 })
+
+async function renderCurrentQuestion() {
+  const q = currentQuestion.value
+  if (!q) return
+  renderedStem.value = await renderWithKatex(q.stem || '')
+  renderedOptions.value = {}
+  for (const opt of (q.options || [])) {
+    renderedOptions.value[opt.label] = await renderWithKatex(opt.content || '')
+  }
+}
 
 function toggleOption(label: string) {
   if (currentQuestion.value.question_type === 'single_choice') {
@@ -114,6 +131,11 @@ function next() {
   else uni.navigateBack()
 }
 
+// 切换题目时重新渲染 LaTeX
+watch(currentIndex, async () => {
+  await renderCurrentQuestion()
+})
+
 function typeLabel(t: string) {
   return ({ single_choice: '单选', multiple_choice: '多选', fill_blank: '填空',
     short_answer: '简答', essay: '论述', computation: '计算', proof: '证明',
@@ -149,4 +171,8 @@ function typeLabel(t: string) {
 .btn-next{background:#4caf50;color:#fff;font-size:24rpx;}
 .feedback-placeholder{text-align:center;color:#ccc;font-size:26rpx;}
 @media (max-width:768px){ .answer-page{flex-direction:column;} .feedback-panel{width:100%;border-left:none;border-top:1rpx solid #e8e8e8;} .options-grid{grid-template-columns:1fr;} }
+
+/* KaTeX 公式样式适配 */
+.katex { font-size: 1.05em; }
+.katex-display { margin: 6px 0; overflow-x: auto; }
 </style>

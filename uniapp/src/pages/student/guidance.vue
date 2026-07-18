@@ -35,12 +35,12 @@
           <text class="stem-toggle">{{ showStem ? '收起 ▲' : '展开 ▼' }}</text>
         </view>
         <view v-if="showStem" class="stem-body">
-          <view class="stem-content" v-html="currentQuestion.stem_html || currentQuestion.stem" />
+          <view class="stem-content" v-html="renderedStem"></view>
           <!-- 原题选项（只读展示） -->
           <view v-if="currentQuestion.options && currentQuestion.options.length > 0" class="stem-options">
             <view v-for="opt in currentQuestion.options" :key="opt.label" class="stem-option">
               <text class="stem-opt-label">{{ opt.label }}.</text>
-              <text class="stem-opt-content">{{ opt.content }}</text>
+              <view class="stem-opt-content" v-html="renderedOptions[opt.label] || opt.content"></view>
             </view>
           </view>
           <!-- 原题图片 -->
@@ -56,7 +56,7 @@
         <view v-for="(msg, i) in messages" :key="i" :class="['msg', msg.role]">
           <view class="msg-avatar">{{ msg.role === 'system' ? '🤖' : '👤' }}</view>
           <view class="msg-bubble" :class="msg.type || ''">
-            <text>{{ msg.content }}</text>
+            <view v-html="msg.content"></view>
           </view>
         </view>
         <!-- 思考中指示器（C 模式请求时） -->
@@ -109,11 +109,11 @@
             <text class="complete-title">引导完成！</text>
             <view v-if="summary" class="complete-summary">
               <text class="summary-label">📝 总结：</text>
-              <text class="summary-text">{{ summary }}</text>
+              <view class="summary-text" v-html="renderedSummary"></view>
             </view>
             <view v-if="finalAnswer" class="complete-final">
               <text class="final-label">🎯 最终答案：</text>
-              <text class="final-text">{{ finalAnswer }}</text>
+              <view class="final-text" v-html="renderedFinalAnswer"></view>
             </view>
             <view class="complete-actions">
               <button v-if="hasPrevQuestion" @click="prevQuestion" class="action-btn prev-btn">← 上一题</button>
@@ -132,7 +132,7 @@
                       @click="selectedOriginalOption = opt.label"
                       :class="['select-option-btn', { selected: selectedOriginalOption === opt.label }]">
                 <text class="select-opt-label">{{ opt.label }}.</text>
-                <text class="select-opt-content">{{ opt.content }}</text>
+                <view class="select-opt-content" v-html="renderedOptions[opt.label] || opt.content"></view>
               </button>
             </view>
             <!-- 主观题：文本输入 -->
@@ -156,14 +156,14 @@
               {{ submitResult.is_correct ? '回答正确！' : '回答错误' }}
             </text>
             <text class="result-score">得分：{{ submitResult.score }} 分</text>
-            <text v-if="submitResult.feedback" class="result-feedback">{{ submitResult.feedback }}</text>
+            <view v-if="submitResult.feedback" class="result-feedback" v-html="renderedFeedback"></view>
             <view v-if="!submitResult.is_correct && originalAnswer" class="result-answer">
               <text class="result-label">正确答案：</text>
-              <text class="result-value">{{ originalAnswer }}</text>
+              <view class="result-value" v-html="renderedOriginalAnswer"></view>
             </view>
             <view v-if="!submitResult.is_correct && originalAnalysis" class="result-analysis">
               <text class="result-label">解析：</text>
-              <text class="result-value">{{ originalAnalysis }}</text>
+              <view class="result-value" v-html="renderedOriginalAnalysis"></view>
             </view>
             <view class="complete-actions">
               <button v-if="hasPrevQuestion" @click="prevQuestion" class="action-btn prev-btn">← 上一题</button>
@@ -182,6 +182,7 @@
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
+import { renderWithKatex } from '@/utils/katex-renderer'
 
 // 页面核心状态
 const questionId = ref(0)
@@ -227,6 +228,15 @@ const scrollTop = ref(0)            // 用于 scroll-view 自动滚动
 
 // 原题信息
 const currentQuestion = ref<any>({})
+
+// LaTeX 渲染后的内容
+const renderedStem = ref('')
+const renderedOptions = ref<Record<string, string>>({})
+const renderedSummary = ref('')
+const renderedFinalAnswer = ref('')
+const renderedFeedback = ref('')
+const renderedOriginalAnswer = ref('')
+const renderedOriginalAnalysis = ref('')
 
 // 提交答案结果
 const submitResult = ref<{ is_correct: boolean; score: number; feedback: string } | null>(null)
@@ -318,9 +328,10 @@ async function startGuidance() {
     finalAnswer.value = ''
     options.value = []
 
-    // 添加系统消息
+    // 添加系统消息（渲染 LaTeX 公式）
     if (data.hint) {
-      messages.value.push({ role: 'system', content: data.hint })
+      const rendered = await renderWithKatex(data.hint)
+      messages.value.push({ role: 'system', content: rendered })
     }
     if (data.options) {
       options.value = data.options
@@ -328,6 +339,16 @@ async function startGuidance() {
     // 缓存原题信息
     if (data.question_info) {
       currentQuestion.value = data.question_info
+      // 渲染题干和选项中的 LaTeX 公式
+      const info = data.question_info
+      const stemToRender = info.stem_html || info.stem || ''
+      // 只有包含 LaTeX 定界符时才调用 renderWithKatex，否则直接使用原始 HTML/文本
+      const hasLatex = /\$|\$\$|\\\(|\\\[/.test(stemToRender)
+      renderedStem.value = hasLatex ? await renderWithKatex(stemToRender) : stemToRender
+      for (const opt of (info.options || [])) {
+        const hasLatexOpt = /\$|\$\$|\\\(|\\\[/.test(opt.content || '')
+        renderedOptions.value[opt.label] = hasLatexOpt ? await renderWithKatex(opt.content || '') : opt.content
+      }
       // 从 questions 列表获取原题的正确答案和解析（如果 levelDetail 已加载）
       if (questions.value.length > 0 && currentIndex.value >= 0) {
         const q = questions.value[currentIndex.value]
@@ -360,7 +381,7 @@ async function selectOption(opt: string) {
       uni.showToast({ title: res.message || '提交失败', icon: 'none' })
       return
     }
-    handleReplyResponse(res.data)
+    await handleReplyResponse(res.data)
   } catch (e) {
     console.error('提交失败:', e)
     uni.showToast({ title: '提交失败', icon: 'none' })
@@ -389,7 +410,7 @@ async function sendReply() {
       uni.showToast({ title: res.message || '发送失败', icon: 'none' })
       return
     }
-    handleReplyResponse(res.data)
+    await handleReplyResponse(res.data)
   } catch (e) {
     console.error('发送失败:', e)
     uni.showToast({ title: '发送失败', icon: 'none' })
@@ -402,7 +423,7 @@ async function sendReply() {
 }
 
 // 处理回复响应
-function handleReplyResponse(data: any) {
+async function handleReplyResponse(data: any) {
   // 处理降级响应
   if (data.downgraded) {
     mode.value = data.mode || 'B'
@@ -434,13 +455,15 @@ function handleReplyResponse(data: any) {
       })
     }
     if (data.analysis) {
-      messages.value.push({ role: 'system', content: `解析：${data.analysis}`, type: 'analysis' })
+      const rendered = await renderWithKatex(data.analysis)
+      messages.value.push({ role: 'system', content: `解析：${rendered}`, type: 'analysis' })
     }
   }
 
   // C 模式评价
   if (data.evaluation) {
-    messages.value.push({ role: 'system', content: `💬 老师评价：${data.evaluation}`, type: 'evaluation' })
+    const rendered = await renderWithKatex(data.evaluation)
+    messages.value.push({ role: 'system', content: `💬 老师评价：${rendered}`, type: 'evaluation' })
   }
 
   // 完成状态
@@ -448,17 +471,20 @@ function handleReplyResponse(data: any) {
     isCompleted.value = true
     summary.value = data.summary || ''
     finalAnswer.value = data.final_answer || ''
+    renderedSummary.value = await renderWithKatex(data.summary || '')
+    renderedFinalAnswer.value = await renderWithKatex(data.final_answer || '')
     if (summary.value) {
-      messages.value.push({ role: 'system', content: `📝 总结：${summary.value}`, type: 'summary' })
+      messages.value.push({ role: 'system', content: `📝 总结：${renderedSummary.value}`, type: 'summary' })
     }
     if (finalAnswer.value) {
-      messages.value.push({ role: 'system', content: `🎯 最终答案：${finalAnswer.value}`, type: 'final_answer' })
+      messages.value.push({ role: 'system', content: `🎯 最终答案：${renderedFinalAnswer.value}`, type: 'final_answer' })
     }
   } else {
     // 更新下一步
     stepIndex.value = data.step_index
     if (data.next_hint) {
-      messages.value.push({ role: 'system', content: data.next_hint })
+      const rendered = await renderWithKatex(data.next_hint)
+      messages.value.push({ role: 'system', content: rendered })
     }
     if (data.options) {
       options.value = data.options
@@ -541,6 +567,10 @@ async function submitAnswer() {
         score: data?.score || 0,
         feedback: data?.feedback || '',
       }
+      // 渲染提交结果中的 LaTeX 公式
+      renderedFeedback.value = await renderWithKatex(data?.feedback || '')
+      renderedOriginalAnswer.value = await renderWithKatex(originalAnswer.value)
+      renderedOriginalAnalysis.value = await renderWithKatex(originalAnalysis.value)
     } else {
       uni.showToast({ title: res.message || '提交失败', icon: 'none' })
     }
@@ -965,6 +995,11 @@ function scrollToBottom() {
     min-width: 120rpx;
   }
 }
+
+/* KaTeX 公式样式适配 */
+.katex { font-size: 1.05em; }
+.katex-display { margin: 6px 0; overflow-x: auto; }
+.katex-html { max-width: 100%; overflow-x: auto; }
 
 /* 小屏适配 */
 @media (max-width: 768px) {

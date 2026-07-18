@@ -111,19 +111,19 @@
         <!-- 正确答案 -->
         <view class="answer-section">
           <view class="answer-label">正确答案</view>
-          <view class="answer-content" v-html="answerRendered"></view>
+          <view class="answer-content" v-html="renderedAnswer"></view>
         </view>
 
         <!-- 解析 -->
         <view v-if="currentQuestion.analysis" class="answer-section">
           <view class="answer-label">详细解析</view>
-          <view class="answer-content" v-html="analysisRendered"></view>
+          <view class="answer-content" v-html="renderedAnalysis"></view>
         </view>
 
         <!-- 解答 -->
         <view v-if="currentQuestion.solution" class="answer-section">
           <view class="answer-label">解答过程</view>
-          <view class="answer-content" v-html="solutionRendered"></view>
+          <view class="answer-content" v-html="renderedSolution"></view>
         </view>
 
         <!-- AI 答案 A 模式（结构化步骤） -->
@@ -181,6 +181,9 @@ const modeAData = ref<any>(null)
 const submitting = ref(false)
 const renderedStem = ref('')
 const renderedOptions = ref<Record<string, string>>({})
+const renderedAnswer = ref('')
+const renderedAnalysis = ref('')
+const renderedSolution = ref('')
 
 // 每题状态缓存（切换题目时保存/恢复）
 const answersMap = ref<Record<number, any>>({})
@@ -234,9 +237,8 @@ const hasNext = computed(() => currentIndex.value < questions.value.length - 1)
 const hasPrev = computed(() => currentIndex.value > 0)
 const canAddPhoto = computed(() => uploadedImages.value.length < 3 && !uploadingPhoto.value)
 
-const answerRendered = computed(() => currentQuestion.value.answer || '')
-const analysisRendered = computed(() => currentQuestion.value.analysis || '')
-const solutionRendered = computed(() => currentQuestion.value.solution || '')
+// 渲染后的答案、解析、解答（供答案解析面板使用）
+// 在 renderCurrentQuestion 中异步渲染
 
 async function renderCurrentQuestion() {
   const q = currentQuestion.value
@@ -253,6 +255,10 @@ async function renderCurrentQuestion() {
   for (const opt of (q.options || [])) {
     if (opt.content) renderedOptions.value[opt.content] = await renderWithKatex(opt.content)
   }
+  // 渲染答案、解析、解答中的 LaTeX 公式
+  renderedAnswer.value = q.answer ? await renderWithKatex(q.answer) : ''
+  renderedAnalysis.value = q.analysis ? await renderWithKatex(q.analysis) : ''
+  renderedSolution.value = q.solution ? await renderWithKatex(q.solution) : ''
 }
 
 function renderOptionHtml(content: string): string {
