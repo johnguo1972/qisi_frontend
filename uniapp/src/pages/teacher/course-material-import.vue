@@ -575,6 +575,7 @@ function goBack() {
   flex: 1;
   overflow: auto;
   padding: 0;
+  margin: 0;
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -589,6 +590,8 @@ function goBack() {
 .doc-page {
   position: relative;
   max-width: 100%;
+  margin: 0;
+  padding: 0;
 }
 
 .image-wrapper {
@@ -597,6 +600,7 @@ function goBack() {
   max-width: 100%;
   margin: 0;
   padding: 0;
+  line-height: 0;  /* Remove inline spacing */
 }
 
 .page-image {
@@ -605,6 +609,7 @@ function goBack() {
   display: block;
   margin: 0;
   padding: 0;
+  vertical-align: top;  /* Prevent baseline offset */
 }
 
 .selection-box {
