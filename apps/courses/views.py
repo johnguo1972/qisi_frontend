@@ -1017,7 +1017,35 @@ def material_ai_recognize(request, course_id, material_id):
             if json_match:
                 response_text = json_match.group(0).strip()
 
-        result = json.loads(response_text) if response_text else {}
+        # Try to parse JSON, handle truncated responses
+        result = None
+        try:
+            result = json.loads(response_text) if response_text else {}
+        except json.JSONDecodeError as e:
+            # Try to fix truncated JSON by adding missing closing brackets
+            logger.warning(f'JSON parse error, trying to fix: {e}')
+            # Count open/close brackets
+            open_braces = response_text.count('{')
+            close_braces = response_text.count('}')
+            open_brackets = response_text.count('[')
+            close_brackets = response_text.count(']')
+
+            fixed = response_text
+            # Add missing closing brackets for arrays
+            while open_brackets > close_brackets:
+                fixed += ']'
+                close_brackets += 1
+            # Add missing closing braces for objects
+            while open_braces > close_braces:
+                fixed += '}'
+                close_braces += 1
+
+            try:
+                result = json.loads(fixed)
+                logger.info('Successfully fixed truncated JSON')
+            except json.JSONDecodeError:
+                # Still can't parse, return empty result with error
+                result = {'error': f'AI 响应格式错误，无法解析'}
 
         if 'error' in result:
             return Response({
