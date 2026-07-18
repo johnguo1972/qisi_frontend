@@ -318,10 +318,11 @@ function onImageError(e: any) {
 
 function getMousePosition(e: MouseEvent) {
   // Get position relative to the image element
-  // Use the image inside the current doc-page to handle multiple pages correctly
-  const imgEl = (e.currentTarget as HTMLElement)?.querySelector('.page-image') as HTMLElement
-    || document.querySelector('.doc-page .page-image') as HTMLElement
+  // Find the image inside the doc-page container
+  const container = docPageRef.value
+  if (!container) return { x: 0, y: 0 }
 
+  const imgEl = container.querySelector('.page-image') as HTMLElement
   if (imgEl) {
     const rect = imgEl.getBoundingClientRect()
     return {
@@ -330,9 +331,7 @@ function getMousePosition(e: MouseEvent) {
     }
   }
 
-  // Fallback to container
-  const container = docPageRef.value
-  if (!container) return { x: 0, y: 0 }
+  // Fallback to container position
   const rect = container.getBoundingClientRect()
   return {
     x: e.clientX - rect.left,
