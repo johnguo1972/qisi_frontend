@@ -222,7 +222,7 @@
         </view>
         <view class="form-group">
           <text class="form-label">截止日期</text>
-          <input class="form-input" type="datetime-local" v-model="missionForm.deadline" placeholder="可选" />
+          <input class="form-input" type="date" v-model="missionForm.deadline" placeholder="选择日期（可选）" />
         </view>
         <view class="selected-nodes" v-if="selectedNodeIds.length > 0">
           <text class="form-label">已选节点（{{ selectedNodeIds.length }}）：</text>

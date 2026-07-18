@@ -817,7 +817,12 @@ def generate_mission(request, course_id):
     deadline = request.data.get('deadline')
 
     if not node_ids:
-        raise ValidationError('未选择目录节点')
+        # 如果未选择节点，使用课程下所有根节点
+        node_ids = list(CourseTree.objects.filter(
+            course=course, parent=None
+        ).values_list('id', flat=True))
+        if not node_ids:
+            raise ValidationError('课程目录为空，请先创建目录节点')
 
     # 创建任务
     mission = LearningMission.objects.create(
