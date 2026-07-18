@@ -998,8 +998,8 @@ def material_ai_recognize(request, course_id, material_id):
         response_text = ai_service._call_ai_multimodal(
             system_prompt="你是试题识别专家，请准确识别图片中的试题内容。",
             user_text=prompt,
+            image_urls=[f'data:image/png;base64,{img_data}'],
             model='qwen3.7-plus',
-            images=[f'data:image/png;base64,{img_data}'],
         )
 
         import json
