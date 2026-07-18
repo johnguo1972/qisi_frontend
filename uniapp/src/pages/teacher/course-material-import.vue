@@ -20,24 +20,25 @@
               <text>文档加载中...</text>
             </view>
             <view v-else class="doc-page" ref="docPageRef" @mousedown="onSelectionStart" @mousemove="onSelectionMove" @mouseup="onSelectionEnd">
-              <img
-                :src="pages[currentPage]?.url"
-                class="page-image"
-                @load="onImageLoad"
-                @error="onImageError"
-                style="max-width: 100%; height: auto;"
-              />
-              <!-- Box selection overlay -->
-              <view
-                v-if="hasSelection"
-                class="selection-box"
-                :style="{
-                  left: Math.min(selectionStart.x, selectionEnd.x) + 'px',
-                  top: Math.min(selectionStart.y, selectionEnd.y) + 'px',
-                  width: Math.abs(selectionEnd.x - selectionStart.x) + 'px',
-                  height: Math.abs(selectionEnd.y - selectionStart.y) + 'px',
-                }"
-              ></view>
+              <view class="image-wrapper">
+                <img
+                  :src="pages[currentPage]?.url"
+                  class="page-image"
+                  @load="onImageLoad"
+                  @error="onImageError"
+                />
+                <!-- Box selection overlay - show when selecting mode is active -->
+                <view
+                  v-if="isSelecting && (selectionStart.x > 0 || selectionEnd.x > 0)"
+                  class="selection-box"
+                  :style="{
+                    left: Math.min(selectionStart.x, selectionEnd.x) + 'px',
+                    top: Math.min(selectionStart.y, selectionEnd.y) + 'px',
+                    width: Math.abs(selectionEnd.x - selectionStart.x) + 'px',
+                    height: Math.abs(selectionEnd.y - selectionStart.y) + 'px',
+                  }"
+                ></view>
+              </view>
             </view>
           </view>
 
@@ -316,6 +317,16 @@ function onImageError(e: any) {
 }
 
 function getMousePosition(e: MouseEvent) {
+  // Get position relative to the image element (like question-edit does)
+  const imgEl = document.querySelector('.doc-page .page-image') as HTMLElement
+  if (imgEl) {
+    const rect = imgEl.getBoundingClientRect()
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    }
+  }
+  // Fallback to container
   const container = docPageRef.value
   if (!container) return { x: 0, y: 0 }
   const rect = container.getBoundingClientRect()
@@ -327,13 +338,15 @@ function getMousePosition(e: MouseEvent) {
 
 function onSelectionStart(e: MouseEvent) {
   if (!isSelecting.value) return
+  e.preventDefault()
   const pos = getMousePosition(e)
   selectionStart.value = pos
   selectionEnd.value = pos
+  console.log('[ImportPage] Selection start:', pos)
 }
 
 function onSelectionMove(e: MouseEvent) {
-  if (!isSelecting.value || !hasSelection.value && selectionStart.value.x === 0) return
+  if (!isSelecting.value) return
   if (selectionStart.value.x === 0 && selectionStart.value.y === 0) return
   const pos = getMousePosition(e)
   selectionEnd.value = pos
@@ -343,6 +356,7 @@ function onSelectionEnd(e: MouseEvent) {
   if (!isSelecting.value) return
   const pos = getMousePosition(e)
   selectionEnd.value = pos
+  console.log('[ImportPage] Selection end:', selectionStart.value, selectionEnd.value)
 }
 
 // AI recognition
@@ -548,16 +562,24 @@ function goBack() {
   max-width: 100%;
 }
 
+.image-wrapper {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
 .page-image {
   max-width: 100%;
   height: auto;
+  display: block;
 }
 
 .selection-box {
   position: absolute;
   border: 2px dashed #409eff;
-  background: rgba(64, 158, 255, 0.1);
+  background: rgba(64, 158, 255, 0.2);
   pointer-events: none;
+  z-index: 10;
 }
 
 .page-nav {
