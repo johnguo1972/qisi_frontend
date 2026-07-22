@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q06",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "6",
+  "section": "二、双选题（本题共5小题，共10分）",
+  "question_type": "multiple_choice",
+  "material": null,
+  "stem": "下列语句中加引号部分描绘的运动情景，选取船为参照物的是（　　）",
+  "options": [
+    {
+      "label": "A",
+      "content": "两岸“青山”相对出，孤帆一片日边来"
+    },
+    {
+      "label": "B",
+      "content": "仔细看山“山”不动，是船行"
+    },
+    {
+      "label": "C",
+      "content": "满眼风光多闪灼，看“山”恰似走来迎"
+    },
+    {
+      "label": "D",
+      "content": "两岸猿声啼不住，“轻舟”已过万重山"
+    }
+  ],
+  "subquestions": [],
+  "answer": {
+    "raw": "AC",
+    "normalized": [
+      "A",
+      "C"
+    ]
+  },
+  "analysis": "A．“青山”相对出，即青山是运动的，而山的运动是以孤帆为参照物的，故A符合题意；\nB．仔细看山“山”不动，即山是静止的，而以船为参照物，山有位置变化，是运动的，故B不符合题意；\nC．看“山”恰似走来迎，即山是运动的，而“满眼风光多闪灼”说明是在船上看到风光变化，即山相对船有位置变化，所以所选的参照物是船，故C符合题意；\nD．“轻舟”已过万重山，轻舟相对山而言有位置变化，所以是以山为参照物的，故D不符合题意。\n故选AC。",
+  "illustrations": [],
+  "tables": [],
+  "formula_assets": [],
+  "source": {
+    "page_start": 5,
+    "page_end": 6
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

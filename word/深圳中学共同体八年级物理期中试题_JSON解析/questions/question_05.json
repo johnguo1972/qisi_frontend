@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q05",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "5",
+  "section": "一、单选题（本题共5小题，共10分）",
+  "question_type": "single_choice",
+  "material": null,
+  "stem": "如图所示为甲、乙两种物质温度随加热时间变化的图像，下列说法正确的是（　　）",
+  "options": [
+    {
+      "label": "A",
+      "content": "海波和甲物质同类"
+    },
+    {
+      "label": "B",
+      "content": "乙熔化用时4分钟"
+    },
+    {
+      "label": "C",
+      "content": "200℃时，乙是固体"
+    },
+    {
+      "label": "D",
+      "content": "乙物质在BC段温度不变，不吸热"
+    }
+  ],
+  "subquestions": [],
+  "answer": {
+    "raw": "C",
+    "normalized": [
+      "C"
+    ]
+  },
+  "analysis": "A．海波是晶体，晶体在熔化过程中温度不变，而由图中可知甲物质是非晶体，故A错误；\nB．由乙图可知此物质从2min时开始熔化，4min时完全熔化，故熔化时间为2min，故B错误；\nC．由乙图可知此物质从2min时开始熔化，此物质的熔点为210℃，故200℃时乙是固体，故C正确；\nD．乙物质在BC段是熔化的过程，晶体熔化过程中温度不变，但是需要持续吸热。\n故选C。",
+  "illustrations": [
+    {
+      "asset_id": "img_10",
+      "file": "../assets/q05_heating_curves.png",
+      "role": "stem_diagram",
+      "alt_text": "甲、乙两种物质的温度—加热时间图像，乙在210℃处出现BC水平段。",
+      "source_media": "word/media/image10"
+    }
+  ],
+  "tables": [],
+  "formula_assets": [],
+  "source": {
+    "page_start": 4,
+    "page_end": 5
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

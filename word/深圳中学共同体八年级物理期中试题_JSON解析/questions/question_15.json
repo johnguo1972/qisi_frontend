@@ -1,0 +1,80 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q15",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "15",
+  "section": "三、填空题（本题共2小题，共10分）",
+  "question_type": "fill_blank",
+  "material": null,
+  "stem": "温度计是利用测温液体热胀冷缩的性质来工作的。中国南极长城站最低气温可达-88.3℃。下表中列出了1标准大气压下几种物质的熔点和沸点，根据有关信息填空。",
+  "options": [],
+  "subquestions": [
+    {
+      "label": "（1）",
+      "stem": "-200℃的酒精为__________态；",
+      "answer": "固"
+    },
+    {
+      "label": "（2）",
+      "stem": "在南极长城站测气温时应选用__________（填“酒精”或“水银”）温度计。",
+      "answer": "酒精"
+    }
+  ],
+  "answer": {
+    "raw": "①固；②酒精",
+    "normalized": [
+      {
+        "subquestion": "1",
+        "value": "固"
+      },
+      {
+        "subquestion": "2",
+        "value": "酒精"
+      }
+    ]
+  },
+  "analysis": "（1）查表知道，固态酒精的熔点是-117℃，-200℃比-117℃低，没有达到它的熔点，所以还是固态。\n（2）查表知道，固态水银的熔点是-38.8℃、固态酒精的熔点是-117℃，即液态水银的凝固点是-38.8℃，液态酒精的凝固点是-117℃。中国南极长城站最低气温可达-88.3℃，低于水银的凝固点，高于液态酒精的凝固点，所以不能用水银温度计测量气温，应该用酒精温度计测量气温。",
+  "illustrations": [],
+  "tables": [
+    {
+      "table_id": "q15_material_properties",
+      "headers_raw": [
+        "物质",
+        "熔点/℃",
+        "熔点/℃"
+      ],
+      "rows": [
+        [
+          "酒精",
+          "-117",
+          "78"
+        ],
+        [
+          "水银",
+          "-38.8",
+          "357"
+        ]
+      ]
+    }
+  ],
+  "formula_assets": [
+    {
+      "asset_id": "formula_22",
+      "file": "../assets/formula_22.png",
+      "role": "formula_image",
+      "recognized_text": "-88.3℃",
+      "source_media": "word/media/image22.wmf"
+    }
+  ],
+  "source": {
+    "page_start": 12,
+    "page_end": 12
+  },
+  "quality": {
+    "warnings": [
+      "POSSIBLE_TABLE_HEADER_ERROR：原Word表格第二、第三列表头均写为“熔点/℃”，已按原文保留。"
+    ],
+    "requires_review": true
+  }
+}

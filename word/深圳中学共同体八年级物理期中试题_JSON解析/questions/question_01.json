@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q01",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "1",
+  "section": "一、单选题（本题共5小题，共10分）",
+  "question_type": "single_choice",
+  "material": null,
+  "stem": "下列各数据中与实际情况不相符的是（　　）",
+  "options": [
+    {
+      "label": "A",
+      "content": "一个中学生的身高约为1.65m"
+    },
+    {
+      "label": "B",
+      "content": "人步行的速度约为1.1m/s"
+    },
+    {
+      "label": "C",
+      "content": "人最舒适的环境温度是37℃"
+    },
+    {
+      "label": "D",
+      "content": "学生课桌的高度约为80cm"
+    }
+  ],
+  "subquestions": [],
+  "answer": {
+    "raw": "C",
+    "normalized": [
+      "C"
+    ]
+  },
+  "analysis": "A．成年人的身高在1.70m左右，中学生的身高略小于此数值，约是1.65m=165cm，故A符合题意；\nB．人正常步行的速度约为4km/h=4×(1/3.6)m/s≈1.1m/s，故B符合题意；\nC．人体正常体温在36.8℃左右，感觉舒适的环境气温在23℃左右，故C不符合题意；\nD．中学生的身高约160cm，课桌高度约为中学生身高的一半，在80cm左右，故D符合题意。\n故选C。",
+  "illustrations": [],
+  "tables": [],
+  "formula_assets": [
+    {
+      "asset_id": "formula_02",
+      "file": "../assets/formula_02.png",
+      "role": "formula_image",
+      "recognized_text": "1.65 m = 165 cm",
+      "source_media": "word/media/image2.wmf"
+    },
+    {
+      "asset_id": "formula_03",
+      "file": "../assets/formula_03.png",
+      "role": "formula_image",
+      "recognized_text": "4 km/h = 4 × (1/3.6) m/s ≈ 1.1 m/s",
+      "source_media": "word/media/image3.wmf"
+    }
+  ],
+  "source": {
+    "page_start": 1,
+    "page_end": 2
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

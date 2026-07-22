@@ -1,0 +1,46 @@
+{
+  "paper": {
+    "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+    "title": "2022-2023学年度第一学期期中考试 初二年级物理试卷（解析版）",
+    "subject": "物理",
+    "grade": "八年级",
+    "semester": "上学期",
+    "exam_type": "期中考试",
+    "duration_minutes": 60,
+    "total_score": 70,
+    "source_file": "精品解析：广东省深圳中学共同体联考2022-2023学年八年级上学期期中考试物理试题（解析版）(1).docx",
+    "source_sha256": "dd6bc375b46da96cb447b7eff25c50d4d25d46c0bdbfcc9519321abd961860b0"
+  },
+  "question_count": 20,
+  "files": [
+    "questions/question_01.json",
+    "questions/question_02.json",
+    "questions/question_03.json",
+    "questions/question_04.json",
+    "questions/question_05.json",
+    "questions/question_06.json",
+    "questions/question_07.json",
+    "questions/question_08.json",
+    "questions/question_09.json",
+    "questions/question_10.json",
+    "questions/question_11.json",
+    "questions/question_12.json",
+    "questions/question_13.json",
+    "questions/question_14.json",
+    "questions/question_15.json",
+    "questions/question_16.json",
+    "questions/question_17.json",
+    "questions/question_18.json",
+    "questions/question_19.json",
+    "questions/question_20.json"
+  ],
+  "combined_json": "all_questions.json",
+  "jsonl": "all_questions.jsonl",
+  "asset_count": 55,
+  "notes": [
+    "题干、选项、答案和解析按原Word试卷拆分。",
+    "实际题图以PNG文件存放，并在各题JSON的illustrations字段中引用。",
+    "原Word中的公式型WMF对象另存为formula_XX.png，并在formula_assets字段中给出识别文本。",
+    "发现的原文结构冲突均保留在quality.warnings中，没有擅自修改答案。"
+  ]
+}

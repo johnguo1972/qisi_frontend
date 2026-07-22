@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q14",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "14",
+  "section": "三、填空题（本题共2小题，共10分）",
+  "question_type": "fill_blank",
+  "material": null,
+  "stem": "在发生中暑的人身上擦拭酒精可以帮助其散去身上的热量，这是因为酒精在_________（填一种物态变化的名称）时要吸热；冬季，在室外说话时，口中会吐出白气，这是水蒸气______（填一种物态变化的名称）形成的；冬季的早晨，经常会在叶子上看见薄薄的一层霜，霜的形成是水蒸气______（填一种物态变化的名称）形成的。",
+  "options": [],
+  "subquestions": [],
+  "answer": {
+    "raw": "①汽化；②液化；③凝华",
+    "normalized": [
+      {
+        "blank": 1,
+        "value": "汽化"
+      },
+      {
+        "blank": 2,
+        "value": "液化"
+      },
+      {
+        "blank": 3,
+        "value": "凝华"
+      }
+    ]
+  },
+  "analysis": "[1]在发生中暑的人身上擦拭酒精，酒精在汽化过程中要吸收热量，可以帮助其散去身上的热量。\n[2]冬季，在室外说话时，口中会吐出白气，是人口中热的水蒸气遇冷液化形成的。\n[3]霜是空气中的水蒸气遇冷凝华形成的。",
+  "illustrations": [],
+  "tables": [],
+  "formula_assets": [],
+  "source": {
+    "page_start": 11,
+    "page_end": 12
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q04",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "4",
+  "section": "一、单选题（本题共5小题，共10分）",
+  "question_type": "single_choice",
+  "material": null,
+  "stem": "甲、乙两物体做匀速直线运动的速度之比为2∶3，运动时间之比为3∶2，则甲、乙物体通过的路程之比为（　　）",
+  "options": [
+    {
+      "label": "A",
+      "content": "9∶4"
+    },
+    {
+      "label": "B",
+      "content": "3∶2"
+    },
+    {
+      "label": "C",
+      "content": "1∶1"
+    },
+    {
+      "label": "D",
+      "content": "4∶9"
+    }
+  ],
+  "subquestions": [],
+  "answer": {
+    "raw": "C",
+    "normalized": [
+      "C"
+    ]
+  },
+  "analysis": "已知甲、乙两物体做匀速直线运动的速度之比为v甲∶v乙=2∶3，运动时间比为t甲∶t乙=3∶2，由v=s/t可知，甲、乙两物体通过的路程之比为s甲/s乙=(v甲t甲)/(v乙t乙)=(2×3)/(3×2)=1∶1。故C正确。故选C。",
+  "illustrations": [],
+  "tables": [],
+  "formula_assets": [
+    {
+      "asset_id": "formula_06",
+      "file": "../assets/formula_06.png",
+      "role": "formula_image",
+      "recognized_text": "v = s/t",
+      "source_media": "word/media/image6.wmf"
+    },
+    {
+      "asset_id": "formula_09",
+      "file": "../assets/formula_09.png",
+      "role": "formula_image",
+      "recognized_text": "s甲/s乙 = (v甲t甲)/(v乙t乙) = (2×3)/(3×2) = 1:1",
+      "source_media": "word/media/image9.wmf"
+    }
+  ],
+  "source": {
+    "page_start": 4,
+    "page_end": 4
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

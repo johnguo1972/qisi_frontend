@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q12",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "12",
+  "section": "三、填空题（本题共2小题，共10分）",
+  "question_type": "fill_blank",
+  "material": null,
+  "stem": "图中停表的读数为_________s。",
+  "options": [],
+  "subquestions": [],
+  "answer": {
+    "raw": "32",
+    "normalized": [
+      {
+        "blank": 1,
+        "value": "32s"
+      }
+    ]
+  },
+  "analysis": "在停表的小表盘上，1min中间有两个小格，所以一个小格代表0.5min，分针示数是0min；大盘分度值是0.1s，秒针示数是32s，则秒表示数是0min+32s=32s。",
+  "illustrations": [
+    {
+      "asset_id": "img_19",
+      "file": "../assets/q12_stopwatch.png",
+      "role": "stem_diagram",
+      "alt_text": "停表示意图及局部放大读数。",
+      "source_media": "word/media/image19"
+    }
+  ],
+  "tables": [],
+  "formula_assets": [
+    {
+      "asset_id": "formula_18",
+      "file": "../assets/formula_18.png",
+      "role": "formula_image",
+      "recognized_text": "s",
+      "source_media": "word/media/image18.wmf"
+    }
+  ],
+  "source": {
+    "page_start": 10,
+    "page_end": 10
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q03",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "3",
+  "section": "一、单选题（本题共5小题，共10分）",
+  "question_type": "multiple_choice",
+  "material": null,
+  "stem": "某物体从地面上某一点出发沿直线运动，其s-t图像如图所示。对物体的运动情况进行分析，得出结论错误的是（　　）",
+  "options": [
+    {
+      "label": "A",
+      "content": "物体在9s内运动的路程为18m"
+    },
+    {
+      "label": "B",
+      "content": "物体在3s内和后3s内的速度相等"
+    },
+    {
+      "label": "C",
+      "content": "以地面为参照物，物体在中间3s内静止"
+    },
+    {
+      "label": "D",
+      "content": "物体在3s内的平均速度为2m/s"
+    }
+  ],
+  "subquestions": [],
+  "answer": {
+    "raw": "BD",
+    "normalized": [
+      "B",
+      "D"
+    ]
+  },
+  "analysis": "A．从图中可知，时间为9s时，物体的路程为18m，且物体从0m处开始运动，故物体在9s内的路程为18m，故A正确，不符合题意；\nB．从图中可知，物体在前3s的路程为12m，物体在后3s的路程为s=18m-12m=6m。根据v=s/t可知，物体在前3s内和后3s内的速度不相等，故B错误，符合题意；\nC．中间3s（3~6s），物体运动的路程为0m，以地面为参照物，物体相对于地面的位置没有变化，物体静止，故C正确，不符合题意；\nD．物体在3s内的平均速度为v=s/t=12m/3s=4m/s，故D错误，符合题意。\n故选BD。",
+  "illustrations": [
+    {
+      "asset_id": "img_04",
+      "file": "../assets/q03_st_graph.png",
+      "role": "stem_diagram",
+      "alt_text": "路程s随时间t变化的折线图：0~3s路程增至12m，3~6s保持12m，6~9s增至18m。",
+      "source_media": "word/media/image4"
+    }
+  ],
+  "tables": [],
+  "formula_assets": [
+    {
+      "asset_id": "formula_05",
+      "file": "../assets/formula_05.png",
+      "role": "formula_image",
+      "recognized_text": "s = 18 m - 12 m = 6 m",
+      "source_media": "word/media/image5.wmf"
+    },
+    {
+      "asset_id": "formula_06",
+      "file": "../assets/formula_06.png",
+      "role": "formula_image",
+      "recognized_text": "v = s/t",
+      "source_media": "word/media/image6.wmf"
+    },
+    {
+      "asset_id": "formula_07",
+      "file": "../assets/formula_07.png",
+      "role": "formula_image",
+      "recognized_text": "3~6 s",
+      "source_media": "word/media/image7.wmf"
+    },
+    {
+      "asset_id": "formula_08",
+      "file": "../assets/formula_08.png",
+      "role": "formula_image",
+      "recognized_text": "v = s/t = 12 m/3 s = 4 m/s",
+      "source_media": "word/media/image8.wmf"
+    }
+  ],
+  "source": {
+    "page_start": 2,
+    "page_end": 4
+  },
+  "quality": {
+    "warnings": [
+      "SECTION_TYPE_ANSWER_CONFLICT：本题位于“单选题”栏目，但原答案为BD。"
+    ],
+    "requires_review": true
+  }
+}

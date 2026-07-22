@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q09",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "9",
+  "section": "二、双选题（本题共5小题，共10分）",
+  "question_type": "multiple_choice",
+  "material": null,
+  "stem": "下列说法错误的是（　　）",
+  "options": [
+    {
+      "label": "A",
+      "content": "0℃的冰与0℃的水冷热程度相同"
+    },
+    {
+      "label": "B",
+      "content": "干冰周围产生白雾，此时只发生了升华现象"
+    },
+    {
+      "label": "C",
+      "content": "可以用体温计测量沸水的温度"
+    },
+    {
+      "label": "D",
+      "content": "体温计使用前若示数在35℃以上应先甩几下"
+    }
+  ],
+  "subquestions": [],
+  "answer": {
+    "raw": "BC",
+    "normalized": [
+      "B",
+      "C"
+    ]
+  },
+  "analysis": "A．温度表示物体的冷热程度，0℃的冰与0℃的水状态不同，冷热程度相同，故A正确，不符合题意；\nB．干冰升华成二氧化碳气体过程中吸收大量的热，使空气中的水蒸气液化而成的小水珠，形成白雾，故B错误，符合题意；\nC．体温计的测量范围在35~42℃之间，1标准大气压下沸水的温度在100℃左右，如果用体温计测量沸水温度，会损坏体温计，故C错误，符合题意；\nD．使用体温计测量体温之前，若示数在35℃以上，要用力甩一下，将水银甩回玻璃泡中，故D正确，不符合题意。\n故选BC。",
+  "illustrations": [],
+  "tables": [],
+  "formula_assets": [
+    {
+      "asset_id": "formula_15",
+      "file": "../assets/formula_15.png",
+      "role": "formula_image",
+      "recognized_text": "0℃",
+      "source_media": "word/media/image15.wmf"
+    },
+    {
+      "asset_id": "formula_16",
+      "file": "../assets/formula_16.png",
+      "role": "formula_image",
+      "recognized_text": "35℃",
+      "source_media": "word/media/image16.wmf"
+    }
+  ],
+  "source": {
+    "page_start": 8,
+    "page_end": 9
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

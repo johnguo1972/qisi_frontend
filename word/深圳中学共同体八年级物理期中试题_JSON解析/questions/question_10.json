@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q10",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "10",
+  "section": "二、双选题（本题共5小题，共10分）",
+  "question_type": "multiple_choice",
+  "material": null,
+  "stem": "关于物态变化，下列说法正确的是（　　）",
+  "options": [
+    {
+      "label": "A",
+      "content": "蒸发在任何温度下都能发生，液体蒸发时会吸热"
+    },
+    {
+      "label": "B",
+      "content": "固体在熔化过程中，需要不断吸热，温度不变"
+    },
+    {
+      "label": "C",
+      "content": "露珠在日出后逐渐消失，升华成水蒸气"
+    },
+    {
+      "label": "D",
+      "content": "初冬的早晨，地面上的霜是空气中的水蒸气凝华形成的"
+    }
+  ],
+  "subquestions": [],
+  "answer": {
+    "raw": "AD",
+    "normalized": [
+      "A",
+      "D"
+    ]
+  },
+  "analysis": "A．蒸发是在任何温度下都能进行的缓慢的汽化现象，汽化吸热，故A正确；\nB．晶体在熔化过程中的特点是不断吸热，温度不变，故B错误；\nC．露珠在日出后逐渐消失，发生汽化现象，故C错误；\nD．地面上的霜是空气中的水蒸气遇冷凝华形成的小冰晶，凝华放热，故D正确。\n故选AD。",
+  "illustrations": [],
+  "tables": [],
+  "formula_assets": [],
+  "source": {
+    "page_start": 9,
+    "page_end": 9
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

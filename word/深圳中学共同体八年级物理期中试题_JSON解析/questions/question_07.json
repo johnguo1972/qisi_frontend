@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q07",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "7",
+  "section": "二、双选题（本题共5小题，共10分）",
+  "question_type": "multiple_choice",
+  "material": null,
+  "stem": "下列说法中，正确的是（　　）",
+  "options": [
+    {
+      "label": "A",
+      "content": "一切正在发声的物体都在振动"
+    },
+    {
+      "label": "B",
+      "content": "一般情况下，声音在气体、液体、固体中的传播速度关系是v气<v液<v固"
+    },
+    {
+      "label": "C",
+      "content": "摩托车安装消声器是为了防止噪声产生"
+    },
+    {
+      "label": "D",
+      "content": "只要我们观察到物体在振动，我们就能听到它发出的声音"
+    }
+  ],
+  "subquestions": [],
+  "answer": {
+    "raw": "AC",
+    "normalized": [
+      "A",
+      "C"
+    ]
+  },
+  "analysis": "A．声音是由物体的振动产生的，一切正在发声的物体都在振动，故A正确；\nB．一般情况下，声音在气体、液体、固体中的传播速度关系是v气<v液<v固，故B错误；\nC．摩托车安装消声器是从声源处控制噪声，是为了防止噪声产生，故C正确；\nD．我们之所以能听到声音，是声源的振动通过媒介传到我们的耳朵，如果只有声源，没有传声介质或听觉器官，是听不到声音的，故D错误。\n故选AC。",
+  "illustrations": [],
+  "tables": [],
+  "formula_assets": [
+    {
+      "asset_id": "formula_12",
+      "file": "../assets/formula_12.png",
+      "role": "formula_image",
+      "recognized_text": "v气 < v液 < v固",
+      "source_media": "word/media/image12.wmf"
+    },
+    {
+      "asset_id": "formula_13",
+      "file": "../assets/formula_13.png",
+      "role": "formula_image",
+      "recognized_text": "v气 < v液 < v固",
+      "source_media": "word/media/image13.wmf"
+    }
+  ],
+  "source": {
+    "page_start": 6,
+    "page_end": 7
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

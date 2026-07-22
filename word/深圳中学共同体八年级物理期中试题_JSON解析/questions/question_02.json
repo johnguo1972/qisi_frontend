@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q02",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "2",
+  "section": "一、单选题（本题共5小题，共10分）",
+  "question_type": "single_choice",
+  "material": null,
+  "stem": "下列物体的运动可近似看作匀速直线运动的是（　　）",
+  "options": [
+    {
+      "label": "A",
+      "content": "正在进站的火车"
+    },
+    {
+      "label": "B",
+      "content": "站在商城自动扶梯上顾客的运动"
+    },
+    {
+      "label": "C",
+      "content": "离开脚后在草地上滚动的足球"
+    },
+    {
+      "label": "D",
+      "content": "绕地球匀速转动的“北斗”卫星"
+    }
+  ],
+  "subquestions": [],
+  "answer": {
+    "raw": "B",
+    "normalized": [
+      "B"
+    ]
+  },
+  "analysis": "A．正在进站的火车，速度逐渐减小，做减速运动，故A不符合题意；\nB．站在商城自动扶梯上顾客的运动，电梯的运行速度大小不变，可以看作匀速直线运动，故B符合题意；\nC．离开脚后在草地上滚动的足球，速度逐渐减小，做减速运动，故C不符合题意；\nD．绕地球匀速转动的“北斗”卫星，运动轨迹是曲线，做曲线运动，故D不符合题意。\n故选B。",
+  "illustrations": [],
+  "tables": [],
+  "formula_assets": [],
+  "source": {
+    "page_start": 2,
+    "page_end": 2
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

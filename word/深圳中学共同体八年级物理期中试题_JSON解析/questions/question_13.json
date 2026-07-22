@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q13",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "13",
+  "section": "三、填空题（本题共2小题，共10分）",
+  "question_type": "fill_blank",
+  "material": null,
+  "stem": "如图所示，用悬挂着的乒乓球接触正在发声的音叉，可观察到乒乓球弹跳起来，它说明了声音是由____________产生的，用到的实验方法是___________。",
+  "options": [],
+  "subquestions": [],
+  "answer": {
+    "raw": "①物体振动；②转换法",
+    "normalized": [
+      {
+        "blank": 1,
+        "value": "物体振动"
+      },
+      {
+        "blank": 2,
+        "value": "转换法"
+      }
+    ]
+  },
+  "analysis": "[1][2]用悬挂着的乒乓球接触正在发声的音叉，音叉正在振动，音叉振动引起乒乓球运动，所以可观察到乒乓球被弹起。实验说明声音是由物体振动产生的；音叉振动比较微小，不容易观察，把音叉的振动转换成乒乓球的运动，所以乒乓球起到放大音叉振动的效果，这种方法叫做转换法。",
+  "illustrations": [
+    {
+      "asset_id": "img_20",
+      "file": "../assets/q13_tuning_fork.png",
+      "role": "stem_diagram",
+      "alt_text": "悬挂乒乓球接触正在发声的音叉实验装置。",
+      "source_media": "word/media/image20"
+    }
+  ],
+  "tables": [],
+  "formula_assets": [],
+  "source": {
+    "page_start": 11,
+    "page_end": 11
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

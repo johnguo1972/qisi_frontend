@@ -1,0 +1,88 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q19",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "19",
+  "section": "五、计算题（本题共2小题，共15分）",
+  "question_type": "calculation",
+  "material": null,
+  "stem": "如图所示，火车在笔直的轨道上匀速行驶。在从山崖驶向一座长为1km的大桥的过程中，当火车头距离桥头150m、距离山崖775m时鸣笛，鸣笛5s后火车头到达桥头，此时司机听到来自山崖的回声。到达桥头后，火车又用50s完全通过了该大桥。",
+  "options": [],
+  "subquestions": [
+    {
+      "label": "（1）",
+      "stem": "计算火车的速度。",
+      "answer": "30m/s"
+    },
+    {
+      "label": "（2）",
+      "stem": "计算声音的速度。",
+      "answer": "340m/s"
+    },
+    {
+      "label": "（3）",
+      "stem": "计算火车的长度。",
+      "answer": "500m"
+    }
+  ],
+  "answer": {
+    "raw": "（1）30m/s；（2）340m/s；（3）500m",
+    "normalized": [
+      {
+        "subquestion": "1",
+        "value": "30m/s"
+      },
+      {
+        "subquestion": "2",
+        "value": "340m/s"
+      },
+      {
+        "subquestion": "3",
+        "value": "500m"
+      }
+    ]
+  },
+  "analysis": "（1）火车的速度v₁=s₁/t=150m/5s=30m/s。\n（2）5s内声音传播的距离s₂=s₁+2s=150m+2×775m=1700m，声音速度v₂=s₂/t=1700m/5s=340m/s。\n（3）火车完全通过大桥的路程s总=v₁t₁=30m/s×50s=1500m，火车长度s车=s总-s桥=1500m-1000m=500m。",
+  "illustrations": [
+    {
+      "asset_id": "img_58",
+      "file": "../assets/q19_train_bridge_cliff.png",
+      "role": "stem_diagram",
+      "alt_text": "火车、桥梁与山崖相对位置示意图。",
+      "source_media": "word/media/image58"
+    }
+  ],
+  "tables": [],
+  "formula_assets": [
+    {
+      "asset_id": "formula_57",
+      "file": "../assets/formula_57.png",
+      "role": "formula_image",
+      "recognized_text": "5 s",
+      "source_media": "word/media/image57.wmf"
+    },
+    {
+      "asset_id": "formula_59",
+      "file": "../assets/formula_59.png",
+      "role": "formula_image",
+      "recognized_text": "v₁ = s₁/t = 150 m/5 s = 30 m/s",
+      "source_media": "word/media/image59.wmf"
+    },
+    {
+      "asset_id": "formula_60",
+      "file": "../assets/formula_60.png",
+      "role": "formula_image",
+      "recognized_text": "v₂ = s₂/t = 1700 m/5 s = 340 m/s",
+      "source_media": "word/media/image60.wmf"
+    }
+  ],
+  "source": {
+    "page_start": 18,
+    "page_end": 19
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

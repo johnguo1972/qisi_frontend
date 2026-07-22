@@ -1,0 +1,123 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q18",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "18",
+  "section": "五、计算题（本题共2小题，共15分）",
+  "question_type": "calculation",
+  "material": null,
+  "stem": "小明翻越一座小山坡，小山坡模型如题图所示。他以A处为起点出发，上坡的速度为2m/s，1min后登上坡顶B，休息10s，接着下坡到达另一侧终点C，下坡速度为4m/s。已知AB段路程等于BC段路程。求：",
+  "options": [],
+  "subquestions": [
+    {
+      "label": "(1)",
+      "stem": "上坡的路程AB为多少？",
+      "answer": "120m"
+    },
+    {
+      "label": "(2)",
+      "stem": "下坡的时间是多少？",
+      "answer": "30s"
+    },
+    {
+      "label": "(3)",
+      "stem": "AC全程的平均速度为多少？",
+      "answer": "2.4m/s"
+    }
+  ],
+  "answer": {
+    "raw": "(1)120m；(2)30s；(3)2.4m/s",
+    "normalized": [
+      {
+        "subquestion": "1",
+        "value": "120m"
+      },
+      {
+        "subquestion": "2",
+        "value": "30s"
+      },
+      {
+        "subquestion": "3",
+        "value": "2.4m/s"
+      }
+    ]
+  },
+  "analysis": "（1）上坡时间t₁=1min=60s。由v=s/t可得s_AB=v₁t₁=2m/s×60s=120m。\n（2）由题知s_BC=s_AB=120m，由v=s/t可得t₂=s_BC/v₂=120m/(4m/s)=30s。\n（3）全程路程s_AC=s_AB+s_BC=120m+120m=240m；全程时间t=t₁+t休息+t₂=60s+10s+30s=100s；AC全程平均速度v=s_AC/t=240m/100s=2.4m/s。",
+  "illustrations": [
+    {
+      "asset_id": "img_49",
+      "file": "../assets/q18_hill_model.png",
+      "role": "stem_diagram",
+      "alt_text": "小山坡模型，A、B、C分别表示起点、坡顶和终点。",
+      "source_media": "word/media/image49"
+    }
+  ],
+  "tables": [],
+  "formula_assets": [
+    {
+      "asset_id": "formula_06",
+      "file": "../assets/formula_06.png",
+      "role": "formula_image",
+      "recognized_text": "v = s/t",
+      "source_media": "word/media/image6.wmf"
+    },
+    {
+      "asset_id": "formula_50",
+      "file": "../assets/formula_50.png",
+      "role": "formula_image",
+      "recognized_text": "t₁ = 1 min = 60 s",
+      "source_media": "word/media/image50.wmf"
+    },
+    {
+      "asset_id": "formula_51",
+      "file": "../assets/formula_51.png",
+      "role": "formula_image",
+      "recognized_text": "s_AB = v₁t₁ = 2 m/s × 60 s = 120 m",
+      "source_media": "word/media/image51.wmf"
+    },
+    {
+      "asset_id": "formula_52",
+      "file": "../assets/formula_52.png",
+      "role": "formula_image",
+      "recognized_text": "s_BC = s_AB = 120 m",
+      "source_media": "word/media/image52.wmf"
+    },
+    {
+      "asset_id": "formula_53",
+      "file": "../assets/formula_53.png",
+      "role": "formula_image",
+      "recognized_text": "t₂ = s_BC/v₂ = 120 m/(4 m/s) = 30 s",
+      "source_media": "word/media/image53.wmf"
+    },
+    {
+      "asset_id": "formula_54",
+      "file": "../assets/formula_54.png",
+      "role": "formula_image",
+      "recognized_text": "s_AC = s_AB + s_BC = 120 m + 120 m = 240 m",
+      "source_media": "word/media/image54.wmf"
+    },
+    {
+      "asset_id": "formula_55",
+      "file": "../assets/formula_55.png",
+      "role": "formula_image",
+      "recognized_text": "t = t₁ + t休息 + t₂ = 60 s + 10 s + 30 s = 100 s",
+      "source_media": "word/media/image55.wmf"
+    },
+    {
+      "asset_id": "formula_56",
+      "file": "../assets/formula_56.png",
+      "role": "formula_image",
+      "recognized_text": "v = s_AC/t = 240 m/100 s = 2.4 m/s",
+      "source_media": "word/media/image56.wmf"
+    }
+  ],
+  "source": {
+    "page_start": 16,
+    "page_end": 18
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q08",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "8",
+  "section": "二、双选题（本题共5小题，共10分）",
+  "question_type": "multiple_choice",
+  "material": null,
+  "stem": "如图所示是声音输入到示波器上时显示的波形，下列说法正确的是（　　）",
+  "options": [
+    {
+      "label": "A",
+      "content": "甲和乙音调相同"
+    },
+    {
+      "label": "B",
+      "content": "乙和丙响度相同"
+    },
+    {
+      "label": "C",
+      "content": "甲和丙音调相同"
+    },
+    {
+      "label": "D",
+      "content": "丙和丁响度相同"
+    }
+  ],
+  "subquestions": [],
+  "answer": {
+    "raw": "AB",
+    "normalized": [
+      "A",
+      "B"
+    ]
+  },
+  "analysis": "从图中可以看出，相同时间内，甲和乙振动的频率相同，丙振动频率比甲、乙大，所以音调相同的是甲和乙；甲振幅最小，丁的振幅较小，乙和丙振幅相同，因此乙、丙响度相同。丁图波形与甲、乙、丙的波形不同，说明丁的音色与甲、乙、丙音色不同，故AB正确，CD错误。故选AB。",
+  "illustrations": [
+    {
+      "asset_id": "img_14",
+      "file": "../assets/q08_waveforms.png",
+      "role": "stem_diagram",
+      "alt_text": "示波器显示的甲、乙、丙、丁四种声音波形。",
+      "source_media": "word/media/image14"
+    }
+  ],
+  "tables": [],
+  "formula_assets": [],
+  "source": {
+    "page_start": 7,
+    "page_end": 8
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

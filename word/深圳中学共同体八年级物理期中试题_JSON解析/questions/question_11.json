@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q11",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "11",
+  "section": "三、填空题（本题共2小题，共10分）",
+  "question_type": "fill_blank",
+  "material": null,
+  "stem": "图甲中温度计的示数是_____________℃，图乙中温度计的示数是_____________℃。",
+  "options": [],
+  "subquestions": [],
+  "answer": {
+    "raw": "①36；②-24",
+    "normalized": [
+      {
+        "blank": 1,
+        "value": "36"
+      },
+      {
+        "blank": 2,
+        "value": "-24"
+      }
+    ]
+  },
+  "analysis": "[1]由图可知，两温度计上10℃之间有10个小格，所以一个小格代表的温度是1℃，即此温度计的分度值为1℃；图甲中，40℃在30℃的上面，此时的温度高于0℃，示数为36℃。\n[2]图乙中，30℃在20℃的下面，此时的温度低于0℃，示数为-24℃。",
+  "illustrations": [
+    {
+      "asset_id": "img_17",
+      "file": "../assets/q11_thermometers.png",
+      "role": "stem_diagram",
+      "alt_text": "甲、乙两支温度计示意图。",
+      "source_media": "word/media/image17"
+    }
+  ],
+  "tables": [],
+  "formula_assets": [],
+  "source": {
+    "page_start": 9,
+    "page_end": 10
+  },
+  "quality": {
+    "warnings": [
+      "SECTION_DECLARED_COUNT_CONFLICT：本栏目标题声明共2小题，但文档中连续出现第11至15题。"
+    ],
+    "requires_review": true
+  }
+}

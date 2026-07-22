@@ -1,0 +1,153 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q17",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "17",
+  "section": "四、实验探究题（本题共2小题，共17分）",
+  "question_type": "experiment",
+  "material": null,
+  "stem": "在探究“冰熔化时温度的变化规律”实验中：",
+  "options": [],
+  "subquestions": [
+    {
+      "label": "（1）",
+      "stem": "为了使试管中的冰受热均匀，且便于记录各时刻的温度值，小明应选用______（填“甲”或“乙”）装置来进行实验。",
+      "answer": "乙"
+    },
+    {
+      "label": "（2）",
+      "stem": "如图丙所示，图中______段表示冰的熔化过程，此过程中冰______（吸收/放出）热量，温度______（升高/降低/不变）。第8min时处于______态（固/液/固液共存）。",
+      "answer": [
+        "BC",
+        "吸收",
+        "不变",
+        "固液共存"
+      ]
+    },
+    {
+      "label": "（3）",
+      "stem": "待冰完全熔化后，利用图示仪器探究水沸腾时温度变化的特点。",
+      "answer": [
+        "自下而上",
+        "96",
+        "乙",
+        "不变",
+        "少",
+        "调为小火"
+      ]
+    }
+  ],
+  "answer": {
+    "raw": "①乙；②BC；③吸收；④不变；⑤固液共存；⑥自下而上；⑦96；⑧乙；⑨不变；⑩少；⑪调为小火",
+    "normalized": [
+      {
+        "blank": 1,
+        "value": "乙"
+      },
+      {
+        "blank": 2,
+        "value": "BC"
+      },
+      {
+        "blank": 3,
+        "value": "吸收"
+      },
+      {
+        "blank": 4,
+        "value": "不变"
+      },
+      {
+        "blank": 5,
+        "value": "固液共存"
+      },
+      {
+        "blank": 6,
+        "value": "自下而上"
+      },
+      {
+        "blank": 7,
+        "value": "96"
+      },
+      {
+        "blank": 8,
+        "value": "乙"
+      },
+      {
+        "blank": 9,
+        "value": "不变"
+      },
+      {
+        "blank": 10,
+        "value": "少"
+      },
+      {
+        "blank": 11,
+        "value": "调为小火"
+      }
+    ]
+  },
+  "analysis": "（1）[1]加热时为了使物体受热均匀，一般使用水浴法加热，所以应选用乙装置来进行实验。\n（2）[2][3][4]由图丙知道，由于图中冰在BC段不断吸收热量，温度保持不变，所以BC段表示冰的熔化过程。\n[5]冰在第4min开始熔化，到第10min结束，所以冰在第8min时是固态液态共存态。\n（3）①[6]酒精灯需用外焰加热，所以要放好酒精灯，再固定铁圈的高度；而温度计的玻璃泡要全部浸没到液体中，但不能碰到容器壁和容器底，所以放好烧杯后，再调节温度计的高度，故应按照自下而上的顺序进行。\n②[7]该温度计的分度值是1℃，所以此时的示数是96℃。\n③[8]水沸腾时气泡越向上越大，故选乙。\n[9]根据实验结果可以发现水沸腾时，继续加热，但温度保持不变。\n[10]根据图3可知，a、b两组所用的水的初温相同，t₁<t₂，即a组加热至沸腾所需要的时间比b组短，所以a组所用的水的质量比b组的少。\n④[11]汤处于沸腾状态，而水沸腾时吸热但温度不变，即使加大火力，也不能提高水温和使食物煮熟得快，只是加快了水的汽化，浪费了燃料。所以先用大火将汤加热沸腾，再改用小火炖，保持锅内的水一直沸腾就行了。",
+  "illustrations": [
+    {
+      "asset_id": "img_42",
+      "file": "../assets/q17_ice_melting_setup.png",
+      "role": "stem_diagram",
+      "alt_text": "冰熔化实验的甲、乙两套加热装置及温度—时间图像。",
+      "source_media": "word/media/image42"
+    },
+    {
+      "asset_id": "img_45",
+      "file": "../assets/q17_water_boiling_setup.png",
+      "role": "stem_diagram",
+      "alt_text": "水沸腾实验装置、温度计、气泡示意图和两组沸腾曲线。",
+      "source_media": "word/media/image45"
+    }
+  ],
+  "tables": [],
+  "formula_assets": [
+    {
+      "asset_id": "formula_43",
+      "file": "../assets/formula_43.png",
+      "role": "formula_image",
+      "recognized_text": "(AB/BC/CD)",
+      "source_media": "word/media/image43.wmf"
+    },
+    {
+      "asset_id": "formula_44",
+      "file": "../assets/formula_44.png",
+      "role": "formula_image",
+      "recognized_text": "/",
+      "source_media": "word/media/image44.wmf"
+    },
+    {
+      "asset_id": "formula_46",
+      "file": "../assets/formula_46.png",
+      "role": "formula_image",
+      "recognized_text": "a",
+      "source_media": "word/media/image46.wmf"
+    },
+    {
+      "asset_id": "formula_47",
+      "file": "../assets/formula_47.png",
+      "role": "formula_image",
+      "recognized_text": "b",
+      "source_media": "word/media/image47.wmf"
+    },
+    {
+      "asset_id": "formula_48",
+      "file": "../assets/formula_48.png",
+      "role": "formula_image",
+      "recognized_text": "t₁ < t₂",
+      "source_media": "word/media/image48.wmf"
+    }
+  ],
+  "source": {
+    "page_start": 14,
+    "page_end": 16
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}

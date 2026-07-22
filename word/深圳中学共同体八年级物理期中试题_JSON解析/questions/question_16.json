@@ -1,0 +1,195 @@
+{
+  "schema_version": "1.0",
+  "record_type": "question",
+  "question_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM_Q16",
+  "paper_id": "SZMS_2022_2023_G8_PHYSICS_MIDTERM",
+  "question_no": "16",
+  "section": "四、实验探究题（本题共2小题，共17分）",
+  "question_type": "experiment",
+  "material": null,
+  "stem": "如图，在斜面上测量小车运动的平均速度。让小车从斜面A点由静止开始下滑，分别测出小车到达B点和C点的时间，即可测出不同阶段的平均速度。",
+  "options": [],
+  "subquestions": [
+    {
+      "label": "（1）",
+      "stem": "该实验原理是______；",
+      "answer": "v=s/t"
+    },
+    {
+      "label": "（2）",
+      "stem": "图中AB段的路程s_AB=____cm，若测得时间t_AB=1.6s，则AB段的平均速度v_AB=___cm/s。",
+      "answer": [
+        "40.0",
+        "25"
+      ]
+    },
+    {
+      "label": "（3）",
+      "stem": "实验中测得上半段路程的平均速度为v₂，下半段路程的平均速度为v₃，那么v₂、v₃的大小关系是v₂______v₃。（选填“>”“<”或“=”）",
+      "answer": "<"
+    },
+    {
+      "label": "（4）",
+      "stem": "若小车过了A点才开始计时，则记录的时间会______，平均速度会______。（偏大/偏小）",
+      "answer": [
+        "偏小",
+        "偏大"
+      ]
+    }
+  ],
+  "answer": {
+    "raw": "①v=s/t；②40.0；③25；④<；⑤偏小；⑥偏大",
+    "normalized": [
+      {
+        "blank": 1,
+        "value": "v=s/t"
+      },
+      {
+        "blank": 2,
+        "value": "40.0"
+      },
+      {
+        "blank": 3,
+        "value": "25"
+      },
+      {
+        "blank": 4,
+        "value": "<"
+      },
+      {
+        "blank": 5,
+        "value": "偏小"
+      },
+      {
+        "blank": 6,
+        "value": "偏大"
+      }
+    ]
+  },
+  "analysis": "（1）平均速度是指某段时间内的路程与这段时间的比值，所以测小车平均速度的实验原理为v=s/t。\n（2）小车运动距离s_AB=80.0cm-40.0cm=40.0cm；小车通过AB段的平均速度v_AB=s_AB/t_AB=40.0cm/1.6s=25cm/s。\n（3）实验中测得上半段路程的平均速度为v₂，下半段路程的平均速度为v₃，整个运动过程中速度越来越大，所以v₂<v₃。\n（4）如果小车过了A点才开始计时，则记录的时间会偏小，根据v=s/t可知平均速度会偏大。",
+  "illustrations": [
+    {
+      "asset_id": "img_28",
+      "file": "../assets/q16_incline_car.png",
+      "role": "stem_diagram",
+      "alt_text": "小车沿斜面从A点经B点运动至C点的测平均速度实验装置。",
+      "source_media": "word/media/image28"
+    }
+  ],
+  "tables": [],
+  "formula_assets": [
+    {
+      "asset_id": "formula_26",
+      "file": "../assets/formula_26.png",
+      "role": "formula_image",
+      "recognized_text": "B",
+      "source_media": "word/media/image26.wmf"
+    },
+    {
+      "asset_id": "formula_27",
+      "file": "../assets/formula_27.png",
+      "role": "formula_image",
+      "recognized_text": "C",
+      "source_media": "word/media/image27.wmf"
+    },
+    {
+      "asset_id": "formula_29",
+      "file": "../assets/formula_29.png",
+      "role": "formula_image",
+      "recognized_text": "AB",
+      "source_media": "word/media/image29.wmf"
+    },
+    {
+      "asset_id": "formula_30",
+      "file": "../assets/formula_30.png",
+      "role": "formula_image",
+      "recognized_text": "s_AB =",
+      "source_media": "word/media/image30.wmf"
+    },
+    {
+      "asset_id": "formula_31",
+      "file": "../assets/formula_31.png",
+      "role": "formula_image",
+      "recognized_text": "cm",
+      "source_media": "word/media/image31.wmf"
+    },
+    {
+      "asset_id": "formula_32",
+      "file": "../assets/formula_32.png",
+      "role": "formula_image",
+      "recognized_text": "t_AB = 1.6 s",
+      "source_media": "word/media/image32.wmf"
+    },
+    {
+      "asset_id": "formula_33",
+      "file": "../assets/formula_33.png",
+      "role": "formula_image",
+      "recognized_text": "v_AB =",
+      "source_media": "word/media/image33.wmf"
+    },
+    {
+      "asset_id": "formula_34",
+      "file": "../assets/formula_34.png",
+      "role": "formula_image",
+      "recognized_text": "cm/s",
+      "source_media": "word/media/image34.wmf"
+    },
+    {
+      "asset_id": "formula_35",
+      "file": "../assets/formula_35.png",
+      "role": "formula_image",
+      "recognized_text": "v₂",
+      "source_media": "word/media/image35.wmf"
+    },
+    {
+      "asset_id": "formula_36",
+      "file": "../assets/formula_36.png",
+      "role": "formula_image",
+      "recognized_text": "v₃",
+      "source_media": "word/media/image36.wmf"
+    },
+    {
+      "asset_id": "formula_37",
+      "file": "../assets/formula_37.png",
+      "role": "formula_image",
+      "recognized_text": ">",
+      "source_media": "word/media/image37.wmf"
+    },
+    {
+      "asset_id": "formula_38",
+      "file": "../assets/formula_38.png",
+      "role": "formula_image",
+      "recognized_text": "<",
+      "source_media": "word/media/image38.wmf"
+    },
+    {
+      "asset_id": "formula_39",
+      "file": "../assets/formula_39.png",
+      "role": "formula_image",
+      "recognized_text": "=",
+      "source_media": "word/media/image39.wmf"
+    },
+    {
+      "asset_id": "formula_40",
+      "file": "../assets/formula_40.png",
+      "role": "formula_image",
+      "recognized_text": "v = s/t",
+      "source_media": "word/media/image40.wmf"
+    },
+    {
+      "asset_id": "formula_41",
+      "file": "../assets/formula_41.png",
+      "role": "formula_image",
+      "recognized_text": "v_AB = s_AB/t_AB = 40.0 cm/1.6 s = 25 cm/s",
+      "source_media": "word/media/image41.wmf"
+    }
+  ],
+  "source": {
+    "page_start": 13,
+    "page_end": 14
+  },
+  "quality": {
+    "warnings": [],
+    "requires_review": false
+  }
+}
