@@ -1,0 +1,19 @@
+[Unit]
+Description=Qisi Celery Beat Service
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/mnt/datadisk0/qisi/backend
+Environment="PATH=/mnt/datadisk0/qisi/backend/venv/bin"
+ExecStart=/mnt/datadisk0/qisi/backend/venv/bin/celery -A config beat -l info \
+  --logfile=/mnt/datadisk0/qisi/logs/celery-beat.log \
+  --pidfile=/mnt/datadisk0/qisi/logs/celery-beat.pid
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

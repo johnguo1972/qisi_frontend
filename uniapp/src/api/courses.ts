@@ -1,5 +1,4 @@
-// Course API - 使用完整 URL 绕过 request.ts 的 /study 前缀
-// 因为后端 courses API 路径是 /api/v1/courses/ 而非 /study/api/v1/courses/
+// Course API - 后端 courses API 路径是 /api/v1/courses/
 const COURSE_BASE = '/api/v1'
 
 // Helper: 直接使用 fetch 绕过 request.ts 的 BASE_URL

@@ -1,0 +1,61 @@
+# ============================================================
+# 齐思 · A自习室 本地开发环境 Docker Compose 配置
+# 使用方式: docker compose -f docker-compose.local.yml up -d
+# PostgreSQL 18.4 + Redis 7.2
+# ============================================================
+
+services:
+  # ============================================================
+  # PostgreSQL 18.4（本地开发用）
+  # 容器名: qisi-postgres（与 start.bat 兼容）
+  # 数据库: appdb
+  # 用户: appuser
+  # 密码: pgsql!1804pwd
+  # 端口: 5432
+  # ============================================================
+  postgres:
+    image: postgres:18.4-bookworm
+    container_name: qisi-postgres
+    hostname: postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_DB: appdb
+      POSTGRES_PASSWORD: pgsql!1804pwd
+      TZ: Asia/Shanghai
+      PGTZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser -d appdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Redis 7.2（本地开发用）
+  # 容器名: qisi-redis
+  # 密码: redis172pwd
+  # 端口: 6379
+  # ============================================================
+  redis:
+    image: redis:7.2-alpine
+    container_name: qisi-redis
+    hostname: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --requirepass redis172pwd --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis172pwd", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  redis-data:

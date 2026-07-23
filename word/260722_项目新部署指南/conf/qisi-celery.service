@@ -1,0 +1,19 @@
+[Unit]
+Description=Qisi Celery Worker Service
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/mnt/datadisk0/qisi/backend
+Environment="PATH=/mnt/datadisk0/qisi/backend/venv/bin"
+ExecStart=/mnt/datadisk0/qisi/backend/venv/bin/celery -A config worker -l info \
+  --logfile=/mnt/datadisk0/qisi/logs/celery-worker.log \
+  --pidfile=/mnt/datadisk0/qisi/logs/celery-worker.pid
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

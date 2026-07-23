@@ -1,0 +1,68 @@
+# ============================================================
+# 齐思 · A自习室 服务器 Docker Compose 配置
+# 部署路径: /mnt/datadisk0/qisi/docker-compose.yml
+# PostgreSQL 18.4 + Redis 7.2
+#
+# 注意：Nginx 不包含在此文件中，因为 Nginx 需要 SSL 证书
+# 才能启动，而证书需要先申请。Nginx 请按部署指南中的
+# "docker run" 命令单独启动（在证书获取之后）。
+# ============================================================
+
+services:
+  # ============================================================
+  # PostgreSQL 18.4
+  # 容器名: app-pgsql
+  # 数据库: appdb
+  # 用户: appuser
+  # 密码: 通过 Docker secrets 读取（文件: /mnt/datadisk0/qisi/docker-data/postgres_password.txt）
+  # 端口: 5432（已发布到宿主机）
+  # ============================================================
+  postgres:
+    image: postgres:18.4-bookworm
+    container_name: app-pgsql
+    hostname: postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - /mnt/datadisk0/qisi/docker-data/pgdata:/var/lib/postgresql
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_DB: appdb
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      TZ: Asia/Shanghai
+      PGTZ: Asia/Shanghai
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser -d appdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Redis 7.2
+  # 容器名: qisi-redis
+  # 密码: redis172pwd
+  # 端口: 6379（已发布到宿主机）
+  # AOF 持久化已启用
+  # ============================================================
+  redis:
+    image: redis:7.2-alpine
+    container_name: qisi-redis
+    hostname: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - /mnt/datadisk0/qisi/docker-data/redis-data:/data
+    command: redis-server --requirepass redis172pwd --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis172pwd", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+secrets:
+  postgres_password:
+    file: /mnt/datadisk0/qisi/docker-data/postgres_password.txt

@@ -154,9 +154,9 @@ TIME_ZONE = 'Asia/Shanghai'
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = '/study/static/'
+STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-MEDIA_URL = '/study/media/'
+MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # Aliyun OSS Configuration
@@ -165,6 +165,3 @@ ALIYUN_OSS_ACCESS_KEY_SECRET = os.environ.get('ALIYUN_OSS_ACCESS_KEY_SECRET', ''
 ALIYUN_OSS_BUCKET = os.environ.get('ALIYUN_OSS_BUCKET', '')
 ALIYUN_OSS_REGION = os.environ.get('ALIYUN_OSS_REGION', 'cn-shanghai')
 ALIYUN_OSS_ENDPOINT = os.environ.get('ALIYUN_OSS_ENDPOINT', 'https://oss-cn-shanghai.aliyuncs.com')
-
-# ========== 部署配置（/study 子路径前缀） ==========
-FORCE_SCRIPT_NAME = '/study'

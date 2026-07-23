@@ -1,7 +1,7 @@
 import { post, get, put, patch, del } from '@/utils/request'
 
 // #ifdef APP-PLUS
-const UPLOAD_BASE = 'https://qisi.chengxuelu.com/study/api/v1'
+const UPLOAD_BASE = 'https://qisi.chengxuelu.com/api/v1'
 // #endif
 // #ifndef APP-PLUS
 const UPLOAD_BASE = '/api/v1'

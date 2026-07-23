@@ -44,7 +44,7 @@
     "h5" : {
         "router" : {
             "mode" : "hash",
-            "base" : "/study/"
+            "base" : "/"
         },
         "devServer" : {
             "port" : 5273
