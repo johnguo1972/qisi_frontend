@@ -2,6 +2,7 @@ import string
 import random
 
 from django.db import models
+import uuid_utils.compat as uuid_compat
 
 from apps.accounts.models import UserAccount
 
@@ -15,7 +16,7 @@ def _generate_invite_code() -> str:
 class Institution(models.Model):
     """Educational institution (school, training center, etc.)."""
 
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     institution_name = models.CharField(max_length=200)
     contact_name = models.CharField(max_length=100, blank=True, null=True)
     contact_phone = models.CharField(max_length=20, blank=True, null=True)
@@ -39,7 +40,7 @@ class Institution(models.Model):
 class InstitutionMember(models.Model):
     """Links a UserAccount to an Institution with a role."""
 
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='members')
     user = models.ForeignKey(UserAccount, on_delete=models.CASCADE, related_name='institution_memberships')
     role = models.CharField(max_length=20)  # admin/teacher
@@ -57,7 +58,7 @@ class InstitutionMember(models.Model):
 class Class(models.Model):
     """A class belonging to an institution, managed by teachers."""
 
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     class_no = models.CharField(max_length=20, unique=True, blank=True)
     institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='classes')
     creator_teacher = models.ForeignKey(
@@ -91,7 +92,7 @@ class Class(models.Model):
 class ClassTeacher(models.Model):
     """Links a teacher to a class."""
 
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, db_column='class_id', related_name='class_teachers')
     teacher = models.ForeignKey(UserAccount, on_delete=models.CASCADE, related_name='teacher_classes')
     role = models.CharField(max_length=20)  # owner/co_teacher
@@ -107,7 +108,7 @@ class ClassTeacher(models.Model):
 class ClassStudent(models.Model):
     """Links a student to a class."""
 
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, db_column='class_id', related_name='class_students')
     student = models.ForeignKey(UserAccount, on_delete=models.CASCADE, related_name='student_classes')
     join_type = models.CharField(max_length=20)  # invite/manual/import
@@ -125,7 +126,7 @@ class ClassStudent(models.Model):
 class ClassJoinRequest(models.Model):
     """A request to join a class (for approval workflow)."""
 
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, db_column='class_id', related_name='join_requests')
     applicant = models.ForeignKey(UserAccount, on_delete=models.CASCADE, related_name='join_requests')
     applicant_name = models.CharField(max_length=100)

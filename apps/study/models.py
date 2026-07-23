@@ -1,10 +1,11 @@
 from django.db import models
+import uuid_utils.compat as uuid_compat
 from apps.accounts.models import UserAccount
 from apps.missions.models import LearningMission, MissionLevel
 
 
 class StudentMissionProgress(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     mission = models.ForeignKey(LearningMission, on_delete=models.CASCADE)
     student_user_id = models.ForeignKey(UserAccount, on_delete=models.CASCADE)
     progress_status = models.CharField(max_length=20, default='not_started')
@@ -23,7 +24,7 @@ class StudentMissionProgress(models.Model):
 
 
 class StudentLevelProgress(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     level = models.ForeignKey(MissionLevel, on_delete=models.CASCADE)
     student_user_id = models.ForeignKey(UserAccount, on_delete=models.CASCADE)
     status = models.CharField(max_length=20, default='locked')
@@ -40,11 +41,11 @@ class StudentLevelProgress(models.Model):
 
 
 class AnswerAttempt(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     student_user_id = models.ForeignKey(UserAccount, on_delete=models.CASCADE)
     mission = models.ForeignKey(LearningMission, on_delete=models.SET_NULL, null=True, blank=True)
     level = models.ForeignKey(MissionLevel, on_delete=models.SET_NULL, null=True, blank=True)
-    question_id = models.IntegerField()
+    question_id = models.UUIDField()
     attempt_no = models.IntegerField(default=1)
     answer_content = models.JSONField(default=dict)
     is_correct = models.BooleanField(default=False)
@@ -63,9 +64,9 @@ class AnswerAttempt(models.Model):
 
 class Favorite(models.Model):
     """Teacher's favorited questions."""
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     user = models.ForeignKey(UserAccount, on_delete=models.CASCADE, db_column='user_id')
-    question_id = models.IntegerField(db_index=True)
+    question_id = models.UUIDField(db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -78,9 +79,9 @@ class Favorite(models.Model):
 
 
 class AIGuidanceSession(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     student_user_id = models.ForeignKey(UserAccount, on_delete=models.CASCADE)
-    question_id = models.IntegerField()
+    question_id = models.UUIDField()
     mode_type = models.CharField(max_length=10)  # B/C
     session_status = models.CharField(max_length=20, default='running')
     invalid_input_count = models.IntegerField(default=0)

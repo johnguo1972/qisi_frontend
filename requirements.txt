@@ -16,6 +16,7 @@ tencentcloud-sdk-python-sms>=3.0.1000,<4.0
 oss2>=2.18,<3.0
 httpx>=0.25,<1.0
 pydantic>=2.0,<3.0
+uuid-utils>=0.11.0
 
 # Test dependencies
 pytest>=7.4,<9.0

@@ -1,9 +1,10 @@
 from django.contrib.auth.models import AbstractBaseUser
 from django.db import models
+import uuid_utils.compat as uuid_compat
 
 
 class UserAccount(AbstractBaseUser):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     role_type = models.CharField(max_length=20)  # teacher/student/parent/admin
     login_name = models.CharField(max_length=64, blank=True, null=True)
     mobile = models.CharField(max_length=20, unique=True)
@@ -37,7 +38,7 @@ class UserAccount(AbstractBaseUser):
 
 
 class StudentParentBind(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     student_user_id = models.ForeignKey(
         UserAccount, on_delete=models.CASCADE, related_name='parent_binds_as_student'
     )

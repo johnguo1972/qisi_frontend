@@ -1,11 +1,12 @@
 from django.db import models
+import uuid_utils.compat as uuid_compat
 from apps.accounts.models import UserAccount
 
 
 class WrongBookItem(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     student_user_id = models.ForeignKey(UserAccount, on_delete=models.CASCADE)
-    question_id = models.IntegerField()
+    question_id = models.UUIDField()
     first_wrong_at = models.DateTimeField(auto_now_add=True)
     latest_wrong_at = models.DateTimeField(auto_now=True)
     wrong_reason_type = models.CharField(max_length=30, blank=True, null=True)
@@ -22,7 +23,7 @@ class WrongBookItem(models.Model):
 
 
 class MasteryRecord(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     student_user_id = models.ForeignKey(UserAccount, on_delete=models.CASCADE)
     mastery_type = models.CharField(max_length=20)  # question/knowledge
     target_code = models.CharField(max_length=64)

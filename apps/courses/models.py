@@ -1,11 +1,12 @@
 """课程管理模块数据模型"""
 from django.db import models
+import uuid_utils.compat as uuid_compat
 from django.conf import settings
 
 
 class Course(models.Model):
     """课程"""
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     name = models.CharField(max_length=200, verbose_name='课程名称')
     description = models.TextField(null=True, blank=True, verbose_name='课程描述')
     subject = models.CharField(max_length=50, verbose_name='学科')
@@ -33,7 +34,7 @@ class Course(models.Model):
 
 class CourseMaterial(models.Model):
     """课程资料"""
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     course = models.ForeignKey(
         Course,
         on_delete=models.CASCADE,
@@ -69,7 +70,7 @@ class CourseMaterial(models.Model):
 
 class CourseTree(models.Model):
     """课程树结构节点"""
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     course = models.ForeignKey(
         Course,
         on_delete=models.CASCADE,
@@ -108,7 +109,7 @@ class CourseQuestionLink(models.Model):
         ('generated', '生成'),
     ]
 
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     course = models.ForeignKey(
         Course,
         on_delete=models.CASCADE,
@@ -156,7 +157,7 @@ class VariantTask(models.Model):
         ('failed', '处理失败'),
     ]
 
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     original_question = models.ForeignKey(
         'parser.ExamQuestion',
         on_delete=models.CASCADE,

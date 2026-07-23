@@ -1,5 +1,6 @@
 """Parser models for exam page parsing results."""
 from django.db import models
+import uuid_utils.compat as uuid_compat
 from apps.papers.models import ExamPaper
 from apps.common import status as const
 
@@ -16,6 +17,7 @@ _PAGE_STATUS_LABELS = {
 
 class ExamPage(models.Model):
     """Represents a single page image of an exam paper."""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     paper = models.ForeignKey(
         ExamPaper, on_delete=models.CASCADE, related_name='pages',
         db_column='paper_id'
@@ -47,6 +49,7 @@ class ExamPage(models.Model):
 
 class AIParseResult(models.Model):
     """Stores raw AI parsing results."""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     paper = models.ForeignKey(
         ExamPaper, on_delete=models.CASCADE, related_name='ai_results',
         db_column='paper_id'
@@ -76,6 +79,7 @@ class AIParseResult(models.Model):
 
 class ExamQuestion(models.Model):
     """Represents a parsed exam question."""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     paper = models.ForeignKey(
         ExamPaper, on_delete=models.CASCADE, related_name='questions',
         db_column='paper_id'
@@ -201,6 +205,7 @@ class ExamQuestion(models.Model):
 
 class QuestionOption(models.Model):
     """Represents an option (A/B/C/D) of a multiple choice question."""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     question = models.ForeignKey(
         ExamQuestion, on_delete=models.CASCADE, related_name='options',
         db_column='question_id'
@@ -225,6 +230,7 @@ class QuestionOption(models.Model):
 
 class QuestionImage(models.Model):
     """Represents an image associated with a question."""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     paper = models.ForeignKey(
         ExamPaper, on_delete=models.CASCADE, related_name='question_images',
         db_column='paper_id'

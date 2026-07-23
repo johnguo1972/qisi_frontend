@@ -1,10 +1,11 @@
 import uuid
 from django.db import models
+import uuid_utils.compat as uuid_compat
 from apps.accounts.models import UserAccount
 
 
 class LearningMission(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     mission_no = models.CharField(max_length=32, unique=True, editable=False)
     mission_name = models.CharField(max_length=120)
     goal_text = models.CharField(max_length=255, blank=True, default='')
@@ -40,7 +41,7 @@ class LearningMission(models.Model):
 
 
 class MissionLevel(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     mission = models.ForeignKey(LearningMission, on_delete=models.CASCADE, related_name='levels')
     level_no = models.IntegerField()
     level_name = models.CharField(max_length=100)
@@ -58,10 +59,10 @@ class MissionLevel(models.Model):
 
 
 class MissionQuestionRel(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     mission = models.ForeignKey(LearningMission, on_delete=models.CASCADE)
     level = models.ForeignKey(MissionLevel, on_delete=models.CASCADE)
-    question_id = models.IntegerField()
+    question_id = models.UUIDField()
     sort_no = models.IntegerField(default=0)
     is_required = models.BooleanField(default=True)
     source_type = models.CharField(max_length=20, default='manual_select')

@@ -1,5 +1,6 @@
 """ExamPaper and ParseTask models."""
 from django.db import models
+import uuid_utils.compat as uuid_compat
 from apps.common import status as const
 
 
@@ -37,6 +38,7 @@ _PAGE_STATUS_LABELS = {
 
 class ExamPaper(models.Model):
     """Represents an uploaded exam paper."""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     title = models.CharField(max_length=255, verbose_name='试卷名称')
     paper_code = models.CharField(
         max_length=20, unique=True, null=True, blank=True,
@@ -83,6 +85,7 @@ class ExamPaper(models.Model):
 
 class ParseTask(models.Model):
     """Represents an async parsing task."""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     paper = models.ForeignKey(
         ExamPaper, on_delete=models.CASCADE, related_name='tasks',
         db_column='paper_id'
@@ -122,6 +125,7 @@ class PaperCodeCounter(models.Model):
     """Tracks the next sequence number for paper code generation.
     Uses letter (e.g. 'M', 'P') rather than full subject name
     to avoid collisions between different subject names mapping to same letter."""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     letter = models.CharField(max_length=1)
     grade_char = models.CharField(max_length=1)
     next_seq = models.IntegerField(default=1)
@@ -138,6 +142,7 @@ class PaperCodeCounter(models.Model):
 
 class QuestionIDCounter(models.Model):
     """Tracks the next hex sequence number for question system IDs."""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     subject = models.CharField(max_length=50, unique=True)
     next_seq = models.IntegerField(default=1)
 
