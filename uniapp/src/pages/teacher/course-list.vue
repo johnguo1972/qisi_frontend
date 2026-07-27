@@ -1,7 +1,5 @@
 <template>
   <view class="course-list">
-    <TeacherSidebar activeItem="course-list" />
-
     <view class="main">
       <!-- Header with create button -->
       <view class="page-header">
@@ -99,7 +97,6 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import CourseCard from '@/components/CourseCard.vue'
 import { courseApi } from '@/api/courses'
 
@@ -282,7 +279,7 @@ onMounted(() => {
 }
 
 .main {
-  margin-left: 240px;
+  margin-left: 0;
   flex: 1;
   padding: 48rpx;
   overflow: visible;

@@ -179,7 +179,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
 import { renderWithKatex } from '@/utils/katex-renderer'
@@ -246,6 +246,12 @@ const originalAnalysis = ref('')    // 原题解析（从 question_info 获取�
 const showAnswerSelect = ref(false) // 是否显示选择答案界面
 const selectedOriginalOption = ref('')  // 用户从原题选项中选择的答案
 const originalTextAnswer = ref('')  // 主观题用户输入的答案
+
+// 组件挂载状态（防止卸载后异步回调仍触发 scroll-view scrollTop 导致空引用报错）
+const isMounted = ref(true)
+onUnmounted(() => {
+  isMounted.value = false
+})
 
 // 计算属性
 const canSubmitAnswer = computed(() => {
@@ -595,6 +601,8 @@ function goBack() {
 }
 
 function scrollToBottom() {
+  // 组件已卸载时不再触发 scrollTop 变化，避免 uni-h5 scroll-view 内部空引用报错
+  if (!isMounted.value) return
   // 每次触发递增 scrollTop 值，强制 scroll-view 滚动到底部
   scrollTop.value += 1
 }
