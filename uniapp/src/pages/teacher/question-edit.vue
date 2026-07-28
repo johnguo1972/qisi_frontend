@@ -16,7 +16,7 @@
             </view>
           </view>
 
-          <view class="page-nav-bar">
+          <view class="page-nav-bar" v-if="totalPages > 1">
             <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上页</button>
             <text class="page-label">第 {{ currentPage }} / {{ totalPages }} 页</text>
             <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下页</button>
@@ -224,7 +224,7 @@ const imageContainerRef = ref<HTMLElement | null>(null)
 const cropOffset = ref<{ x: number; y: number }>((() => { try { const s = sessionStorage.getItem('cropOffset'); return s ? JSON.parse(s) : { x: 0, y: 0 } } catch { return { x: 0, y: 0 } } })())
 const calibrating = ref(false)
 const calibPos = ref<{ x: number; y: number }>({ x: 0, y: 0 })
-let questionId = 0
+let questionId = ''
 const paperId = ref(0)
 const questionList = ref<any[]>([])
 const currentQuestionIndex = ref(-1)
@@ -345,8 +345,19 @@ function handleInsertImage(imageId: number) {
 }
 function moveImageUp(index: number) { if (index <= 0) return; const temp = images.value[index]; images.value[index] = images.value[index - 1]; images.value[index - 1] = temp }
 function moveImageDown(index: number) { if (index >= images.value.length - 1) return; const temp = images.value[index]; images.value[index] = images.value[index + 1]; images.value[index + 1] = temp }
-async function loadQuestion(id: number) { loading.value = true; try { const res = await getQuestionDetail(id); const q = res.data || res; if (q && q.id) { question.value = q; paperId.value = q.paper || 0; if (paperId.value) { try { const { getPaperQuestions } = await import('@/api/questions'); const listRes = await getPaperQuestions(paperId.value); questionList.value = listRes.data?.data || listRes.data || []; currentQuestionIndex.value = questionList.value.findIndex((item: any) => item.id === id) } catch {} } form.value = { stem: q.stem || '', answer: q.answer || '', analysis: q.analysis || '', solution: q.solution || '', difficulty: q.difficulty || 1, question_type: q.question_type || '', question_no: q.question_no || '', page_start: q.page_start || 1, page_end: q.page_end || 1, options: q.options && q.options.length > 0 ? q.options.map((o: any) => ({ label: o.option_label || o.label || '', content: o.content || '' })) : [{ label: 'A', content: '' }, { label: 'B', content: '' }, { label: 'C', content: '' }, { label: 'D', content: '' }] }; images.value = q.images || [] } try { const assetsRes = await getQuestionAssets(id); if (assetsRes.code === 0 && assetsRes.data) { pages.value = assetsRes.data.pages || []; if (pages.value.length > 0) { totalPages.value = pages.value.length; currentPage.value = Math.min(question.value?.page_start || 1, totalPages.value) } if (assetsRes.data.images?.length > 0) images.value = assetsRes.data.images } } catch {} updateCurrentImage(); await updatePreviews() } catch (e: any) { console.error('加载失败:', e); uni.showToast({ title: '加载失败', icon: 'none' }) } finally { loading.value = false } }
-function updateCurrentImage() { const page = pages.value[currentPage.value - 1]; if (page?.image_path) currentImageSrc.value = getImageUrl(page.image_path); clearCrop() }
+async function loadQuestion(id: string) { loading.value = true; try { const res = await getQuestionDetail(id); const q = res.data || res; if (q && q.id) { question.value = q; paperId.value = q.paper || 0; if (paperId.value) { try { const { getPaperQuestions } = await import('@/api/questions'); const listRes = await getPaperQuestions(paperId.value); questionList.value = listRes.data?.data || listRes.data || []; currentQuestionIndex.value = questionList.value.findIndex((item: any) => item.id === id) } catch {} } form.value = { stem: q.stem || '', answer: q.answer || '', analysis: q.analysis || '', solution: q.solution || '', difficulty: q.difficulty || 1, question_type: q.question_type || '', question_no: q.question_no || '', page_start: q.page_start || 1, page_end: q.page_end || 1, options: q.options && q.options.length > 0 ? q.options.map((o: any) => ({ label: o.option_label || o.label || '', content: o.content || '' })) : [{ label: 'A', content: '' }, { label: 'B', content: '' }, { label: 'C', content: '' }, { label: 'D', content: '' }] }; images.value = q.images || [] } try { const assetsRes = await getQuestionAssets(id); if (assetsRes.code === 0 && assetsRes.data) { pages.value = assetsRes.data.pages || []; if (pages.value.length > 0) { totalPages.value = pages.value.length; currentPage.value = Math.min(question.value?.page_start || 1, totalPages.value) } if (assetsRes.data.images?.length > 0) images.value = assetsRes.data.images } } catch {} updateCurrentImage(); await updatePreviews() } catch (e: any) { console.error('加载失败:', e); uni.showToast({ title: '加载失败', icon: 'none' }) } finally { loading.value = false } }
+function updateCurrentImage() {
+  const page = pages.value[currentPage.value - 1]
+  if (page?.image_path) {
+    currentImageSrc.value = getImageUrl(page.image_path)
+  } else if (images.value.length > 0) {
+    // JSON导入的题目没有pages，显示第一张配图
+    currentImageSrc.value = getImageUrl(images.value[0].file_path)
+  } else {
+    currentImageSrc.value = ''
+  }
+  clearCrop()
+}
 function prevPage() { if (currentPage.value > 1) { currentPage.value--; updateCurrentImage() } }
 function nextPage() { if (currentPage.value < totalPages.value) { currentPage.value++; updateCurrentImage() } }
 function zoomIn() { zoom.value = Math.min(3.0, zoom.value + 0.1) }
@@ -479,7 +490,7 @@ function onKeyDown(e: KeyboardEvent) {
 }
 
 onLoad((options) => {
-  questionId = Number(options?.id || 0)
+  questionId = options?.id || ''
 })
 
 onMounted(async () => {
@@ -580,7 +591,7 @@ onUnmounted(() => {
 .kp-tag-remove { cursor: pointer; color: #909399; font-size: 16px; line-height: 1; }
 .kp-tag-remove:hover { color: #409eff; }
 .kp-empty { margin-top: 8px; font-size: 12px; color: #909399; }
-.math-preview { margin-top: 5px; padding: 8px; background: #fafafa; border: 1px dashed #ccc; border-radius: 4px; font-size: 14px; min-height: 24px; white-space: pre-wrap; word-break: break-all; }
+.math-preview { display: none; }
 .form-actions-bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-top: 1px solid #ebeef5; margin-top: 16px; }
 .actions-left { font-size: 11px; color: #666; }
 .shortcut-hint { font-size: 11px; color: #999; }

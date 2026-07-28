@@ -171,7 +171,7 @@ export function aiProcessSingleMode(questionId: number, mode: string) {
 }
 
 // Question edit page APIs
-export function getQuestionDetail(questionId: number) {
+export function getQuestionDetail(questionId: string) {
   return get<any>(`/review/questions/${questionId}/`)
 }
 
@@ -230,3 +230,106 @@ export function photoListQuestions(params?: any) {
 export function getKnowledgeTree() {
   return get('/dicts/knowledge-points')
 }
+
+// === JSON 数据包导入 ===
+
+export function importJsonPackage(file: File) {
+  return new Promise<any>((resolve, reject) => {
+    const token = uni.getStorageSync('accessToken')
+    const formData = new FormData()
+    formData.append('file', file)
+
+    // #ifdef H5
+    fetch(`${UPLOAD_BASE}/questions/import-json-package`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: formData,
+    })
+      .then(res => res.json())
+      .then(data => data.code === 0 ? resolve(data) : reject(new Error(data.message || '导入失败')))
+      .catch(reject)
+    // #endif
+
+    // #ifndef H5
+    // APP端暂不支持JSON导入，请在H5端使用
+    reject(new Error('APP端暂不支持JSON导入，请在H5端使用'))
+    // #endif
+  })
+}
+
+export function getImportTaskStatus(taskId: string) {
+  return get<any>(`/questions/import-json-task/${taskId}/status/`)
+}
+
+export function getJsonImportHistory() {
+  return get<any>('/questions/json-import-history/')
+}
+
+// === 题目篮子 ===
+
+export function getBasket() {
+  return get<any>('/questions/basket/')
+}
+
+export function addToBasket(questionId: string) {
+  return post<any>('/questions/basket/add/', { question_id: questionId })
+}
+
+export function removeFromBasket(questionId: string) {
+  return del(`/questions/basket/${questionId}/`)
+}
+
+export function clearBasket() {
+  return del('/questions/basket/clear/')
+}
+
+// === 批量操作 ===
+
+export function batchUpdateQuestions(data: {
+  ids: string[]
+  action: string
+  value?: any
+}) {
+  return post<any>('/questions/batch-update/', data)
+}
+
+// === 标签管理 ===
+
+export function getTagList(params?: { search?: string }) {
+  return get<any>('/questions/tags/', params)
+}
+
+export function createTag(data: { name: string; color?: string }) {
+  return post<any>('/questions/tags/create/', data)
+}
+
+export function updateTag(tagId: string, data: { name?: string; color?: string }) {
+  return put<any>(`/questions/tags/${tagId}/update/`, data)
+}
+
+export function deleteTag(tagId: string) {
+  return del(`/questions/tags/${tagId}/delete/`)
+}
+
+export function getQuestionTags(questionId: string) {
+  return get<any>(`/questions/${questionId}/tags/`)
+}
+
+export function addQuestionTag(questionId: string, data: { tag_id?: string; tag_name?: string }) {
+  return post<any>(`/questions/${questionId}/tags/add/`, data)
+}
+
+export function removeQuestionTag(questionId: string, tagId: string) {
+  return del(`/questions/${questionId}/tags/${tagId}/remove/`)
+}
+
+// === 条形码 ===
+
+export function getQuestionBarcodeUrl(questionId: string): string {
+  return `${UPLOAD_BASE}/questions/${questionId}/barcode/`
+}
+
+export function scanBarcode(barcodeData: string) {
+  return post<any>('/questions/barcode/scan/', { barcode_data: barcodeData })
+}
+

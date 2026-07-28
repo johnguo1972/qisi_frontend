@@ -1,0 +1,485 @@
+<template>
+  <view class="q-card" :id="'q-' + question.id">
+    <!-- 题头 -->
+    <view class="card-header">
+      <text class="q-num" :style="{ background: diffColor }">{{ index }}</text>
+      <text class="q-title" :class="'diff-l' + question.difficulty">第 {{ question.question_no }} 题</text>
+      <text class="q-type-tag">{{ questionTypeLabel }}</text>
+      <text class="q-creator">{{ question.creator_name || question.paper_title || '' }} {{ formatDate(question.created_at) }}</text>
+    </view>
+
+    <!-- 题干 -->
+    <view class="q-body">
+      <view class="stem-content" v-html="stemHtml"></view>
+    </view>
+
+    <!-- 题目配图 -->
+    <view v-if="diagramImages.length > 0" class="q-images">
+      <view class="image-row">
+        <view v-for="(img, idx) in diagramImages" :key="idx" class="img-cell">
+          <image :src="img.url" mode="widthFix" class="q-img" @click="previewImg(img.url)" />
+          <text v-if="img.caption" class="img-label">{{ img.caption }}</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- 选择题选项 -->
+    <view v-if="isChoiceType" class="q-options">
+      <view v-for="opt in options" :key="opt.label" class="opt-row">
+        <text class="opt-label" :style="{ color: optColor }">{{ opt.label }}.</text>
+        <view class="opt-content" v-html="opt.html"></view>
+      </view>
+    </view>
+
+    <!-- 子问题 -->
+    <view v-if="subquestions.length > 0" class="q-subquestions">
+      <view v-for="(sub, idx) in subquestions" :key="idx" class="sub-row">
+        <text class="sub-label">({{ sub.label || (idx + 1) }})</text>
+        <view class="sub-content" v-html="sub.html"></view>
+      </view>
+    </view>
+
+    <!-- 知识点标签 -->
+    <view class="q-tags">
+      <view class="tag-group">
+        <text class="tag-title">● 知识点</text>
+        <view v-for="kp in question.knowledge_points_display || []" :key="kp.id" class="tag kp-tag">{{ kp.name }}</view>
+      </view>
+      <view class="tag-group">
+        <text class="tag-title">● 标签</text>
+        <view v-for="tag in question.tags || []" :key="tag" class="tag label-tag">{{ tag }}</view>
+      </view>
+      <view v-if="question.source_collection" class="tag-group">
+        <text class="tag-title">● 来源</text>
+        <text class="source-link">{{ question.source_collection }}</text>
+      </view>
+    </view>
+
+    <!-- 底部操作栏 -->
+    <view class="q-footer">
+      <view class="q-footer-right">
+        <button size="mini" @click="$emit('toggle-answer')">答案</button>
+        <button size="mini">分享</button>
+        <button size="mini">二维码</button>
+        <button size="mini">导出</button>
+        <button size="mini" @click="$emit('whiteboard', question.id)">白板</button>
+        <button size="mini" @click="$emit('related', question.id)">关联</button>
+        <button size="mini">更多</button>
+        <button size="mini" @click="$emit('add-basket', question.id)">加入篮子</button>
+        <view class="check-box" :class="{ checked: isChecked }" @click="toggleCheck">
+          <text v-if="isChecked" class="check-mark">&#10003;</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- 答案区 (可折叠) -->
+    <view v-if="showAnswer" class="q-answer">
+      <view v-if="question.answer" class="answer-item">
+        <text class="answer-label">【答案】</text>
+        <view v-html="answerHtml"></view>
+      </view>
+      <view v-if="question.analysis" class="answer-item">
+        <text class="answer-label">【解析】</text>
+        <view v-html="analysisHtml"></view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, watch, onMounted } from 'vue'
+import { renderWithKatex } from '@/utils/katex-renderer'
+
+const props = defineProps<{
+  question: any
+  index: number
+  showAnswer: boolean
+}>()
+
+defineEmits(['whiteboard', 'related', 'toggle-answer', 'add-favorite', 'add-basket', 'check'])
+
+const stemHtml = ref('')
+const answerHtml = ref('')
+const analysisHtml = ref('')
+const optionHtmls = ref<Record<string, string>>({})
+const subquestionHtmls = ref<string[]>([])
+const isChecked = ref(false)
+
+function toggleCheck() {
+  isChecked.value = !isChecked.value
+}
+
+const options = computed(() => {
+  return (props.question.options || []).map((opt: any) => ({
+    ...opt,
+    html: optionHtmls.value[opt.label] || opt.content || '',
+  }))
+})
+
+const subquestions = computed(() => {
+  return (props.question.subquestions || []).map((sub: any, idx: number) => ({
+    ...sub,
+    label: sub.label || String(idx + 1),
+    html: subquestionHtmls.value[idx] || sub.stem || '',
+  }))
+})
+
+const isChoiceType = computed(() =>
+  ['single_choice', 'multiple_choice'].includes(props.question.question_type)
+)
+
+const QUESTION_TYPE_LABELS: Record<string, string> = {
+  single_choice: '单选题',
+  multiple_choice: '多选题',
+  fill_blank: '填空题',
+  short_answer: '简答题',
+  essay: '作文题',
+  true_false: '判断题',
+  computation: '计算题',
+  proof: '证明题',
+  solution: '解答题',
+  experiment: '实验题',
+  reading_comprehension: '阅读理解',
+  unknown: '未知',
+}
+
+const questionTypeLabel = computed(() =>
+  QUESTION_TYPE_LABELS[props.question.question_type] || props.question.question_type || ''
+)
+
+const diffColor = computed(() => {
+  const colors: Record<number, string> = { 1: '#67c23a', 2: '#409eff', 3: '#e6a23c', 4: '#f56c6c', 5: '#9924ff' }
+  return colors[props.question.difficulty] || '#909399'
+})
+
+const optColor = computed(() => '#409eff')
+
+const questionImages = computed(() => {
+  const images = props.question.images || []
+  return images.map((img: any) => ({
+    url: getImageUrl(img.file_path || img.url),
+    caption: img.description || '',
+    type: img.image_type || 'other',
+  }))
+})
+
+// 题目配图（非公式类型）
+const diagramImages = computed(() => {
+  return questionImages.value.filter(img => img.type !== 'formula')
+})
+
+function getImageUrl(path: string): string {
+  if (!path) return ''
+  if (path.startsWith('http')) return path
+  // #ifdef APP-PLUS
+  return 'https://qisi.chengxuelu.com/media/' + path.replace(/\\/g, '/')
+  // #endif
+  // #ifndef APP-PLUS
+  // H5端使用相对路径，由开发服务器代理
+  return '/media/' + path.replace(/\\/g, '/')
+  // #endif
+}
+
+// 快速判断文本是否包含 LaTeX 公式标记
+function hasMathMarkers(text: string): boolean {
+  if (!text) return false
+  return text.includes('$') || text.includes('\\[') || text.includes('\\(')
+}
+
+// 轻量渲染：纯文本直接转HTML，跳过KaTeX
+function quickRender(text: string): string {
+  if (!text) return '<span style="color:#999">(无内容)</span>'
+  if (!hasMathMarkers(text)) {
+    // 纯文本，直接转义换行符
+    return text.replace(/\n/g, '<br/>')
+  }
+  return '' // 需要KaTeX渲染，返回空由调用方处理
+}
+
+function previewImg(url: string) {
+  uni.previewImage({ urls: [url] })
+}
+
+function formatDate(dateStr: string): string {
+  if (!dateStr) return ''
+  return dateStr.slice(0, 10)
+}
+
+async function renderContent() {
+  const q = props.question
+
+  // 题干：直接渲染，不追加公式文本
+  stemHtml.value = quickRender(q.stem || '')
+  if (!stemHtml.value) stemHtml.value = await renderWithKatex(q.stem || '')
+
+  // 答案和解析
+  answerHtml.value = quickRender(q.answer || '')
+  if (!answerHtml.value) answerHtml.value = await renderWithKatex(q.answer || '')
+
+  analysisHtml.value = quickRender(q.analysis || '')
+  if (!analysisHtml.value) analysisHtml.value = await renderWithKatex(q.analysis || '')
+
+  // 渲染选项
+  const newOptHtmls: Record<string, string> = {}
+  for (const opt of q.options || []) {
+    const html = quickRender(opt.content || '')
+    newOptHtmls[opt.label] = html || await renderWithKatex(opt.content || '')
+  }
+  optionHtmls.value = newOptHtmls
+
+  // 渲染子问题
+  const newSubHtmls: string[] = []
+  for (const sub of q.subquestions || []) {
+    const html = quickRender(sub.stem || '')
+    newSubHtmls.push(html || await renderWithKatex(sub.stem || ''))
+  }
+  subquestionHtmls.value = newSubHtmls
+}
+
+watch(() => props.question.id, renderContent, { immediate: true })
+onMounted(renderContent)
+</script>
+
+<style scoped>
+.q-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f0f0f0;
+  flex-wrap: wrap;
+}
+
+.q-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 14px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.q-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.q-type-tag {
+  font-size: 11px;
+  color: #409eff;
+  background: #ecf5ff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.q-creator {
+  font-size: 12px;
+  color: #909399;
+  margin-left: auto;
+}
+
+.q-body {
+  margin-bottom: 16px;
+}
+
+.stem-content {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #303133;
+}
+
+.q-images {
+  margin-bottom: 16px;
+}
+
+.image-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.img-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.q-img {
+  max-width: 300px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.img-label {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+}
+
+.q-options {
+  margin-bottom: 16px;
+}
+
+.opt-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.opt-label {
+  font-weight: bold;
+  font-size: 14px;
+  min-width: 20px;
+}
+
+.opt-content {
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.q-subquestions {
+  margin-bottom: 16px;
+}
+
+.sub-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.sub-label {
+  font-weight: bold;
+  color: #409eff;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.sub-content {
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.q-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #fafafa;
+  border-radius: 6px;
+}
+
+.tag-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tag-title {
+  font-size: 12px;
+  color: #909399;
+}
+
+.tag {
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.kp-tag {
+  background: #ecf5ff;
+  color: #409eff;
+}
+
+.label-tag {
+  background: #f0f9eb;
+  color: #67c23a;
+}
+
+.source-link {
+  font-size: 12px;
+  color: #409eff;
+  cursor: pointer;
+}
+
+.q-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
+}
+.q-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.check-box {
+  width: 22px; height: 22px;
+  border: 2px solid #dcdfe6;
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; flex-shrink: 0;
+  background: #fff;
+}
+.check-box.checked {
+  background: #67c23a;
+  border-color: #67c23a;
+}
+.check-mark {
+  color: #fff;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.q-answer {
+  margin-top: 16px;
+  padding: 16px;
+  background: #fafafa;
+  border-radius: 6px;
+  border-left: 3px solid #409eff;
+}
+
+.answer-item {
+  margin-bottom: 12px;
+}
+
+.answer-item:last-child {
+  margin-bottom: 0;
+}
+
+.answer-label {
+  font-weight: bold;
+  color: #409eff;
+  font-size: 13px;
+  margin-right: 8px;
+}
+
+.diff-l1 { color: #67c23a; }
+.diff-l2 { color: #409eff; }
+.diff-l3 { color: #e6a23c; }
+.diff-l4 { color: #f56c6c; }
+.diff-l5 { color: #9924ff; }
+</style>

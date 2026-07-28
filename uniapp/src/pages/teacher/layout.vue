@@ -14,6 +14,7 @@ import WorkbenchPage from './workbench.vue'
 import ImportPage from './import.vue'
 import NewQuestionPage from './new-question.vue'
 import BankPage from './bank.vue'
+import QuestionBankPage from './question-bank.vue'
 import FavoritesPage from './favorites.vue'
 import MyClassesPage from './my-classes.vue'
 import MissionListPage from './mission-list.vue'
@@ -26,6 +27,7 @@ const components: Record<string, any> = {
   import: ImportPage,
   'new-question': NewQuestionPage,
   bank: BankPage,
+  'question-bank': QuestionBankPage,
   favorites: FavoritesPage,
   'course-list': CourseListPage,
   classes: MyClassesPage,

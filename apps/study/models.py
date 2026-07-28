@@ -95,3 +95,63 @@ class AIGuidanceSession(models.Model):
 
     def __str__(self):
         return f"AI Session Q{self.question_id} ({self.mode_type}) - {self.session_status}"
+
+
+class QuestionBasket(models.Model):
+    """教师题目篮子（类似购物车），用于批量操作和组卷。"""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    user = models.ForeignKey(UserAccount, on_delete=models.CASCADE, db_column='user_id')
+    question_id = models.UUIDField(db_index=True)
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'tiku_question_basket'
+        unique_together = ['user', 'question_id']
+        ordering = ['-added_at']
+        verbose_name = '题目篮子'
+        verbose_name_plural = '题目篮子'
+
+    def __str__(self):
+        return f"Basket Q{self.question_id} by {self.user}"
+
+
+class QuestionTag(models.Model):
+    """自定义标签。"""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    name = models.CharField(max_length=100, unique=True, verbose_name='标签名称')
+    color = models.CharField(max_length=20, default='#409eff', verbose_name='标签颜色')
+    created_by = models.ForeignKey(
+        UserAccount, on_delete=models.SET_NULL,
+        null=True, blank=True, verbose_name='创建者'
+    )
+    question_count = models.IntegerField(default=0, verbose_name='题目数量')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'tiku_question_tag'
+        ordering = ['-question_count']
+        verbose_name = '题目标签'
+        verbose_name_plural = '题目标签'
+
+    def __str__(self):
+        return self.name
+
+
+class QuestionTagRelation(models.Model):
+    """题目-标签关联。"""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    question = models.ForeignKey(
+        'parser.ExamQuestion', on_delete=models.CASCADE,
+        db_column='question_id'
+    )
+    tag = models.ForeignKey(
+        QuestionTag, on_delete=models.CASCADE,
+        db_column='tag_id'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'tiku_question_tag_relation'
+        unique_together = ['question', 'tag']
+        verbose_name = '题目标签关联'
+        verbose_name_plural = '题目标签关联'

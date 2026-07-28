@@ -155,6 +155,46 @@ class ExamQuestion(models.Model):
         verbose_name='AI处理状态',
     )
 
+    # === 新增字段（教师端题库管理功能）===
+    # 自定义标签 (JSON数组存储标签名称)
+    tags = models.JSONField(
+        null=True, blank=True, default=list,
+        verbose_name='自定义标签',
+        help_text='如: ["期末提优", "易错题", "压轴题"]'
+    )
+
+    # 题目来源/试卷集名称
+    source_collection = models.CharField(
+        max_length=255, null=True, blank=True,
+        verbose_name='来源题集',
+        help_text='如: 物理小题狂做试卷'
+    )
+
+    # 创建者显示名称
+    creator_name = models.CharField(
+        max_length=100, null=True, blank=True,
+        verbose_name='创建者姓名'
+    )
+
+    # 收录日期
+    collected_at = models.DateTimeField(
+        null=True, blank=True,
+        verbose_name='收录日期'
+    )
+
+    # 视频解析URL (预留)
+    video_explanation_url = models.CharField(
+        max_length=500, null=True, blank=True,
+        verbose_name='视频解析URL'
+    )
+
+    # 条形码编码值
+    barcode_data = models.CharField(
+        max_length=100, null=True, blank=True, db_index=True,
+        verbose_name='条形码数据',
+        help_text='用于生成条形码的编码值，通常等于system_id'
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

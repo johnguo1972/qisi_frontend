@@ -15,13 +15,31 @@ class QuestionListSerializer(serializers.ModelSerializer):
     ai_answer_c_confirmed = serializers.SerializerMethodField()
     paper_title = serializers.CharField(source='paper.title', read_only=True, default='')
 
+    # 新增字段：图片列表（最多5张）
+    images = serializers.SerializerMethodField()
+    # 新增字段：选项列表
+    options = serializers.SerializerMethodField()
+    # 新增字段：自定义标签
+    tags = serializers.JSONField(required=False, default=list)
+    # 新增字段：来源题集
+    source_collection = serializers.CharField(required=False, default='')
+    # 新增字段：创建者姓名
+    creator_name = serializers.CharField(required=False, default='')
+    # 新增字段：收录日期
+    collected_at = serializers.DateTimeField(required=False, read_only=True)
+
     class Meta:
         model = ExamQuestion
         fields = ['id', 'question_no', 'system_id', 'question_type', 'difficulty',
-                  'subject', 'review_status', 'stem_preview', 'knowledge_points_count',
+                  'subject', 'review_status', 'stem', 'stem_preview', 'answer', 'analysis', 'solution',
+                  'knowledge_points_count',
                   'ai_answer_a', 'ai_answer_b', 'ai_answer_c',
                   'ai_answer_a_confirmed', 'ai_answer_b_confirmed', 'ai_answer_c_confirmed',
-                  'paper_title']
+                  'paper_title',
+                  # 新增字段
+                  'images', 'options', 'tags', 'source_collection',
+                  'creator_name', 'collected_at',
+                  ]
 
     def get_stem_preview(self, obj):
         stem = obj.stem or ''
@@ -61,6 +79,28 @@ class QuestionListSerializer(serializers.ModelSerializer):
 
     def get_ai_answer_c_confirmed(self, obj):
         return self._has_answer(obj.ai_answer_c)
+
+    # 新增方法：获取图片列表
+    def get_images(self, obj):
+        return [
+            {
+                'id': str(img.id),
+                'file_path': img.file_path,
+                'description': img.description or '',
+                'image_type': img.image_type,
+            }
+            for img in obj.images.all()[:5]  # 最多返回5张图片
+        ]
+
+    # 新增方法：获取选项列表
+    def get_options(self, obj):
+        return [
+            {
+                'label': opt.option_label,
+                'content': opt.content,
+            }
+            for opt in obj.options.all()
+        ]
 
 
 class QuestionDetailSerializer(serializers.ModelSerializer):

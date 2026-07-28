@@ -20,9 +20,9 @@
       </view>
       <view class="nav-group">
         <view class="nav-group-title">题库管理</view>
-        <view class="nav-item" :class="{ active: activeItem === 'bank' }" @click="goBank">
+        <view class="nav-item" :class="{ active: activeItem === 'question-bank' }" @click="goQuestionBank">
           <text class="nav-icon">&#128218;</text>
-          <text class="nav-text">题库列表</text>
+          <text class="nav-text">题库管理</text>
         </view>
         <view class="nav-item" :class="{ active: activeItem === 'favorites' }" @click="goFavorites">
           <text class="nav-icon">&#11088;</text>
@@ -74,6 +74,7 @@ function goWorkbench() { emit('navigate', 'workbench') }
 function goImport() { emit('navigate', 'import') }
 function goNewQuestion() { emit('navigate', 'new-question') }
 function goBank() { emit('navigate', 'bank') }
+function goQuestionBank() { emit('navigate', 'question-bank') }
 function goFavorites() { emit('navigate', 'favorites') }
 function goCourseList() { emit('navigate', 'course-list') }
 function goClasses() { emit('navigate', 'classes') }
