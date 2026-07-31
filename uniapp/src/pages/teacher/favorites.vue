@@ -4,6 +4,12 @@
     <view class="main">
       <!-- Left: Knowledge tree (4-level: grade → semester → chapter → KP) -->
       <view class="knowledge-tree">
+        <view class="subject-selector">
+          <text class="subject-label">科目</text>
+          <select v-model="selectedSubject" class="subject-select" @change="onSubjectChange">
+            <option v-for="item in subjectOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+          </select>
+        </view>
         <text class="tree-title">知识树</text>
         <view v-if="treeLoading" class="loading">加载中...</view>
         <view v-else class="tree-content">
@@ -113,7 +119,12 @@ const userStore = useUserStore()
 const favorites = ref<Favorite[]>([])
 const loading = ref(false)
 const treeLoading = ref(false)
-const selectedKP = ref<number | null>(null)
+const selectedKP = ref<string | number | null>(null)
+const selectedSubject = ref(['physics', 'math'].includes(userStore.userInfo?.subject || '') ? userStore.userInfo.subject : 'physics')
+const subjectOptions = [
+  { value: 'physics', label: '物理' },
+  { value: 'math', label: '数学' },
+]
 
 // Tree
 interface TreeNode {
@@ -143,8 +154,13 @@ const typeOptions = [
   { label: '证明题', value: 'proof' },
 ]
 
-function selectKP(id: number) { selectedKP.value = id; loadFavorites() }
+function selectKP(id: string | number) { selectedKP.value = id; loadFavorites() }
 function clearKPFilter() { selectedKP.value = null; loadFavorites() }
+function onSubjectChange() {
+  selectedKP.value = null
+  loadKnowledgeTree()
+  loadFavorites()
+}
 
 onMounted(async () => {
   loadKnowledgeTree()
@@ -154,8 +170,7 @@ onMounted(async () => {
 async function loadKnowledgeTree() {
   treeLoading.value = true
   try {
-    const subject = userStore.userInfo?.subject || ''
-    const res: any = await knowledgeApi.getTree({ subject })
+    const res: any = await knowledgeApi.getTree({ subject: selectedSubject.value })
     const grades = res.data?.grades || []
     tree.value = grades.map((g: any) => ({
       ...g,
@@ -181,9 +196,10 @@ async function loadFavorites() {
   loading.value = true
   try {
     const params: Record<string, any> = {}
+    params.subject = selectedSubject.value
     if (currentType.value) params.question_type = currentType.value
     if (searchQuery.value) params.search = searchQuery.value
-    if (selectedKP.value) params.knowledge_point_id = selectedKP.value
+    if (selectedKP.value !== null) params.knowledge_point_id = selectedKP.value
     const res = await favoriteApi.list(params)
     favorites.value = res.data || []
   } catch (e) {
@@ -239,6 +255,9 @@ function difficultyText(d: number | null): string {
 
 /* Knowledge tree */
 .knowledge-tree { width: 240px; background: #fff; border-radius: 8px; padding: 16px; overflow-y: auto; flex-shrink: 0; }
+.subject-selector { margin-bottom: 14px; }
+.subject-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: #303133; }
+.subject-select { width: 100%; height: 32px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; color: #409eff; background: #ecf5ff; font-size: 13px; }
 .tree-title { font-size: 14px; font-weight: 500; color: #303133; margin-bottom: 12px; display: block; }
 .tree-content .tree-node { padding: 4px 8px; cursor: pointer; font-size: 13px; color: #606266; display: flex; align-items: center; border-radius: 4px; }
 .tree-content .tree-node:hover { background: #f5f7fa; }

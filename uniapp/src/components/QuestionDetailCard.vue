@@ -49,6 +49,10 @@
         <text class="tag-title">● 标签</text>
         <view v-for="tag in question.tags || []" :key="tag" class="tag label-tag">{{ tag }}</view>
       </view>
+      <view class="tag-group">
+        <text class="tag-title">● 难度</text>
+        <text class="tag label-tag difficulty-tag">{{ question.difficulty ?? '-' }}</text>
+      </view>
       <view v-if="question.source_collection" class="tag-group">
         <text class="tag-title">● 来源</text>
         <text class="source-link">{{ question.source_collection }}</text>
@@ -66,8 +70,8 @@
         <button size="mini" @click="$emit('related', question.id)">关联</button>
         <button size="mini">更多</button>
         <button size="mini" @click="$emit('add-basket', question.id)">加入篮子</button>
-        <view class="check-box" :class="{ checked: isChecked }" @click="toggleCheck">
-          <text v-if="isChecked" class="check-mark">&#10003;</text>
+        <view class="check-box" :class="{ checked: selected }" @click="toggleCheck">
+          <text v-if="selected" class="check-mark">&#10003;</text>
         </view>
       </view>
     </view>
@@ -94,20 +98,16 @@ const props = defineProps<{
   question: any
   index: number
   showAnswer: boolean
+  selected?: boolean
 }>()
-
-defineEmits(['whiteboard', 'related', 'toggle-answer', 'add-favorite', 'add-basket', 'check'])
 
 const stemHtml = ref('')
 const answerHtml = ref('')
 const analysisHtml = ref('')
 const optionHtmls = ref<Record<string, string>>({})
 const subquestionHtmls = ref<string[]>([])
-const isChecked = ref(false)
-
-function toggleCheck() {
-  isChecked.value = !isChecked.value
-}
+const emit = defineEmits(['whiteboard', 'related', 'toggle-answer', 'add-favorite', 'add-basket', 'check'])
+function toggleCheck() { emit('check', props.question.id) }
 
 const options = computed(() => {
   return (props.question.options || []).map((opt: any) => ({

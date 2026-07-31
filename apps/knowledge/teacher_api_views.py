@@ -85,12 +85,21 @@ def knowledge_tree(request):
 
     # --- Count questions per knowledge point ---
     kp_counts = {}
+    unclassified_count = 0
     try:
         qs_questions = ExamQuestion.objects.filter(knowledge_points__isnull=False).values_list('knowledge_points', flat=True)
         for kps in qs_questions:
-            if isinstance(kps, list):
-                for kp_id in kps:
-                    kp_counts[kp_id] = kp_counts.get(kp_id, 0) + 1
+            if not kps:
+                unclassified_count += 1
+            elif isinstance(kps, list):
+                for item in kps:
+                    if isinstance(item, dict):
+                        for key in (str(item.get('id')), item.get('module')):
+                            if key and key != 'None':
+                                kp_counts[key] = kp_counts.get(key, 0) + 1
+                    elif item:
+                        key = str(item)
+                        kp_counts[key] = kp_counts.get(key, 0) + 1
     except Exception as e:
         logger.warning('Failed to aggregate question counts: %s', e)
 
@@ -121,7 +130,7 @@ def knowledge_tree(request):
         tree[grade_key]['semesters'][term_display]['chapters'][chapter_key].append({
             'id': kp.id,
             'name': kp.module if kp.module else kp.chapter,
-            'question_count': kp_counts.get(kp.id, 0),
+            'question_count': kp_counts.get(str(kp.id), 0) or kp_counts.get(kp.module, 0),
         })
 
     # Convert to list format, sort semesters so 上学期 comes before 下学期
@@ -146,8 +155,8 @@ def knowledge_tree(request):
             if not has_unclassified:
                 sem_obj['chapters'].append({
                     'name': '未分类',
-                    'knowledge_points': [],
-                    'question_count': 0,
+                    'knowledge_points': [{'id': -1, 'name': '未分类', 'question_count': unclassified_count}],
+                    'question_count': unclassified_count,
                 })
 
             grade_obj['semesters'].append(sem_obj)

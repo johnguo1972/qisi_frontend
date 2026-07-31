@@ -81,7 +81,7 @@ export const questionApi = {
     post<any>(`/review/question/${questionId}/ai-confirm/${mode}/`),
 
   // AI process (review API)
-  aiProcess: (questionId: number, data?: { model?: string }) =>
+  aiProcess: (questionId: string | number, data?: { model?: string }) =>
     post<any>(`/review/question/${questionId}/ai-process/`, data),
 
   // AI task status polling

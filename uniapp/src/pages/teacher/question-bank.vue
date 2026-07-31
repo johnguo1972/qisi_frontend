@@ -17,6 +17,12 @@
       </view>
       <view class="filter-right">
         <view class="pagination">
+          <select v-model.number="currentPage" class="page-select" @change="goToPage">
+            <option v-for="page in totalPages" :key="page" :value="page">第 {{ page }} 页</option>
+          </select>
+          <select v-model.number="pageSize" class="page-size-select" @change="changePageSize">
+            <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }} 条/页</option>
+          </select>
           <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
           <text class="page-info">{{ currentPage }}/{{ totalPages }}页</text>
           <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
@@ -36,7 +42,7 @@
         </view>
 
         <view class="tree-header">
-          <text class="tree-title">目录管理</text>
+          <text class="tree-title">知识点</text>
           <input
             v-model="treeSearch"
             class="tree-search"
@@ -137,11 +143,13 @@
             :question="q"
             :index="index + 1"
             :show-answer="showAnswerMap[q.id]"
+            :selected="selectedQuestionIds.includes(String(q.id))"
             @whiteboard="goEdit(q.id)"
             @related="handleRelated"
             @toggle-answer="toggleAnswer(q.id)"
             @add-favorite="addFavorite(q.id)"
-            @add-basket="addToBasket(q.id)"
+            @add-basket="addSelectedToBasket"
+            @check="toggleQuestionSelection"
           />
           <view v-if="loading" class="loading-more">加载中...</view>
           <view v-else-if="questions.length === 0" class="empty-state">
@@ -161,6 +169,7 @@
         @share-multiple="handleShareMultiple"
         @share-history="handleShareHistory"
         @basket="handleBasket"
+        @ai-process="handleAiProcess"
       />
     </view>
 
@@ -212,11 +221,14 @@ const loading = ref(false)
 const currentPage = ref(1)
 const totalPages = ref(1)
 const totalCount = ref(0)
+const pageSize = ref(20)
+const pageSizeOptions = [10, 20, 30, 50]
 
 const activeType = ref('')
 const activeDifficulty = ref('')
 const showAnswerMap = ref<Record<string, boolean>>({})
 const basketCount = ref(0)
+const selectedQuestionIds = ref<string[]>([])
 
 const importVisible = ref(false)
 const addMenuVisible = ref(false)
@@ -295,7 +307,7 @@ function onSubjectChange() { loadKnowledgeTree(); loadQuestions() }
 async function loadQuestions() {
   loading.value = true
   try {
-    const params: any = { page: currentPage.value, page_size: 20 }
+    const params: any = { page: currentPage.value, page_size: pageSize.value }
     if (selectedKP.value) params.knowledge_point_id = selectedKP.value
     if (activeType.value) params.question_type = activeType.value
     if (activeDifficulty.value) params.difficulty = activeDifficulty.value
@@ -305,8 +317,9 @@ async function loadQuestions() {
     const res: any = await questionApi.list(params)
     const data = res.data
     questions.value = data?.items || data || []
+    selectedQuestionIds.value = selectedQuestionIds.value.filter(id => questions.value.some(q => String(q.id) === id))
     totalCount.value = data?.total || questions.value.length
-    totalPages.value = Math.max(1, Math.ceil(totalCount.value / 20))
+    totalPages.value = Math.max(1, Math.ceil(totalCount.value / pageSize.value))
   } catch (e) {
     console.error('加载题目失败:', e)
   } finally {
@@ -317,6 +330,8 @@ async function loadQuestions() {
 function loadMore() { if (currentPage.value < totalPages.value) { currentPage.value++; loadQuestions() } }
 function prevPage() { if (currentPage.value > 1) { currentPage.value--; loadQuestions() } }
 function nextPage() { if (currentPage.value < totalPages.value) { currentPage.value++; loadQuestions() } }
+function goToPage() { loadQuestions() }
+function changePageSize() { currentPage.value = 1; loadQuestions() }
 
 // === 筛选 ===
 function toggleFilter(key: string) { const item = filterItems.value.find(f => f.key === key); if (item) item.active = !item.active }
@@ -337,6 +352,28 @@ function goManualCreate() { addMenuVisible.value = false; uni.showToast({ title:
 async function addFavorite(id: number) {
   try { await favoriteApi.add(id); uni.showToast({ title: '已加入精选', icon: 'success' }) }
   catch (e: any) { if (e?.statusCode === 409) uni.showToast({ title: '已在精选中', icon: 'none' }) }
+}
+
+function toggleQuestionSelection(id: string) {
+  const key = String(id)
+  const index = selectedQuestionIds.value.indexOf(key)
+  if (index >= 0) selectedQuestionIds.value.splice(index, 1)
+  else selectedQuestionIds.value.push(key)
+}
+
+async function addSelectedToBasket() {
+  if (!selectedQuestionIds.value.length) {
+    uni.showToast({ title: '请先选择题目', icon: 'none' })
+    return
+  }
+  let added = 0
+  let favorited = 0
+  for (const id of selectedQuestionIds.value) {
+    try { await apiAddToBasket(id); added++ } catch (e: any) { if (e?.statusCode !== 409) console.warn(e) }
+    try { await favoriteApi.add(id); favorited++ } catch (e: any) { if (e?.statusCode !== 409) console.warn(e) }
+  }
+  await loadBasketCount()
+  uni.showToast({ title: `篮子 ${added} 题，精选 ${favorited} 题`, icon: 'success' })
 }
 
 async function addToBasket(id: number) {
@@ -388,7 +425,29 @@ async function handleRefresh() {
 }
 function handleShareMultiple() { uni.showToast({ title: '分享功能开发中', icon: 'none' }) }
 function handleShareHistory() { uni.showToast({ title: '分享历史功能开发中', icon: 'none' }) }
-function handleBasket() { uni.showToast({ title: '篮子功能开发中', icon: 'none' }) }
+function handleBasket() { addSelectedToBasket() }
+async function handleAiProcess() {
+  uni.showLoading({ title: 'AI处理中...' })
+  if (!selectedQuestionIds.value.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
+  for (const id of selectedQuestionIds.value) {
+    try {
+      const started: any = await questionApi.aiProcess(id)
+      const taskId = started?.data?.task_id || started?.data?.data?.task_id
+      if (taskId) {
+        for (let attempt = 0; attempt < 120; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+          const status: any = await questionApi.getTaskStatus(taskId)
+          const state = status?.data?.status || status?.data?.data?.status
+          if (state === 'complete' || state === 'partial' || state === 'failed') break
+        }
+      }
+    } catch (e) { console.warn('AI处理失败', id, e) }
+  }
+  uni.hideLoading()
+  await loadKnowledgeTree()
+  await loadQuestions()
+  uni.showToast({ title: `已提交 ${selectedQuestionIds.value.length} 题AI处理`, icon: 'success' })
+}
 </script>
 
 <style scoped>
@@ -403,6 +462,12 @@ function handleBasket() { uni.showToast({ title: '篮子功能开发中', icon: 
 .chip-remove { font-size: 14px; margin-left: 2px; }
 .pagination { display: flex; align-items: center; gap: 8px; }
 .page-info { font-size: 13px; color: #606266; }
+.page-select, .page-size-select {
+  height: 28px; min-width: 88px; padding: 0 8px;
+  border: 1px solid #dcdfe6; border-radius: 4px;
+  background: #fff; color: #606266; font-size: 12px;
+}
+.page-size-select { min-width: 82px; }
 
 .main-layout { display: flex; flex: 1; overflow: hidden; }
 

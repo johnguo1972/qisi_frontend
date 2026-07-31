@@ -6,6 +6,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from apps.parser.models import ExamQuestion
 from apps.study.models import Favorite
+from apps.knowledge.models import KnowledgePoint
+from django.db.models import Q
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +19,7 @@ def favorites_list(request):
     question_type = request.GET.get('question_type', '')
     knowledge_point_id = request.GET.get('knowledge_point_id', '')
     search = request.GET.get('search', '')
+    subject = request.GET.get('subject', '')
 
     fav_ids = Favorite.objects.filter(
         user=request.user
@@ -25,17 +28,28 @@ def favorites_list(request):
     qs = ExamQuestion.objects.select_related('paper').filter(
         id__in=fav_ids
     )
+    subject_map = {'数学': 'math', '物理': 'physics', '化学': 'chemistry', '英语': 'english', '语文': 'chinese'}
+    if subject:
+        db_subject = subject_map.get(subject, subject)
+        qs = qs.filter(Q(subject=db_subject) | Q(subject=subject))
 
     if question_type:
         qs = qs.filter(question_type=question_type)
     if search:
         qs = qs.filter(stem__icontains=search)
     if knowledge_point_id:
-        try:
-            kp_id = int(knowledge_point_id)
-            qs = qs.filter(ai_knowledge_enrichment__contains=[{'id': kp_id}])
-        except (ValueError, TypeError):
-            pass
+        if knowledge_point_id == '-1':
+            qs = qs.filter(Q(knowledge_points__isnull=True) | Q(knowledge_points=[]))
+        else:
+            try:
+                kp_id = int(knowledge_point_id)
+                qs = qs.filter(knowledge_points__contains=[{'id': kp_id}])
+            except (ValueError, TypeError):
+                try:
+                    kp = KnowledgePoint.objects.get(pk=knowledge_point_id)
+                    qs = qs.filter(knowledge_points__contains=[{'module': kp.module}])
+                except (KnowledgePoint.DoesNotExist, ValueError, TypeError):
+                    pass
 
     qs = qs.order_by('-created_at')
 
