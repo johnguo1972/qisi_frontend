@@ -487,8 +487,8 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(self.question.ai_processing_status, 'success')
         self.assertIsNotNone(self.question.ai_processed_at)
 
-    def test_process_question_full_v2_uses_legacy_probe_type_for_blank_canonical(self):
-        """Real probe normalization must feed the canonical type into v2."""
+    def test_process_question_full_v2_normalizes_escaped_probe_tokens_and_saves(self):
+        """Real repaired taxonomy boundaries reach v2 and persistence cleanly."""
         from apps.common.ai.components import (
             KnowledgeAnalysisComponent,
             ModeAAnswerComponent,
@@ -508,10 +508,14 @@ class AIProcessFullPipelineTest(TestCase):
                 return AIResult(
                     content=json.dumps({
                         'subject': 'math',
-                        'question_type': ' \t\r\n\u00a0\u2003\u3000 ',
-                        'question_style': '\u200b\u3000calculation\u3000\ufeff',
-                        'difficulty': '\u200b\u3000\t',
-                        'difficulty_est': '\u2060\u3000L2\u3000\u200d',
+                        'question_type': '\u200b\\t\n\f\r\u3000',
+                        'question_style': (
+                            '\r\u2060\\n\tcalculation\f\u3000\\r\ufeff'
+                        ),
+                        'difficulty': (
+                            '\n\u200b\\f\rL2\t\u3000\\n\ufeff'
+                        ),
+                        'difficulty_est': 'L4',
                         'knowledge_points': ['方程'],
                         'multi_part': False,
                         'proof_or_calc': 'calc',

@@ -56,6 +56,24 @@ def _components():
     return import_module("apps.common.ai.components")
 
 
+def _valid_probe_payload(**overrides):
+    payload = {
+        "subject": "math",
+        "question_type": "calculation",
+        "difficulty": "L2",
+        "knowledge_points": ["algebra"],
+        "multi_part": False,
+        "proof_or_calc": "calc",
+        "visual_risk_score": 0,
+        "reasoning_risk_score": 20,
+        "recommended_route": "STANDARD",
+        "brief_reason": "basic calculation",
+        "normalized_text": "solve x+1=2",
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_question_input_is_immutable_including_collection_fields():
     components = _components()
     question = components.QuestionInput(
@@ -361,6 +379,133 @@ def test_probe_strips_boundary_format_characters_but_preserves_internal_ones():
 
     assert result["question_type"] == "calcu\u200blation"
     assert result["question_style"] == "calcu\u200blation"
+    assert result["difficulty"] == "L2"
+    assert result["difficulty_est"] == "L2"
+
+
+@pytest.mark.parametrize(
+    ("canonical_key", "legacy_key", "token", "conflict"),
+    [
+        ("question_type", "question_style", "calculation", "legacy-conflict"),
+        ("difficulty", "difficulty_est", "L2", "L4"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("escaped_padding", "actual_padding"),
+    [(r"\t", "\t"), (r"\n", "\n"), (r"\f", "\f"), (r"\r", "\r")],
+)
+@pytest.mark.parametrize("source_key", ["canonical", "legacy"])
+def test_probe_normalizes_repaired_and_actual_escaped_whitespace_boundaries(
+    canonical_key,
+    legacy_key,
+    token,
+    conflict,
+    escaped_padding,
+    actual_padding,
+    source_key,
+):
+    """Taxonomy boundaries accept repaired literal and decoded whitespace."""
+    components = _components()
+    prefix = (
+        actual_padding
+        + "\u200b"
+        + escaped_padding
+        + "\u00a0"
+        + actual_padding
+    )
+    suffix = (
+        actual_padding
+        + "\u3000"
+        + escaped_padding
+        + "\ufeff"
+        + actual_padding
+    )
+    padded_token = prefix + token + suffix
+    boundary_only = prefix + suffix
+    payload = _valid_probe_payload()
+    if source_key == "canonical":
+        payload[canonical_key] = padded_token
+        payload[legacy_key] = conflict
+    else:
+        payload[canonical_key] = boundary_only
+        payload[legacy_key] = padded_token
+    client = RecordingAIClient(
+        {"question_probe": json.dumps(payload, ensure_ascii=False)}
+    )
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result[canonical_key] == token
+    assert result[legacy_key] == token
+
+
+def test_probe_preserves_literal_escape_sequences_inside_question_type():
+    components = _components()
+    provider_value = "calcu\nla\ttion"
+    repaired_literal_escapes = r"calcu\nla\ttion"
+    payload = _valid_probe_payload(question_type=provider_value)
+    client = RecordingAIClient(
+        {"question_probe": json.dumps(payload, ensure_ascii=False)}
+    )
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["question_type"] == repaired_literal_escapes
+    assert result["question_style"] == repaired_literal_escapes
+
+
+@pytest.mark.parametrize(
+    ("canonical_key", "legacy_key", "valid_value"),
+    [
+        ("question_type", "question_style", "calculation"),
+        ("difficulty", "difficulty_est", "L2"),
+    ],
+)
+@pytest.mark.parametrize(
+    "invalid_value",
+    [[], {}, ["invalid"], {"invalid": "value"}, 7, True],
+)
+@pytest.mark.parametrize("invalid_source", ["canonical", "legacy"])
+def test_probe_rejects_non_string_scalar_alias_values_without_fallback(
+    canonical_key,
+    legacy_key,
+    valid_value,
+    invalid_value,
+    invalid_source,
+):
+    components = _components()
+    payload = _valid_probe_payload()
+    if invalid_source == "canonical":
+        payload[canonical_key] = invalid_value
+        payload[legacy_key] = valid_value
+    else:
+        payload[canonical_key] = None
+        payload[legacy_key] = invalid_value
+    client = RecordingAIClient(
+        {"question_probe": json.dumps(payload, ensure_ascii=False)}
+    )
+
+    with pytest.raises(AIResponseError):
+        components.QuestionProbeComponent(client).run(
+            components.QuestionInput(stem="solve x+1=2")
+        )
+
+
+def test_probe_keeps_none_compatibility_fallback_for_difficulty():
+    components = _components()
+    payload = _valid_probe_payload(difficulty=None, difficulty_est="L2")
+    client = RecordingAIClient(
+        {"question_probe": json.dumps(payload, ensure_ascii=False)}
+    )
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
     assert result["difficulty"] == "L2"
     assert result["difficulty_est"] == "L2"
 

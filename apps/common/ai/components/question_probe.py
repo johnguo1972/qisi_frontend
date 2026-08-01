@@ -14,25 +14,42 @@ from .base import QuestionAIComponent, QuestionInput
 _BOUNDARY_FORMAT_CHARACTERS = frozenset(
     {"\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"}
 )
+_LITERAL_ESCAPED_WHITESPACE = frozenset({r"\t", r"\n", r"\f", r"\r"})
 
 
 def _normalize_scalar_token(value: object) -> object:
-    """Trim visual boundary padding without changing token internals."""
+    """Trim taxonomy-token padding without changing token internals."""
     if not isinstance(value, str):
         return value
 
     start = 0
     end = len(value)
-    while start < end and (
-        value[start].isspace() or value[start] in _BOUNDARY_FORMAT_CHARACTERS
-    ):
-        start += 1
-    while end > start and (
-        value[end - 1].isspace()
-        or value[end - 1] in _BOUNDARY_FORMAT_CHARACTERS
-    ):
-        end -= 1
+    while start < end:
+        previous = (start, end)
+        while start < end and (
+            value[start].isspace()
+            or value[start] in _BOUNDARY_FORMAT_CHARACTERS
+        ):
+            start += 1
+        if value[start : start + 2] in _LITERAL_ESCAPED_WHITESPACE:
+            start += 2
+            continue
+        while end > start and (
+            value[end - 1].isspace()
+            or value[end - 1] in _BOUNDARY_FORMAT_CHARACTERS
+        ):
+            end -= 1
+        if value[max(start, end - 2) : end] in _LITERAL_ESCAPED_WHITESPACE:
+            end -= 2
+            continue
+        if (start, end) == previous:
+            break
     return value[start:end]
+
+
+def _scalar_value_is_missing(value: object) -> bool:
+    """Only absent or normalized-empty strings may use a legacy fallback."""
+    return value is None or (isinstance(value, str) and value == "")
 
 
 def _is_nonempty(value: object) -> bool:
@@ -61,9 +78,9 @@ def _normalize_scalar_alias_pair(
 ) -> None:
     canonical_value = _normalize_scalar_token(result.get(canonical))
     legacy_value = _normalize_scalar_token(result.get(legacy))
-    if _is_nonempty(canonical_value):
+    if not _scalar_value_is_missing(canonical_value):
         selected = canonical_value
-    elif _is_nonempty(legacy_value):
+    elif not _scalar_value_is_missing(legacy_value):
         selected = legacy_value
     else:
         selected = default
