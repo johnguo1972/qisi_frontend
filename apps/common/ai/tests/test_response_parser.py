@@ -187,6 +187,110 @@ def test_response_parser_redacts_all_bare_digest_parameters_before_truncating():
     assert caught.value.__context__ is None
 
 
+@pytest.mark.parametrize("boundary", [";", "}", "]"])
+def test_response_parser_preserves_digest_credential_boundaries(boundary):
+    sensitive_values = (
+        "digest-double-sensitive",
+        "digest-single-sensitive",
+        "digest-bare-sensitive",
+    )
+    raw = (
+        'broken authorization: Digest username="prefix\\"'
+        f'{sensitive_values[0]}", '
+        "realm='prefix\\'"
+        f"{sensitive_values[1]}', qop=auth, "
+        f"x.ext={sensitive_values[2]}{boundary} ordinary-boundary-visible"
+    )
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json(raw)
+
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value), caught.value, caught.value.__traceback__
+        )
+    )
+    for sensitive in sensitive_values:
+        assert sensitive not in str(caught.value)
+        assert sensitive not in formatted
+    assert "ordinary-boundary-visible" in str(caught.value)
+    assert "ordinary-boundary-visible" in formatted
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize(
+    "extension_name",
+    [
+        "_ext",
+        "9ext",
+        "!ext",
+        "#ext",
+        "$ext",
+        "%ext",
+        "&ext",
+        "x'ext",
+        "x*",
+        "x+ext",
+        "x.ext",
+        "x^ext",
+        "x`ext",
+        "x|ext",
+        "x~ext",
+    ],
+)
+def test_response_parser_redacts_digest_extensions_with_http_token_names(
+    extension_name,
+):
+    sensitive = "digest-extension-sensitive"
+    raw = (
+        'broken authorization: Digest username="user-sensitive", '
+        f'{extension_name}="{sensitive}"; ordinary-note-visible'
+    )
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json(raw)
+
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value), caught.value, caught.value.__traceback__
+        )
+    )
+    assert sensitive not in str(caught.value)
+    assert sensitive not in formatted
+    assert "ordinary-note-visible" in str(caught.value)
+    assert "ordinary-note-visible" in formatted
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize("line_break", ["\n", "\r\n"])
+def test_response_parser_digest_parameter_spacing_does_not_cross_lines(
+    line_break,
+):
+    digest_secret = "digest-line-sensitive"
+    ordinary_value = "ordinary-value-visible"
+    raw = (
+        f'broken authorization: Digest username="{digest_secret}",'
+        f"{line_break}ordinary={ordinary_value}; trailing-visible"
+    )
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json(raw)
+
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value), caught.value, caught.value.__traceback__
+        )
+    )
+    assert digest_secret not in str(caught.value)
+    assert digest_secret not in formatted
+    assert ordinary_value in str(caught.value)
+    assert ordinary_value in formatted
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
 def test_response_parser_validates_and_returns_schema_dump():
     parsed = ResponseParser.parse_json('{"answer": "D"}', AnswerSchema)
 
