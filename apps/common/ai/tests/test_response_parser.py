@@ -124,6 +124,33 @@ def test_response_parser_redacts_json_secrets_and_bare_base64_before_truncating(
     assert caught.value.__context__ is None
 
 
+@pytest.mark.parametrize(
+    ("field", "scheme", "credential"),
+    [
+        ("authorization", "Bearer", "bearer-short-secret"),
+        ('"authorization"', "Basic", "basic-short-secret"),
+        ("'authorization'", "Digest", "digest-short-secret"),
+    ],
+)
+def test_response_parser_redacts_complete_bare_authorization_values(
+    field, scheme, credential
+):
+    raw = f"broken-prefix {field}: {scheme} {credential}, trailing"
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json(raw)
+
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value), caught.value, caught.value.__traceback__
+        )
+    )
+    assert credential not in str(caught.value)
+    assert credential not in formatted
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
 def test_response_parser_validates_and_returns_schema_dump():
     parsed = ResponseParser.parse_json('{"answer": "D"}', AnswerSchema)
 

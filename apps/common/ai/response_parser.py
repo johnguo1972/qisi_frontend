@@ -88,13 +88,24 @@ def _safe_preview(text: str) -> str:
         r'''(?ix)
         (?P<prefix>
             (?<![A-Za-z0-9_])
+            ["']?authorization["']?\s*:\s*
+        )
+        (?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,}\]]+)
+        ''',
+        lambda match: match.group("prefix") + "[secret-redacted]",
+        text,
+    )
+    preview = re.sub(
+        r'''(?ix)
+        (?P<prefix>
+            (?<![A-Za-z0-9_])
             ["']?(?:key|api[_-]?key|access[_-]?token|refresh[_-]?token|
-            token|secret|authorization)["']?\s*:\s*
+            token|secret)["']?\s*:\s*
         )
         (?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\s}\]]+)
         ''',
         lambda match: match.group("prefix") + "[secret-redacted]",
-        text,
+        preview,
     )
     preview = re.sub(
         r"data:[^,\s]+;base64,[A-Za-z0-9+/=]+",
