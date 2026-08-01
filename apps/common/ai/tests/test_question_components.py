@@ -165,6 +165,7 @@ def test_probe_preserves_legacy_aliases_when_provider_returns_canonical_fields()
     [
         ("canonical", "legacy", "canonical"),
         ("", "legacy", "legacy"),
+        ("   ", "calculation", "calculation"),
         (None, "legacy", "legacy"),
     ],
 )
@@ -246,6 +247,36 @@ def test_probe_list_alias_uses_nonempty_legacy_when_canonical_is_empty():
 
     assert result["knowledge_points"] == ["力与运动"]
     assert result["topic_tags_top3"] == ["力与运动"]
+
+
+def test_probe_rejects_question_type_when_both_aliases_are_blank():
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "question_probe": json.dumps(
+                {
+                    "subject": "math",
+                    "question_type": "   ",
+                    "question_style": "\t",
+                    "difficulty": "L2",
+                    "knowledge_points": ["方程"],
+                    "multi_part": False,
+                    "proof_or_calc": "calc",
+                    "visual_risk_score": 0,
+                    "reasoning_risk_score": 20,
+                    "recommended_route": "STANDARD",
+                    "brief_reason": "基础计算",
+                    "normalized_text": "解方程 x+1=2",
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+
+    with pytest.raises(AIResponseError):
+        components.QuestionProbeComponent(client).run(
+            components.QuestionInput(stem="解方程 x+1=2")
+        )
 
 
 @pytest.mark.parametrize(

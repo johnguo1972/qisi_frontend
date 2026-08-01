@@ -40,7 +40,7 @@ class _StrictResponseModel(BaseModel):
 
 class QuestionProbeResponse(_StrictResponseModel):
     subject: Literal["math", "physics"]
-    question_type: str = Field(min_length=1)
+    question_type: NonBlankStr
     grade: str
     semester: str
     chapter: str

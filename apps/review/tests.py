@@ -487,6 +487,72 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(self.question.ai_processing_status, 'success')
         self.assertIsNotNone(self.question.ai_processed_at)
 
+    def test_process_question_full_v2_uses_legacy_probe_type_for_blank_canonical(self):
+        """Real probe normalization must feed the canonical type into v2."""
+        from apps.common.ai.components import (
+            KnowledgeAnalysisComponent,
+            ModeAAnswerComponent,
+            ModeBAnswerComponent,
+            ModeCAnswerComponent,
+            QuestionProbeComponent,
+            ResultVerifierComponent,
+            VisionExtractionComponent,
+        )
+        from apps.common.ai.prompt_registry import PromptRegistry
+        from apps.common.ai.types import AIResult
+
+        class _ProbeResponseClient:
+            def complete(
+                self, task_key, *, system, user, images=(), trace_id=None
+            ):
+                return AIResult(
+                    content=json.dumps({
+                        'subject': 'math',
+                        'question_type': '   ',
+                        'question_style': 'calculation',
+                        'difficulty': 'L2',
+                        'knowledge_points': ['方程'],
+                        'multi_part': False,
+                        'proof_or_calc': 'calc',
+                        'visual_risk_score': 0,
+                        'reasoning_risk_score': 20,
+                        'recommended_route': 'STANDARD',
+                        'brief_reason': '基础计算',
+                        'normalized_text': '解方程 x+1=2',
+                    }, ensure_ascii=False),
+                    provider='qwen',
+                    model='configured-model',
+                    latency_ms=1,
+                    raw_response={},
+                )
+
+        responses = {
+            KnowledgeAnalysisComponent: {'knowledge_points': []},
+            VisionExtractionComponent: {'figure_present': False},
+            ModeAAnswerComponent: {'mode': 'A', 'final_answer': '2'},
+            ModeBAnswerComponent: {'mode': 'B', 'final_answer': '2'},
+            ModeCAnswerComponent: {'mode': 'C', 'final_answer': '2'},
+            ResultVerifierComponent: {'pass': True},
+        }
+        registry = PromptRegistry()
+
+        def component_factory(component_type):
+            if component_type is QuestionProbeComponent:
+                return QuestionProbeComponent(_ProbeResponseClient(), registry)
+            component = MagicMock()
+            component.run.return_value = responses[component_type]
+            return component
+
+        service = AIReviewService(component_factory=component_factory)
+        with patch.object(service, '_get_question_image_urls', return_value=[]):
+            results = service.process_question_full_v2(self.question.id)
+
+        self.assertEqual(results['errors'], {})
+        self.assertEqual(results['probe']['question_type'], 'calculation')
+        self.assertEqual(results['probe']['question_style'], 'calculation')
+        self.question.refresh_from_db()
+        self.assertEqual(self.question.ai_processing_status, 'success')
+
     def test_process_question_full_v2_marks_failed_for_invalid_mode_b_answer(self):
         """A malformed real Mode B component result must persist failed state."""
         from apps.common.ai.components import QuestionComponentFactory
