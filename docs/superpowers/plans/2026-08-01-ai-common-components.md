@@ -25,34 +25,12 @@
 **Files:**
 
 - Create: `docs/ai_process(0801）.md`
-- Test: `tests/test_ai_architecture_inventory.py`
 
-- [ ] **Step 1：编写会失败的文档完整性测试**
+- [ ] **Step 1：建立人工审查清单**
 
-```python
-from pathlib import Path
+审查清单必须包含：`AIReviewService`、题目探查、A/B/C 模式、学生引导、教师引导、拍照识题、试卷解析、变式题、DeepSeek、持久化、异常与重试。文档属于人类阅读材料，不为关键词存在性编写 pytest。
 
-
-DOC = Path(__file__).parents[1] / "docs" / "ai_process(0801）.md"
-
-
-def test_ai_process_document_covers_all_active_domains():
-    text = DOC.read_text(encoding="utf-8")
-    for marker in (
-        "AIReviewService", "题目探查", "A 模式", "B 模式", "C 模式",
-        "学生引导", "教师引导", "拍照识题", "试卷解析", "变式题",
-        "DeepSeek", "持久化", "异常与重试",
-    ):
-        assert marker in text
-```
-
-- [ ] **Step 2：运行测试，确认因文档不存在而失败**
-
-Run: `python -m pytest tests/test_ai_architecture_inventory.py -q`
-
-Expected: FAIL，提示 `docs/ai_process(0801）.md` 不存在。
-
-- [ ] **Step 3：编写现状与目标调用链文档**
+- [ ] **Step 2：编写现状与目标调用链文档**
 
 文档按调用入口逐项记录：入口文件/函数、输入、提示词来源、模型、HTTP 客户端、解析、持久化、失败策略、迁移后的公共组件。至少覆盖：
 
@@ -67,16 +45,14 @@ courses -> VariantGenerator -> DeepSeek ResultVerifier
 
 另附配置职责表、模型路由表、兼容契约表和旧代码删除清单。
 
-- [ ] **Step 4：运行测试确认通过**
+- [ ] **Step 3：按清单人工审查文档**
 
-Run: `python -m pytest tests/test_ai_architecture_inventory.py -q`
+逐项核对所有活跃 AI 入口均有：文件/函数、输入、提示词来源、模型、HTTP 客户端、解析、持久化、失败策略和迁移目标；用 `rg` 结果与文档条目交叉核对，不将源码文本扫描写成 pytest。
 
-Expected: PASS。
-
-- [ ] **Step 5：提交基线文档与测试**
+- [ ] **Step 4：提交基线文档**
 
 ```powershell
-git add -- "docs/ai_process(0801）.md" tests/test_ai_architecture_inventory.py
+git add -- "docs/ai_process(0801）.md"
 git commit -m "docs: inventory all AI processing flows"
 ```
 
@@ -607,35 +583,19 @@ git commit -m "refactor: preserve DeepSeek verification in shared variant flow"
 - Delete: `apps/parser/services/qwen_vl_service.py`
 - Modify or Delete: `apps/study/ai_helper.py`
 - Modify or Delete: `apps/courses/ai_service.py`
-- Modify: `tests/test_ai_architecture_inventory.py`
 - Modify: `docs/ai_process(0801）.md`
 
-- [ ] **Step 1：扩展架构测试，使旧实现仍存在时失败**
+- [ ] **Step 1：建立静态交付扫描基线**
 
-```python
-FORBIDDEN_ACTIVE_PATTERNS = (
-    "qwen3.6-flash", "qwen3.6-plus",
-    "dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-)
+Run: `rg -n "qwen3\\.6-(flash|plus)|httpx\\.Client|chat/completions|QWEN_API_KEY|DEEPSEEK_API_KEY" apps config/ai_config.cfg`
 
+Expected: 列出待删除的旧 HTTP 客户端、模型名和提示词调用点，作为清理基线。该扫描是交付审查命令，不写成源码关键词 pytest。
 
-def test_only_shared_client_calls_httpx_post():
-    offenders = scan_python_sources("httpx.Client") - {"apps/common/ai/client.py"}
-    assert offenders == set()
+- [ ] **Step 2：确认行为测试已覆盖迁移边界**
 
+Run: `python -m pytest apps/common/ai/tests tests/test_ai_pipeline.py apps/review/tests.py apps/parser/tests.py apps/courses/tests apps/study/tests apps/missions/tests -q`
 
-def test_only_config_layer_reads_ai_secrets():
-    offenders = scan_python_sources("QWEN_API_KEY", "DEEPSEEK_API_KEY")
-    assert offenders <= {"apps/common/ai/config.py"}
-```
-
-扫描排除 migrations、测试 fixture、历史设计文档和 `docs/ai_process` 的“迁移前”说明，但不排除活跃 Python 和 `config/ai_config.cfg`。
-
-- [ ] **Step 2：运行测试确认旧代码触发失败**
-
-Run: `python -m pytest tests/test_ai_architecture_inventory.py -q`
-
-Expected: FAIL，并列出旧 HTTP 客户端、内嵌模型名和提示词文件。
+Expected: PASS；组件行为、配置加载和旧兼容契约均由运行测试保护。
 
 - [ ] **Step 3：删除旧实现并修复所有 import**
 
@@ -647,7 +607,7 @@ Expected: FAIL，并列出旧 HTTP 客户端、内嵌模型名和提示词文件
 
 - [ ] **Step 5：运行禁用扫描与相关全量测试**
 
-Run: `python -m pytest tests/test_ai_architecture_inventory.py apps/common/ai/tests tests/test_ai_pipeline.py apps/review/tests.py apps/parser/tests.py apps/courses/tests apps/study/tests apps/missions/tests -q`
+Run: `python -m pytest apps/common/ai/tests tests/test_ai_pipeline.py apps/review/tests.py apps/parser/tests.py apps/courses/tests apps/study/tests apps/missions/tests -q`
 
 Expected: PASS。
 
@@ -659,7 +619,7 @@ Expected: 3.6 无匹配；`httpx.Client`/`chat/completions`/Key 只出现在允�
 
 ```powershell
 git add -u -- apps/common/ai_prompts.py apps/common/ai_prompts.py.bak apps/courses/prompts.py apps/parser/services/qwen_text_service.py apps/parser/services/qwen_vl_service.py apps/study/ai_helper.py apps/courses/ai_service.py
-git add -- tests/test_ai_architecture_inventory.py "docs/ai_process(0801）.md"
+git add -- "docs/ai_process(0801）.md"
 git commit -m "refactor: remove obsolete direct AI integrations"
 ```
 
@@ -733,7 +693,7 @@ Expected: `System check identified no issues`。
 
 - [ ] **Step 2：执行 AI/业务定向套件**
 
-Run: `python -m pytest apps/common/ai/tests tests/test_ai_pipeline.py tests/test_ai_architecture_inventory.py apps/review/tests.py apps/parser/tests.py apps/courses/tests apps/study/tests apps/missions/tests -q`
+Run: `python -m pytest apps/common/ai/tests tests/test_ai_pipeline.py apps/review/tests.py apps/parser/tests.py apps/courses/tests apps/study/tests apps/missions/tests -q`
 
 Expected: 全部 PASS。
 
