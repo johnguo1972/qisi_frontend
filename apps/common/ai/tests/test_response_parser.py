@@ -13,6 +13,15 @@ class AnswerSchema(BaseModel):
     answer: str
 
 
+def _error_surfaces(error: AIResponseError) -> tuple[str, str]:
+    formatted = "".join(
+        traceback.format_exception(type(error), error, error.__traceback__)
+    )
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    return str(error), formatted
+
+
 def test_response_parser_repairs_fenced_json():
     parsed = ResponseParser.parse_json('```json\n{"answer":"D",}\n```')
 
@@ -289,6 +298,128 @@ def test_response_parser_digest_parameter_spacing_does_not_cross_lines(
     assert ordinary_value in formatted
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize("line_break", ["\n", "\r\n"])
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_response_parser_quoted_authorization_does_not_cross_lines(
+    quote, line_break
+):
+    sensitive = "quoted-authorization-sensitive"
+    ordinary = "ordinary-diagnostic-visible"
+    raw = (
+        f"broken authorization: {quote}Digest username={sensitive}"
+        f"{line_break}{ordinary}{quote}; trailing-visible"
+    )
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json(raw)
+
+    message, formatted = _error_surfaces(caught.value)
+    assert sensitive not in message
+    assert sensitive not in formatted
+    assert ordinary in message
+    assert ordinary in formatted
+
+
+@pytest.mark.parametrize("line_break", ["\n", "\r\n"])
+@pytest.mark.parametrize("scheme", ["Bearer", "Basic", "Digest"])
+def test_response_parser_bare_authorization_does_not_cross_lines(
+    scheme, line_break
+):
+    sensitive = "bare-authorization-sensitive"
+    ordinary = "ordinary-diagnostic-visible"
+    raw = (
+        f"broken authorization: {scheme} {sensitive}"
+        f"{line_break}{ordinary}; trailing-visible"
+    )
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json(raw)
+
+    message, formatted = _error_surfaces(caught.value)
+    assert sensitive not in message
+    assert sensitive not in formatted
+    assert ordinary in message
+    assert ordinary in formatted
+
+
+def test_response_parser_redacts_strict_lowercase_base64url_token():
+    sensitive = "abcd-efgabcd-efgabcd-efgabcd-efg"
+    ordinary = "ordinary diagnostic words remain visible"
+    raw = f"broken {sensitive} {ordinary}"
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json(raw)
+
+    message, formatted = _error_surfaces(caught.value)
+    assert sensitive not in message
+    assert sensitive not in formatted
+    assert ordinary in message
+    assert ordinary in formatted
+
+
+def test_response_parser_preserves_plain_long_english_diagnostic():
+    ordinary = "ordinarydiagnosticmessagewithlowercaseletters"
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json("broken " + ordinary)
+
+    message, formatted = _error_surfaces(caught.value)
+    assert ordinary in message
+    assert ordinary in formatted
+
+
+@pytest.mark.parametrize(
+    ("prefix", "field"),
+    [
+        ("", "key"),
+        ("broken ", "token"),
+        ("broken (", "secret"),
+    ],
+)
+def test_response_parser_redacts_exact_secret_fields_with_equals(
+    prefix, field
+):
+    sensitive = "shortsensitivevalue"
+    ordinary = "ordinary-visible"
+    raw = f"{prefix}{field}={sensitive}; {ordinary}"
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json(raw)
+
+    message, formatted = _error_surfaces(caught.value)
+    assert sensitive not in message
+    assert sensitive not in formatted
+    assert ordinary in message
+    assert ordinary in formatted
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "api_key=shortapivalue",
+        "access_token=shortaccessvalue",
+        'key: "shortkeyvalue"',
+        "token: shorttokenvalue",
+        "secret: shortsecretvalue",
+    ],
+)
+def test_response_parser_keeps_existing_secret_field_forms_redacted(
+    assignment
+):
+    sensitive = assignment.split("=", 1)[-1].split(":", 1)[-1]
+    sensitive = sensitive.strip().strip('"')
+    ordinary = "ordinary-visible"
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json(f"broken {assignment}; {ordinary}")
+
+    message, formatted = _error_surfaces(caught.value)
+    assert sensitive not in message
+    assert sensitive not in formatted
+    assert ordinary in message
+    assert ordinary in formatted
 
 
 def test_response_parser_validates_and_returns_schema_dump():
