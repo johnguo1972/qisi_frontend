@@ -151,6 +151,42 @@ def test_response_parser_redacts_complete_bare_authorization_values(
     assert caught.value.__context__ is None
 
 
+def test_response_parser_redacts_all_bare_digest_parameters_before_truncating():
+    safe_prefix = "broken-prefix-" + "safe." * 12
+    sensitive_values = (
+        "digest-user-sensitive",
+        "digest-realm-sensitive",
+        "digest-nonce-sensitive",
+        "/private/resource",
+        "digest-response-sensitive",
+        "digest-opaque-sensitive",
+        "digest-cnonce-sensitive",
+    )
+    raw = (
+        f'{safe_prefix} authorization: Digest username="{sensitive_values[0]}", '
+        f'realm="{sensitive_values[1]}", nonce="{sensitive_values[2]}", '
+        f'uri="{sensitive_values[3]}", response="{sensitive_values[4]}", '
+        f'opaque="{sensitive_values[5]}", qop=auth, nc=00000001, '
+        f'cnonce="{sensitive_values[6]}"; ordinary-note-visible'
+    )
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json(raw)
+
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value), caught.value, caught.value.__traceback__
+        )
+    )
+    assert safe_prefix in str(caught.value)
+    assert "ordinary-note-visible" in str(caught.value)
+    for sensitive in sensitive_values:
+        assert sensitive not in str(caught.value)
+        assert sensitive not in formatted
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
 def test_response_parser_validates_and_returns_schema_dump():
     parsed = ResponseParser.parse_json('{"answer": "D"}', AnswerSchema)
 
