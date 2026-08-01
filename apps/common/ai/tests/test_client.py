@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import traceback
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
@@ -17,6 +19,60 @@ from apps.common.exceptions import AIRequestError
 
 TEST_SECRET = "test-secret"
 TEST_DATA_IMAGE = "data:image/png;base64," + "QUJDREVGR0hJSktMTU5PUA==" * 4
+TRACE_SYSTEM = "system-private-marker"
+TRACE_USER = "user-private-marker"
+TRACE_RAW_RESPONSE = "raw-response-private-marker"
+TRACE_NETWORK_DETAIL = "network-private-marker"
+
+
+class TrackingTransport(httpx.BaseTransport):
+    def __init__(self) -> None:
+        self.closed = False
+        self.close_calls = 0
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        if self.closed:
+            raise RuntimeError("borrowed transport was closed")
+        return _success_response(request)
+
+    def close(self) -> None:
+        self.close_calls += 1
+        self.closed = True
+
+
+class ConcurrentTrackingTransport(TrackingTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_started = threading.Event()
+        self.second_started = threading.Event()
+        self.release_second = threading.Event()
+        self.close_while_active = False
+        self._active = 0
+        self._lock = threading.Lock()
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        if self.closed:
+            raise RuntimeError("borrowed transport was closed")
+        user = json.loads(request.content)["messages"][1]["content"]
+        with self._lock:
+            self._active += 1
+        try:
+            if user == "first":
+                self.first_started.set()
+                assert self.second_started.wait(2)
+            else:
+                self.second_started.set()
+                assert self.release_second.wait(2)
+            return _success_response(request, user)
+        finally:
+            with self._lock:
+                self._active -= 1
+
+    def close(self) -> None:
+        with self._lock:
+            if self._active:
+                self.close_while_active = True
+        super().close()
 
 
 def _config(
@@ -83,6 +139,30 @@ def _success_response(request: httpx.Request, content: str = "ok") -> httpx.Resp
             ],
         },
     )
+
+
+def _traceback_with_locals(error: BaseException) -> str:
+    return "".join(
+        traceback.TracebackException(
+            type(error),
+            error,
+            error.__traceback__,
+            capture_locals=True,
+        ).format()
+    )
+
+
+def _assert_no_private_traceback_values(error: BaseException) -> None:
+    formatted = _traceback_with_locals(error)
+    for sensitive in (
+        TEST_SECRET,
+        TRACE_SYSTEM,
+        TRACE_USER,
+        TEST_DATA_IMAGE,
+        TRACE_RAW_RESPONSE,
+        TRACE_NETWORK_DETAIL,
+    ):
+        assert sensitive not in formatted
 
 
 def test_complete_sends_text_payload_from_cached_config(monkeypatch):
@@ -266,14 +346,181 @@ def test_complete_supports_injected_httpx_client(monkeypatch):
     transport = httpx.MockTransport(_success_response)
 
     with httpx.Client(transport=transport) as http_client:
-        client = AIClient(client=http_client, sleeper=lambda _seconds: None)
-        result = client.complete(
-            "question_probe", system="system", user="user"
-        )
+        with AIClient(
+            client=http_client, sleeper=lambda _seconds: None
+        ) as client:
+            result = client.complete(
+                "question_probe", system="system", user="user"
+            )
         follow_up = http_client.get("https://example.test/health")
 
     assert result.content == "ok"
     assert follow_up.status_code == 200
+
+
+def test_borrowed_transport_supports_repeated_calls_and_is_not_closed(
+    monkeypatch,
+):
+    monkeypatch.setattr(client_module, "load_ai_config", _config)
+    transport = TrackingTransport()
+    client = AIClient(transport=transport, sleeper=lambda _seconds: None)
+
+    first = client.complete("question_probe", system="system", user="first")
+    second = client.complete("question_probe", system="system", user="second")
+    client.close()
+
+    assert (first.content, second.content) == ("ok", "ok")
+    assert transport.close_calls == 0
+    assert not transport.closed
+
+
+def test_borrowed_transport_is_not_closed_during_concurrent_calls(monkeypatch):
+    monkeypatch.setattr(client_module, "load_ai_config", _config)
+    transport = ConcurrentTrackingTransport()
+    client = AIClient(transport=transport, sleeper=lambda _seconds: None)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(
+            client.complete,
+            "question_probe",
+            system="system",
+            user="first",
+        )
+        assert transport.first_started.wait(2)
+        second_future = executor.submit(
+            client.complete,
+            "question_probe",
+            system="system",
+            user="second",
+        )
+        assert transport.second_started.wait(2)
+        first = first_future.result(timeout=2)
+        transport.release_second.set()
+        second = second_future.result(timeout=2)
+
+    third = client.complete("question_probe", system="system", user="third")
+    client.close()
+
+    assert (first.content, second.content, third.content) == (
+        "first",
+        "second",
+        "third",
+    )
+    assert transport.close_calls == 0
+    assert not transport.close_while_active
+
+
+def test_injected_client_defaults_cannot_modify_configured_request(monkeypatch):
+    monkeypatch.setattr(client_module, "load_ai_config", _config)
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["headers"] = dict(request.headers)
+        seen["timeout"] = request.extensions["timeout"]
+        return _success_response(request)
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(
+        transport=transport,
+        auth=httpx.BasicAuth("default-user", "default-auth-secret"),
+        params={"default-param": "default-param-secret"},
+        cookies={"session": "default-cookie-secret"},
+        headers={"X-Default": "default-header-secret"},
+        timeout=1.0,
+    ) as http_client:
+        AIClient(client=http_client).complete(
+            "question_probe", system="system", user="user"
+        )
+
+    assert seen["url"] == "https://example.test/qwen/chat/completions"
+    headers = seen["headers"]
+    assert headers["authorization"] == "Bearer test-secret"
+    assert "cookie" not in headers
+    assert "x-default" not in headers
+    assert seen["timeout"] == {
+        "connect": 300.0,
+        "read": 300.0,
+        "write": 300.0,
+        "pool": 300.0,
+    }
+
+
+def test_401_traceback_locals_do_not_expose_request_or_response_data(
+    monkeypatch,
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, request=request, text=TRACE_RAW_RESPONSE)
+
+    client = _client(monkeypatch, handler)
+
+    with pytest.raises(AIRequestError) as caught:
+        client.complete(
+            "question_probe",
+            system=TRACE_SYSTEM,
+            user=TRACE_USER,
+            images=(TEST_DATA_IMAGE,),
+        )
+
+    _assert_no_private_traceback_values(caught.value)
+
+
+def test_read_timeout_traceback_locals_do_not_expose_network_data(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout(
+            TRACE_NETWORK_DETAIL,
+            request=request,
+        )
+
+    client = _client(monkeypatch, handler)
+
+    with pytest.raises(AIRequestError) as caught:
+        client.complete(
+            "question_probe",
+            system=TRACE_SYSTEM,
+            user=TRACE_USER,
+            images=(TEST_DATA_IMAGE,),
+        )
+
+    _assert_no_private_traceback_values(caught.value)
+
+
+def test_non_json_traceback_locals_do_not_expose_raw_response(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, text=TRACE_RAW_RESPONSE)
+
+    client = _client(monkeypatch, handler)
+
+    with pytest.raises(AIResponseError) as caught:
+        client.complete(
+            "question_probe",
+            system=TRACE_SYSTEM,
+            user=TRACE_USER,
+            images=(TEST_DATA_IMAGE,),
+        )
+
+    _assert_no_private_traceback_values(caught.value)
+
+
+def test_empty_choices_traceback_locals_do_not_expose_raw_response(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json={"choices": [], "debug": TRACE_RAW_RESPONSE},
+        )
+
+    client = _client(monkeypatch, handler)
+
+    with pytest.raises(AIResponseError) as caught:
+        client.complete(
+            "question_probe",
+            system=TRACE_SYSTEM,
+            user=TRACE_USER,
+            images=(TEST_DATA_IMAGE,),
+        )
+
+    _assert_no_private_traceback_values(caught.value)
 
 
 def test_logs_and_exceptions_redact_secret_image_and_transport_details(

@@ -6,19 +6,45 @@ import hashlib
 import logging
 import time
 from collections.abc import Callable, Sequence
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 import httpx
 
 from apps.common.exceptions import AIRequestError
 
 from .config import AIConfig, AITaskConfig, load_ai_config
-from .exceptions import AIResponseError
+from .exceptions import AIConfigError, AIResponseError
 from .response_parser import ResponseParser
 from .types import AIResult
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _Failure:
+    kind: Literal["config", "request", "response"]
+    message: str
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    result: AIResult | None = None
+    failure: _Failure | None = None
+
+
+class _BorrowedTransport(httpx.BaseTransport):
+    """Delegate requests without taking ownership of an injected transport."""
+
+    def __init__(self, transport: httpx.BaseTransport) -> None:
+        self._transport = transport
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        return self._transport.handle_request(request)
+
+    def close(self) -> None:
+        return None
 
 
 class AIClient:
@@ -34,9 +60,27 @@ class AIClient:
         if client is not None and transport is not None:
             raise ValueError("client and transport cannot both be provided")
         self._config: AIConfig = load_ai_config()
-        self._client = client
-        self._transport = transport
         self._sleeper = sleeper
+        self._owns_client = client is None
+        if client is not None:
+            self._client = client
+        else:
+            borrowed = _BorrowedTransport(transport) if transport else None
+            self._client = httpx.Client(
+                transport=borrowed,
+                trust_env=False,
+            )
+
+    def __enter__(self) -> "AIClient":
+        return self
+
+    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Close only the HTTP client and transport owned by this instance."""
+        if self._owns_client and not self._client.is_closed:
+            self._client.close()
 
     def complete(
         self,
@@ -47,50 +91,86 @@ class AIClient:
         images: Sequence[str] = (),
         trace_id: str | None = None,
     ) -> AIResult:
-        task = self._config.get_task_config(task_key)
-        provider = self._config.get_provider_config(task.provider)
-        payload = _build_payload(task, system=system, user=user, images=images)
-        headers = {
-            "Authorization": f"Bearer {provider.api_key}",
-            "Content-Type": "application/json",
-        }
-        log_fields = {
-            "task_key": task.key,
-            "provider": provider.name,
-            "model": task.model,
-            "trace_id": _trace_id_hash(trace_id),
-        }
-        logger.info("AI request started", extra=log_fields)
-        started = time.perf_counter()
+        outcome: _Outcome | None = None
+        try:
+            outcome = self._execute(
+                task_key,
+                system=system,
+                user=user,
+                images=images,
+                trace_id=trace_id,
+            )
+        finally:
+            system = ""
+            user = ""
+            images = ()
+            trace_id = None
 
-        if self._client is not None:
+        if outcome is None:
+            raise AIRequestError("AI provider request failed")
+        if outcome.failure is not None:
+            _raise_failure(outcome.failure)
+        if outcome.result is None:
+            raise AIResponseError("AI response is missing")
+        return outcome.result
+
+    def _execute(
+        self,
+        task_key: str,
+        *,
+        system: str,
+        user: str,
+        images: Sequence[str],
+        trace_id: str | None,
+    ) -> _Outcome:
+        try:
+            task = self._config.get_task_config(task_key)
+            provider = self._config.get_provider_config(task.provider)
+            payload = _build_payload(
+                task,
+                system=system,
+                user=user,
+                images=images,
+            )
+            headers = {
+                "Authorization": f"Bearer {provider.api_key}",
+                "Content-Type": "application/json",
+            }
+            log_fields = {
+                "task_key": task.key,
+                "provider": provider.name,
+                "model": task.model,
+                "trace_id": _trace_id_hash(trace_id),
+            }
+            logger.info("AI request started", extra=log_fields)
             return self._complete_with_client(
-                self._client,
                 task=task,
                 url=provider.api_url,
                 headers=headers,
                 payload=payload,
                 log_fields=log_fields,
-                started=started,
+                started=time.perf_counter(),
             )
-
-        with httpx.Client(
-            transport=self._transport,
-            trust_env=False,
-        ) as client:
-            return self._complete_with_client(
-                client,
-                task=task,
-                url=provider.api_url,
-                headers=headers,
-                payload=payload,
-                log_fields=log_fields,
-                started=started,
+        except AIConfigError as error:
+            return _Outcome(
+                failure=_Failure(kind="config", message=str(error))
             )
+        except Exception:
+            logger.error("AI request failed before completion")
+            return _Outcome(
+                failure=_Failure(
+                    kind="request",
+                    message="AI provider request failed",
+                )
+            )
+        finally:
+            system = ""
+            user = ""
+            images = ()
+            trace_id = None
 
     def _complete_with_client(
         self,
-        client: httpx.Client,
         *,
         task: AITaskConfig,
         url: str,
@@ -98,8 +178,7 @@ class AIClient:
         payload: dict[str, Any],
         log_fields: dict[str, str | None],
         started: float,
-    ) -> AIResult:
-        terminal_error: tuple[str, int | None] | None = None
+    ) -> _Outcome:
         attempts = task.retry_count + 1
 
         for attempt_index in range(attempts):
@@ -107,11 +186,21 @@ class AIClient:
             failure_kind: str | None = None
             status_code: int | None = None
             try:
-                response = client.post(
+                request = httpx.Request(
+                    "POST",
                     url,
                     headers=headers,
                     json=payload,
-                    timeout=task.timeout_seconds,
+                    extensions={
+                        "timeout": httpx.Timeout(
+                            task.timeout_seconds
+                        ).as_dict()
+                    },
+                )
+                response = self._client.send(
+                    request,
+                    auth=None,
+                    follow_redirects=False,
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as error:
@@ -121,9 +210,11 @@ class AIClient:
                 failure_kind = "timeout"
             except httpx.HTTPError:
                 failure_kind = "transport"
+            except Exception:
+                failure_kind = "transport"
 
             if failure_kind is None:
-                return _result_from_response(
+                return _outcome_from_response(
                     response,
                     task=task,
                     started=started,
@@ -145,26 +236,44 @@ class AIClient:
                 self._sleeper(delay)
                 continue
 
-            terminal_error = (failure_kind, status_code)
-            break
-
-        assert terminal_error is not None
-        failure_kind, status_code = terminal_error
-        logger.error(
-            "AI request failed",
-            extra={
-                **log_fields,
-                "status_code": status_code,
-                "latency_ms": _latency_ms(started),
-            },
-        )
-        if failure_kind == "http_status":
-            raise AIRequestError(
-                f"AI provider request failed with HTTP {status_code}"
+            logger.error(
+                "AI request failed",
+                extra={
+                    **log_fields,
+                    "status_code": status_code,
+                    "latency_ms": _latency_ms(started),
+                },
             )
-        if failure_kind == "timeout":
-            raise AIRequestError("AI provider request timed out")
-        raise AIRequestError("AI provider request failed")
+            if failure_kind == "http_status":
+                return _Outcome(
+                    failure=_Failure(
+                        kind="request",
+                        message=(
+                            "AI provider request failed with HTTP "
+                            f"{status_code}"
+                        ),
+                    )
+                )
+            if failure_kind == "timeout":
+                return _Outcome(
+                    failure=_Failure(
+                        kind="request",
+                        message="AI provider request timed out",
+                    )
+                )
+            return _Outcome(
+                failure=_Failure(
+                    kind="request",
+                    message="AI provider request failed",
+                )
+            )
+
+        return _Outcome(
+            failure=_Failure(
+                kind="request",
+                message="AI provider request failed",
+            )
+        )
 
 
 def _build_payload(
@@ -201,38 +310,67 @@ def _build_payload(
     return payload
 
 
-def _result_from_response(
+def _outcome_from_response(
     response: httpx.Response | None,
     *,
     task: AITaskConfig,
     started: float,
     log_fields: dict[str, str | None],
-) -> AIResult:
+) -> _Outcome:
     if response is None:
-        raise AIResponseError("AI response is missing")
+        return _Outcome(
+            failure=_Failure(
+                kind="response",
+                message="AI response is missing",
+            )
+        )
 
-    invalid_json = False
     try:
         raw_response = response.json()
     except ValueError:
-        invalid_json = True
-        raw_response = None
-    if invalid_json or not isinstance(raw_response, dict):
-        raise AIResponseError("AI response is not a JSON object")
+        return _Outcome(
+            failure=_Failure(
+                kind="response",
+                message="AI response is not a JSON object",
+            )
+        )
+    if not isinstance(raw_response, dict):
+        return _Outcome(
+            failure=_Failure(
+                kind="response",
+                message="AI response is not a JSON object",
+            )
+        )
 
-    content = ResponseParser.extract_content(raw_response)
+    try:
+        content = ResponseParser.extract_content(raw_response)
+    except AIResponseError as error:
+        return _Outcome(
+            failure=_Failure(kind="response", message=str(error))
+        )
+
     latency_ms = _latency_ms(started)
     logger.info(
         "AI request completed",
         extra={**log_fields, "latency_ms": latency_ms},
     )
-    return AIResult(
-        content=content,
-        provider=task.provider,
-        model=task.model,
-        latency_ms=latency_ms,
-        raw_response=raw_response,
+    return _Outcome(
+        result=AIResult(
+            content=content,
+            provider=task.provider,
+            model=task.model,
+            latency_ms=latency_ms,
+            raw_response=raw_response,
+        )
     )
+
+
+def _raise_failure(failure: _Failure) -> None:
+    if failure.kind == "config":
+        raise AIConfigError(failure.message)
+    if failure.kind == "response":
+        raise AIResponseError(failure.message)
+    raise AIRequestError(failure.message)
 
 
 def _is_retryable(failure_kind: str, status_code: int | None) -> bool:
