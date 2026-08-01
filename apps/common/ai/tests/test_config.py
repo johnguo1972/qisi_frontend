@@ -1,0 +1,237 @@
+from __future__ import annotations
+
+from pathlib import Path
+from textwrap import dedent
+
+import pytest
+
+from apps.common.ai.config import (
+    AIConfig,
+    load_ai_config,
+    reset_ai_config_for_tests,
+)
+from apps.common.ai.exceptions import AIConfigError
+
+
+REQUIRED_TASKS = {
+    "question_probe",
+    "knowledge_analysis",
+    "mode_a_answer",
+    "mode_b_answer",
+    "mode_c_answer",
+    "result_verify",
+    "vision_fact_extract",
+    "vision_page_parse",
+    "vision_question_parse",
+    "vision_position_detect",
+    "guidance_generate",
+    "guidance_evaluate",
+    "teacher_guidance_evaluate",
+    "variant_generate",
+    "variant_verify_deepseek",
+    "photo_recognize",
+}
+
+
+@pytest.fixture(autouse=True)
+def _reset_cached_config():
+    reset_ai_config_for_tests()
+    yield
+    reset_ai_config_for_tests()
+
+
+@pytest.fixture
+def provider_env(monkeypatch):
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv(
+        "QWEN_API_URL", "https://example.test/qwen/chat/completions"
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
+    monkeypatch.setenv(
+        "DEEPSEEK_API_URL", "https://example.test/deepseek/chat/completions"
+    )
+
+
+def write_minimal_cfg(
+    tmp_path: Path,
+    *,
+    task: str = "question_probe",
+    provider: str = "qwen",
+    model: str = "qwen3.7-flash",
+    prompt: str = "请分析题目 {question_text}",
+    temperature: str = "0.2",
+    max_tokens: str = "4096",
+    timeout_seconds: str = "300",
+    retry_count: str = "3",
+    retry_backoff_seconds: str = "1, 2, 4",
+    response_format: str = "json",
+) -> Path:
+    env_prefix = "QWEN" if provider == "qwen" else "DEEPSEEK"
+    cfg = tmp_path / "ai_config.cfg"
+    cfg.write_text(
+        dedent(
+            f"""
+            [provider:{provider}]
+            api_url_env = {env_prefix}_API_URL
+            api_key_env = {env_prefix}_API_KEY
+
+            [task:{task}]
+            provider = {provider}
+            model = {model}
+            prompt = {task}
+            temperature = {temperature}
+            max_tokens = {max_tokens}
+            timeout_seconds = {timeout_seconds}
+            retry_count = {retry_count}
+            retry_backoff_seconds = {retry_backoff_seconds}
+            response_format = {response_format}
+
+            [prompt:{task}]
+            template = {prompt}
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return cfg
+
+
+def test_loads_task_and_provider_from_cfg(tmp_path, provider_env):
+    loaded = AIConfig.load(write_minimal_cfg(tmp_path))
+
+    assert loaded.get_task_config("question_probe").model == "qwen3.7-flash"
+    assert loaded.get_provider_config("qwen").api_url.endswith("chat/completions")
+    assert loaded.get_task_config("question_probe").timeout_seconds == 300
+
+
+def test_provider_repr_does_not_expose_api_key(tmp_path, provider_env):
+    provider = AIConfig.load(write_minimal_cfg(tmp_path)).get_provider_config("qwen")
+
+    assert "test-qwen-key" not in repr(provider)
+
+
+def test_missing_required_env_fails_without_leaking_secret(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("QWEN_API_URL", "https://example.test/chat/completions")
+    monkeypatch.delenv("QWEN_API_KEY", raising=False)
+
+    with pytest.raises(AIConfigError, match="QWEN_API_KEY") as caught:
+        AIConfig.load(write_minimal_cfg(tmp_path))
+
+    assert "chat/completions" not in str(caught.value)
+
+
+def test_rejects_missing_provider_section(tmp_path, provider_env):
+    cfg = write_minimal_cfg(tmp_path)
+    task_config = cfg.read_text(encoding="utf-8").split(
+        "[task:question_probe]", 1
+    )[1]
+    cfg.write_text(
+        "[task:question_probe]" + task_config,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AIConfigError, match="provider"):
+        AIConfig.load(cfg)
+
+
+@pytest.mark.parametrize(
+    ("option", "bad_value"),
+    [
+        ("max_tokens", "not-an-integer"),
+        ("max_tokens", "0"),
+        ("retry_count", "-1"),
+        ("temperature", "not-a-float"),
+        ("temperature", "2.01"),
+        ("timeout_seconds", "299.9"),
+        ("retry_backoff_seconds", "1, -2, 4"),
+        ("retry_backoff_seconds", "1, nan, 4"),
+    ],
+)
+def test_rejects_invalid_numeric_values(
+    tmp_path, provider_env, option, bad_value
+):
+    kwargs = {option: bad_value}
+
+    with pytest.raises(AIConfigError, match=option):
+        AIConfig.load(write_minimal_cfg(tmp_path, **kwargs))
+
+
+def test_rejects_unknown_provider(tmp_path, provider_env):
+    with pytest.raises(AIConfigError, match="unknown provider"):
+        AIConfig.load(write_minimal_cfg(tmp_path, provider="other"))
+
+
+def test_rejects_unknown_section(tmp_path, provider_env):
+    cfg = write_minimal_cfg(tmp_path)
+    cfg.write_text(
+        cfg.read_text(encoding="utf-8") + "\n[typo:question_probe]\nvalue = ignored\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AIConfigError, match="unknown section"):
+        AIConfig.load(cfg)
+
+
+@pytest.mark.parametrize("model", ["qwen3.6-plus", "qwen3-vl-max", "deepseek-v4-pro"])
+def test_rejects_invalid_qwen_task_model(tmp_path, provider_env, model):
+    with pytest.raises(AIConfigError, match="model"):
+        AIConfig.load(write_minimal_cfg(tmp_path, model=model))
+
+
+def test_rejects_unconfigured_deepseek_model(tmp_path, provider_env):
+    with pytest.raises(AIConfigError, match="model"):
+        AIConfig.load(
+            write_minimal_cfg(
+                tmp_path,
+                provider="deepseek",
+                model="deepseek-unconfigured",
+            )
+        )
+
+
+def test_rejects_missing_prompt_section(tmp_path, provider_env):
+    cfg = write_minimal_cfg(tmp_path)
+    content = cfg.read_text(encoding="utf-8").split("[prompt:question_probe]", 1)[0]
+    cfg.write_text(content, encoding="utf-8")
+
+    with pytest.raises(AIConfigError, match="prompt"):
+        AIConfig.load(cfg)
+
+
+def test_reads_utf8_chinese_and_preserves_prompt_braces(tmp_path, provider_env):
+    loaded = AIConfig.load(
+        write_minimal_cfg(tmp_path, prompt="请根据 {question_text} 提出追问：为什么？")
+    )
+
+    assert loaded.get_task_config("question_probe").prompt == (
+        "请根据 {question_text} 提出追问：为什么？"
+    )
+
+
+def test_default_config_declares_every_task_with_300_second_timeout(provider_env):
+    loaded = AIConfig.load()
+
+    assert set(loaded.task_keys) == REQUIRED_TASKS
+    assert {loaded.get_task_config(key).timeout_seconds for key in REQUIRED_TASKS} == {
+        300.0
+    }
+
+
+def test_runtime_loader_caches_first_successful_load(tmp_path, provider_env):
+    cfg = write_minimal_cfg(tmp_path)
+    first = load_ai_config(cfg)
+    cfg.unlink()
+
+    assert load_ai_config(cfg) is first
+
+
+def test_reset_allows_tests_to_replace_cached_config(tmp_path, provider_env):
+    cfg = write_minimal_cfg(tmp_path)
+    first = load_ai_config(cfg)
+    reset_ai_config_for_tests()
+
+    second = load_ai_config(cfg)
+
+    assert second is not first

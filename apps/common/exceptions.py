@@ -1,5 +1,18 @@
 """Custom exceptions for the exam parser system."""
 
+from .ai.exceptions import AIConfigError, AIPromptError, AIResponseError
+
+__all__ = [
+    "AIConfigError",
+    "AIPromptError",
+    "AIRequestError",
+    "AIResponseError",
+    "ConversionError",
+    "ImageCropError",
+    "SchemaValidationError",
+    "TaskExecutionError",
+]
+
 
 class AIRequestError(Exception):
     """Raised when an AI API request fails."""
