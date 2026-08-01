@@ -19,6 +19,24 @@ DEFAULT_AI_CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / "ai_co
 SUPPORTED_PROVIDERS = frozenset({"qwen", "deepseek"})
 QWEN_MODELS = frozenset({"qwen3.7-flash", "qwen3.7-plus", "qwen3-vl-plus"})
 DEEPSEEK_MODELS = frozenset({"deepseek-v4-pro"})
+TASK_PROVIDER_SCHEMA = {
+    "question_probe": "qwen",
+    "knowledge_analysis": "qwen",
+    "mode_a_answer": "qwen",
+    "mode_b_answer": "qwen",
+    "mode_c_answer": "qwen",
+    "result_verify": "qwen",
+    "vision_fact_extract": "qwen",
+    "vision_page_parse": "qwen",
+    "vision_question_parse": "qwen",
+    "vision_position_detect": "qwen",
+    "guidance_generate": "qwen",
+    "guidance_evaluate": "qwen",
+    "teacher_guidance_evaluate": "qwen",
+    "variant_generate": "qwen",
+    "variant_verify_deepseek": "deepseek",
+    "photo_recognize": "qwen",
+}
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
@@ -61,20 +79,13 @@ class AIConfig:
     @classmethod
     def load(cls, path: Path | None = None) -> "AIConfig":
         config_path = Path(path) if path is not None else DEFAULT_AI_CONFIG_PATH
-        parser = RawConfigParser(interpolation=None)
-        try:
-            with config_path.open("r", encoding="utf-8") as config_file:
-                parser.read_file(config_file)
-        except (OSError, UnicodeError, ConfigParserError) as exc:
-            raise AIConfigError(
-                f"Unable to read AI configuration file {config_path}: {exc}"
-            ) from exc
+        parser = _read_config_parser(config_path)
+        if parser is None:
+            raise AIConfigError("Unable to read AI configuration file")
 
         for section in parser.sections():
             if not section.startswith(("provider:", "task:", "prompt:")):
-                raise AIConfigError(
-                    f"AI configuration contains unknown section [{section}]"
-                )
+                raise AIConfigError("AI configuration contains unknown section")
 
         provider_sections = _named_sections(parser, "provider")
         task_sections = _named_sections(parser, "task")
@@ -101,16 +112,26 @@ class AIConfig:
         return cls(providers=providers, tasks=tasks)
 
     def get_task_config(self, task_key: str) -> AITaskConfig:
-        try:
-            return self._tasks[task_key]
-        except KeyError as exc:
-            raise AIConfigError(f"Unknown AI task: {task_key}") from exc
+        task = self._tasks.get(task_key)
+        if task is None:
+            raise AIConfigError("Unknown AI task")
+        return task
 
     def get_provider_config(self, provider: str) -> AIProviderConfig:
-        try:
-            return self._providers[provider]
-        except KeyError as exc:
-            raise AIConfigError(f"Unknown AI provider: {provider}") from exc
+        provider_config = self._providers.get(provider)
+        if provider_config is None:
+            raise AIConfigError("Unknown AI provider")
+        return provider_config
+
+
+def _read_config_parser(config_path: Path) -> RawConfigParser | None:
+    parser = RawConfigParser(interpolation=None)
+    try:
+        with config_path.open("r", encoding="utf-8") as config_file:
+            parser.read_file(config_file)
+    except (OSError, UnicodeError, ConfigParserError):
+        return None
+    return parser
 
 
 def _named_sections(
@@ -138,18 +159,19 @@ def _require_options(
     missing = required - present
     if missing:
         names = ", ".join(sorted(missing))
-        raise AIConfigError(f"Section [{section}] is missing required option(s): {names}")
+        raise AIConfigError(
+            f"AI configuration section is missing required option(s): {names}"
+        )
     unknown = present - required - (optional or set())
     if unknown:
-        names = ", ".join(sorted(unknown))
-        raise AIConfigError(f"Section [{section}] has unknown option(s): {names}")
+        raise AIConfigError("AI configuration section has unknown option(s)")
 
 
 def _load_provider(
     parser: RawConfigParser, section: str, name: str
 ) -> AIProviderConfig:
     if name not in SUPPORTED_PROVIDERS:
-        raise AIConfigError(f"Section [{section}] uses unknown provider {name}")
+        raise AIConfigError("AI provider section uses unknown provider")
     _require_options(parser, section, {"api_url_env", "api_key_env"})
     api_url_env = parser.get(section, "api_url_env").strip()
     api_key_env = parser.get(section, "api_key_env").strip()
@@ -157,17 +179,13 @@ def _load_provider(
     api_key = _read_env_reference(section, "api_key_env", api_key_env)
     parsed_url = urlparse(api_url)
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-        raise AIConfigError(
-            f"Environment variable {api_url_env} for [{section}] is not a valid HTTP URL"
-        )
+        raise AIConfigError("AI provider URL is not a valid HTTP URL")
     return AIProviderConfig(name=name, api_url=api_url, api_key=api_key)
 
 
 def _read_env_reference(section: str, option: str, env_name: str) -> str:
     if not ENV_NAME_PATTERN.fullmatch(env_name):
-        raise AIConfigError(
-            f"Option {option} in [{section}] must contain an environment variable name"
-        )
+        raise AIConfigError("AI provider option must name an environment variable")
     value = os.environ.get(env_name, "").strip()
     if not value:
         raise AIConfigError(
@@ -180,7 +198,7 @@ def _load_prompt(parser: RawConfigParser, section: str, name: str) -> str:
     _require_options(parser, section, {"template"})
     template = parser.get(section, "template").strip()
     if not template:
-        raise AIConfigError(f"Prompt section [{section}] has an empty template")
+        raise AIConfigError("AI prompt section has an empty template")
     return template
 
 
@@ -207,39 +225,40 @@ def _load_task(
         {"response_format"},
     )
     provider = parser.get(section, "provider").strip()
+    if provider not in SUPPORTED_PROVIDERS:
+        raise AIConfigError("AI task uses unknown provider")
+    expected_provider = TASK_PROVIDER_SCHEMA.get(key)
+    if expected_provider is None:
+        raise AIConfigError("AI task is not declared in the provider route schema")
+    if provider != expected_provider:
+        raise AIConfigError("AI task provider route does not match required schema")
     if provider not in providers:
-        if provider not in SUPPORTED_PROVIDERS:
-            raise AIConfigError(f"Task [{section}] uses unknown provider {provider}")
-        raise AIConfigError(
-            f"Task [{section}] references missing provider section provider:{provider}"
-        )
+        raise AIConfigError("AI task references a missing provider section")
 
     model = parser.get(section, "model").strip()
-    _validate_model(section, provider, model)
+    _validate_model(provider, model)
     prompt_name = parser.get(section, "prompt").strip()
     if prompt_name not in prompts:
-        raise AIConfigError(
-            f"Task [{section}] references missing prompt section prompt:{prompt_name}"
-        )
+        raise AIConfigError("AI task references a missing prompt section")
 
     temperature = _parse_float(parser, section, "temperature")
     if not 0 <= temperature <= 2:
-        raise AIConfigError(f"Option temperature in [{section}] must be between 0 and 2")
+        raise AIConfigError("Option temperature must be between 0 and 2")
     max_tokens = _parse_int(parser, section, "max_tokens")
     if max_tokens <= 0:
-        raise AIConfigError(f"Option max_tokens in [{section}] must be greater than zero")
+        raise AIConfigError("Option max_tokens must be greater than zero")
     timeout_seconds = _parse_float(parser, section, "timeout_seconds")
     if timeout_seconds != 300:
-        raise AIConfigError(f"Option timeout_seconds in [{section}] must be exactly 300")
+        raise AIConfigError("Option timeout_seconds must be exactly 300")
     retry_count = _parse_int(parser, section, "retry_count")
     if retry_count < 0:
-        raise AIConfigError(f"Option retry_count in [{section}] cannot be negative")
+        raise AIConfigError("Option retry_count cannot be negative")
     retry_backoff_seconds = _parse_float_tuple(
         parser, section, "retry_backoff_seconds"
     )
     if any(not isfinite(value) or value < 0 for value in retry_backoff_seconds):
         raise AIConfigError(
-            f"Option retry_backoff_seconds in [{section}] cannot contain negative values"
+            "Option retry_backoff_seconds cannot contain negative values"
         )
     response_format = parser.get(section, "response_format", fallback="").strip() or None
 
@@ -257,32 +276,38 @@ def _load_task(
     )
 
 
-def _validate_model(section: str, provider: str, model: str) -> None:
+def _validate_model(provider: str, model: str) -> None:
     if provider == "qwen" and model not in QWEN_MODELS:
         allowed = ", ".join(sorted(QWEN_MODELS))
         raise AIConfigError(
-            f"Task [{section}] has invalid Qwen model {model!r}; allowed: {allowed}"
+            f"AI task has an invalid Qwen model; allowed: {allowed}"
         )
     if provider == "deepseek" and model not in DEEPSEEK_MODELS:
-        raise AIConfigError(f"Task [{section}] has invalid DeepSeek model {model!r}")
+        raise AIConfigError("AI task has an invalid DeepSeek model")
 
 
 def _parse_int(parser: RawConfigParser, section: str, option: str) -> int:
     value = parser.get(section, option).strip()
+    parsed: int | None = None
     try:
-        return int(value)
-    except ValueError as exc:
-        raise AIConfigError(
-            f"Option {option} in [{section}] must be an integer"
-        ) from exc
+        parsed = int(value)
+    except ValueError:
+        pass
+    if parsed is None:
+        raise AIConfigError(f"Option {option} must be an integer")
+    return parsed
 
 
 def _parse_float(parser: RawConfigParser, section: str, option: str) -> float:
     value = parser.get(section, option).strip()
+    parsed: float | None = None
     try:
-        return float(value)
-    except ValueError as exc:
-        raise AIConfigError(f"Option {option} in [{section}] must be a number") from exc
+        parsed = float(value)
+    except ValueError:
+        pass
+    if parsed is None:
+        raise AIConfigError(f"Option {option} must be a number")
+    return parsed
 
 
 def _parse_float_tuple(
@@ -291,12 +316,16 @@ def _parse_float_tuple(
     raw_values = parser.get(section, option).strip()
     if not raw_values:
         return ()
+    parsed: tuple[float, ...] | None = None
     try:
-        return tuple(float(value.strip()) for value in raw_values.split(","))
-    except ValueError as exc:
+        parsed = tuple(float(value.strip()) for value in raw_values.split(","))
+    except ValueError:
+        pass
+    if parsed is None:
         raise AIConfigError(
-            f"Option {option} in [{section}] must be a comma-separated number list"
-        ) from exc
+            f"Option {option} must be a comma-separated number list"
+        )
+    return parsed
 
 
 _ai_config: AIConfig | None = None

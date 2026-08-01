@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import traceback
 from pathlib import Path
 from textwrap import dedent
 
@@ -96,6 +97,16 @@ def write_minimal_cfg(
     return cfg
 
 
+def assert_untrusted_value_is_redacted(error: BaseException, marker: str) -> None:
+    formatted = "".join(
+        traceback.format_exception(type(error), error, error.__traceback__)
+    )
+    if marker in str(error) or marker in formatted:
+        pytest.fail("AIConfigError leaked untrusted configuration text", pytrace=False)
+    if error.__cause__ is not None or error.__context__ is not None:
+        pytest.fail("AIConfigError retained an untrusted exception chain", pytrace=False)
+
+
 def test_loads_task_and_provider_from_cfg(tmp_path, provider_env):
     loaded = AIConfig.load(write_minimal_cfg(tmp_path))
 
@@ -120,6 +131,19 @@ def test_missing_required_env_fails_without_leaking_secret(
         AIConfig.load(write_minimal_cfg(tmp_path))
 
     assert "chat/completions" not in str(caught.value)
+
+
+def test_malformed_config_error_redacts_source_text_and_exception_chain(
+    tmp_path,
+):
+    marker = "-".join(("sk", "live", "sensitive", "token"))
+    cfg = tmp_path / "malformed.cfg"
+    cfg.write_text(f"[provider:qwen]\n{marker}\n", encoding="utf-8")
+
+    with pytest.raises(AIConfigError) as caught:
+        AIConfig.load(cfg)
+
+    assert_untrusted_value_is_redacted(caught.value, marker)
 
 
 def test_rejects_missing_provider_section(tmp_path, provider_env):
@@ -180,13 +204,48 @@ def test_rejects_invalid_qwen_task_model(tmp_path, provider_env, model):
         AIConfig.load(write_minimal_cfg(tmp_path, model=model))
 
 
+def test_invalid_model_error_redacts_configured_value(tmp_path, provider_env):
+    marker = "-".join(("model", "sensitive", "token"))
+
+    with pytest.raises(AIConfigError) as caught:
+        AIConfig.load(write_minimal_cfg(tmp_path, model=marker))
+
+    assert_untrusted_value_is_redacted(caught.value, marker)
+
+
+def test_invalid_numeric_error_redacts_configured_value_and_exception_chain(
+    tmp_path, provider_env
+):
+    marker = "-".join(("numeric", "sensitive", "token"))
+
+    with pytest.raises(AIConfigError) as caught:
+        AIConfig.load(write_minimal_cfg(tmp_path, max_tokens=marker))
+
+    assert_untrusted_value_is_redacted(caught.value, marker)
+
+
 def test_rejects_unconfigured_deepseek_model(tmp_path, provider_env):
     with pytest.raises(AIConfigError, match="model"):
         AIConfig.load(
             write_minimal_cfg(
                 tmp_path,
+                task="variant_verify_deepseek",
                 provider="deepseek",
                 model="deepseek-unconfigured",
+            )
+        )
+
+
+def test_rejects_qwen_route_for_deepseek_verification_task(
+    tmp_path, provider_env
+):
+    with pytest.raises(AIConfigError, match="provider route"):
+        AIConfig.load(
+            write_minimal_cfg(
+                tmp_path,
+                task="variant_verify_deepseek",
+                provider="qwen",
+                model="qwen3.7-flash",
             )
         )
 
@@ -216,6 +275,12 @@ def test_default_config_declares_every_task_with_300_second_timeout(provider_env
     assert set(loaded.task_keys) == REQUIRED_TASKS
     assert {loaded.get_task_config(key).timeout_seconds for key in REQUIRED_TASKS} == {
         300.0
+    }
+    assert {
+        key: loaded.get_task_config(key).provider for key in REQUIRED_TASKS
+    } == {
+        key: "deepseek" if key == "variant_verify_deepseek" else "qwen"
+        for key in REQUIRED_TASKS
     }
 
 
