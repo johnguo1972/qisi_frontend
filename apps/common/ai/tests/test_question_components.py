@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 from importlib import import_module
 import json
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -339,10 +342,14 @@ def test_question_components_reject_wrong_mode_missing_fields_and_bad_shapes(
         (
             "ModeAAnswerComponent",
             "mode_a_answer",
-            '{"mode":"A","steps":[1,2,3],"final_answer":"2","summary":"完成"}',
+            '{"mode":"A","steps":[{"step":1,"content":"列式"},{"step":2,"content":"求解"},{"step":3,"content":"验算"}],"final_answer":"2","summary":"完成"}',
             {
                 "mode": "A",
-                "steps": [1, 2, 3],
+                "steps": [
+                    {"step": 1, "content": "列式"},
+                    {"step": 2, "content": "求解"},
+                    {"step": 3, "content": "验算"},
+                ],
                 "final_answer": "2",
                 "summary": "完成",
             },
@@ -353,12 +360,13 @@ def test_question_components_reject_wrong_mode_missing_fields_and_bad_shapes(
             """
             {
               "mode": "B",
-              "questions": [{
-                "question": "第一步？",
-                "options": {"A":"1","B":"2","C":"3","D":"4"},
-                "correct_option": "B",
-                "analysis": "代入"
-              }]
+              "questions": [
+                {"question":"第一步？","options":{"A":"1","B":"2","C":"3","D":"4"},"correct_option":"B","reference_answer":"2","analysis":"代入"},
+                {"question":"第二步？","options":{"A":"1","B":"2","C":"3","D":"4"},"correct_option":"B","reference_answer":"2","analysis":"计算"},
+                {"question":"第三步？","options":{"A":"1","B":"2","C":"3","D":"4"},"correct_option":"B","reference_answer":"2","analysis":"验算"}
+              ],
+              "final_answer": "2",
+              "summary": "递进完成"
             }
             """,
             {
@@ -374,12 +382,11 @@ def test_question_components_reject_wrong_mode_missing_fields_and_bad_shapes(
             """
             {
               "mode": "C",
-              "questions": [{
-                "question": "你观察到什么？",
-                "reference_answer": "等式",
-                "key_points": ["观察结构"],
-                "followup_hint": "看等号两侧"
-              }],
+              "questions": [
+                {"question":"你观察到什么？","reference_answer":"等式","key_points":["观察结构"],"followup_hint":"看等号两侧"},
+                {"question":"下一步做什么？","reference_answer":"移项","key_points":["等式性质"],"followup_hint":"保持等式成立"},
+                {"question":"如何验算？","reference_answer":"代回原式","key_points":["结果验证"],"followup_hint":"检查左右两边"}
+              ],
               "final_answer": "2",
               "summary": "开放引导"
             }
@@ -547,3 +554,471 @@ def test_legacy_service_does_not_create_unused_client_for_injected_factory():
 
     client_constructor.assert_not_called()
     assert result["final_answer"] == "2"
+
+
+@pytest.mark.parametrize(
+    ("component_name", "task_key", "invalid_payload"),
+    [
+        (
+            "QuestionProbeComponent",
+            "question_probe",
+            {
+                "subject": "math",
+                "question_type": "calculation",
+                "difficulty": "L2",
+                "knowledge_points": ["方程"],
+                "multi_part": False,
+                "proof_or_calc": "calc",
+                "visual_risk_score": 0,
+                "reasoning_risk_score": 20,
+                "recommended_route": "STANDARD",
+                "brief_reason": "基础计算",
+                "normalized_text": "",
+            },
+        ),
+        (
+            "QuestionProbeComponent",
+            "question_probe",
+            {
+                "subject": "math",
+                "question_type": "calculation",
+                "difficulty": "L2",
+                "knowledge_points": [],
+                "multi_part": False,
+                "proof_or_calc": "calc",
+                "visual_risk_score": 0,
+                "reasoning_risk_score": 20,
+                "recommended_route": "STANDARD",
+                "brief_reason": "基础计算",
+                "normalized_text": "解方程",
+            },
+        ),
+        (
+            "QuestionProbeComponent",
+            "question_probe",
+            {
+                "subject": "math",
+                "question_type": "calculation",
+                "difficulty": "L2",
+                "knowledge_points": ["方程", "代数", "运算", "等式", "数", "超限"],
+                "multi_part": False,
+                "proof_or_calc": "calc",
+                "visual_risk_score": 0,
+                "reasoning_risk_score": 20,
+                "recommended_route": "STANDARD",
+                "brief_reason": "基础计算",
+                "normalized_text": "解方程",
+            },
+        ),
+        (
+            "QuestionProbeComponent",
+            "question_probe",
+            {
+                "subject": "math",
+                "question_type": "calculation",
+                "difficulty": "L2",
+                "knowledge_points": ["方程", ""],
+                "multi_part": False,
+                "proof_or_calc": "calc",
+                "visual_risk_score": 0,
+                "reasoning_risk_score": 20,
+                "recommended_route": "STANDARD",
+                "brief_reason": "基础计算",
+                "normalized_text": "解方程",
+            },
+        ),
+        (
+            "ModeAAnswerComponent",
+            "mode_a_answer",
+            {
+                "mode": "A",
+                "steps": [
+                    {"step": 1, "content": "列式"},
+                    {"step": 2, "content": "求解"},
+                ],
+                "final_answer": "2",
+                "summary": "完成",
+            },
+        ),
+        (
+            "ModeAAnswerComponent",
+            "mode_a_answer",
+            {
+                "mode": "A",
+                "steps": [
+                    {"step": 1, "content": "列式"},
+                    {"step": 2, "content": ""},
+                    {"step": 3, "content": "验算"},
+                ],
+                "final_answer": "2",
+                "summary": "完成",
+            },
+        ),
+        (
+            "ModeAAnswerComponent",
+            "mode_a_answer",
+            {
+                "mode": "A",
+                "steps": [
+                    {"step": 1, "content": "列式"},
+                    {"step": 2, "content": "求解"},
+                    {"step": 3, "content": "验算"},
+                ],
+                "final_answer": "",
+                "summary": "完成",
+            },
+        ),
+        (
+            "KnowledgeAnalysisComponent",
+            "knowledge_analysis",
+            {
+                "subject": "math",
+                "difficulty": "L2",
+                "knowledge_points": [{"module": "方程", "reason": "   "}],
+            },
+        ),
+        (
+            "ModeBAnswerComponent",
+            "mode_b_answer",
+            {
+                "mode": "B",
+                "questions": [
+                    {
+                        "question": "第一步？",
+                        "options": {"A": "1", "B": "2", "C": "3", "D": "4"},
+                        "reference_answer": "数值2",
+                        "analysis": "说明",
+                    }
+                ] * 3,
+                "final_answer": "2",
+                "summary": "完成",
+            },
+        ),
+        (
+            "ModeBAnswerComponent",
+            "mode_b_answer",
+            {
+                "mode": "B",
+                "questions": [
+                    {
+                        "question": "第一步？",
+                        "options": {"A": "1", "B": "2", "C": "3", "D": "4"},
+                        "correct_answer": ["A"],
+                        "reference_answer": "1",
+                        "analysis": "说明",
+                    }
+                ] * 3,
+                "final_answer": "2",
+                "summary": "完成",
+            },
+        ),
+        (
+            "ModeAAnswerComponent",
+            "mode_a_answer",
+            {
+                "mode": "A",
+                "steps": [
+                    {"step": 1, "content": "列式"},
+                    {"content": "求解"},
+                    {"step": 3, "content": "验算"},
+                ],
+                "final_answer": "2",
+                "summary": "完成",
+            },
+        ),
+        (
+            "ModeAAnswerComponent",
+            "mode_a_answer",
+            {
+                "mode": "A",
+                "steps": [
+                    {"step": 1, "content": "列式"},
+                    {"step": 2, "content": "求解"},
+                    {"step": 3, "content": "验算"},
+                ],
+                "final_answer": "2",
+                "summary": "   ",
+            },
+        ),
+        (
+            "ModeCAnswerComponent",
+            "mode_c_answer",
+            {
+                "mode": "C",
+                "questions": [
+                    {
+                        "question": "观察什么？",
+                        "reference_answer": "等式",
+                        "key_points": [""],
+                        "followup_hint": "观察等号",
+                    }
+                ] * 3,
+                "final_answer": "2",
+                "summary": "完成",
+            },
+        ),
+        (
+            "ModeCAnswerComponent",
+            "mode_c_answer",
+            {
+                "mode": "C",
+                "questions": [
+                    {
+                        "question": "观察什么？",
+                        "reference_answer": "等式",
+                        "key_points": ["结构"],
+                        "followup_hint": "观察等号",
+                    }
+                ] * 2,
+                "final_answer": "2",
+                "summary": "完成",
+            },
+        ),
+        (
+            "ModeCAnswerComponent",
+            "mode_c_answer",
+            {
+                "mode": "C",
+                "questions": [
+                    {
+                        "question": "观察什么？",
+                        "reference_answer": "",
+                        "key_points": ["结构"],
+                        "followup_hint": "观察等号",
+                    }
+                ] * 3,
+                "final_answer": "2",
+                "summary": "完成",
+            },
+        ),
+        (
+            "ModeCAnswerComponent",
+            "mode_c_answer",
+            {
+                "mode": "C",
+                "questions": [
+                    {
+                        "question": "观察什么？",
+                        "reference_answer": "等式",
+                        "key_points": ["结构"],
+                        "followup_hint": "",
+                    }
+                ] * 3,
+                "final_answer": "2",
+                "summary": "完成",
+            },
+        ),
+        (
+            "ModeCAnswerComponent",
+            "mode_c_answer",
+            {
+                "mode": "C",
+                "questions": [
+                    {
+                        "question": "观察什么？",
+                        "reference_answer": "等式",
+                        "key_points": ["结构"],
+                        "followup_hint": "观察等号",
+                    }
+                ] * 3,
+                "final_answer": "",
+                "summary": "完成",
+            },
+        ),
+        (
+            "VisionExtractionComponent",
+            "vision_fact_extract",
+            {
+                "subject": "math",
+                "figure_present": True,
+                "figure_type": "坐标图",
+                "visual_summary": "坐标图中标出一点",
+                "diagram_facts": [""],
+                "text_marks_in_figure": [],
+                "variables_and_symbols": [],
+                "target_related_visual_info": [],
+                "unclear_parts": [],
+                "ocr_conflicts": [],
+                "confidence": "high",
+            },
+        ),
+        (
+            "ResultVerifierComponent",
+            "result_verify",
+            {
+                "pass": True,
+                "consistency": "",
+                "fact_violation": False,
+                "calc_suspect": False,
+                "issues": [],
+                "retry_needed": False,
+                "retry_reason": "",
+            },
+        ),
+        (
+            "ResultVerifierComponent",
+            "result_verify",
+            {
+                "pass": True,
+                "consistency": "consistent",
+                "fact_violation": "false",
+                "calc_suspect": False,
+                "issues": [],
+                "retry_needed": False,
+                "retry_reason": "",
+            },
+        ),
+        (
+            "ResultVerifierComponent",
+            "result_verify",
+            {
+                "pass": False,
+                "consistency": "inconsistent",
+                "fact_violation": True,
+                "calc_suspect": False,
+                "issues": [""],
+                "retry_needed": True,
+                "retry_reason": "事实冲突",
+            },
+        ),
+        (
+            "ResultVerifierComponent",
+            "result_verify",
+            {
+                "pass": False,
+                "consistency": "inconsistent",
+                "fact_violation": False,
+                "calc_suspect": True,
+                "issues": ["计算可疑"],
+                "retry_needed": True,
+                "retry_reason": "",
+            },
+        ),
+    ],
+)
+def test_components_reject_payloads_outside_central_cfg_hard_contract(
+    component_name, task_key, invalid_payload
+):
+    components = _components()
+    client = RecordingAIClient(
+        {task_key: json.dumps(invalid_payload, ensure_ascii=False)}
+    )
+
+    with pytest.raises(AIResponseError):
+        getattr(components, component_name)(client).run(
+            components.QuestionInput(stem="解方程 x+1=2")
+        )
+
+
+@pytest.mark.parametrize(
+    "payload_patch",
+    [
+        {"questions": []},
+        {"questions": [{"question": "第一步？", "options": {"A": "1", "B": "2", "C": "3", "D": "4"}, "correct_option": "A", "reference_answer": "1", "analysis": "说明"}] * 2},
+        {"questions": [{"question": "", "options": {"A": "1", "B": "2", "C": "3", "D": "4"}, "correct_option": "A", "reference_answer": "1", "analysis": "说明"}] * 3},
+        {"questions": [{"question": "第一步？", "options": {"A": "1", "B": "2", "C": "3"}, "correct_option": "A", "reference_answer": "1", "analysis": "说明"}] * 3},
+        {"questions": [{"question": "第一步？", "options": {"A": "1", "B": "2", "C": "3", "D": "4", "E": "5"}, "correct_option": "A", "reference_answer": "1", "analysis": "说明"}] * 3},
+        {"questions": [{"question": "第一步？", "options": {"A": "1", "B": "2", "C": "3", "D": ""}, "correct_option": "A", "reference_answer": "1", "analysis": "说明"}] * 3},
+        {"questions": [{"question": "第一步？", "options": {"A": "1", "B": "2", "C": "3", "D": "4"}, "correct_option": "E", "reference_answer": "1", "analysis": "说明"}] * 3},
+        {"questions": [{"question": "第一步？", "options": {"A": "1", "B": "2", "C": "3", "D": "4"}, "correct_option": "A", "reference_answer": "", "analysis": "说明"}] * 3},
+        {"questions": [{"question": "第一步？", "options": {"A": "1", "B": "2", "C": "3", "D": "4"}, "correct_option": "A", "reference_answer": "1", "analysis": ""}] * 3},
+        {"final_answer": ""},
+        {"summary": ""},
+    ],
+)
+def test_mode_b_rejects_each_invalid_question_contract_field(payload_patch):
+    components = _components()
+    valid_question = {
+        "question": "第一步？",
+        "options": {"A": "1", "B": "2", "C": "3", "D": "4"},
+        "correct_option": "A",
+        "reference_answer": "1",
+        "analysis": "说明",
+    }
+    payload = {
+        "mode": "B",
+        "questions": [dict(valid_question) for _ in range(3)],
+        "final_answer": "2",
+        "summary": "完成",
+    }
+    payload.update(payload_patch)
+    client = RecordingAIClient(
+        {"mode_b_answer": json.dumps(payload, ensure_ascii=False)}
+    )
+
+    with pytest.raises(AIResponseError):
+        components.ModeBAnswerComponent(client).run(
+            components.QuestionInput(stem="解方程 x+1=2")
+        )
+
+
+def test_provider_client_is_lazy_and_constructed_once_for_sixteen_threads():
+    from apps.common.ai_service import AIReviewService
+
+    created = []
+    created_lock = threading.Lock()
+
+    def create_client():
+        time.sleep(0.02)
+        client = MagicMock(name=f"client-{len(created)}")
+        with created_lock:
+            created.append(client)
+        return client
+
+    with patch("apps.common.ai_service.AIClient", side_effect=create_client):
+        service = AIReviewService()
+        assert created == []
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            clients = list(executor.map(lambda _index: service._provider_client(), range(16)))
+
+        assert len(created) == 1
+        assert all(client is created[0] for client in clients)
+        service.close()
+
+    created[0].close.assert_called_once_with()
+
+
+def test_mode_b_accepts_only_explicit_abcd_legacy_correct_answer_alias():
+    components = _components()
+    questions = [
+        {
+            "question": f"第{index}步？",
+            "options": {"A": "1", "B": "2", "C": "3", "D": "4"},
+            "correct_answer": "B",
+            "reference_answer": "数值2",
+            "explanation": "计算说明",
+        }
+        for index in range(1, 4)
+    ]
+    client = RecordingAIClient(
+        {
+            "mode_b_answer": json.dumps(
+                {
+                    "mode": "B",
+                    "questions": questions,
+                    "final_answer": "2",
+                    "summary": "递进完成",
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+
+    result = components.ModeBAnswerComponent(client).run(
+        components.QuestionInput(stem="解方程 x+1=2")
+    )
+
+    assert result["questions"][0]["correct_option"] == "B"
+    assert result["questions"][0]["correct_answer"] == "B"
+    assert result["questions"][0]["reference_answer"] == "数值2"
+
+
+def test_service_close_does_not_close_injected_client():
+    from apps.common.ai_service import AIReviewService
+
+    borrowed_client = MagicMock()
+    service = AIReviewService(ai_client=borrowed_client)
+
+    service.close()
+
+    borrowed_client.close.assert_not_called()

@@ -71,15 +71,17 @@ class ModeBAnswerComponent(_ModeAnswerComponent):
                     normalized_questions.append(item)
                     continue
                 question = dict(item)
-                correct_answer = (
-                    question.get("correct_answer")
-                    or question.get("correct_option")
-                    or question.get("reference_answer")
-                    or ""
-                )
+                correct_answer = question.get("correct_option")
+                if not correct_answer:
+                    legacy_answer = question.get("correct_answer")
+                    correct_answer = (
+                        legacy_answer
+                        if legacy_answer in ("A", "B", "C", "D")
+                        else ""
+                    )
                 explanation = (
-                    question.get("explanation")
-                    or question.get("analysis")
+                    question.get("analysis")
+                    or question.get("explanation")
                     or ""
                 )
                 question["correct_answer"] = correct_answer

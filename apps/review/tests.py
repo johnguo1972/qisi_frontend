@@ -487,8 +487,8 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(self.question.ai_processing_status, 'success')
         self.assertIsNotNone(self.question.ai_processed_at)
 
-    def test_process_question_full_v2_marks_failed_for_schema_invalid_answer(self):
-        """A schema-invalid component result must not produce success state."""
+    def test_process_question_full_v2_marks_failed_for_invalid_mode_b_answer(self):
+        """A malformed real Mode B component result must persist failed state."""
         from apps.common.ai.components import QuestionComponentFactory
         from apps.common.ai.prompt_registry import PromptRegistry
         from apps.common.ai.types import AIResult
@@ -531,27 +531,38 @@ class AIProcessFullPipelineTest(TestCase):
                 'confidence': 'high',
             },
             'mode_a_answer': {
-                'mode': 'A', 'steps': ['第一步'], 'final_answer': '2',
+                'mode': 'A',
+                'steps': [
+                    {'step': 1, 'content': '列式'},
+                    {'step': 2, 'content': '求解'},
+                    {'step': 3, 'content': '验算'},
+                ],
+                'final_answer': '2',
+                'summary': '完成',
             },
             'mode_b_answer': {
                 'mode': 'B',
-                'questions': [{
-                    'question': '下一步是什么？',
-                    'options': {'A': '1', 'B': '2', 'C': '3', 'D': '4'},
-                    'correct_option': 'B',
-                    'analysis': '两边减一',
-                }],
+                'questions': [
+                    {
+                        'question': '下一步是什么？',
+                        'options': {'A': '1', 'B': '2', 'C': '3', 'D': '4'},
+                        'reference_answer': '数值2',
+                        'analysis': '两边减一',
+                    }
+                ] * 3,
                 'final_answer': '2',
                 'summary': '递进引导',
             },
             'mode_c_answer': {
                 'mode': 'C',
-                'questions': [{
-                    'question': '等式两边如何变化？',
-                    'reference_answer': '两边同时减一',
-                    'key_points': ['等式性质'],
-                    'followup_hint': '保持等式成立',
-                }],
+                'questions': [
+                    {
+                        'question': '等式两边如何变化？',
+                        'reference_answer': '两边同时减一',
+                        'key_points': ['等式性质'],
+                        'followup_hint': '保持等式成立',
+                    }
+                ] * 3,
                 'final_answer': '2',
                 'summary': '开放引导',
             },
@@ -585,8 +596,10 @@ class AIProcessFullPipelineTest(TestCase):
         with patch.object(service, '_get_question_image_urls', return_value=[]):
             results = service.process_question_full_v2(self.question.id)
 
-        self.assertIn('answer_a', results['errors'])
-        self.assertIn('error', results['answer_a'])
+        self.assertEqual(set(results['errors']), {'answer_b'})
+        self.assertIn('error', results['answer_b'])
+        self.assertEqual(results['answer_a']['final_answer'], '2')
+        self.assertEqual(results['answer_c']['final_answer'], '2')
         self.question.refresh_from_db()
         self.assertEqual(self.question.ai_processing_status, 'failed')
 

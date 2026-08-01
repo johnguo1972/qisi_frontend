@@ -2,6 +2,7 @@
 import logging
 import time
 import os
+import threading
 from django.conf import settings
 from apps.common.exceptions import AIRequestError
 from apps.common.ai.client import AIClient
@@ -74,11 +75,12 @@ class AIReviewService:
     ):
         self._config = load_ai_config()
         self._ai_client = ai_client
+        self._ai_client_lock = threading.Lock()
+        self._owns_ai_client = False
         self._prompt_registry = prompt_registry or PromptRegistry(self._config)
         self.api_key = self._config.get_provider_config("qwen").api_key
         self._component_client = None
         if component_factory is None:
-            self._ai_client = self._ai_client or AIClient()
             self._component_client = _LegacyComponentClient(self)
             self._component_factory = QuestionComponentFactory(
                 self._component_client, self._prompt_registry
@@ -130,9 +132,24 @@ class AIReviewService:
         ).content
 
     def _provider_client(self):
-        if self._ai_client is None:
-            self._ai_client = AIClient()
-        return self._ai_client
+        client = self._ai_client
+        if client is None:
+            with self._ai_client_lock:
+                if self._ai_client is None:
+                    self._ai_client = AIClient()
+                    self._owns_ai_client = True
+                client = self._ai_client
+        return client
+
+    def close(self) -> None:
+        """Close only the lazily-created client owned by this service."""
+        with self._ai_client_lock:
+            if self._ai_client is None or not self._owns_ai_client:
+                return
+            client = self._ai_client
+            self._ai_client = None
+            self._owns_ai_client = False
+        client.close()
 
     def _get_question_image_urls(self, question, max_images: int = 5) -> list:
         """Get OSS URLs for all question images.
