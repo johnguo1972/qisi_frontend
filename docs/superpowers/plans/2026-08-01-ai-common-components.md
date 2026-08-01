@@ -14,6 +14,7 @@
 - 不提交 `.env`、数据库 dump、`media/`、`.superpowers/` 临时目录或用户已有的无关修改。
 - 不改变 URL、请求参数、响应 envelope、Celery task 名称、数据库字段和前端依赖的 A/B/C JSON 字段。
 - 不在日志、测试快照或异常文本中输出 API Key、完整 base64 图片、手机号等敏感信息。
+- 所有 Qwen 与 DeepSeek AI 调用的 `timeout_seconds` 统一为 `300` 秒，不保留 60 秒超时。
 - 每个迁移域先写失败测试，再实现，再执行定向回归；全域切换完成前不删除旧实现。
 - 真实模型测试仅各发起一次最小 Qwen 与 DeepSeek 请求，并将供应商/网络失败与代码失败分开报告。
 
@@ -106,6 +107,7 @@ def test_loads_task_and_provider_from_cfg(tmp_path, monkeypatch):
     loaded = AIConfig.load(cfg)
     assert loaded.get_task_config("question_probe").model == "qwen3.7-flash"
     assert loaded.get_provider_config("qwen").api_url.endswith("chat/completions")
+    assert loaded.get_task_config("question_probe").timeout_seconds == 300
 
 
 def test_missing_required_env_fails_without_leaking_secret(tmp_path, monkeypatch):
@@ -114,7 +116,7 @@ def test_missing_required_env_fails_without_leaking_secret(tmp_path, monkeypatch
         AIConfig.load(write_minimal_cfg(tmp_path))
 ```
 
-同时覆盖：缺 section、非法整数/浮点范围、未知 provider、非法 task model、提示词 section 缺失、UTF-8 中文读取。
+同时覆盖：缺 section、非法整数/浮点范围、未知 provider、非法 task model、提示词 section 缺失、UTF-8 中文读取，以及每个 AI task 的超时均为 300 秒。
 
 - [ ] **Step 2：运行配置测试确认失败**
 
@@ -159,7 +161,7 @@ class AIConfig:
 
 - [ ] **Step 4：建立完整 cfg 骨架和模型映射**
 
-建立任务键：`question_probe`、`knowledge_analysis`、`mode_a_answer`、`mode_b_answer`、`mode_c_answer`、`result_verify`、`vision_fact_extract`、`vision_page_parse`、`vision_question_parse`、`vision_position_detect`、`guidance_generate`、`guidance_evaluate`、`teacher_guidance_evaluate`、`variant_generate`、`variant_verify_deepseek`、`photo_recognize`。
+建立任务键：`question_probe`、`knowledge_analysis`、`mode_a_answer`、`mode_b_answer`、`mode_c_answer`、`result_verify`、`vision_fact_extract`、`vision_page_parse`、`vision_question_parse`、`vision_position_detect`、`guidance_generate`、`guidance_evaluate`、`teacher_guidance_evaluate`、`variant_generate`、`variant_verify_deepseek`、`photo_recognize`。上述任务的 `timeout_seconds` 全部明确写为 `300`。
 
 模型限定为 `qwen3.7-flash`、`qwen3.7-plus`、`qwen3-vl-plus` 和 DeepSeek 配置值；不得出现 Qwen 3.6。
 
