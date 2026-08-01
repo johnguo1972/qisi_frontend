@@ -215,6 +215,156 @@ def test_probe_scalar_aliases_prefer_nonempty_canonical_then_legacy(
     assert result["topic_tags_top3"] == ["方程"]
 
 
+@pytest.mark.parametrize(
+    ("canonical", "legacy", "expected"),
+    [
+        (
+            " \t\r\n\u00a0\u2003\u3000calculation\u3000\u2003\u00a0\r\n\t ",
+            "legacy-conflict",
+            "calculation",
+        ),
+        (
+            " \t\r\n\u00a0\u2003\u3000 ",
+            "\u3000\u2003\u00a0calculation\u00a0\u2003\u3000",
+            "calculation",
+        ),
+    ],
+)
+def test_probe_normalizes_scalar_question_type_alias_boundaries(
+    canonical, legacy, expected
+):
+    components = _components()
+    payload = {
+        "subject": "math",
+        "question_type": canonical,
+        "question_style": legacy,
+        "difficulty": "L2",
+        "knowledge_points": ["algebra"],
+        "multi_part": False,
+        "proof_or_calc": "calc",
+        "visual_risk_score": 0,
+        "reasoning_risk_score": 20,
+        "recommended_route": "STANDARD",
+        "brief_reason": "basic calculation",
+        "normalized_text": "solve x+1=2",
+    }
+    client = RecordingAIClient(
+        {"question_probe": json.dumps(payload, ensure_ascii=False)}
+    )
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["question_type"] == expected
+    assert result["question_style"] == expected
+
+
+@pytest.mark.parametrize(
+    ("canonical", "legacy", "expected"),
+    [
+        ("\t\r\n\u00a0\u2003\u3000L2\u3000\u2003\u00a0\r\n", "L4", "L2"),
+        ("\t\r\n\u00a0\u2003\u3000", "\u3000\u2003L2\u2003\u3000", "L2"),
+    ],
+)
+def test_probe_normalizes_scalar_difficulty_alias_boundaries(
+    canonical, legacy, expected
+):
+    components = _components()
+    payload = {
+        "subject": "math",
+        "question_type": "calculation",
+        "difficulty": canonical,
+        "difficulty_est": legacy,
+        "knowledge_points": ["algebra"],
+        "multi_part": False,
+        "proof_or_calc": "calc",
+        "visual_risk_score": 0,
+        "reasoning_risk_score": 20,
+        "recommended_route": "STANDARD",
+        "brief_reason": "basic calculation",
+        "normalized_text": "solve x+1=2",
+    }
+    client = RecordingAIClient(
+        {"question_probe": json.dumps(payload, ensure_ascii=False)}
+    )
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["difficulty"] == expected
+    assert result["difficulty_est"] == expected
+
+
+@pytest.mark.parametrize(
+    "format_char", ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"]
+)
+@pytest.mark.parametrize(
+    ("canonical_key", "legacy_key"),
+    [
+        ("question_type", "question_style"),
+        ("difficulty", "difficulty_est"),
+    ],
+)
+def test_probe_rejects_scalar_aliases_containing_only_format_characters(
+    format_char, canonical_key, legacy_key
+):
+    components = _components()
+    payload = {
+        "subject": "math",
+        "question_type": "calculation",
+        "difficulty": "L2",
+        "knowledge_points": ["algebra"],
+        "multi_part": False,
+        "proof_or_calc": "calc",
+        "visual_risk_score": 0,
+        "reasoning_risk_score": 20,
+        "recommended_route": "STANDARD",
+        "brief_reason": "basic calculation",
+        "normalized_text": "solve x+1=2",
+    }
+    payload[canonical_key] = format_char
+    payload[legacy_key] = format_char
+    client = RecordingAIClient(
+        {"question_probe": json.dumps(payload, ensure_ascii=False)}
+    )
+
+    with pytest.raises(AIResponseError):
+        components.QuestionProbeComponent(client).run(
+            components.QuestionInput(stem="solve x+1=2")
+        )
+
+
+def test_probe_strips_boundary_format_characters_but_preserves_internal_ones():
+    components = _components()
+    payload = {
+        "subject": "math",
+        "question_type": "\u200bcalcu\u200blation\ufeff",
+        "difficulty": "\u2060L2\u200d",
+        "knowledge_points": ["algebra"],
+        "multi_part": False,
+        "proof_or_calc": "calc",
+        "visual_risk_score": 0,
+        "reasoning_risk_score": 20,
+        "recommended_route": "STANDARD",
+        "brief_reason": "basic calculation",
+        "normalized_text": "solve x+1=2",
+    }
+    client = RecordingAIClient(
+        {"question_probe": json.dumps(payload, ensure_ascii=False)}
+    )
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["question_type"] == "calcu\u200blation"
+    assert result["question_style"] == "calcu\u200blation"
+    assert result["difficulty"] == "L2"
+    assert result["difficulty_est"] == "L2"
+
+
 def test_probe_list_alias_uses_nonempty_legacy_when_canonical_is_empty():
     components = _components()
     client = RecordingAIClient(

@@ -11,6 +11,30 @@ from apps.common.ai.schemas import (
 from .base import QuestionAIComponent, QuestionInput
 
 
+_BOUNDARY_FORMAT_CHARACTERS = frozenset(
+    {"\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"}
+)
+
+
+def _normalize_scalar_token(value: object) -> object:
+    """Trim visual boundary padding without changing token internals."""
+    if not isinstance(value, str):
+        return value
+
+    start = 0
+    end = len(value)
+    while start < end and (
+        value[start].isspace() or value[start] in _BOUNDARY_FORMAT_CHARACTERS
+    ):
+        start += 1
+    while end > start and (
+        value[end - 1].isspace()
+        or value[end - 1] in _BOUNDARY_FORMAT_CHARACTERS
+    ):
+        end -= 1
+    return value[start:end]
+
+
 def _is_nonempty(value: object) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
@@ -22,6 +46,21 @@ def _normalize_alias_pair(
 ) -> None:
     canonical_value = result.get(canonical)
     legacy_value = result.get(legacy)
+    if _is_nonempty(canonical_value):
+        selected = canonical_value
+    elif _is_nonempty(legacy_value):
+        selected = legacy_value
+    else:
+        selected = default
+    result[canonical] = selected
+    result[legacy] = selected
+
+
+def _normalize_scalar_alias_pair(
+    result: dict, canonical: str, legacy: str, default: object
+) -> None:
+    canonical_value = _normalize_scalar_token(result.get(canonical))
+    legacy_value = _normalize_scalar_token(result.get(legacy))
     if _is_nonempty(canonical_value):
         selected = canonical_value
     elif _is_nonempty(legacy_value):
@@ -49,10 +88,10 @@ class QuestionProbeComponent(QuestionAIComponent):
         normalized.setdefault("grade", "")
         normalized.setdefault("semester", "")
         normalized.setdefault("chapter", "")
-        _normalize_alias_pair(
+        _normalize_scalar_alias_pair(
             normalized, "question_type", "question_style", ""
         )
-        _normalize_alias_pair(
+        _normalize_scalar_alias_pair(
             normalized, "difficulty", "difficulty_est", ""
         )
         _normalize_alias_pair(

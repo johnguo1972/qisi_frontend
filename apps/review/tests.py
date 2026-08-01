@@ -508,9 +508,10 @@ class AIProcessFullPipelineTest(TestCase):
                 return AIResult(
                     content=json.dumps({
                         'subject': 'math',
-                        'question_type': '   ',
-                        'question_style': 'calculation',
-                        'difficulty': 'L2',
+                        'question_type': ' \t\r\n\u00a0\u2003\u3000 ',
+                        'question_style': '\u200b\u3000calculation\u3000\ufeff',
+                        'difficulty': '\u200b\u3000\t',
+                        'difficulty_est': '\u2060\u3000L2\u3000\u200d',
                         'knowledge_points': ['方程'],
                         'multi_part': False,
                         'proof_or_calc': 'calc',
@@ -550,8 +551,20 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(results['errors'], {})
         self.assertEqual(results['probe']['question_type'], 'calculation')
         self.assertEqual(results['probe']['question_style'], 'calculation')
+        self.assertEqual(results['probe']['difficulty'], 'L2')
+        self.assertEqual(results['probe']['difficulty_est'], 'L2')
+
+        service.save_results_to_question(self.question.id, results)
         self.question.refresh_from_db()
         self.assertEqual(self.question.ai_processing_status, 'success')
+        self.assertEqual(
+            self.question.ai_probe_result['question_type'], 'calculation'
+        )
+        self.assertEqual(
+            self.question.ai_probe_result['question_style'], 'calculation'
+        )
+        self.assertEqual(self.question.ai_probe_result['difficulty'], 'L2')
+        self.assertEqual(self.question.ai_probe_result['difficulty_est'], 'L2')
 
     def test_process_question_full_v2_marks_failed_for_invalid_mode_b_answer(self):
         """A malformed real Mode B component result must persist failed state."""
