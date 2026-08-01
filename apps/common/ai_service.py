@@ -1,147 +1,128 @@
-"""AI service for knowledge analysis and A/B/C mode answer generation."""
-import json
+"""Backward-compatible facade for the shared question AI components."""
 import logging
 import time
 import os
-import httpx
 from django.conf import settings
 from apps.common.exceptions import AIRequestError
-from apps.common.ai_prompts import AIPrompts
-from apps.common.utils import repair_json_string
+from apps.common.ai.client import AIClient
+from apps.common.ai.config import load_ai_config
+from apps.common.ai.exceptions import AIConfigError, AIPromptError, AIResponseError
+from apps.common.ai.prompt_registry import PromptRegistry
+from apps.common.ai.types import AIResult
+from apps.common.ai.components import (
+    KnowledgeAnalysisComponent,
+    ModeAAnswerComponent,
+    ModeBAnswerComponent,
+    ModeCAnswerComponent,
+    QuestionComponentFactory,
+    QuestionInput,
+    QuestionProbeComponent,
+    ResultVerifierComponent,
+    VisionExtractionComponent,
+)
 
 logger = logging.getLogger(__name__)
 
-QWEN_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+
+class _LegacyComponentClient:
+    """Route component calls through legacy mock hooks, never through HTTP."""
+
+    def __init__(self, service: "AIReviewService") -> None:
+        self._service = service
+
+    def complete(
+        self,
+        task_key: str,
+        *,
+        system: str,
+        user: str,
+        images=(),
+        trace_id: str | None = None,
+    ) -> AIResult:
+        if images:
+            content = self._service._call_ai_multimodal(
+                system,
+                user,
+                list(images),
+                task_key=task_key,
+            )
+        else:
+            content = self._service._call_ai(
+                system,
+                user,
+                task_key=task_key,
+            )
+        task = self._service._config.get_task_config(task_key)
+        return AIResult(
+            content=content,
+            provider=task.provider,
+            model=task.model,
+            latency_ms=0,
+            raw_response={},
+        )
 
 
 class AIReviewService:
-    """Service for AI-powered knowledge analysis and answer generation."""
+    """Thin compatibility adapter retaining the legacy public API."""
 
-    def __init__(self):
-        self.api_key = os.environ.get('QWEN_API_KEY', '')
-        if not self.api_key:
-            raise AIRequestError("QWEN_API_KEY is not set")
+    def __init__(
+        self,
+        component_factory=None,
+        *,
+        ai_client=None,
+        prompt_registry=None,
+    ):
+        self._config = load_ai_config()
+        self._ai_client = ai_client or AIClient()
+        self._prompt_registry = prompt_registry or PromptRegistry(self._config)
+        self.api_key = self._config.get_provider_config("qwen").api_key
+        self._component_client = _LegacyComponentClient(self)
+        self._component_factory = component_factory or QuestionComponentFactory(
+            self._component_client, self._prompt_registry
+        )
 
-    def _get_model(self, override_model: str = None, *, default_model: str = None) -> str:
-        """Get AI model name, with optional override and per-call default.
-
-        Priority: override_model > settings.AI_MODEL > default_model fallback.
-        """
-        return override_model or getattr(settings, 'AI_MODEL', default_model or 'qwen3.6-plus')
+    def _get_model(
+        self, override_model: str = None, *, default_model: str = None
+    ) -> str:
+        """Return compatibility metadata without changing configured routing."""
+        task_key = (
+            "question_probe"
+            if default_model and "flash" in default_model
+            else "knowledge_analysis"
+        )
+        configured_model = self._config.get_task_config(task_key).model
+        configured_models = {
+            self._config.get_task_config(key).model
+            for key in self._config.task_keys
+        }
+        if override_model in configured_models:
+            return override_model
+        return configured_model
 
     def _call_ai(self, system_prompt: str, user_prompt: str,
                  model: str = None, max_tokens: int = 4000,
-                 default_model: str = None) -> str:
-        """Call AI API with retry logic (up to 3 attempts).
-
-        Returns: parsed assistant message content (JSON string)
-        Raises: AIRequestError on final failure
-        """
-        model = self._get_model(model, default_model=default_model)
-        # Retry delays: 5s → 8s → 10s
-        retry_delays = [5, 8, 10]
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        payload = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.1,
-            "response_format": {"type": "json_object"},
-        }
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        last_error = None
-        for attempt in range(1, 4):
-            try:
-                with httpx.Client(timeout=300.0, trust_env=False) as client:
-                    response = client.post(QWEN_API_URL, json=payload, headers=headers)
-                    response.raise_for_status()
-                result = response.json()
-                choices = result.get("choices", [])
-                if not choices:
-                    raise AIRequestError("No choices in AI response")
-                return choices[0]["message"]["content"]
-            except httpx.ReadTimeout as e:
-                last_error = e
-                wait = retry_delays[attempt - 1]
-                logger.warning(f"AI API timeout (attempt {attempt}/3), retrying in {wait}s: {e}")
-                time.sleep(wait)
-            except httpx.HTTPError as e:
-                last_error = e
-                wait = retry_delays[attempt - 1]
-                logger.warning(f"AI API HTTP error (attempt {attempt}/3), retrying in {wait}s: {e}")
-                time.sleep(wait)
-            except Exception as e:
-                raise AIRequestError(f"Unexpected AI API error: {e}")
-
-        raise AIRequestError(f"AI API call failed after 3 attempts: {last_error}")
+                 default_model: str = None, *, task_key: str | None = None) -> str:
+        """Legacy mock hook delegating to the single configured ``AIClient``."""
+        if not task_key:
+            raise AIRequestError("Configured AI task key is required")
+        return self._ai_client.complete(
+            task_key, system=system_prompt, user=user_prompt
+        ).content
 
     def _call_ai_multimodal(self, system_prompt: str, user_text: str,
                             image_urls: list, model: str = None,
                             max_tokens: int = 8000,
-                            default_model: str = None) -> str:
-        """Call AI API with multimodal (text + images) messages.
-
-        Returns: parsed assistant message content
-        Raises: AIRequestError on final failure
-        """
-        model = self._get_model(model, default_model=default_model)
-        retry_delays = [5, 8, 10]
-
-        # Build content parts: text first, then images
-        content_parts = [{"type": "text", "text": user_text}]
-        for url in image_urls:
-            content_parts.append({
-                "type": "image_url",
-                "image_url": {"url": url}
-            })
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content_parts},
-        ]
-        payload = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.1,
-        }
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        last_error = None
-        for attempt in range(1, 4):
-            try:
-                with httpx.Client(timeout=300.0, trust_env=False) as client:
-                    response = client.post(QWEN_API_URL, json=payload, headers=headers)
-                    response.raise_for_status()
-                result = response.json()
-                choices = result.get("choices", [])
-                if not choices:
-                    raise AIRequestError("No choices in AI multimodal response")
-                return choices[0]["message"]["content"]
-            except httpx.ReadTimeout as e:
-                last_error = e
-                wait = retry_delays[attempt - 1]
-                logger.warning(f"AI multimodal timeout (attempt {attempt}/3), retrying in {wait}s: {e}")
-                time.sleep(wait)
-            except httpx.HTTPError as e:
-                last_error = e
-                wait = retry_delays[attempt - 1]
-                logger.warning(f"AI multimodal HTTP error (attempt {attempt}/3), retrying in {wait}s: {e}")
-                time.sleep(wait)
-            except Exception as e:
-                raise AIRequestError(f"Unexpected AI multimodal error: {e}")
-
-        raise AIRequestError(f"AI multimodal call failed after 3 attempts: {last_error}")
+                            default_model: str = None, *,
+                            task_key: str | None = None) -> str:
+        """Legacy multimodal mock hook delegating to configured ``AIClient``."""
+        if not task_key:
+            raise AIRequestError("Configured AI task key is required")
+        return self._ai_client.complete(
+            task_key,
+            system=system_prompt,
+            user=user_text,
+            images=tuple(image_urls),
+        ).content
 
     def _get_question_image_urls(self, question, max_images: int = 5) -> list:
         """Get OSS URLs for all question images.
@@ -176,218 +157,87 @@ class AIReviewService:
         return urls
 
     def _upload_to_oss(self, local_path: str, oss_key: str) -> str | None:
-        """Upload a file to Aliyun OSS and return the public URL.
+        """Delegate uploads to the existing OSS service."""
+        from pathlib import PurePosixPath
+        from apps.common.oss_service import upload_crop_image_safe
 
-        Returns None if OSS is not configured or upload fails.
-        """
-        import oss2
+        parent = str(PurePosixPath(oss_key).parent)
+        prefix = parent if parent != "." else "question_crops"
+        return upload_crop_image_safe(local_path, prefix=prefix)
 
-        access_key_id = os.environ.get('ALIYUN_OSS_ACCESS_KEY_ID', '')
-        access_key_secret = os.environ.get('ALIYUN_OSS_ACCESS_KEY_SECRET', '')
-        endpoint = os.environ.get('ALIYUN_OSS_ENDPOINT', 'https://oss-cn-shanghai.aliyuncs.com')
-        bucket_name = os.environ.get('ALIYUN_OSS_BUCKET', '')
+    def _component(self, component_type):
+        return self._component_factory(component_type)
 
-        if not all([access_key_id, access_key_secret, bucket_name]):
-            logger.warning('OSS credentials not configured, skipping image upload')
-            return None
-
+    @staticmethod
+    def _run_component(component, question_input: QuestionInput) -> dict:
         try:
-            auth = oss2.Auth(access_key_id, access_key_secret)
-            bucket = oss2.Bucket(auth, endpoint, bucket_name)
+            result = component.run(question_input)
+        except (AIConfigError, AIPromptError, AIResponseError) as error:
+            raise AIRequestError(str(error)) from None
+        if not isinstance(result, dict):
+            raise AIRequestError(
+                "AI question component returned a non-object response"
+            )
+        return result
 
-            # Use the file_path as OSS key (e.g., 'exams/11/crops/abc.png')
-            with open(local_path, 'rb') as f:
-                bucket.put_object(oss_key, f)
-
-            # Return public URL
-            url = f'https://{bucket_name}.{endpoint.replace("https://", "")}/{oss_key}'
-            logger.info(f'Uploaded to OSS: {url}')
-            return url
-        except oss2.exceptions.OssError as e:
-            logger.error(f'OSS upload failed for {local_path}: {e}')
-            return None
-        except Exception as e:
-            logger.error(f'Unexpected OSS error for {local_path}: {e}')
-            return None
-
-    def _parse_json_response(self, raw: str) -> dict:
-        """Parse AI JSON response with repair logic."""
-        cleaned = repair_json_string(raw)
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            raise AIRequestError(f"Failed to parse AI JSON response: {e}\nRaw: {raw[:500]}")
+    @staticmethod
+    def _question_input(question, image_urls=(), **metadata) -> QuestionInput:
+        return QuestionInput(
+            stem=getattr(question, "stem", "") or "",
+            options=getattr(question, "options", None),
+            answer=getattr(question, "answer", "") or "",
+            solution=getattr(question, "solution", "") or "",
+            image_urls=tuple(image_urls),
+            metadata={
+                "analysis": getattr(question, "analysis", "") or "",
+                **metadata,
+            },
+        )
 
     def analyze_knowledge(self, question, model: str = None) -> dict:
-        """Step 1: Analyze knowledge points for a question.
-
-        Returns: dict with knowledge_points, grade_term, solving_methods
-        """
-        from apps.knowledge.models import KnowledgePoint
-        from apps.parser.models import QuestionImage
-
-        # Build knowledge points list for the prompt
-        # Order by stage and grade_index so AI sees all grade levels (not just primary school)
-        # Without explicit ordering, ID 1-99 are all primary school, high school starts at ID ~949
-        subject_map = {'math': 'math', 'physics': 'physics', '数学': 'math', '物理': 'physics'}
-        db_subject = subject_map.get(question.subject, 'math')
-        kp_list = list(KnowledgePoint.objects.filter(
-            subject=db_subject
-        ).order_by('stage', 'grade_index', 'id'))
-
-        # Select representative knowledge points from each grade level
-        # so the AI sees the full grade spectrum without exceeding token limits
-        selected = []
-        seen_grades = {}
-        for kp in kp_list:
-            grade_key = (kp.stage, kp.grade_index)
-            if grade_key not in seen_grades:
-                seen_grades[grade_key] = 0
-            if seen_grades[grade_key] < 5:  # up to 5 per grade level
-                selected.append(kp)
-                seen_grades[grade_key] += 1
-
-        kp_list_text = ", ".join(f"[{kp.id}]{kp.module}({kp.full_label})" for kp in selected)
-
-        # Build image descriptions
-        images = QuestionImage.objects.filter(question=question).order_by('sort_order')
-        image_descs = []
-        for img in images:
-            image_descs.append(f"图片类型: {img.image_type}, 路径: {img.file_path}")
-
-        prompt = AIPrompts.knowledge_analysis(
-            question_text=question.stem,
-            question_answer=question.answer or '',
-            question_analysis=question.analysis or '',
-            question_solution=question.solution or '',
-            image_descriptions=image_descs if image_descs else None,
+        """Analyze knowledge points through the configured shared component."""
+        question_input = self._question_input(
+            question, subject_hint=getattr(question, "subject", "") or ""
         )
-        prompt['user'] = prompt['user'].replace('{knowledge_points_list}', kp_list_text)
-
-        raw = self._call_ai(prompt['system'], prompt['user'], model=model)
-        return self._parse_json_response(raw)
+        return self._run_component(
+            self._component(KnowledgeAnalysisComponent), question_input
+        )
 
     def generate_answer_a(self, question, knowledge_data: dict = None,
                           model: str = None) -> dict:
-        """Step 2: Generate A mode answer (3-5 steps) with image attachments."""
-        from apps.parser.models import QuestionImage
-
-        knowledge_refs = ""
-        if knowledge_data and knowledge_data.get('knowledge_points'):
-            kps = knowledge_data['knowledge_points']
-            knowledge_refs = ", ".join(
-                kp.get('module', '') or kp.get('full_label', '')
-                for kp in kps if kp
-            )
-
-        # Get image URLs for multimodal
-        image_urls = self._get_question_image_urls(question)
-
-        images = QuestionImage.objects.filter(question=question).order_by('sort_order')
-        image_descs = [f"图片类型: {img.image_type}" for img in images]
-
-        prompt = AIPrompts.mode_a_answer(
-            question_text=question.stem,
-            knowledge_refs=knowledge_refs,
-            question_answer=question.answer or '',
-            question_analysis=question.analysis or '',
-            question_solution=question.solution or '',
-            image_descriptions=image_descs if image_descs else None,
+        """Generate the legacy Mode A shape through ``ModeAAnswerComponent``."""
+        return self._generate_mode(
+            ModeAAnswerComponent, question, knowledge_data
         )
-
-        if image_urls:
-            # Use multimodal API with images
-            raw = self._call_ai_multimodal(
-                prompt['system'], prompt['user'], image_urls,
-                model=model, default_model='qwen3.6-plus'
-            )
-        else:
-            # Fallback to text-only
-            raw = self._call_ai(
-                prompt['system'], prompt['user'], model=model,
-                default_model='qwen3.6-plus'
-            )
-        return self._parse_json_response(raw)
 
     def generate_answer_b(self, question, knowledge_data: dict = None,
                           model: str = None) -> dict:
-        """Step 3: Generate B mode answer (Socratic multiple-choice) with image attachments."""
-        from apps.parser.models import QuestionImage
-
-        knowledge_refs = ""
-        if knowledge_data and knowledge_data.get('knowledge_points'):
-            kps = knowledge_data['knowledge_points']
-            knowledge_refs = ", ".join(
-                kp.get('module', '') or kp.get('full_label', '')
-                for kp in kps if kp
-            )
-
-        # Get image URLs for multimodal
-        image_urls = self._get_question_image_urls(question)
-
-        images = QuestionImage.objects.filter(question=question).order_by('sort_order')
-        image_descs = [f"图片类型: {img.image_type}" for img in images]
-
-        prompt = AIPrompts.mode_b_answer(
-            question_text=question.stem,
-            knowledge_refs=knowledge_refs,
-            question_answer=question.answer or '',
-            question_analysis=question.analysis or '',
-            question_solution=question.solution or '',
-            image_descriptions=image_descs if image_descs else None,
+        """Generate the legacy Mode B shape through ``ModeBAnswerComponent``."""
+        return self._generate_mode(
+            ModeBAnswerComponent, question, knowledge_data
         )
-
-        if image_urls:
-            raw = self._call_ai_multimodal(
-                prompt['system'], prompt['user'], image_urls,
-                model=model, default_model='qwen3.6-plus'
-            )
-        else:
-            raw = self._call_ai(
-                prompt['system'], prompt['user'], model=model,
-                default_model='qwen3.6-plus'
-            )
-        return self._parse_json_response(raw)
 
     def generate_answer_c(self, question, knowledge_data: dict = None,
                           model: str = None) -> dict:
-        """Step 4: Generate C mode answer (Socratic open-ended) with image attachments."""
-        from apps.parser.models import QuestionImage
-
-        knowledge_refs = ""
-        if knowledge_data and knowledge_data.get('knowledge_points'):
-            kps = knowledge_data['knowledge_points']
-            knowledge_refs = ", ".join(
-                kp.get('module', '') or kp.get('full_label', '')
-                for kp in kps if kp
-            )
-
-        # Get image URLs for multimodal
-        image_urls = self._get_question_image_urls(question)
-
-        images = QuestionImage.objects.filter(question=question).order_by('sort_order')
-        image_descs = [f"图片类型: {img.image_type}" for img in images]
-
-        prompt = AIPrompts.mode_c_answer(
-            question_text=question.stem,
-            knowledge_refs=knowledge_refs,
-            question_answer=question.answer or '',
-            question_analysis=question.analysis or '',
-            question_solution=question.solution or '',
-            image_descriptions=image_descs if image_descs else None,
+        """Generate the legacy Mode C shape through ``ModeCAnswerComponent``."""
+        return self._generate_mode(
+            ModeCAnswerComponent, question, knowledge_data
         )
 
-        if image_urls:
-            raw = self._call_ai_multimodal(
-                prompt['system'], prompt['user'], image_urls,
-                model=model, default_model='qwen3.6-plus'
-            )
-        else:
-            raw = self._call_ai(
-                prompt['system'], prompt['user'], model=model,
-                default_model='qwen3.6-plus'
-            )
-        return self._parse_json_response(raw)
+    def _generate_mode(self, component_type, question, knowledge_data) -> dict:
+        image_urls = self._get_question_image_urls(question)
+        knowledge_refs = []
+        if isinstance(knowledge_data, dict):
+            knowledge_refs = knowledge_data.get("knowledge_points") or []
+        question_input = self._question_input(
+            question,
+            image_urls,
+            knowledge_refs=knowledge_refs,
+            vision_result={},
+        )
+        return self._run_component(
+            self._component(component_type), question_input
+        )
 
     def process_question_full(self, question_id: int, model: str = None) -> dict:
         """Full pipeline: knowledge analysis + A/B/C answer generation.
@@ -491,130 +341,89 @@ class AIReviewService:
 
     def probe_and_norm(self, question, image_urls: list, model: str = None) -> dict:
         """Step 1: Probe & Norm — 轻量探查 + 规范化."""
-        prompt = AIPrompts.probe_and_norm(
-            ocr_text=question.stem or '',
-            has_figure=len(image_urls) > 0,
+        question_input = self._question_input(question, image_urls)
+        return self._run_component(
+            self._component(QuestionProbeComponent), question_input
         )
-
-        if image_urls:
-            raw = self._call_ai_multimodal(
-                prompt['system'], prompt['user'], image_urls,
-                model=model, default_model='qwen3.6-flash'
-            )
-        else:
-            raw = self._call_ai(
-                prompt['system'], prompt['user'], model=model,
-                default_model='qwen3.6-flash'
-            )
-        return self._parse_json_response(raw)
 
     def vision_extraction(self, question, image_urls: list,
                           normalized_text: str, model: str = None) -> dict:
         """Step 2: Vision Extraction — 统一读图."""
-        prompt = AIPrompts.vision_extraction(normalized_text=normalized_text)
-
-        if image_urls:
-            raw = self._call_ai_multimodal(
-                prompt['system'], prompt['user'], image_urls,
-                model=model, default_model='qwen3.6-plus'
-            )
-        else:
-            raw = self._call_ai(
-                prompt['system'], prompt['user'], model=model,
-                default_model='qwen3.6-plus'
-            )
-        return self._parse_json_response(raw)
+        question_input = self._question_input(
+            question, image_urls, normalized_text=normalized_text
+        )
+        return self._run_component(
+            self._component(VisionExtractionComponent), question_input
+        )
 
     def solve_mode_a(self, question, image_urls: list, normalized_text: str,
                      vision_result: dict, knowledge_refs: str,
                      model: str = None) -> dict:
         """Step 3a: A 模式求解."""
-        prompt = AIPrompts.solve_mode_a(
-            normalized_text=normalized_text,
-            vision_json=json.dumps(vision_result, ensure_ascii=False),
-            knowledge_refs=knowledge_refs,
+        return self._solve_mode(
+            ModeAAnswerComponent, question, image_urls, normalized_text,
+            vision_result, knowledge_refs
         )
-
-        if image_urls:
-            raw = self._call_ai_multimodal(
-                prompt['system'], prompt['user'], image_urls,
-                model=model, default_model='qwen3.6-plus'
-            )
-        else:
-            raw = self._call_ai(
-                prompt['system'], prompt['user'], model=model,
-                default_model='qwen3.6-plus'
-            )
-        logger.info(f'[AI RAW] solve_mode_a question={question.id}\n{raw}')
-        return self._parse_json_response(raw)
 
     def solve_mode_b(self, question, image_urls: list, normalized_text: str,
                      vision_result: dict, knowledge_refs: str,
                      model: str = None) -> dict:
         """Step 3b: B 模式求解."""
-        prompt = AIPrompts.solve_mode_b(
-            normalized_text=normalized_text,
-            vision_json=json.dumps(vision_result, ensure_ascii=False),
-            knowledge_refs=knowledge_refs,
+        return self._solve_mode(
+            ModeBAnswerComponent, question, image_urls, normalized_text,
+            vision_result, knowledge_refs
         )
-
-        if image_urls:
-            raw = self._call_ai_multimodal(
-                prompt['system'], prompt['user'], image_urls,
-                model=model, default_model='qwen3.6-plus'
-            )
-        else:
-            raw = self._call_ai(
-                prompt['system'], prompt['user'], model=model,
-                default_model='qwen3.6-plus'
-            )
-        logger.info(f'[AI RAW] solve_mode_b question={question.id}\n{raw}')
-        return self._parse_json_response(raw)
 
     def solve_mode_c(self, question, image_urls: list, normalized_text: str,
                      vision_result: dict, knowledge_refs: str,
                      model: str = None) -> dict:
         """Step 3c: C 模式求解."""
-        prompt = AIPrompts.solve_mode_c(
-            normalized_text=normalized_text,
-            vision_json=json.dumps(vision_result, ensure_ascii=False),
-            knowledge_refs=knowledge_refs,
+        return self._solve_mode(
+            ModeCAnswerComponent, question, image_urls, normalized_text,
+            vision_result, knowledge_refs
         )
 
-        if image_urls:
-            raw = self._call_ai_multimodal(
-                prompt['system'], prompt['user'], image_urls,
-                model=model, default_model='qwen3.6-plus'
-            )
-        else:
-            raw = self._call_ai(
-                prompt['system'], prompt['user'], model=model,
-                default_model='qwen3.6-plus'
-            )
-        logger.info(f'[AI RAW] solve_mode_c question={question.id}\n{raw}')
-        return self._parse_json_response(raw)
+    def _solve_mode(
+        self, component_type, question, image_urls, normalized_text,
+        vision_result, knowledge_refs
+    ) -> dict:
+        question_input = self._question_input(
+            question,
+            image_urls,
+            normalized_text=normalized_text,
+            vision_result=vision_result,
+            knowledge_refs=knowledge_refs,
+        )
+        return self._run_component(
+            self._component(component_type), question_input
+        )
 
     def verify_result(self, normalized_text: str, vision_result: dict,
                       solver_output: dict, model: str = None) -> dict:
         """Step 4: 解后校验."""
-        prompt = AIPrompts.verify_result(
-            normalized_text=normalized_text,
-            vision_json=json.dumps(vision_result, ensure_ascii=False),
-            solver_output=solver_output,
+        question_input = QuestionInput(
+            stem=normalized_text,
+            metadata={
+                "normalized_text": normalized_text,
+                "vision_result": vision_result,
+                "solver_output": solver_output,
+            },
         )
-
-        raw = self._call_ai(
-            prompt['system'], prompt['user'], model=model,
-            default_model='qwen3.6-flash'
+        return self._run_component(
+            self._component(ResultVerifierComponent), question_input
         )
-        return self._parse_json_response(raw)
 
     def analyze_knowledge_points(self, question, normalized_text: str, subject_hint: str = '',
                                  model: str = None) -> dict:
         """知识点识别：输出 1-5 个知识点 module + 难度（供 save 阶段匹配 knowledge_points 表）."""
-        prompt = AIPrompts.analyze_knowledge(normalized_text=normalized_text, subject_hint=subject_hint)
-        raw = self._call_ai(prompt['system'], prompt['user'], model=model, default_model='qwen3.6-flash')
-        return self._parse_json_response(raw)
+        question_input = self._question_input(
+            question,
+            normalized_text=normalized_text,
+            subject_hint=subject_hint,
+        )
+        return self._run_component(
+            self._component(KnowledgeAnalysisComponent), question_input
+        )
 
     def process_question_full_v2(self, question_id: int, model: str = None) -> dict:
         """Full 6-step pipeline: Probe -> Vision -> Solver A/B/C -> Verifier."""

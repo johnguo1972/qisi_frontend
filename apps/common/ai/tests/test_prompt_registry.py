@@ -264,6 +264,26 @@ def test_registry_defaults_do_not_make_missing_variables_optional(provider_env):
         registry.render("knowledge_analysis", normalized_text="题目")
 
 
+def test_question_probe_prompt_requests_complete_canonical_taxonomy(provider_env):
+    system, _ = PromptRegistry(AIConfig.load()).render(
+        "question_probe",
+        ocr_text="题目",
+        has_figure=False,
+        ocr_confidence="unknown",
+    )
+
+    for field_name in (
+        "subject",
+        "question_type",
+        "grade",
+        "semester",
+        "chapter",
+        "difficulty",
+        "knowledge_points",
+    ):
+        assert f"{field_name} (" in system
+
+
 class _CapturedResponse:
     def raise_for_status(self):
         return None

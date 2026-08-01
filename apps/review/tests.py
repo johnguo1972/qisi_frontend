@@ -398,6 +398,95 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertIn('answer_b', results)
         self.assertIn('answer_c', results)
 
+    def test_process_question_full_v2_routes_all_steps_through_components(self):
+        """The legacy v2 pipeline keeps its shape while using components."""
+        from apps.common.ai.components import (
+            KnowledgeAnalysisComponent,
+            ModeAAnswerComponent,
+            ModeBAnswerComponent,
+            ModeCAnswerComponent,
+            QuestionProbeComponent,
+            ResultVerifierComponent,
+            VisionExtractionComponent,
+        )
+
+        responses = {
+            QuestionProbeComponent: {
+                'subject': 'math',
+                'normalized_text': '规范化题干',
+                'topic_tags_top3': ['函数'],
+            },
+            KnowledgeAnalysisComponent: {
+                'subject': 'math',
+                'difficulty': 'L2',
+                'knowledge_points': [{'module': '函数'}],
+            },
+            VisionExtractionComponent: {
+                'figure_present': False,
+                'entities': [],
+            },
+            ModeAAnswerComponent: {
+                'mode': 'A', 'steps': [1, 2, 3], 'final_answer': '5',
+                'summary': '完成',
+            },
+            ModeBAnswerComponent: {
+                'mode': 'B', 'questions': [], 'final_answer': '5',
+            },
+            ModeCAnswerComponent: {
+                'mode': 'C', 'questions': [], 'final_answer': '5',
+            },
+            ResultVerifierComponent: {
+                'pass': True, 'issues': [], 'retry_needed': False,
+            },
+        }
+        created_types = []
+
+        def component_factory(component_type):
+            created_types.append(component_type)
+            component = MagicMock()
+            component.run.return_value = responses[component_type]
+            return component
+
+        service = AIReviewService(component_factory=component_factory)
+        image_urls = [
+            'https://example.test/one.png',
+            'https://example.test/two.png',
+        ]
+        with patch.object(
+            service, '_get_question_image_urls', return_value=image_urls
+        ):
+            results = service.process_question_full_v2(self.question.id)
+
+        self.assertEqual(
+            created_types,
+            [
+                QuestionProbeComponent,
+                KnowledgeAnalysisComponent,
+                VisionExtractionComponent,
+                ModeAAnswerComponent,
+                ModeBAnswerComponent,
+                ModeCAnswerComponent,
+                ResultVerifierComponent,
+            ],
+        )
+        self.assertEqual(
+            set(results),
+            {
+                'probe', 'knowledge', 'vision', 'answer_a', 'answer_b',
+                'answer_c', 'verifier', 'errors', 'image_count',
+            },
+        )
+        self.assertEqual(results['image_count'], 2)
+        self.assertEqual(results['errors'], {})
+        self.assertEqual(results['answer_a']['mode'], 'A')
+        self.assertEqual(results['answer_b']['mode'], 'B')
+        self.assertEqual(results['answer_c']['mode'], 'C')
+        self.assertTrue(results['verifier']['pass'])
+
+        self.question.refresh_from_db()
+        self.assertEqual(self.question.ai_processing_status, 'success')
+        self.assertIsNotNone(self.question.ai_processed_at)
+
 
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
