@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +9,8 @@ from apps.common.ai.config import AIConfig
 from apps.common.ai.exceptions import AIConfigError, AIPromptError
 from apps.common.ai.prompt_registry import PromptRegistry
 from apps.common.ai_prompts import AIPrompts
+from apps.missions import views as mission_views
+from apps.study import ai_helper, guidance_views
 
 
 @pytest.fixture
@@ -259,3 +262,161 @@ def test_registry_defaults_do_not_make_missing_variables_optional(provider_env):
 
     with pytest.raises(AIPromptError, match="subject_hint"):
         registry.render("knowledge_analysis", normalized_text="题目")
+
+
+class _CapturedResponse:
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"choices": [{"message": {"content": '{"steps": []}'}}]}
+
+
+def _capture_legacy_guidance_generate(monkeypatch, stem, answer):
+    captured = {}
+
+    class _CapturedClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, *, json, headers):
+            captured["messages"] = json["messages"]
+            return _CapturedResponse()
+
+    monkeypatch.setattr(ai_helper.httpx, "Client", _CapturedClient)
+    result = ai_helper.call_qwen_for_guidance_with_question(stem, answer)
+    assert result == {"steps": []}
+    return tuple(message["content"] for message in captured["messages"])
+
+
+def _plain_view_handler(decorated_view):
+    return decorated_view.cls.post.__closure__[0].cell_contents
+
+
+def _capture_legacy_student_evaluation(monkeypatch, answer):
+    captured = {}
+    session = SimpleNamespace(
+        id="student-session",
+        session_status="running",
+        mode_type="C",
+        invalid_input_count=0,
+        question_id=7,
+        content_log_json={"step_index": 0, "steps": [], "answers": []},
+        save=lambda: None,
+    )
+    question = SimpleNamespace(
+        stem="题目",
+        answer=answer,
+        ai_answer_b={},
+        ai_answer_c={"questions": [{"question": "第一问"}, {"question": "第二问"}]},
+    )
+
+    class _SessionModel:
+        class DoesNotExist(Exception):
+            pass
+
+        objects = SimpleNamespace(get=lambda **kwargs: session)
+
+    class _QuestionModel:
+        class DoesNotExist(Exception):
+            pass
+
+        objects = SimpleNamespace(get=lambda **kwargs: question)
+
+    def capture(system, user):
+        captured["prompt"] = (system, user)
+        return "评价"
+
+    monkeypatch.setattr(guidance_views, "AIGuidanceSession", _SessionModel)
+    monkeypatch.setattr(guidance_views, "ExamQuestion", _QuestionModel)
+    monkeypatch.setattr(guidance_views, "call_qwen_for_guidance", capture)
+    request = SimpleNamespace(
+        data={"reply": "学生作答"}, user=SimpleNamespace(id=1)
+    )
+    _plain_view_handler(guidance_views.guidance_reply)(
+        request, "student-session"
+    )
+    return captured["prompt"]
+
+
+def _capture_legacy_teacher_evaluation(monkeypatch, answer):
+    captured = {}
+    session_id = "teacher-session"
+    session = {
+        "question_id": 8,
+        "mode": "C",
+        "turn": 0,
+        "messages": [],
+        "ai_c": {"questions": [{"question": "第一问"}, {"question": "第二问"}]},
+    }
+    question = SimpleNamespace(stem="题目", answer=answer, ai_answer_c={})
+
+    class _QuestionModel:
+        class DoesNotExist(Exception):
+            pass
+
+        objects = SimpleNamespace(get=lambda **kwargs: question)
+
+    def capture(system, user, model):
+        captured["prompt"] = (system, user)
+        return "评价"
+
+    monkeypatch.setitem(
+        mission_views._teacher_guidance_sessions, session_id, session
+    )
+    monkeypatch.setattr(mission_views, "ExamQuestion", _QuestionModel)
+    monkeypatch.setattr(mission_views, "_call_qwen", capture)
+    request = SimpleNamespace(data={"user_answer": "学生作答"})
+    _plain_view_handler(mission_views.teacher_guidance_reply)(request, session_id)
+    return captured["prompt"]
+
+
+@pytest.mark.parametrize("answer", ["", "D"])
+def test_guidance_generate_matches_complete_legacy_messages(
+    provider_env, monkeypatch, answer
+):
+    legacy = _capture_legacy_guidance_generate(monkeypatch, "题目", answer)
+
+    rendered = PromptRegistry(AIConfig.load()).render(
+        "guidance_generate", stem="题目", answer=answer
+    )
+
+    assert rendered == legacy
+
+
+@pytest.mark.parametrize("answer", ["", "D"])
+def test_guidance_evaluate_matches_complete_legacy_messages(
+    provider_env, monkeypatch, answer
+):
+    legacy = _capture_legacy_student_evaluation(monkeypatch, answer)
+
+    rendered = PromptRegistry(AIConfig.load()).render(
+        "guidance_evaluate",
+        question_text="题目",
+        reference_answer=answer,
+        student_answer="学生作答",
+    )
+
+    assert rendered == legacy
+
+
+@pytest.mark.parametrize("answer", ["", "D"])
+def test_teacher_guidance_evaluate_matches_complete_legacy_messages(
+    provider_env, monkeypatch, answer
+):
+    legacy = _capture_legacy_teacher_evaluation(monkeypatch, answer)
+
+    rendered = PromptRegistry(AIConfig.load()).render(
+        "teacher_guidance_evaluate",
+        question_text="题目",
+        reference_answer=answer,
+        student_answer="学生作答",
+    )
+
+    assert rendered == legacy

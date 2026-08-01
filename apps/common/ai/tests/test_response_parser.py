@@ -91,7 +91,8 @@ def test_response_parser_redacts_json_secrets_and_bare_base64_before_truncating(
     bare_base64 = "QWxhZGRpbjpvcGVuIHNlc2FtZQ+/" * 4
     bare_base64url = "AbC9_def-GhiJklMNopQRstuVwXyZ0123" * 3
     raw = (
-        'broken-prefix "api_key": "AIzaSensitiveValue", '
+        'broken-prefix "key": "short-secret", '
+        '"api_key": "AIzaSensitiveValue", '
         '"token": "token-sensitive", '
         '"secret": "secret-sensitive", '
         '"authorization": "Basic auth-sensitive" '
@@ -111,6 +112,7 @@ def test_response_parser_redacts_json_secrets_and_bare_base64_before_truncating(
     assert "broken-prefix" in formatted
     for sensitive in (
         "AIzaSensitiveValue",
+        "short-secret",
         "token-sensitive",
         "secret-sensitive",
         "auth-sensitive",

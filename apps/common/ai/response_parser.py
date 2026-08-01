@@ -87,7 +87,8 @@ def _safe_preview(text: str) -> str:
     preview = re.sub(
         r'''(?ix)
         (?P<prefix>
-            ["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|
+            (?<![A-Za-z0-9_])
+            ["']?(?:key|api[_-]?key|access[_-]?token|refresh[_-]?token|
             token|secret|authorization)["']?\s*:\s*
         )
         (?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\s}\]]+)

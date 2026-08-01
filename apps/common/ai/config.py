@@ -236,7 +236,10 @@ def _load_prompt(
     present = set(parser.options(section))
     if "template" in present:
         _require_options(
-            parser, section, {"template"}, {"variables", "defaults"}
+            parser,
+            section,
+            {"template"},
+            {"variables", "defaults", "encoding"},
         )
         system = ""
         user = parser.get(section, "template").strip()
@@ -251,11 +254,15 @@ def _load_prompt(
             parser,
             section,
             {"system", "user", "variables"},
-            {"defaults"},
+            {"defaults", "encoding"},
         )
         system = parser.get(section, "system").strip()
         user = parser.get(section, "user").strip()
         variables = _parse_prompt_variables(parser.get(section, "variables"))
+
+    encoding = parser.get(section, "encoding", fallback="plain").strip()
+    system = _decode_prompt_text(system, encoding)
+    user = _decode_prompt_text(user, encoding)
 
     if not system and not user:
         raise AIConfigError("AI prompt section cannot be empty")
@@ -288,6 +295,21 @@ def _parse_prompt_variables(raw_variables: str) -> tuple[str, ...]:
     ):
         raise AIConfigError("AI prompt variables declaration is invalid")
     return variables
+
+
+def _decode_prompt_text(text: str, encoding: str) -> str:
+    if encoding == "plain":
+        return text
+    if encoding != "json":
+        raise AIConfigError("AI prompt encoding is invalid")
+    parse_failed = False
+    try:
+        decoded = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        parse_failed = True
+    if parse_failed or not isinstance(decoded, str):
+        raise AIConfigError("AI prompt encoded text is invalid")
+    return decoded
 
 
 def _extract_prompt_variables(*templates: str) -> tuple[str, ...]:
