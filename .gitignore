@@ -42,3 +42,7 @@ dump.rdb
 .vscode/
 media/
 node_modules/
+
+# ============ Codex 隔离工作区 / 临时产物 ============
+.worktrees/
+.superpowers/
