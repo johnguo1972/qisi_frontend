@@ -5,6 +5,12 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
+from apps.common.ai.schemas import (
+    ModeAResponse,
+    ModeBResponse,
+    ModeCResponse,
+)
+
 from .base import QuestionAIComponent, QuestionInput, to_plain_data
 
 
@@ -41,19 +47,19 @@ class _ModeAnswerComponent(QuestionAIComponent):
         }
 
     def normalize(self, result: dict) -> dict:
-        normalized = dict(result)
-        normalized.setdefault("mode", self.mode)
-        return normalized
+        return dict(result)
 
 
 class ModeAAnswerComponent(_ModeAnswerComponent):
     task_key = "mode_a_answer"
     mode = "A"
+    response_schema = ModeAResponse
 
 
 class ModeBAnswerComponent(_ModeAnswerComponent):
     task_key = "mode_b_answer"
     mode = "B"
+    response_schema = ModeBResponse
 
     def normalize(self, result: dict) -> dict:
         normalized = super().normalize(result)
@@ -65,15 +71,21 @@ class ModeBAnswerComponent(_ModeAnswerComponent):
                     normalized_questions.append(item)
                     continue
                 question = dict(item)
-                question.setdefault(
-                    "correct_answer",
-                    question.get(
-                        "correct_option", question.get("reference_answer", "")
-                    ),
+                correct_answer = (
+                    question.get("correct_answer")
+                    or question.get("correct_option")
+                    or question.get("reference_answer")
+                    or ""
                 )
-                question.setdefault(
-                    "explanation", question.get("analysis", "")
+                explanation = (
+                    question.get("explanation")
+                    or question.get("analysis")
+                    or ""
                 )
+                question["correct_answer"] = correct_answer
+                question["correct_option"] = correct_answer
+                question["explanation"] = explanation
+                question["analysis"] = explanation
                 normalized_questions.append(question)
             normalized["questions"] = normalized_questions
         return normalized
@@ -82,3 +94,4 @@ class ModeBAnswerComponent(_ModeAnswerComponent):
 class ModeCAnswerComponent(_ModeAnswerComponent):
     task_key = "mode_c_answer"
     mode = "C"
+    response_schema = ModeCResponse

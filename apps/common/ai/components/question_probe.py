@@ -2,11 +2,37 @@
 
 from __future__ import annotations
 
+from apps.common.ai.schemas import (
+    KnowledgeAnalysisResponse,
+    QuestionProbeResponse,
+    VisionFactResponse,
+)
+
 from .base import QuestionAIComponent, QuestionInput
+
+
+def _is_nonempty(value: object) -> bool:
+    return value is not None and value != "" and value != [] and value != {}
+
+
+def _normalize_alias_pair(
+    result: dict, canonical: str, legacy: str, default: object
+) -> None:
+    canonical_value = result.get(canonical)
+    legacy_value = result.get(legacy)
+    if _is_nonempty(canonical_value):
+        selected = canonical_value
+    elif _is_nonempty(legacy_value):
+        selected = legacy_value
+    else:
+        selected = default
+    result[canonical] = selected
+    result[legacy] = selected
 
 
 class QuestionProbeComponent(QuestionAIComponent):
     task_key = "question_probe"
+    response_schema = QuestionProbeResponse
 
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
         return {
@@ -18,32 +44,24 @@ class QuestionProbeComponent(QuestionAIComponent):
     def normalize(self, result: dict) -> dict:
         normalized = dict(result)
         normalized.setdefault("subject", "")
-        normalized.setdefault(
-            "question_type", normalized.get("question_style", "")
-        )
         normalized.setdefault("grade", "")
         normalized.setdefault("semester", "")
         normalized.setdefault("chapter", "")
-        normalized.setdefault(
-            "difficulty", normalized.get("difficulty_est", "")
+        _normalize_alias_pair(
+            normalized, "question_type", "question_style", ""
         )
-        normalized.setdefault(
-            "knowledge_points", normalized.get("topic_tags_top3", [])
+        _normalize_alias_pair(
+            normalized, "difficulty", "difficulty_est", ""
         )
-        normalized.setdefault(
-            "question_style", normalized.get("question_type", "")
-        )
-        normalized.setdefault(
-            "difficulty_est", normalized.get("difficulty", "")
-        )
-        normalized.setdefault(
-            "topic_tags_top3", normalized.get("knowledge_points", [])
+        _normalize_alias_pair(
+            normalized, "knowledge_points", "topic_tags_top3", []
         )
         return normalized
 
 
 class KnowledgeAnalysisComponent(QuestionAIComponent):
     task_key = "knowledge_analysis"
+    response_schema = KnowledgeAnalysisResponse
 
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
         return {
@@ -56,6 +74,7 @@ class KnowledgeAnalysisComponent(QuestionAIComponent):
 
 class VisionExtractionComponent(QuestionAIComponent):
     task_key = "vision_fact_extract"
+    response_schema = VisionFactResponse
 
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
         return {

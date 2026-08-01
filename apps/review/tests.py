@@ -487,6 +487,109 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(self.question.ai_processing_status, 'success')
         self.assertIsNotNone(self.question.ai_processed_at)
 
+    def test_process_question_full_v2_marks_failed_for_schema_invalid_answer(self):
+        """A schema-invalid component result must not produce success state."""
+        from apps.common.ai.components import QuestionComponentFactory
+        from apps.common.ai.prompt_registry import PromptRegistry
+        from apps.common.ai.types import AIResult
+
+        responses = {
+            'question_probe': {
+                'subject': 'math',
+                'question_type': 'calculation',
+                'grade': '七年级',
+                'semester': '上学期',
+                'chapter': '第三章',
+                'difficulty': 'L2',
+                'knowledge_points': ['方程'],
+                'multi_part': False,
+                'proof_or_calc': 'calc',
+                'visual_risk_score': 0,
+                'reasoning_risk_score': 20,
+                'recommended_route': 'STANDARD',
+                'brief_reason': '基础计算',
+                'normalized_text': '解方程 x+1=2',
+            },
+            'knowledge_analysis': {
+                'subject': 'math',
+                'difficulty': 'L2',
+                'knowledge_points': [
+                    {'module': '一元一次方程', 'reason': '直接求解方程'}
+                ],
+            },
+            'vision_fact_extract': {
+                'subject': 'math',
+                'figure_present': False,
+                'figure_type': '',
+                'visual_summary': '无图形',
+                'diagram_facts': [],
+                'text_marks_in_figure': [],
+                'variables_and_symbols': [],
+                'target_related_visual_info': [],
+                'unclear_parts': [],
+                'ocr_conflicts': [],
+                'confidence': 'high',
+            },
+            'mode_a_answer': {
+                'mode': 'A', 'steps': ['第一步'], 'final_answer': '2',
+            },
+            'mode_b_answer': {
+                'mode': 'B',
+                'questions': [{
+                    'question': '下一步是什么？',
+                    'options': {'A': '1', 'B': '2', 'C': '3', 'D': '4'},
+                    'correct_option': 'B',
+                    'analysis': '两边减一',
+                }],
+                'final_answer': '2',
+                'summary': '递进引导',
+            },
+            'mode_c_answer': {
+                'mode': 'C',
+                'questions': [{
+                    'question': '等式两边如何变化？',
+                    'reference_answer': '两边同时减一',
+                    'key_points': ['等式性质'],
+                    'followup_hint': '保持等式成立',
+                }],
+                'final_answer': '2',
+                'summary': '开放引导',
+            },
+            'result_verify': {
+                'pass': True,
+                'consistency': 'consistent',
+                'fact_violation': False,
+                'calc_suspect': False,
+                'issues': [],
+                'retry_needed': False,
+                'retry_reason': '',
+            },
+        }
+
+        class _ConfiguredResponseClient:
+            def complete(
+                self, task_key, *, system, user, images=(), trace_id=None
+            ):
+                return AIResult(
+                    content=json.dumps(responses[task_key], ensure_ascii=False),
+                    provider='qwen',
+                    model='configured-model',
+                    latency_ms=1,
+                    raw_response={},
+                )
+
+        component_factory = QuestionComponentFactory(
+            _ConfiguredResponseClient(), PromptRegistry()
+        )
+        service = AIReviewService(component_factory=component_factory)
+        with patch.object(service, '_get_question_image_urls', return_value=[]):
+            results = service.process_question_full_v2(self.question.id)
+
+        self.assertIn('answer_a', results['errors'])
+        self.assertIn('error', results['answer_a'])
+        self.question.refresh_from_db()
+        self.assertEqual(self.question.ai_processing_status, 'failed')
+
 
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""

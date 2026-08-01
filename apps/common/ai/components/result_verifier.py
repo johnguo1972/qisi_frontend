@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 
+from apps.common.ai.schemas import ResultVerifierResponse
+
 from .base import QuestionAIComponent, QuestionInput, to_plain_data
 
 
 class ResultVerifierComponent(QuestionAIComponent):
     task_key = "result_verify"
+    response_schema = ResultVerifierResponse
 
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
         return {

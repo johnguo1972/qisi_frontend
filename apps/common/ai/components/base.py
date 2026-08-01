@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import ClassVar, Protocol
 
+from pydantic import BaseModel, ValidationError
+
 from apps.common.ai.client import AIClient
 from apps.common.ai.exceptions import AIResponseError
 from apps.common.ai.prompt_registry import PromptRegistry
@@ -67,6 +69,7 @@ class QuestionAIComponent(ABC):
     """Render, execute, and parse one fixed configured AI task."""
 
     task_key: ClassVar[str]
+    response_schema: ClassVar[type[BaseModel] | None] = None
 
     def __init__(
         self,
@@ -91,7 +94,16 @@ class QuestionAIComponent(ABC):
         parsed = ResponseParser.parse_json(result.content)
         if not isinstance(parsed, dict):
             raise AIResponseError("AI question component response must be an object")
-        return self.normalize(dict(parsed))
+        normalized = self.normalize(dict(parsed))
+        if self.response_schema is None:
+            return normalized
+        try:
+            validated = self.response_schema.model_validate(normalized)
+        except ValidationError:
+            raise AIResponseError(
+                f"AI response failed {self.task_key} schema validation"
+            ) from None
+        return validated.model_dump(by_alias=True, exclude_none=True)
 
     @abstractmethod
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:

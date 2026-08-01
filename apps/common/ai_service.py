@@ -73,13 +73,18 @@ class AIReviewService:
         prompt_registry=None,
     ):
         self._config = load_ai_config()
-        self._ai_client = ai_client or AIClient()
+        self._ai_client = ai_client
         self._prompt_registry = prompt_registry or PromptRegistry(self._config)
         self.api_key = self._config.get_provider_config("qwen").api_key
-        self._component_client = _LegacyComponentClient(self)
-        self._component_factory = component_factory or QuestionComponentFactory(
-            self._component_client, self._prompt_registry
-        )
+        self._component_client = None
+        if component_factory is None:
+            self._ai_client = self._ai_client or AIClient()
+            self._component_client = _LegacyComponentClient(self)
+            self._component_factory = QuestionComponentFactory(
+                self._component_client, self._prompt_registry
+            )
+        else:
+            self._component_factory = component_factory
 
     def _get_model(
         self, override_model: str = None, *, default_model: str = None
@@ -105,7 +110,7 @@ class AIReviewService:
         """Legacy mock hook delegating to the single configured ``AIClient``."""
         if not task_key:
             raise AIRequestError("Configured AI task key is required")
-        return self._ai_client.complete(
+        return self._provider_client().complete(
             task_key, system=system_prompt, user=user_prompt
         ).content
 
@@ -117,12 +122,17 @@ class AIReviewService:
         """Legacy multimodal mock hook delegating to configured ``AIClient``."""
         if not task_key:
             raise AIRequestError("Configured AI task key is required")
-        return self._ai_client.complete(
+        return self._provider_client().complete(
             task_key,
             system=system_prompt,
             user=user_text,
             images=tuple(image_urls),
         ).content
+
+    def _provider_client(self):
+        if self._ai_client is None:
+            self._ai_client = AIClient()
+        return self._ai_client
 
     def _get_question_image_urls(self, question, max_images: int = 5) -> list:
         """Get OSS URLs for all question images.
