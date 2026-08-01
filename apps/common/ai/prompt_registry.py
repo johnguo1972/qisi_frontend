@@ -41,7 +41,11 @@ class PromptRegistry:
                 "Unknown prompt variable(s): " + _safe_variable_names(unknown)
             )
 
-        rendered = {name: str(value) for name, value in variables.items()}
+        defaults = dict(prompt.defaults)
+        rendered = {
+            name: str(defaults[name] if not value and name in defaults else value)
+            for name, value in variables.items()
+        }
         system = _render_template(prompt.system, rendered)
         user = _render_template(prompt.user, rendered)
         unresolved = {

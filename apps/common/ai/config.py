@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from configparser import Error as ConfigParserError
@@ -58,6 +59,7 @@ class AIPromptConfig:
     system: str
     user: str
     variables: tuple[str, ...]
+    defaults: tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -233,7 +235,9 @@ def _load_prompt(
 ) -> AIPromptConfig:
     present = set(parser.options(section))
     if "template" in present:
-        _require_options(parser, section, {"template"}, {"variables"})
+        _require_options(
+            parser, section, {"template"}, {"variables", "defaults"}
+        )
         system = ""
         user = parser.get(section, "template").strip()
         inferred = _extract_prompt_variables(user)
@@ -243,7 +247,12 @@ def _load_prompt(
             else inferred
         )
     else:
-        _require_options(parser, section, {"system", "user", "variables"})
+        _require_options(
+            parser,
+            section,
+            {"system", "user", "variables"},
+            {"defaults"},
+        )
         system = parser.get(section, "system").strip()
         user = parser.get(section, "user").strip()
         variables = _parse_prompt_variables(parser.get(section, "variables"))
@@ -255,11 +264,15 @@ def _load_prompt(
         raise AIConfigError(
             "AI prompt variables do not match template placeholders"
         )
+    defaults = _parse_prompt_defaults(
+        parser.get(section, "defaults", fallback=""), variables
+    )
     return AIPromptConfig(
         key=name,
         system=system,
         user=user,
         variables=variables,
+        defaults=defaults,
     )
 
 
@@ -285,6 +298,33 @@ def _extract_prompt_variables(*templates: str) -> tuple[str, ...]:
             if variable not in variables:
                 variables.append(variable)
     return tuple(variables)
+
+
+def _parse_prompt_defaults(
+    raw_defaults: str, variables: tuple[str, ...]
+) -> tuple[tuple[str, str], ...]:
+    if not raw_defaults.strip():
+        return ()
+    parse_failed = False
+    try:
+        parsed = json.loads(raw_defaults)
+    except (TypeError, json.JSONDecodeError):
+        parse_failed = True
+    if (
+        parse_failed
+        or not isinstance(parsed, dict)
+        or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in parsed.items()
+        )
+        or not set(parsed).issubset(variables)
+    ):
+        raise AIConfigError("AI prompt defaults declaration is invalid")
+    return tuple(
+        (variable, parsed[variable])
+        for variable in variables
+        if variable in parsed
+    )
 
 
 def _load_task(

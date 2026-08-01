@@ -87,6 +87,41 @@ def test_response_parser_redacts_secrets_base64_and_pii_from_errors():
         assert sensitive not in formatted
 
 
+def test_response_parser_redacts_json_secrets_and_bare_base64_before_truncating():
+    bare_base64 = "QWxhZGRpbjpvcGVuIHNlc2FtZQ+/" * 4
+    bare_base64url = "AbC9_def-GhiJklMNopQRstuVwXyZ0123" * 3
+    raw = (
+        'broken-prefix "api_key": "AIzaSensitiveValue", '
+        '"token": "token-sensitive", '
+        '"secret": "secret-sensitive", '
+        '"authorization": "Basic auth-sensitive" '
+        + bare_base64
+        + " "
+        + bare_base64url
+    )
+
+    with pytest.raises(AIResponseError) as caught:
+        ResponseParser.parse_json(raw)
+
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value), caught.value, caught.value.__traceback__
+        )
+    )
+    assert "broken-prefix" in formatted
+    for sensitive in (
+        "AIzaSensitiveValue",
+        "token-sensitive",
+        "secret-sensitive",
+        "auth-sensitive",
+        bare_base64,
+        bare_base64url,
+    ):
+        assert sensitive not in formatted
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
 def test_response_parser_validates_and_returns_schema_dump():
     parsed = ResponseParser.parse_json('{"answer": "D"}', AnswerSchema)
 

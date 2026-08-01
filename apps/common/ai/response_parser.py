@@ -85,9 +85,20 @@ def _extract_json_candidate(text: str) -> str:
 
 def _safe_preview(text: str) -> str:
     preview = re.sub(
+        r'''(?ix)
+        (?P<prefix>
+            ["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|
+            token|secret|authorization)["']?\s*:\s*
+        )
+        (?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\s}\]]+)
+        ''',
+        lambda match: match.group("prefix") + "[secret-redacted]",
+        text,
+    )
+    preview = re.sub(
         r"data:[^,\s]+;base64,[A-Za-z0-9+/=]+",
         "[base64-redacted]",
-        text,
+        preview,
         flags=re.IGNORECASE,
     )
     preview = re.sub(r"\bBearer\s+\S+", "Bearer [redacted]", preview, flags=re.I)
@@ -97,6 +108,20 @@ def _safe_preview(text: str) -> str:
         "[key-redacted]",
         preview,
         flags=re.I,
+    )
+    preview = re.sub(
+        r"(?<![A-Za-z0-9+/_=])[A-Za-z0-9+/_]{32,}={0,2}"
+        r"(?![A-Za-z0-9+/_=])",
+        "[base64-redacted]",
+        preview,
+    )
+    preview = re.sub(
+        r"(?<![A-Za-z0-9_-])"
+        r"(?=[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-]))"
+        r"(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*\d)"
+        r"[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])",
+        "[base64url-redacted]",
+        preview,
     )
     preview = re.sub(
         r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",

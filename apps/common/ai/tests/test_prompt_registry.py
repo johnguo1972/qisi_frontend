@@ -7,6 +7,7 @@ import pytest
 from apps.common.ai.config import AIConfig
 from apps.common.ai.exceptions import AIConfigError, AIPromptError
 from apps.common.ai.prompt_registry import PromptRegistry
+from apps.common.ai_prompts import AIPrompts
 
 
 @pytest.fixture
@@ -169,3 +170,92 @@ def test_default_registry_renders_every_declared_task(provider_env):
         )
         assert system or user
         assert all(f"{{{name}}}" not in system + user for name in variables)
+
+
+@pytest.mark.parametrize(
+    ("task_key", "legacy_prompt", "variables"),
+    [
+        (
+            "knowledge_analysis",
+            AIPrompts.analyze_knowledge("题目", ""),
+            {"normalized_text": "题目", "subject_hint": ""},
+        ),
+        (
+            "mode_a_answer",
+            AIPrompts.solve_mode_a("题目", "{}", ""),
+            {
+                "normalized_text": "题目",
+                "vision_json": "{}",
+                "knowledge_refs": "",
+            },
+        ),
+        (
+            "mode_b_answer",
+            AIPrompts.solve_mode_b("题目", "{}", ""),
+            {
+                "normalized_text": "题目",
+                "vision_json": "{}",
+                "knowledge_refs": "",
+            },
+        ),
+        (
+            "mode_c_answer",
+            AIPrompts.solve_mode_c("题目", "{}", ""),
+            {
+                "normalized_text": "题目",
+                "vision_json": "{}",
+                "knowledge_refs": "",
+            },
+        ),
+    ],
+)
+def test_registry_empty_values_match_legacy_common_prompt_defaults(
+    provider_env, task_key, legacy_prompt, variables
+):
+    system, user = PromptRegistry(AIConfig.load()).render(task_key, **variables)
+
+    assert system == legacy_prompt["system"]
+    assert user == legacy_prompt["user"]
+
+
+@pytest.mark.parametrize(
+    ("task_key", "variables", "expected_line"),
+    [
+        (
+            "guidance_generate",
+            {"stem": "题目", "answer": ""},
+            "答案：见解析",
+        ),
+        (
+            "guidance_evaluate",
+            {
+                "question_text": "题目",
+                "reference_answer": "",
+                "student_answer": "回答",
+            },
+            "参考答案：见解析",
+        ),
+        (
+            "teacher_guidance_evaluate",
+            {
+                "question_text": "题目",
+                "reference_answer": "",
+                "student_answer": "回答",
+            },
+            "正确答案：见解析",
+        ),
+    ],
+)
+def test_registry_preserves_empty_answer_fallbacks(
+    provider_env, task_key, variables, expected_line
+):
+    _, user = PromptRegistry(AIConfig.load()).render(task_key, **variables)
+
+    assert expected_line in user
+
+
+def test_registry_defaults_do_not_make_missing_variables_optional(provider_env):
+    registry = PromptRegistry(AIConfig.load())
+
+    with pytest.raises(AIPromptError, match="subject_hint"):
+        registry.render("knowledge_analysis", normalized_text="题目")
