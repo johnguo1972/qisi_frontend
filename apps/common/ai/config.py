@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from math import isfinite
 from pathlib import Path
 from threading import Lock
+from types import MappingProxyType
+from typing import Mapping
 from urllib.parse import urlparse
 
 from .exceptions import AIConfigError
@@ -38,6 +40,9 @@ TASK_PROVIDER_SCHEMA = {
     "photo_recognize": "qwen",
 }
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+PROMPT_VARIABLE_PATTERN = re.compile(
+    r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})"
+)
 
 
 @dataclass(frozen=True)
@@ -48,11 +53,20 @@ class AIProviderConfig:
 
 
 @dataclass(frozen=True)
+class AIPromptConfig:
+    key: str
+    system: str
+    user: str
+    variables: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class AITaskConfig:
     key: str
     provider: str
     model: str
     prompt: str
+    prompt_key: str
     temperature: float
     max_tokens: int
     timeout_seconds: float
@@ -68,13 +82,23 @@ class AIConfig:
         self,
         providers: dict[str, AIProviderConfig],
         tasks: dict[str, AITaskConfig],
+        prompts: dict[str, AIPromptConfig],
     ) -> None:
-        self._providers = providers.copy()
-        self._tasks = tasks.copy()
+        self._providers: Mapping[str, AIProviderConfig] = MappingProxyType(
+            providers.copy()
+        )
+        self._tasks: Mapping[str, AITaskConfig] = MappingProxyType(tasks.copy())
+        self._prompts: Mapping[str, AIPromptConfig] = MappingProxyType(
+            prompts.copy()
+        )
 
     @property
     def task_keys(self) -> tuple[str, ...]:
         return tuple(self._tasks)
+
+    @property
+    def prompt_keys(self) -> tuple[str, ...]:
+        return tuple(self._prompts)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AIConfig":
@@ -109,7 +133,7 @@ class AIConfig:
             name: _load_task(parser, section, name, providers, prompts)
             for section, name in task_sections
         }
-        return cls(providers=providers, tasks=tasks)
+        return cls(providers=providers, tasks=tasks, prompts=prompts)
 
     def get_task_config(self, task_key: str) -> AITaskConfig:
         task = self._tasks.get(task_key)
@@ -123,9 +147,19 @@ class AIConfig:
             raise AIConfigError("Unknown AI provider")
         return provider_config
 
+    def get_prompt_config(self, prompt_key: str) -> AIPromptConfig:
+        prompt = self._prompts.get(prompt_key)
+        if prompt is None:
+            raise AIConfigError("Unknown AI prompt")
+        return prompt
+
 
 def _read_config_parser(config_path: Path) -> RawConfigParser | None:
-    parser = RawConfigParser(interpolation=None)
+    parser = RawConfigParser(
+        interpolation=None,
+        comment_prefixes=(";",),
+        inline_comment_prefixes=None,
+    )
     try:
         with config_path.open("r", encoding="utf-8") as config_file:
             parser.read_file(config_file)
@@ -194,12 +228,63 @@ def _read_env_reference(section: str, option: str, env_name: str) -> str:
     return value
 
 
-def _load_prompt(parser: RawConfigParser, section: str, name: str) -> str:
-    _require_options(parser, section, {"template"})
-    template = parser.get(section, "template").strip()
-    if not template:
-        raise AIConfigError("AI prompt section has an empty template")
-    return template
+def _load_prompt(
+    parser: RawConfigParser, section: str, name: str
+) -> AIPromptConfig:
+    present = set(parser.options(section))
+    if "template" in present:
+        _require_options(parser, section, {"template"}, {"variables"})
+        system = ""
+        user = parser.get(section, "template").strip()
+        inferred = _extract_prompt_variables(user)
+        variables = (
+            _parse_prompt_variables(parser.get(section, "variables"))
+            if "variables" in present
+            else inferred
+        )
+    else:
+        _require_options(parser, section, {"system", "user", "variables"})
+        system = parser.get(section, "system").strip()
+        user = parser.get(section, "user").strip()
+        variables = _parse_prompt_variables(parser.get(section, "variables"))
+
+    if not system and not user:
+        raise AIConfigError("AI prompt section cannot be empty")
+    actual_variables = _extract_prompt_variables(system, user)
+    if set(variables) != set(actual_variables):
+        raise AIConfigError(
+            "AI prompt variables do not match template placeholders"
+        )
+    return AIPromptConfig(
+        key=name,
+        system=system,
+        user=user,
+        variables=variables,
+    )
+
+
+def _parse_prompt_variables(raw_variables: str) -> tuple[str, ...]:
+    if not raw_variables.strip():
+        return ()
+    variables = tuple(
+        variable.strip() for variable in raw_variables.split(",")
+    )
+    if (
+        any(not variable.isidentifier() for variable in variables)
+        or len(set(variables)) != len(variables)
+    ):
+        raise AIConfigError("AI prompt variables declaration is invalid")
+    return variables
+
+
+def _extract_prompt_variables(*templates: str) -> tuple[str, ...]:
+    variables: list[str] = []
+    for template in templates:
+        for match in PROMPT_VARIABLE_PATTERN.finditer(template):
+            variable = match.group(1)
+            if variable not in variables:
+                variables.append(variable)
+    return tuple(variables)
 
 
 def _load_task(
@@ -207,7 +292,7 @@ def _load_task(
     section: str,
     key: str,
     providers: dict[str, AIProviderConfig],
-    prompts: dict[str, str],
+    prompts: dict[str, AIPromptConfig],
 ) -> AITaskConfig:
     _require_options(
         parser,
@@ -238,7 +323,8 @@ def _load_task(
     model = parser.get(section, "model").strip()
     _validate_model(provider, model)
     prompt_name = parser.get(section, "prompt").strip()
-    if prompt_name not in prompts:
+    prompt_config = prompts.get(prompt_name)
+    if prompt_config is None:
         raise AIConfigError("AI task references a missing prompt section")
 
     temperature = _parse_float(parser, section, "temperature")
@@ -266,7 +352,8 @@ def _load_task(
         key=key,
         provider=provider,
         model=model,
-        prompt=prompts[prompt_name],
+        prompt=prompt_config.user or prompt_config.system,
+        prompt_key=prompt_name,
         temperature=temperature,
         max_tokens=max_tokens,
         timeout_seconds=timeout_seconds,

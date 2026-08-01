@@ -8,6 +8,7 @@ import pytest
 
 from apps.common.ai.config import (
     AIConfig,
+    AIPromptConfig,
     load_ai_config,
     reset_ai_config_for_tests,
 )
@@ -267,6 +268,19 @@ def test_reads_utf8_chinese_and_preserves_prompt_braces(tmp_path, provider_env):
     assert loaded.get_task_config("question_probe").prompt == (
         "请根据 {question_text} 提出追问：为什么？"
     )
+
+
+def test_exposes_immutable_prompt_configuration(tmp_path, provider_env):
+    loaded = AIConfig.load(write_minimal_cfg(tmp_path))
+
+    prompt = loaded.get_prompt_config("question_probe")
+
+    assert isinstance(prompt, AIPromptConfig)
+    assert prompt.system == ""
+    assert prompt.user == "请分析题目 {question_text}"
+    assert prompt.variables == ("question_text",)
+    with pytest.raises((AttributeError, TypeError)):
+        prompt.user = "changed"
 
 
 def test_default_config_declares_every_task_with_300_second_timeout(provider_env):
