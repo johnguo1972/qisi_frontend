@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 
+from apps.common.ai.client import AIClient
 from apps.common.ai.components.base import QuestionInput
 from apps.common.ai.components.result_verifier import ResultVerifierComponent
 from apps.common.ai.components.variant_generator import VariantGeneratorComponent
-from apps.common.ai.config import load_ai_config
+from apps.common.ai.config import load_ai_config, reset_ai_config_for_tests
 from apps.common.ai.exceptions import AIResponseError
 from apps.common.ai.types import AIResult
 from apps.common.exceptions import AIRequestError
@@ -283,3 +285,45 @@ def test_variant_routes_are_cfg_fixed_to_expected_provider_model_and_timeout():
         verification.model,
         verification.timeout_seconds,
     ) == ("deepseek", "deepseek-v4-pro", 300.0)
+
+
+def test_real_qwen_variant_component_runs_when_optional_deepseek_key_is_absent(
+    monkeypatch,
+):
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("QWEN_API_URL", "https://example.test/qwen")
+    monkeypatch.setenv("DEEPSEEK_API_URL", "https://example.test/deepseek")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                VALID_VARIANT, ensure_ascii=False
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    reset_ai_config_for_tests()
+    try:
+        client = AIClient(transport=httpx.MockTransport(handler))
+        result = VariantGeneratorComponent(client).generate(
+            _question(), "数值变化"
+        )
+    finally:
+        if "client" in locals():
+            client.close()
+        reset_ai_config_for_tests()
+
+    assert result["provider"] == "qwen"
+    assert seen == ["https://example.test/qwen"]

@@ -126,6 +126,10 @@ class AIClient:
         try:
             task = self._config.get_task_config(task_key)
             provider = self._config.get_provider_config(task.provider)
+            if not provider.api_key:
+                raise AIConfigError(
+                    "AI provider credentials are not configured"
+                )
             payload = _build_payload(
                 task,
                 system=system,

@@ -308,6 +308,44 @@ def test_default_config_declares_every_task_with_300_second_timeout(provider_env
     }
 
 
+def test_default_config_allows_only_explicitly_optional_deepseek_key(
+    monkeypatch,
+):
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("QWEN_API_URL", "https://example.test/qwen")
+    monkeypatch.setenv("DEEPSEEK_API_URL", "https://example.test/deepseek")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    loaded = AIConfig.load()
+
+    assert loaded.get_provider_config("qwen").api_key == "test-qwen-key"
+    assert loaded.get_provider_config("deepseek").api_key == ""
+
+
+def test_optional_deepseek_key_does_not_make_provider_url_optional(monkeypatch):
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("QWEN_API_URL", "https://example.test/qwen")
+    monkeypatch.delenv("DEEPSEEK_API_URL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    with pytest.raises(AIConfigError, match="DEEPSEEK_API_URL"):
+        AIConfig.load()
+
+
+def test_rejects_invalid_api_key_optional_declaration(tmp_path, provider_env):
+    cfg = write_minimal_cfg(tmp_path)
+    cfg.write_text(
+        cfg.read_text(encoding="utf-8").replace(
+            "api_key_env = QWEN_API_KEY",
+            "api_key_env = QWEN_API_KEY\napi_key_optional = sometimes",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AIConfigError, match="api_key_optional"):
+        AIConfig.load(cfg)
+
+
 def test_runtime_loader_caches_first_successful_load(tmp_path, provider_env):
     cfg = write_minimal_cfg(tmp_path)
     first = load_ai_config(cfg)

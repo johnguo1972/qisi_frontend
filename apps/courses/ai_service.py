@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hmac
+
 from apps.common.ai.client import AIClient
 from apps.common.ai.components.base import QuestionInput
 from apps.common.ai.components.result_verifier import ResultVerifierComponent
@@ -10,6 +12,14 @@ from apps.common.ai.config import load_ai_config
 from apps.common.ai.exceptions import AIConfigError, AIResponseError
 from apps.common.ai.response_parser import ResponseParser
 from apps.common.exceptions import AIRequestError
+
+
+_LEGACY_VARIANT_TASK_KEYS = (
+    "variant_generate",
+    "variant_verify_deepseek",
+)
+_LEGACY_MAX_TOKENS = frozenset({2000, 8000})
+_LEGACY_TEMPERATURE = 0.1
 
 
 def variant_generator_component_factory() -> VariantGeneratorComponent:
@@ -83,19 +93,71 @@ def call_ai(
     max_tokens: int = 8000,
     temperature: float = 0.1,
 ) -> str:
-    """Forward legacy Qwen calls to the configured shared client.
+    """Forward compatible legacy calls to a matching configured variant task.
 
-    Provider overrides are rejected so a legacy DeepSeek request can never be
-    silently routed through Qwen.
+    Positional and keyword arguments remain accepted. Provider/model/request
+    parameters must match shared cfg (or an old ignored token/temperature
+    default); arbitrary overrides are rejected instead of being silently routed.
     """
-    del model, max_tokens, temperature
-    if api_url is not None or api_key is not None:
-        raise AIRequestError("Legacy AI provider overrides are unsupported")
-    return AIClient().complete(
-        "variant_generate",
-        system=system_prompt,
-        user=user_prompt,
-    ).content
+    task_key = _match_legacy_variant_task(
+        model=model,
+        api_url=api_url,
+        api_key=api_key,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    model = ""
+    api_url = None
+    api_key = None
+    max_tokens = 0
+    temperature = 0.0
+    if task_key is None:
+        raise AIRequestError(
+            "Legacy AI request does not match configured task"
+        )
+    with AIClient() as client:
+        return client.complete(
+            task_key,
+            system=system_prompt,
+            user=user_prompt,
+        ).content
+
+
+def _match_legacy_variant_task(
+    *,
+    model: str,
+    api_url: str | None,
+    api_key: str | None,
+    max_tokens: int,
+    temperature: float,
+) -> str | None:
+    if (
+        type(model) is not str
+        or (api_url is not None and type(api_url) is not str)
+        or (api_key is not None and type(api_key) is not str)
+        or type(max_tokens) is not int
+        or type(temperature) not in (int, float)
+    ):
+        return None
+
+    config = load_ai_config()
+    for task_key in _LEGACY_VARIANT_TASK_KEYS:
+        task = config.get_task_config(task_key)
+        provider = config.get_provider_config(task.provider)
+        if model != task.model:
+            continue
+        if api_url is not None and api_url != provider.api_url:
+            continue
+        if api_key is not None and not hmac.compare_digest(
+            api_key.encode("utf-8"), provider.api_key.encode("utf-8")
+        ):
+            continue
+        if max_tokens not in {*_LEGACY_MAX_TOKENS, task.max_tokens}:
+            continue
+        if temperature not in {_LEGACY_TEMPERATURE, task.temperature}:
+            continue
+        return task_key
+    return None
 
 
 def parse_json_response(text: str) -> dict:

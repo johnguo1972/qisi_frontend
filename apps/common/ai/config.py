@@ -208,26 +208,67 @@ def _load_provider(
 ) -> AIProviderConfig:
     if name not in SUPPORTED_PROVIDERS:
         raise AIConfigError("AI provider section uses unknown provider")
-    _require_options(parser, section, {"api_url_env", "api_key_env"})
+    _require_options(
+        parser,
+        section,
+        {"api_url_env", "api_key_env"},
+        {"api_key_optional"},
+    )
     api_url_env = parser.get(section, "api_url_env").strip()
     api_key_env = parser.get(section, "api_key_env").strip()
+    api_key_optional = _parse_bool_option(
+        parser,
+        section,
+        "api_key_optional",
+        fallback=False,
+    )
     api_url = _read_env_reference(section, "api_url_env", api_url_env)
-    api_key = _read_env_reference(section, "api_key_env", api_key_env)
+    api_key = _read_env_reference(
+        section,
+        "api_key_env",
+        api_key_env,
+        optional=api_key_optional,
+    )
     parsed_url = urlparse(api_url)
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
         raise AIConfigError("AI provider URL is not a valid HTTP URL")
     return AIProviderConfig(name=name, api_url=api_url, api_key=api_key)
 
 
-def _read_env_reference(section: str, option: str, env_name: str) -> str:
+def _read_env_reference(
+    section: str,
+    option: str,
+    env_name: str,
+    *,
+    optional: bool = False,
+) -> str:
     if not ENV_NAME_PATTERN.fullmatch(env_name):
         raise AIConfigError("AI provider option must name an environment variable")
     value = os.environ.get(env_name, "").strip()
     if not value:
+        if optional:
+            return ""
         raise AIConfigError(
             f"Environment variable {env_name} required by [{section}] is not set"
         )
     return value
+
+
+def _parse_bool_option(
+    parser: RawConfigParser,
+    section: str,
+    option: str,
+    *,
+    fallback: bool,
+) -> bool:
+    if not parser.has_option(section, option):
+        return fallback
+    raw_value = parser.get(section, option).strip().lower()
+    if raw_value == "true":
+        return True
+    if raw_value == "false":
+        return False
+    raise AIConfigError(f"Option {option} must be true or false")
 
 
 def _load_prompt(

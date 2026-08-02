@@ -12,8 +12,13 @@ import pytest
 
 import apps.common.ai.client as client_module
 from apps.common.ai.client import AIClient
-from apps.common.ai.config import AIConfig, AIProviderConfig, AITaskConfig
-from apps.common.ai.exceptions import AIResponseError
+from apps.common.ai.config import (
+    AIConfig,
+    AIProviderConfig,
+    AITaskConfig,
+    reset_ai_config_for_tests,
+)
+from apps.common.ai.exceptions import AIConfigError, AIResponseError
 from apps.common.exceptions import AIRequestError
 
 
@@ -83,6 +88,7 @@ def _config(
     response_format: str | None = None,
     retry_count: int = 0,
     retry_backoff_seconds: tuple[float, ...] = (),
+    api_key: str = TEST_SECRET,
 ) -> AIConfig:
     task = AITaskConfig(
         key=task_key,
@@ -100,7 +106,7 @@ def _config(
     provider_config = AIProviderConfig(
         name=provider,
         api_url=f"https://example.test/{provider}/chat/completions",
-        api_key=TEST_SECRET,
+        api_key=api_key,
     )
     return AIConfig(
         providers={provider: provider_config},
@@ -589,6 +595,70 @@ def test_deepseek_request_uses_its_configured_model_url_key_and_300s_timeout(
         "pool": 300.0,
     }
     assert result.provider == "deepseek"
+
+
+def test_empty_optional_provider_key_fails_before_network(monkeypatch):
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request)
+        return _success_response(request)
+
+    client = _client(
+        monkeypatch,
+        handler,
+        config=_config(
+            task_key="variant_verify_deepseek",
+            provider="deepseek",
+            model="deepseek-v4-pro",
+            api_key="",
+        ),
+    )
+
+    with pytest.raises(
+        AIConfigError, match="AI provider credentials are not configured"
+    ) as caught:
+        client.complete(
+            "variant_verify_deepseek", system="verify", user="candidate"
+        )
+
+    assert attempts == []
+    assert "deepseek" not in str(caught.value).lower()
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+def test_real_deepseek_task_without_optional_key_makes_zero_network_attempts(
+    monkeypatch,
+):
+    attempts = []
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("QWEN_API_URL", "https://example.test/qwen")
+    monkeypatch.setenv("DEEPSEEK_API_URL", "https://example.test/deepseek")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request)
+        return _success_response(request)
+
+    reset_ai_config_for_tests()
+    try:
+        client = AIClient(transport=httpx.MockTransport(handler))
+        with pytest.raises(
+            AIConfigError,
+            match="AI provider credentials are not configured",
+        ):
+            client.complete(
+                "variant_verify_deepseek",
+                system="verify",
+                user="candidate",
+            )
+    finally:
+        if "client" in locals():
+            client.close()
+        reset_ai_config_for_tests()
+
+    assert attempts == []
 
 
 def test_rejects_ambiguous_client_and_transport_injection(monkeypatch):
