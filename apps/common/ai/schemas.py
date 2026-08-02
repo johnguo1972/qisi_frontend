@@ -8,12 +8,24 @@ from typing import Annotated, Any, Literal
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 
+def _is_visual_blank_character(character: str) -> bool:
+    return character.isspace() or unicodedata.category(character) == "Cf"
+
+
 def has_visible_text(value: str) -> bool:
     """Return whether text contains content beyond whitespace/format controls."""
-    return any(
-        not (character.isspace() or unicodedata.category(character) == "Cf")
-        for character in value
-    )
+    return any(not _is_visual_blank_character(character) for character in value)
+
+
+def strip_visual_boundaries(value: str) -> str:
+    """Strip whitespace and format controls from both text boundaries."""
+    start = 0
+    end = len(value)
+    while start < end and _is_visual_blank_character(value[start]):
+        start += 1
+    while end > start and _is_visual_blank_character(value[end - 1]):
+        end -= 1
+    return value[start:end]
 
 
 def _require_non_blank(value: str) -> str:

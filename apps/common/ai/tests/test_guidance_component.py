@@ -245,6 +245,61 @@ def test_evaluation_preserves_nonempty_text_with_internal_format_character():
     ) == "正确\u200b，请继续。"
 
 
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (
+            "\ufeff\u200b{\"evaluation\": \"直接 JSON\"}\u200c\u2060",
+            "直接 JSON",
+        ),
+        (
+            "\u200d\u2060```JSON\n"
+            '{"evaluation": "围栏 JSON"}\n```'
+            "\ufeff\u200b",
+            "围栏 JSON",
+        ),
+        (
+            "\u200b\ufeff \t正文\u200c内容 \u2060\u200d",
+            "正文\u200c内容",
+        ),
+    ],
+)
+def test_evaluation_strips_visual_boundaries_before_classification(
+    content,
+    expected,
+):
+    from apps.common.ai.components.guidance import GuidanceContext
+
+    component, _, _ = _component({"guidance_evaluate": content})
+
+    assert component.evaluate_student_reply(
+        GuidanceContext("题目", "D", "我的思路")
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "\ufeff\u200b```python\n"
+        '{"evaluation": "POISON"}\n```'
+        "\u200c\u2060",
+        "\u200b```json\n{\"evaluation\": \"POISON\"\n```\ufeff",
+        "\u200d{\"evaluation\": \"POISON\", \"extra\": true}\u2060",
+        "\ufeff{\"evaluation\": \"POISON\"} trailing\u200b",
+        "\u200b{broken\u200c",
+    ],
+)
+def test_evaluation_visual_boundaries_cannot_hide_malformed_structures(content):
+    from apps.common.ai.components.guidance import GuidanceContext
+
+    component, _, _ = _component({"guidance_evaluate": content})
+
+    with pytest.raises(AIResponseError):
+        component.evaluate_student_reply(
+            GuidanceContext("题目", "D", "我的思路")
+        )
+
+
 def test_teacher_evaluation_returns_compatibility_object():
     from apps.common.ai.components.guidance import GuidanceContext
 

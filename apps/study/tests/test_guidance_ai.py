@@ -436,6 +436,16 @@ def test_legacy_generation_wrapper_keeps_empty_dict_fallback(
             "]}",
             "\u200b",
         ),
+        (
+            "\ufeff\u200b"
+            '{"steps": ['
+            '{"question": "第一问", "hint": "提示一"},'
+            '{"question": "第二问", "hint": "提示二"},'
+            '{"question": "第三问", "hint": "提示三"}'
+            '], "unexpected": "POISON"}'
+            "\u2060\u200c",
+            "POISON",
+        ),
     ],
 )
 def test_student_start_endpoint_rejects_provider_extra_without_db_pollution(
@@ -509,3 +519,95 @@ def test_student_start_endpoint_rejects_provider_extra_without_db_pollution(
     assert session.session_status == "downgraded"
     assert "ai_c_generated" not in session.content_log_json
     assert forbidden_marker not in str(session.content_log_json)
+
+
+@pytest.mark.django_db
+def test_student_reply_endpoint_rejects_cf_hidden_unknown_fence_without_pollution(
+    monkeypatch,
+):
+    import uuid
+
+    from rest_framework.test import APIClient
+
+    from apps.accounts.models import UserAccount
+    from apps.common.ai.components.guidance import GuidanceComponent
+    from apps.papers.models import ExamPaper
+    from apps.parser.models import ExamQuestion
+    from apps.study.models import AIGuidanceSession
+
+    student = UserAccount.objects.create(
+        role_type="student",
+        mobile="13970000073",
+        display_name="Task7回复学生",
+    )
+    paper = ExamPaper.objects.create(
+        title="Task7回复试卷",
+        subject="数学",
+        stage="初中",
+        grade="9",
+        source_file_path="task7/reply.docx",
+        status="uploaded",
+        uploaded_by=student,
+    )
+    question = ExamQuestion.objects.create(
+        paper=paper,
+        question_no="2",
+        question_type="fill_blank",
+        subject="数学",
+        stem="题目",
+        answer="D",
+        ai_answer_c={
+            "questions": [
+                {"question": "第一问", "reference_answer": "一"},
+                {"question": "第二问", "reference_answer": "二"},
+                {"question": "第三问", "reference_answer": "三"},
+            ]
+        },
+    )
+    session = AIGuidanceSession.objects.create(
+        id=uuid.UUID(int=7),
+        student_user_id=student,
+        question_id=question.id,
+        mode_type="C",
+        session_status="running",
+        content_log_json={"step_index": 0, "steps": [], "answers": []},
+    )
+    provider_content = (
+        "\ufeff\u200b```python\n"
+        '{"evaluation": "POISON"}\n```'
+        "\u200c\u2060"
+    )
+
+    class Client:
+        def complete(self, task_key, **kwargs):
+            return AIResult(
+                content=provider_content,
+                provider="qwen",
+                model="qwen3.7-flash",
+                latency_ms=1,
+                raw_response={
+                    "choices": [{"message": {"content": provider_content}}]
+                },
+            )
+
+    monkeypatch.setattr(
+        guidance_views,
+        "guidance_component_factory",
+        lambda: GuidanceComponent(Client()),
+    )
+    client = APIClient()
+    client.force_authenticate(user=student)
+
+    response = client.post(
+        "/api/v1/student/guidance/sessions/7/reply",
+        {"reply": "我认为应该先整理已知条件"},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["evaluation"] == (
+        "（AI 评价暂时不可用：AIResponseError）"
+    )
+    assert "POISON" not in str(response.json())
+    session.refresh_from_db()
+    assert "POISON" not in str(session.content_log_json)

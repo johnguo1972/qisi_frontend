@@ -151,6 +151,18 @@ def test_teacher_c_reply_keeps_existing_failure_wording(
         ('```JSON\n{"evaluation": "POISON"\n```', "POISON"),
         ('```python\n{"evaluation": "POISON"}\n```', "POISON"),
         ('{"evaluation": "\u200b"}', "\u200b"),
+        (
+            "\ufeff\u200b```python\n"
+            '{"evaluation": "POISON"}\n```'
+            "\u200c\u2060",
+            "POISON",
+        ),
+        (
+            "\u200d"
+            '{"evaluation": "POISON", "unexpected": true}'
+            "\ufeff",
+            "POISON",
+        ),
     ],
 )
 def test_teacher_reply_endpoint_does_not_store_malformed_provider_content(

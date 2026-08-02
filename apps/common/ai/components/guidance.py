@@ -12,7 +12,7 @@ from apps.common.ai.client import AIClient
 from apps.common.ai.exceptions import AIResponseError
 from apps.common.ai.prompt_registry import PromptRegistry
 from apps.common.ai.response_parser import ResponseParser
-from apps.common.ai.schemas import NonBlankStr
+from apps.common.ai.schemas import NonBlankStr, strip_visual_boundaries
 
 from .base import AICompleter, QuestionInput
 
@@ -130,7 +130,7 @@ _PLAIN_MARKER_LIMIT = 64
 
 
 def _parse_evaluation(content: str) -> str:
-    stripped = ResponseParser.parse_text(content)
+    stripped = strip_visual_boundaries(ResponseParser.parse_text(content))
     if stripped.startswith("```"):
         fence = _JSON_FENCE.fullmatch(stripped)
         if (
