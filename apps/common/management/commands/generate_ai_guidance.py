@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
 from apps.parser.models import ExamQuestion
-from apps.common.ai_service import AIReviewService
+from apps.common.ai_service import AIReviewService, create_ai_review_service
 
 
 class Command(BaseCommand):
@@ -11,7 +11,7 @@ class Command(BaseCommand):
         parser.add_argument('--all', action='store_true', help='Process all questions with missing ai_answer_b')
 
     def handle(self, *args, **options):
-        service = AIReviewService()
+        service = create_ai_review_service()
         
         if options['all']:
             questions = ExamQuestion.objects.filter(ai_answer_b__isnull=True)

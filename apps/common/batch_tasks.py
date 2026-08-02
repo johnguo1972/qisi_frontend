@@ -4,7 +4,7 @@ import json
 from celery import shared_task
 from django.core.cache import cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from apps.common.ai_service import AIReviewService
+from apps.common.ai_service import AIReviewService, create_ai_review_service
 from apps.parser.models import ExamQuestion
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def batch_ai_process_questions(self, question_ids, model=None):
         'errors': {},
     }), timeout=3600)
 
-    service = AIReviewService()
+    service = create_ai_review_service()
     success_count = 0
     error_count = 0
     errors = {}
@@ -107,10 +107,10 @@ def single_generate_ai_answers(self, question_id: int, model: str = None):
 
     Args:
         question_id: 题目 ID
-        model: 可选 AI 模型覆盖（如 'qwen3.6-plus'），默认由 AIReviewService 决定
+        model: 可选 AI 模型覆盖（如 'qwen3.7-plus'），默认由 AIReviewService 决定
     """
     try:
-        service = AIReviewService()
+        service = create_ai_review_service()
         results = service.process_question_full(question_id, model=model)
         service.save_results_to_question(question_id, results)
 

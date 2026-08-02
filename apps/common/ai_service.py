@@ -655,3 +655,8 @@ class AIReviewService:
                 if k2 in question.ai_answer_c:
                     v = question.ai_answer_c[k2]
                     logger.info(f'[AI SAVE] ai_answer_c.{k2} (len={len(str(v))}): {str(v)[:500]}')
+
+
+def create_ai_review_service(**kwargs) -> AIReviewService:
+    """Build the compatibility facade through one injectable entry point."""
+    return AIReviewService(**kwargs)

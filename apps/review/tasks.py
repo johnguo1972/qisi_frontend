@@ -3,7 +3,8 @@ import json
 import logging
 from celery import shared_task
 from django.core.cache import cache
-from apps.common.ai_service import AIReviewService
+from django.utils import timezone
+from apps.common.ai_service import AIReviewService, create_ai_review_service
 from apps.parser.models import ExamQuestion
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ def single_ai_process_question(self, question_id, model=None):
 
     set_progress('running', 'starting', STEP_LABELS['starting'])
 
-    service = AIReviewService()
+    service = create_ai_review_service()
 
     try:
         question = ExamQuestion.objects.get(id=question_id)
@@ -107,7 +108,7 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
 
     set_progress('running', 'starting', STEP_LABELS['starting'])
 
-    service = AIReviewService()
+    service = create_ai_review_service()
 
     try:
         question = ExamQuestion.objects.get(id=question_id)
@@ -130,7 +131,7 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         image_urls = service._get_question_image_urls(question)
 
         # Generate only the requested mode
-        mode_key = f'answer_{mode.lower()}'
+        mode_key = f'ai_answer_{mode.lower()}'
         if mode == 'A':
             answer = service.solve_mode_a(
                 question, image_urls, normalized_text, vision_result,
@@ -153,8 +154,8 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         # Save result
         answer['mode'] = mode
         answer['model'] = service._get_model(model)
-        from datetime import datetime
-        answer['generated_at'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        processed_at = timezone.now()
+        answer['generated_at'] = processed_at.strftime('%Y-%m-%dT%H:%M:%S')
         answer['confirmed'] = False
         answer['confirmed_at'] = None
         answer['edited_content'] = None
@@ -162,7 +163,7 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
 
         # Update DB field
         setattr(question, mode_key, answer)
-        question.ai_processed_at = datetime.now()
+        question.ai_processed_at = processed_at
         question.ai_processing_status = 'success'
         question.save()
 

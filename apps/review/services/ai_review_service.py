@@ -2,7 +2,7 @@
 import logging
 from django.utils import timezone
 from apps.parser.models import ExamQuestion
-from apps.common.ai_service import AIReviewService
+from apps.common.ai_service import AIReviewService, create_ai_review_service
 from apps.common.exceptions import AIRequestError
 
 logger = logging.getLogger(__name__)
@@ -13,7 +13,7 @@ def process_single_question(question_id: int, model: str = None) -> dict:
 
     Returns a summary dict even if some steps fail.
     """
-    service = AIReviewService()
+    service = create_ai_review_service()
     results = service.process_question_full(question_id, model=model)
     service.save_results_to_question(question_id, results)
 
