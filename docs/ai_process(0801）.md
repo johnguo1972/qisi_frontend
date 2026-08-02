@@ -131,3 +131,10 @@ parser 旧 prompt 文件中的唯一非提示数据 `QUESTION_TYPE_LABELS` 已�
 - 删除后完整相关套件：574 项通过；`python manage.py check` 为 0 issue；Python compile/关键模块 import 通过；`git diff --check` 通过。
 - 静态扫描结果：`apps/config` 中 Qwen 3.6 为 0 匹配；生产 Python 内嵌提示词为 0 匹配；已删除模块 import 为 0 匹配；`httpx.Client` 仅存在于公共客户端（以及测试），Key/兼容 URL 字样仅存在于 cfg 引用和测试夹具。
 - 上述均为本地单元/模拟/数据库契约验证；Qwen 和 DeepSeek 真实网络冒烟尚未在 Task10 执行，留待 Task11 单次显式 `--live` 验证。
+
+## 8. Task11 受控冒烟命令状态（2026-08-03）
+
+- 已实现 `python manage.py ai_smoke_test --provider qwen --live` 与 `python manage.py ai_smoke_test --provider deepseek --live`。命令仅通过公共题目探查组件或 DeepSeek 结果校验组件调用 cfg 中的固定 task，不包含独立提示词、URL、Key、模型、超时、HTTP 或回退路由。
+- `--live` 是强制显式开关；缺少该开关时，在加载配置和构造 AI 客户端之前以非零退出码拒绝执行。成功输出仅包含 provider、cfg 配置模型、`status=ok`、耗时和 `schema=valid`；失败仅输出固定类别与退出码，不输出请求、响应或异常原文。
+- 命令单元测试使用注入客户端完成零联网验证，覆盖 Qwen/DeepSeek task 隔离、严格 Schema、摘要白名单、配置/传输或超时/HTTP/响应分类、退出码、客户端清理和 traceback 脱敏。
+- 本节当前只证明命令实现和本地模拟测试；本轮没有发起真实外网请求。Qwen 与 DeepSeek 各一次 `--live` 证据仍待获准执行后另行记录，不能据此宣称外部模型调用成功。
