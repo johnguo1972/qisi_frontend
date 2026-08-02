@@ -2,6 +2,7 @@
 
 from io import StringIO
 import json
+import logging
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -168,6 +169,7 @@ def test_batch_task_uses_injected_facade_and_preserves_result_and_progress():
         "errors": {},
     }
     assert all(timeout == 3600 for _, _, timeout in writes)
+    facade.close.assert_called_once_with()
 
 
 @pytest.mark.django_db
@@ -201,6 +203,96 @@ def test_signal_generation_task_uses_injected_facade_and_keeps_result_shape():
     facade.save_results_to_question.assert_called_once_with(
         str(question.id), facade.process_question_full.return_value
     )
+    facade.close.assert_called_once_with()
+
+
+def test_review_task_closes_facade_on_early_missing_question():
+    from apps.review import tasks
+
+    facade = MagicMock()
+    with (
+        patch.object(tasks, "create_ai_review_service", return_value=facade),
+        patch.object(
+            tasks.ExamQuestion.objects,
+            "get",
+            side_effect=tasks.ExamQuestion.DoesNotExist,
+        ),
+        patch.object(tasks.cache, "set"),
+    ):
+        result = tasks.single_ai_process_question.run("missing")
+
+    assert result == {
+        "status": "failed",
+        "error": "Question missing not found",
+    }
+    facade.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    ("task_name", "args"),
+    [
+        ("single_ai_process_question", ("db-error",)),
+        ("single_mode_ai_process_question", ("db-error", "A")),
+    ],
+)
+def test_review_tasks_close_facade_on_unexpected_question_lookup_error(
+    task_name, args
+):
+    from apps.review import tasks
+
+    facade = MagicMock()
+    with (
+        patch.object(tasks, "create_ai_review_service", return_value=facade),
+        patch.object(
+            tasks.ExamQuestion.objects,
+            "get",
+            side_effect=RuntimeError("database unavailable"),
+        ),
+        patch.object(tasks.cache, "set"),
+        pytest.raises(RuntimeError, match="database unavailable"),
+    ):
+        getattr(tasks, task_name).run(*args)
+
+    facade.close.assert_called_once_with()
+
+
+def test_review_task_logs_metadata_without_ai_content_or_provider_errors(caplog):
+    from apps.review import tasks
+
+    sensitive = (
+        "13812345678 token=PRIVATE_TOKEN "
+        "data:image/png;base64,PRIVATE_DATA "
+        "https://cdn.example.test/a.png?Signature=PRIVATE_SIGNATURE "
+        "provider raw answer"
+    )
+    question = MagicMock(ai_processing_status="success")
+    facade = MagicMock()
+    facade.process_question_full_v2.return_value = {
+        "answer_a": {"steps": [sensitive], "summary": sensitive},
+        "vision": {"error": sensitive},
+        "errors": {},
+        "image_count": 1,
+    }
+    caplog.set_level(logging.DEBUG, logger="apps.review.tasks")
+
+    with (
+        patch.object(tasks, "create_ai_review_service", return_value=facade),
+        patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(tasks.cache, "set"),
+    ):
+        result = tasks.single_ai_process_question.run("safe-log")
+
+    assert result["status"] == "complete"
+    assert sensitive not in caplog.text
+    for marker in (
+        "13812345678",
+        "PRIVATE_TOKEN",
+        "PRIVATE_DATA",
+        "PRIVATE_SIGNATURE",
+        "provider raw answer",
+    ):
+        assert marker not in caplog.text
+    facade.close.assert_called_once_with()
 
 
 @pytest.mark.django_db
@@ -430,6 +522,7 @@ def test_guidance_command_keeps_empty_success_for_unmatched_valid_uuid():
 
     service_factory.assert_called_once_with()
     facade.process_question_full.assert_not_called()
+    facade.close.assert_called_once_with()
     assert stdout.getvalue() == ""
 
 

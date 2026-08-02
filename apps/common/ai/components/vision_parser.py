@@ -40,8 +40,23 @@ class VisionParserComponent:
         ai_client: AICompleter | None = None,
         prompt_registry: PromptRegistry | None = None,
     ) -> None:
-        self._ai_client = ai_client or AIClient()
+        self._owns_ai_client = ai_client is None
+        self._ai_client = ai_client if ai_client is not None else AIClient()
         self._prompt_registry = prompt_registry or PromptRegistry()
+        self._closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._owns_ai_client:
+            self._ai_client.close()
 
     def detect_positions(self, image_path: str) -> dict[str, Any]:
         outcome = self._execute(

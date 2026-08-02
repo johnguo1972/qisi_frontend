@@ -635,8 +635,8 @@ def teacher_guidance_reply(request, session_id):
             evaluation = '（AI评价功能暂不可用，请检查AI服务配置）'
         except AIResponseError:
             evaluation = '（AI评价调用失败：AIResponseError）'
-        except Exception as error:
-            evaluation = f'（AI评价调用失败：{str(error)}）'
+        except Exception:
+            evaluation = '（AI评价调用失败，请稍后重试）'
 
         # 获取下一个引导问题
         steps = ai_c.get('steps') or ai_c.get('dialogue') or []

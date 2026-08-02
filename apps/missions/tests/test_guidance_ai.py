@@ -98,15 +98,23 @@ def test_teacher_c_reply_uses_component_and_keeps_response_contract(monkeypatch)
         ),
         (
             AIRequestError("provider failed"),
-            "（AI评价调用失败：provider failed）",
+            "（AI评价调用失败，请稍后重试）",
         ),
         (
             AIRequestError("AI provider request timed out"),
-            "（AI评价调用失败：AI provider request timed out）",
+            "（AI评价调用失败，请稍后重试）",
         ),
         (
             AIResponseError("malformed response"),
             "（AI评价调用失败：AIResponseError）",
+        ),
+        (
+            RuntimeError(
+                "13812345678 token=PRIVATE_TOKEN "
+                "data:image/png;base64,PRIVATE_DATA "
+                "https://cdn.example.test/a.png?Signature=PRIVATE_SIGNATURE"
+            ),
+            "（AI评价调用失败，请稍后重试）",
         ),
     ],
 )

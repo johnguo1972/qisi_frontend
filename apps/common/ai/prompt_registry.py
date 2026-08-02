@@ -10,18 +10,25 @@ from .config import (
     PROMPT_VARIABLE_PATTERN,
     load_ai_config,
 )
-from .exceptions import AIConfigError, AIPromptError
+from .exceptions import AIPromptError
 
 
 class PromptRegistry:
     """Render prompts already validated by :class:`AIConfig`."""
 
     def __init__(self, config: AIConfig | None = None) -> None:
-        self._config = config if config is not None else load_ai_config()
+        source = config if config is not None else load_ai_config()
+        self._tasks = {
+            key: source.get_task_config(key) for key in source.task_keys
+        }
+        self._prompts = {
+            key: source.get_prompt_config(key) for key in source.prompt_keys
+        }
+        source = None
 
     @property
     def task_keys(self) -> tuple[str, ...]:
-        return self._config.task_keys
+        return tuple(self._tasks)
 
     def get_variables(self, task_key: str) -> tuple[str, ...]:
         return self._get_prompt(task_key).variables
@@ -63,9 +70,9 @@ class PromptRegistry:
 
     def _get_prompt(self, task_key: str) -> AIPromptConfig:
         try:
-            task = self._config.get_task_config(task_key)
-            return self._config.get_prompt_config(task.prompt_key)
-        except AIConfigError:
+            task = self._tasks[task_key]
+            return self._prompts[task.prompt_key]
+        except KeyError:
             raise AIPromptError("Unknown AI task") from None
 
 

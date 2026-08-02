@@ -14,22 +14,24 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         service = create_ai_review_service()
-        
-        if options['all']:
-            questions = ExamQuestion.objects.filter(ai_answer_b__isnull=True)
-            self.stdout.write(f'Found {questions.count()} questions with missing ai_answer_b')
-        else:
-            questions = ExamQuestion.objects.filter(id__in=options['question_ids'])
-        
-        for question in questions:
-            self.stdout.write(f'Processing question {question.id}...')
-            try:
-                results = service.process_question_full(question.id)
-                if 'answer_b' in results and not results['answer_b'].get('error'):
-                    question.ai_answer_b = results['answer_b']
-                    question.save()
-                    self.stdout.write(self.style.SUCCESS(f'✓ Question {question.id} updated'))
-                else:
-                    self.stdout.write(self.style.WARNING(f'⚠ Question {question.id} generation failed'))
-            except Exception as e:
-                self.stdout.write(self.style.ERROR(f'✗ Question {question.id} error: {e}'))
+        try:
+            if options['all']:
+                questions = ExamQuestion.objects.filter(ai_answer_b__isnull=True)
+                self.stdout.write(f'Found {questions.count()} questions with missing ai_answer_b')
+            else:
+                questions = ExamQuestion.objects.filter(id__in=options['question_ids'])
+
+            for question in questions:
+                self.stdout.write(f'Processing question {question.id}...')
+                try:
+                    results = service.process_question_full(question.id)
+                    if 'answer_b' in results and not results['answer_b'].get('error'):
+                        question.ai_answer_b = results['answer_b']
+                        question.save()
+                        self.stdout.write(self.style.SUCCESS(f'✓ Question {question.id} updated'))
+                    else:
+                        self.stdout.write(self.style.WARNING(f'⚠ Question {question.id} generation failed'))
+                except Exception as e:
+                    self.stdout.write(self.style.ERROR(f'✗ Question {question.id} error: {e}'))
+        finally:
+            service.close()

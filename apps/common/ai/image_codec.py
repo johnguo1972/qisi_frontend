@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import re
 import warnings
 from dataclasses import dataclass
@@ -19,6 +20,16 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
 DEFAULT_MAX_EDGE = 1600
 SUPPORTED_IMAGE_FORMATS = frozenset({"JPEG", "PNG", "WEBP"})
+DATA_IMAGE_MIME_FORMATS = {
+    "jpeg": "JPEG",
+    "png": "PNG",
+    "webp": "WEBP",
+}
+DATA_IMAGE_PATTERN = re.compile(
+    r"\Adata:image/(?P<subtype>png|jpeg|webp);base64,"
+    r"(?P<payload>[A-Za-z0-9+/]+={0,2})\Z",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -90,6 +101,8 @@ def _prepare_image_source(source: object, *, max_edge: int) -> _ImageOutcome:
             return _ImageOutcome(error="Image processing limit is invalid")
 
         candidate = source.strip()
+        if candidate.lower().startswith("data:"):
+            return _encode_data_image(candidate, max_edge=max_edge)
         parsed = urlsplit(candidate)
         if parsed.scheme.lower() in {"http", "https"}:
             if not parsed.netloc:
@@ -105,6 +118,76 @@ def _prepare_image_source(source: object, *, max_edge: int) -> _ImageOutcome:
         return _ImageOutcome(error="Image input is invalid")
     finally:
         source = ""
+
+
+def _encode_data_image(source: str, *, max_edge: int) -> _ImageOutcome:
+    image = None
+    input_buffer = None
+    output = None
+    decoded = b""
+    encoded = ""
+    try:
+        match = DATA_IMAGE_PATTERN.fullmatch(source)
+        if match is None:
+            return _ImageOutcome(error="Image data URI is invalid or unsupported")
+        payload = match.group("payload")
+        max_encoded_size = ((MAX_IMAGE_BYTES + 2) // 3) * 4
+        if len(payload) > max_encoded_size:
+            return _ImageOutcome(error="Image data is too large")
+        try:
+            decoded = base64.b64decode(payload, validate=True)
+        except (ValueError, binascii.Error):
+            return _ImageOutcome(error="Image data URI is invalid or unsupported")
+        if not decoded:
+            return _ImageOutcome(error="Image data is empty")
+        if len(decoded) > MAX_IMAGE_BYTES:
+            return _ImageOutcome(error="Image data is too large")
+
+        input_buffer = BytesIO(decoded)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            image = Image.open(input_buffer)
+            expected_format = DATA_IMAGE_MIME_FORMATS[
+                match.group("subtype").lower()
+            ]
+            if image.format != expected_format:
+                return _ImageOutcome(error="Image data format does not match MIME type")
+            width, height = image.size
+            if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+                return _ImageOutcome(error="Image dimensions are unsupported")
+            image.load()
+
+        if image.mode != "RGB":
+            converted = image.convert("RGB")
+            image.close()
+            image = converted
+        if max(image.size) > max_edge:
+            image.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+
+        output = BytesIO()
+        image.save(output, format="JPEG", quality=85, optimize=True)
+        encoded = base64.b64encode(output.getvalue()).decode("ascii")
+        return _ImageOutcome(value=f"data:image/jpeg;base64,{encoded}")
+    except (
+        OSError,
+        ValueError,
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ):
+        return _ImageOutcome(error="Image data is invalid or unsupported")
+    except Exception:
+        return _ImageOutcome(error="Image processing failed")
+    finally:
+        if image is not None:
+            image.close()
+        if input_buffer is not None:
+            input_buffer.close()
+        if output is not None:
+            output.close()
+        source = ""
+        decoded = b""
+        encoded = ""
 
 
 def _encode_local_image(source: str, *, max_edge: int) -> _ImageOutcome:

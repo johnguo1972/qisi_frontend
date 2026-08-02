@@ -125,6 +125,57 @@ def test_position_component_factory_failure_is_also_fixed_and_safe(
     _assert_safe_records(caplog.records)
 
 
+def test_position_service_closes_created_component_after_failure(monkeypatch):
+    class Component:
+        def __init__(self):
+            self.close_calls = 0
+
+        def detect_positions(self, _image_path):
+            raise AIRequestError("provider failed")
+
+        def close(self):
+            self.close_calls += 1
+
+    component = Component()
+    monkeypatch.setattr(
+        position_service,
+        "vision_parser_component_factory",
+        lambda: component,
+    )
+
+    position_service.detect_positions([{"page_no": 1, "path": "page.png"}])
+
+    assert component.close_calls == 1
+
+
+def test_question_parse_service_context_closes_owned_but_not_borrowed_component(
+    monkeypatch,
+):
+    class Component:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    owned = Component()
+    monkeypatch.setattr(
+        question_parse_service,
+        "VisionParserComponent",
+        lambda: owned,
+    )
+
+    with question_parse_service.QuestionParseService() as service:
+        assert service is not None
+    service.close()
+    assert owned.close_calls == 1
+
+    borrowed = Component()
+    with question_parse_service.QuestionParseService(borrowed):
+        pass
+    assert borrowed.close_calls == 0
+
+
 def test_question_adapter_raises_chainless_safe_error_and_clears_locals():
     service = question_parse_service.QuestionParseService(UnsafeComponent())
 
@@ -353,8 +404,13 @@ def test_question_reparse_failure_persists_and_retries_only_safe_detail(
     monkeypatch.setattr(parser_tasks.settings, "MEDIA_ROOT", tmp_path)
 
     class UnsafeService:
+        close_calls = 0
+
         def parse_question(self, *_args, **_kwargs):
             raise AIRequestError(UNSAFE_DETAIL)
+
+        def close(self):
+            type(self).close_calls += 1
 
     monkeypatch.setattr(
         question_parse_service, "QuestionParseService", UnsafeService
@@ -385,6 +441,7 @@ def test_question_reparse_failure_persists_and_retries_only_safe_detail(
     _assert_no_sensitive(formatted)
     assert str(private_page) not in formatted
     assert not AIParseResult.objects.exclude(error_message__isnull=True).exists()
+    assert UnsafeService.close_calls == 1
     _assert_safe_records(caplog.records)
 
 

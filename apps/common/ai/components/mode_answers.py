@@ -55,6 +55,15 @@ class ModeAAnswerComponent(_ModeAnswerComponent):
     mode = "A"
     response_schema = ModeAResponse
 
+    def normalize(self, result: dict) -> dict:
+        normalized = super().normalize(result)
+        missing = normalized.get("missing_conditions")
+        if missing is None:
+            normalized["missing_conditions"] = []
+        elif isinstance(missing, str):
+            normalized["missing_conditions"] = [missing] if missing.strip() else []
+        return normalized
+
 
 class ModeBAnswerComponent(_ModeAnswerComponent):
     task_key = "mode_b_answer"

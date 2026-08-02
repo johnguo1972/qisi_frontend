@@ -30,11 +30,11 @@
 | task key | provider | 模型 | 公共组件/方法 | 响应处理 |
 | --- | --- | --- | --- | --- |
 | `question_probe` | Qwen | `qwen3.7-flash` | `QuestionProbeComponent.run` | `QuestionProbeResponse` 严格分类 Schema |
-| `knowledge_analysis` | Qwen | `qwen3.7-plus` | `KnowledgeAnalysisComponent.run` | `KnowledgeAnalysisResponse` |
+| `knowledge_analysis` | Qwen | `qwen3.7-flash` | `KnowledgeAnalysisComponent.run` | `KnowledgeAnalysisResponse` |
 | `mode_a_answer` | Qwen | `qwen3.7-plus` | `ModeAAnswerComponent.run` | A 模式步骤/答案严格 Schema |
 | `mode_b_answer` | Qwen | `qwen3.7-plus` | `ModeBAnswerComponent.run` | B 模式问题、A-D 选项和答案严格 Schema |
 | `mode_c_answer` | Qwen | `qwen3.7-plus` | `ModeCAnswerComponent.run` | C 模式开放问题和追问严格 Schema |
-| `result_verify` | Qwen | `qwen3.7-flash` | `ResultVerifierComponent.verify` | 通用结果校验 Schema |
+| `result_verify` | Qwen | `qwen3.7-flash` | `ResultVerifierComponent.run` | 通用结果校验 Schema |
 | `vision_fact_extract` | Qwen | `qwen3-vl-plus` | `VisionParserComponent.extract_facts` | 图像事实对象解析 |
 | `vision_page_parse` | Qwen | `qwen3-vl-plus` | `VisionParserComponent.parse_page` | 整页题目对象解析与审计字段 |
 | `vision_question_parse` | Qwen | `qwen3-vl-plus` | `VisionParserComponent.parse_question` | 逐题对象解析与审计字段 |
@@ -128,7 +128,7 @@ parser 旧 prompt 文件中的唯一非提示数据 `QUESTION_TYPE_LABELS` 已�
 
 - 删除前保护套件：562 项通过。
 - Task10 新增入口采用 RED -> GREEN：先复现缺 task key/旧私有调用失败，再通过公共组件修复；路由、Schema、权限、crop、envelope 和安全失败边界均有自动化测试。
-- 删除后完整相关套件：574 项通过；`python manage.py check` 为 0 issue；Python compile/关键模块 import 通过；`git diff --check` 通过。
+- 最终集中修复后完整相关套件：723 项通过；`python manage.py check` 为 0 issue；Python compile/关键模块 import 通过；`git diff --check` 通过。
 - 静态扫描结果：`apps/config` 中 Qwen 3.6 为 0 匹配；生产 Python 内嵌提示词为 0 匹配；已删除模块 import 为 0 匹配；`httpx.Client` 仅存在于公共客户端（以及测试），Key/兼容 URL 字样仅存在于 cfg 引用和测试夹具。
 - 上述均为本地单元/模拟/数据库契约验证；Qwen 和 DeepSeek 真实网络冒烟尚未在 Task10 执行，留待 Task11 单次显式 `--live` 验证。
 
@@ -137,7 +137,7 @@ parser 旧 prompt 文件中的唯一非提示数据 `QUESTION_TYPE_LABELS` 已�
 - 已实现 `python manage.py ai_smoke_test --provider qwen --live` 与 `python manage.py ai_smoke_test --provider deepseek --live`。命令仅通过公共题目探查组件或 DeepSeek 结果校验组件调用 cfg 中的固定 task，不包含独立提示词、URL、Key、模型、超时、HTTP 或回退路由。
 - `--live` 是强制显式开关；缺少该开关时，在加载配置和构造 AI 客户端之前以非零退出码拒绝执行。成功输出仅包含 provider、cfg 配置模型、`status=ok`、耗时和 `schema=valid`；失败仅输出固定类别与退出码，不输出请求、响应或异常原文。
 - 命令单元测试使用注入客户端完成零联网验证，覆盖 Qwen/DeepSeek task 隔离、严格 Schema、摘要白名单、配置/传输或超时/HTTP/响应分类、退出码、客户端清理和 traceback 脱敏。
-- 本地实现证据：Task11 命令定向测试 15 项通过，公共 AI 回归 505 项通过，Django `check` 为 0 issue；这些是组件和命令的模拟/本地证据，不等同于供应商调用成功。
-- Qwen 真实冒烟：唯一一次 `--live` 命令已执行且进程已经结束，但工具输出在上下文切换时被截断。取证未发现文件日志、数据库审计、命令历史或仍在运行的进程，因此结果和退出码不可恢复。为遵守“每个提供商各一次”的调用限制，没有重复请求，也不宣称 Qwen 成功。
+- 本地实现证据：Task11 命令定向测试 15 项通过，本轮最终相关回归 723 项通过，Django `check` 为 0 issue；这些是组件和命令的模拟/本地证据，不等同于供应商调用成功。
+- Qwen live 当前为“未验证，等待新的显式授权”，不能标记为 Task11 live complete。唯一一次 `--live` 命令已执行且进程已经结束，但工具输出在上下文切换时被截断；取证未发现可恢复的文件日志、数据库审计、命令历史或仍在运行的进程。为遵守“每个提供商各一次”的调用限制，本轮没有重复请求。
 - DeepSeek 真实冒烟：唯一一次 `--live` 命令已执行，安全摘要为 `provider=deepseek status=error category=http_status http_status=401`。这是供应商认证/凭证失败，不是公共组件 Schema 失败或模拟测试失败；DeepSeek 失败后没有回退到 Qwen。
-- Task11 的外部证据结论是：Qwen 结果不可恢复，DeepSeek 被供应商认证阻止；两者均不能记为真实调用成功。后续如需重新验证，必须先取得新的调用授权，不能把本次证据记录视作重试授权。
+- Task11 的外部证据结论是：Qwen live 未验证并等待新的显式授权；DeepSeek live 是外部 HTTP 401，且失败后没有 Qwen 回退。两者均不能记为真实调用成功。后续如需重新验证，必须先取得新的调用授权，不能把本次证据记录视作重试授权。

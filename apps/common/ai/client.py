@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
+import secrets
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -20,6 +22,7 @@ from .types import AIResult
 
 
 logger = logging.getLogger(__name__)
+_TRACE_HMAC_KEY = secrets.token_bytes(32)
 
 
 @dataclass(frozen=True)
@@ -401,4 +404,8 @@ def _latency_ms(started: float) -> int:
 def _trace_id_hash(trace_id: str | None) -> str | None:
     if trace_id is None:
         return None
-    return hashlib.sha256(trace_id.encode("utf-8")).hexdigest()[:16]
+    return hmac.new(
+        _TRACE_HMAC_KEY,
+        trace_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:16]

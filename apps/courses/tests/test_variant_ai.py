@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import inspect
 import json
 import traceback
 from types import SimpleNamespace
 from urllib.parse import quote
 
+import httpx
 import pytest
 from PIL import Image
 from rest_framework.exceptions import ValidationError
@@ -13,6 +13,7 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.accounts.models import UserAccount
 from apps.common.ai.components.base import QuestionInput
+from apps.common.ai.client import AIClient
 from apps.common.ai.components.vision_parser import VisionParserComponent
 from apps.common.ai.config import (
     AIConfig,
@@ -21,7 +22,6 @@ from apps.common.ai.config import (
     reset_ai_config_for_tests,
 )
 from apps.common.ai.exceptions import AIConfigError, AIResponseError
-from apps.common.ai import legacy_variant_adapter
 from apps.common.ai.types import AIResult
 from apps.common.exceptions import AIRequestError
 from apps.courses import ai_service, tasks, views
@@ -33,10 +33,6 @@ from apps.courses.models import (
 )
 from apps.papers.models import ExamPaper
 from apps.parser.models import ExamQuestion
-
-
-_SURROGATE_API_KEYS = ("\ud800", "\udfff", "正常\ud800key")
-_NORMAL_UNICODE_API_KEY = "正常共享密钥"
 
 
 def _percent_encode_layers(value: str, layers: int) -> str:
@@ -170,6 +166,7 @@ class FakeGenerator:
         self.error = error
         self.calls = []
         self.order = order
+        self.close_calls = 0
 
     def generate(self, question, variant_mode):
         assert isinstance(question, QuestionInput)
@@ -180,12 +177,16 @@ class FakeGenerator:
             raise self.error
         return self.result
 
+    def close(self):
+        self.close_calls += 1
+
 
 class FakeVerifier:
     def __init__(self, outcomes=None, order=None):
         self.outcomes = list(outcomes or [_verification_result()])
         self.calls = []
         self.order = order
+        self.close_calls = 0
 
     def verify(self, task_key, original, candidate):
         self.calls.append((task_key, original, candidate))
@@ -195,6 +196,9 @@ class FakeVerifier:
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
+
+    def close(self):
+        self.close_calls += 1
 
 
 @pytest.fixture
@@ -260,14 +264,6 @@ def _install_components(monkeypatch, generator, verifier, *, available=True):
         tasks,
         "deepseek_verification_available",
         lambda: available,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        tasks,
-        "call_ai",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("legacy provider path used")
-        ),
         raising=False,
     )
 
@@ -378,6 +374,77 @@ def test_material_ai_recognize_preserves_crop_and_owner_permission(
     assert response.data == {"success": False, "message": "未识别到试题"}
     assert len(calls) == 1
     assert calls[0][0].startswith("data:image/png;base64,")
+
+
+@pytest.mark.django_db
+def test_material_crop_reaches_real_codec_and_client_transport(
+    monkeypatch, tmp_path, variant_records
+):
+    image_path = tmp_path / "course-real-crop.png"
+    Image.new("RGB", (100, 60), color="white").save(image_path)
+    material = _create_course_material(variant_records, image_path)
+    expected = {
+        "question_type": "solution",
+        "stem": "证明三角形全等。",
+        "options": {},
+        "answer": "略",
+        "analysis": "使用边角边。",
+        "difficulty": 3,
+        "knowledge_points": ["全等三角形"],
+        "images": [],
+    }
+    seen_images = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        image_url = payload["messages"][1]["content"][1]["image_url"]["url"]
+        seen_images.append(image_url)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": json.dumps(expected, ensure_ascii=False)}}
+                ]
+            },
+        )
+
+    monkeypatch.setenv("QWEN_API_URL", "https://example.test/qwen")
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("DEEPSEEK_API_URL", "https://example.test/deepseek")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    reset_ai_config_for_tests()
+    client = AIClient(
+        transport=httpx.MockTransport(handler), sleeper=lambda _seconds: None
+    )
+    component = VisionParserComponent(client)
+    monkeypatch.setattr(
+        views,
+        "material_vision_component_factory",
+        lambda: component,
+        raising=False,
+    )
+    request = APIRequestFactory().post(
+        "/unused",
+        {
+            "image_url": str(image_path),
+            "crop_region": {"x1": 10, "y1": 5, "x2": 70, "y2": 45},
+        },
+        format="json",
+    )
+    force_authenticate(request, user=variant_records.teacher)
+
+    try:
+        response = views.material_ai_recognize(
+            request, variant_records.course.id, material.id
+        )
+    finally:
+        client.close()
+        reset_ai_config_for_tests()
+
+    assert response.status_code == 200
+    assert response.data == {"success": True, "data": expected}
+    assert len(seen_images) == 1
+    assert seen_images[0].startswith("data:image/jpeg;base64,")
 
 
 @pytest.mark.django_db
@@ -712,6 +779,8 @@ def test_task_calls_qwen_then_deepseek_and_persists_confirmable_fields(
     assert order == ["variant_generate", "variant_verify_deepseek"]
     assert len(generator.calls) == 1
     assert len(verifier.calls) == 1
+    assert generator.close_calls == 1
+    assert verifier.close_calls == 1
     variant_task = VariantTask.objects.get(id=result["variant_task_id"])
     generated = ExamQuestion.objects.get(id=result["question_id"])
     assert result["status"] == "success"
@@ -855,6 +924,37 @@ def test_generation_failure_sets_error_state_and_keeps_celery_retry_contract(
     assert variant_task.completed_at is not None
     assert captured["countdown"] == 30
     assert captured["exc"] is error
+    assert generator.close_calls == 1
+
+
+def test_material_recognition_helper_closes_created_component_on_failure(
+    monkeypatch, tmp_path
+):
+    image_path = tmp_path / "close-component.png"
+    Image.new("RGB", (20, 20), color="white").save(image_path)
+
+    class Component:
+        def __init__(self):
+            self.close_calls = 0
+
+        def recognize_course_material(self, _images):
+            raise AIRequestError("provider failed")
+
+        def close(self):
+            self.close_calls += 1
+
+    component = Component()
+    monkeypatch.setattr(
+        views,
+        "material_vision_component_factory",
+        lambda: component,
+        raising=False,
+    )
+
+    with pytest.raises(ValidationError, match="AI 识别失败"):
+        views._recognize_course_material_image(str(image_path), None)
+
+    assert component.close_calls == 1
 
 
 def test_legacy_service_is_a_thin_component_adapter(monkeypatch):
@@ -883,19 +983,6 @@ def test_legacy_service_is_a_thin_component_adapter(monkeypatch):
     assert len(verifier.calls) == 1
 
 
-def test_legacy_module_call_ai_keeps_argument_order():
-    parameters = tuple(inspect.signature(ai_service.call_ai).parameters)
-    assert parameters == (
-        "system_prompt",
-        "user_prompt",
-        "model",
-        "api_url",
-        "api_key",
-        "max_tokens",
-        "temperature",
-    )
-
-
 def test_deepseek_availability_converts_missing_config_to_skip(monkeypatch):
     monkeypatch.setattr(
         ai_service,
@@ -910,15 +997,9 @@ def test_deepseek_availability_converts_missing_config_to_skip(monkeypatch):
 
 def test_deepseek_availability_does_not_fetch_raw_provider_key(monkeypatch):
     monkeypatch.setattr(ai_service, "load_ai_config", _legacy_config)
-    monkeypatch.setattr(
-        ai_service,
-        "get_deepseek_api_key",
-        lambda: (_ for _ in ()).throw(
-            AssertionError("raw provider key crossed compatibility boundary")
-        ),
-    )
 
     assert ai_service.deepseek_verification_available() is True
+    assert not hasattr(ai_service, "get_deepseek_api_key")
 
 
 def test_real_course_factory_constructs_and_skips_optional_missing_deepseek_key(
@@ -935,7 +1016,7 @@ def test_real_course_factory_constructs_and_skips_optional_missing_deepseek_key(
         available = tasks.deepseek_verification_available()
     finally:
         if "generator" in locals():
-            generator._ai_client.close()
+            generator.close()
         reset_ai_config_for_tests()
 
     assert available is False
@@ -983,278 +1064,6 @@ def _legacy_config(*, qwen_api_key: str = "qwen-test-key"):
         ),
     }
     return AIConfig(providers=providers, tasks=tasks_by_key, prompts={})
-
-
-def _format_adapter_traceback(error):
-    return "".join(
-        traceback.TracebackException(
-            type(error),
-            error,
-            error.__traceback__.tb_next,
-            capture_locals=True,
-        ).format()
-    )
-
-
-def test_shared_legacy_adapter_clears_locals_when_config_loading_fails():
-    private_system = "private-system-prompt"
-    private_user = "private-user-prompt"
-    private_key = "private-adapter-key"
-
-    with pytest.raises(AIConfigError) as caught:
-        legacy_variant_adapter.complete_legacy_variant_request(
-            private_system,
-            private_user,
-            "qwen3.7-plus",
-            api_key=private_key,
-            config_loader=lambda: (_ for _ in ()).throw(
-                AIConfigError("configuration unavailable")
-            ),
-        )
-
-    formatted = _format_adapter_traceback(caught.value)
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is None
-    for sensitive in (private_system, private_user, private_key):
-        assert sensitive not in formatted
-
-
-def test_shared_legacy_adapter_clears_matcher_config_and_request_locals():
-    class BrokenConfig:
-        def __repr__(self):
-            return "BrokenConfig(private-config-state)"
-
-        def get_task_config(self, _task_key):
-            raise AIConfigError("task lookup unavailable")
-
-    with pytest.raises(AIConfigError) as caught:
-        legacy_variant_adapter.complete_legacy_variant_request(
-            "private-match-system",
-            "private-match-user",
-            "qwen3.7-plus",
-            api_key="private-match-key",
-            config_loader=BrokenConfig,
-        )
-
-    formatted = _format_adapter_traceback(caught.value)
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is None
-    for sensitive in (
-        "private-config-state",
-        "private-match-system",
-        "private-match-user",
-        "private-match-key",
-    ):
-        assert sensitive not in formatted
-
-
-def test_shared_legacy_adapter_clears_client_and_request_locals_on_call_error():
-    class FailingClient:
-        def __repr__(self):
-            return "FailingClient(private-client-state)"
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def complete(self, _task_key, **_kwargs):
-            raise AIRequestError("provider failed")
-
-    with pytest.raises(AIRequestError) as caught:
-        legacy_variant_adapter.complete_legacy_variant_request(
-            "private-client-system",
-            "private-client-user",
-            "qwen3.7-plus",
-            api_key="qwen-test-key",
-            config_loader=_legacy_config,
-            client_factory=FailingClient,
-        )
-
-    formatted = _format_adapter_traceback(caught.value)
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is None
-    for sensitive in (
-        "private-client-state",
-        "private-client-system",
-        "private-client-user",
-        "qwen-test-key",
-    ):
-        assert sensitive not in formatted
-
-
-def test_legacy_module_call_ai_accepts_default_positional_and_keyword_forms(
-    monkeypatch,
-):
-    calls = []
-
-    class FakeClient:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def complete(self, task_key, **kwargs):
-            calls.append((task_key, kwargs))
-            return SimpleNamespace(content=task_key)
-
-    config = _legacy_config()
-    monkeypatch.setattr(ai_service, "load_ai_config", lambda: config)
-    monkeypatch.setattr(ai_service, "AIClient", FakeClient)
-
-    default_result = ai_service.call_ai(
-        "system", "user", "qwen3.7-plus"
-    )
-    positional_result = ai_service.call_ai(
-        "verify-system",
-        "verify-user",
-        "deepseek-v4-pro",
-        "https://example.test/deepseek",
-        "deepseek-test-key",
-        2000,
-        0.1,
-    )
-    keyword_result = ai_service.call_ai(
-        system_prompt="system-2",
-        user_prompt="user-2",
-        model="qwen3.7-plus",
-        api_url="https://example.test/qwen",
-        api_key="qwen-test-key",
-        max_tokens=8192,
-        temperature=0.5,
-    )
-
-    assert (default_result, positional_result, keyword_result) == (
-        "variant_generate",
-        "variant_verify_deepseek",
-        "variant_generate",
-    )
-    assert [call[0] for call in calls] == [
-        "variant_generate",
-        "variant_verify_deepseek",
-        "variant_generate",
-    ]
-
-
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"model": "unconfigured-model"},
-        {
-            "model": "qwen3.7-plus",
-            "api_url": "https://attacker.test/qwen",
-        },
-        {"model": "qwen3.7-plus", "api_key": "wrong-key"},
-        {"model": "qwen3.7-plus", "api_key": "错误密钥"},
-        {"model": "qwen3.7-plus", "max_tokens": 1234},
-        {"model": "qwen3.7-plus", "max_tokens": []},
-        {"model": "qwen3.7-plus", "temperature": 1.5},
-        {"model": "qwen3.7-plus", "temperature": []},
-    ],
-)
-def test_legacy_module_call_ai_rejects_unconfigured_overrides_safely(
-    monkeypatch, overrides
-):
-    calls = []
-    monkeypatch.setattr(ai_service, "load_ai_config", _legacy_config)
-    monkeypatch.setattr(
-        ai_service,
-        "AIClient",
-        lambda: calls.append("constructed") or None,
-    )
-
-    with pytest.raises(
-        AIRequestError, match="Legacy AI request does not match configured task"
-    ) as caught:
-        ai_service.call_ai("system", "user", **overrides)
-
-    assert calls == []
-    assert "wrong-key" not in str(caught.value)
-    assert "attacker" not in str(caught.value)
-
-
-def _capture_surrogate_key_error(key_index: int) -> AIRequestError:
-    try:
-        ai_service.call_ai(
-            "system",
-            "user",
-            model="qwen3.7-plus",
-            api_key=_SURROGATE_API_KEYS[key_index],
-        )
-    except AIRequestError as error:
-        return error
-    raise AssertionError("legacy surrogate key was not rejected")
-
-
-@pytest.mark.parametrize("key_index", range(len(_SURROGATE_API_KEYS)))
-def test_legacy_module_call_ai_rejects_surrogate_keys_without_leaking(
-    monkeypatch, key_index
-):
-    calls = []
-    monkeypatch.setattr(ai_service, "load_ai_config", _legacy_config)
-    monkeypatch.setattr(
-        ai_service,
-        "AIClient",
-        lambda: calls.append("constructed") or None,
-    )
-
-    error = _capture_surrogate_key_error(key_index)
-    formatted = "".join(
-        traceback.TracebackException(
-            type(error),
-            error,
-            error.__traceback__,
-            capture_locals=True,
-        ).format()
-    )
-    escaped_key = _SURROGATE_API_KEYS[key_index].encode(
-        "unicode_escape"
-    ).decode("ascii")
-
-    assert str(error) == "Legacy AI request does not match configured task"
-    assert error.__cause__ is None
-    assert error.__context__ is None
-    assert _SURROGATE_API_KEYS[key_index] not in formatted
-    assert escaped_key not in formatted
-    assert calls == []
-
-
-def test_legacy_module_call_ai_preserves_matching_normal_unicode_key(
-    monkeypatch,
-):
-    calls = []
-
-    class FakeClient:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def complete(self, task_key, **kwargs):
-            calls.append((task_key, kwargs))
-            return SimpleNamespace(content="unicode-key-ok")
-
-    config = _legacy_config(qwen_api_key=_NORMAL_UNICODE_API_KEY)
-    monkeypatch.setattr(ai_service, "load_ai_config", lambda: config)
-    monkeypatch.setattr(ai_service, "AIClient", FakeClient)
-
-    result = ai_service.call_ai(
-        "system",
-        "user",
-        model="qwen3.7-plus",
-        api_key=_NORMAL_UNICODE_API_KEY,
-    )
-
-    assert result == "unicode-key-ok"
-    assert calls == [
-        (
-            "variant_generate",
-            {"system": "system", "user": "user"},
-        )
-    ]
 
 
 def _question_input():

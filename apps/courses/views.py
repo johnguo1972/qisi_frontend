@@ -57,6 +57,7 @@ def _recognize_course_material_image(image_path, crop_region):
     buffer = None
     original_size = None
     cropped_size = None
+    component = None
     try:
         if crop_region:
             import base64
@@ -85,9 +86,8 @@ def _recognize_course_material_image(image_path, crop_region):
                 original_size,
                 cropped_size,
             )
-        result = material_vision_component_factory().recognize_course_material(
-            [image_source]
-        )
+        component = material_vision_component_factory()
+        result = component.recognize_course_material([image_source])
     except Exception as error:
         logger.error(
             'Course material AI recognition failed: %s',
@@ -95,6 +95,9 @@ def _recognize_course_material_image(image_path, crop_region):
         )
         failed = True
     finally:
+        close = getattr(component, 'close', None)
+        if callable(close):
+            close()
         image_path = ''
         crop_region = {}
         image_source = ''
@@ -103,6 +106,7 @@ def _recognize_course_material_image(image_path, crop_region):
         buffer = None
         original_size = None
         cropped_size = None
+        component = None
 
     if failed:
         raise ValidationError('AI 识别失败')

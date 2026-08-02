@@ -290,7 +290,12 @@ def _run_reparse_question_task(question_id: int):
 
         # 3. Call Stage 2
         service = QuestionParseService()
-        parse_result = service.parse_question(question_info, page_image_paths, page_nos_existing)
+        try:
+            parse_result = service.parse_question(
+                question_info, page_image_paths, page_nos_existing
+            )
+        finally:
+            service.close()
         parsed = parse_result['parsed']
 
         # 4. Postprocess: wrap in page-level format

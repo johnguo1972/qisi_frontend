@@ -100,8 +100,6 @@ CACHES = {
     }
 }
 
-QWEN_API_KEY = os.environ.get('QWEN_API_KEY', '')
-AI_MODEL = os.environ.get('AI_MODEL', 'qwen3.7-plus')
 
 # Tencent Cloud SMS
 SMS_DEV_MODE = os.environ.get('SMS_DEV_MODE', '0').lower() in ('1', 'true', 'yes')

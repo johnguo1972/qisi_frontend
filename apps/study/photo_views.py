@@ -62,6 +62,9 @@ def _call_vision_api(image_paths: list) -> dict:
     except Exception:
         failed = True
     finally:
+        close = getattr(component, 'close', None)
+        if callable(close):
+            close()
         image_sources.clear()
         image_paths = []
         img_path = ""

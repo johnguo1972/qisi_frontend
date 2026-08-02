@@ -53,11 +53,11 @@ class _LegacyComponentClient:
                 user,
                 task_key=task_key,
             )
-        task = self._service._config.get_task_config(task_key)
+        provider, model = self._service._task_route(task_key)
         return AIResult(
             content=content,
-            provider=task.provider,
-            model=task.model,
+            provider=provider,
+            model=model,
             latency_ms=0,
             raw_response={},
         )
@@ -73,13 +73,25 @@ class AIReviewService:
         ai_client=None,
         prompt_registry=None,
     ):
-        self._config = load_ai_config()
+        config = load_ai_config()
+        self._task_routes = {
+            key: (
+                config.get_task_config(key).provider,
+                config.get_task_config(key).model,
+            )
+            for key in config.task_keys
+        }
         self._ai_client = ai_client
         self._ai_client_lock = threading.Lock()
         self._owns_ai_client = False
-        self._prompt_registry = prompt_registry or PromptRegistry(self._config)
-        self.api_key = self._config.get_provider_config("qwen").api_key
+        self._prompt_registry = (
+            prompt_registry
+            if prompt_registry is not None
+            else PromptRegistry(config)
+        )
+        config = None
         self._component_client = None
+        self._owns_component_factory = component_factory is None
         if component_factory is None:
             self._component_client = _LegacyComponentClient(self)
             self._component_factory = QuestionComponentFactory(
@@ -87,6 +99,12 @@ class AIReviewService:
             )
         else:
             self._component_factory = component_factory
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+        self.close()
 
     def _get_model(
         self, override_model: str = None, *, default_model: str = None
@@ -97,14 +115,19 @@ class AIReviewService:
             if default_model and "flash" in default_model
             else "knowledge_analysis"
         )
-        configured_model = self._config.get_task_config(task_key).model
+        configured_model = self._task_route(task_key)[1]
         configured_models = {
-            self._config.get_task_config(key).model
-            for key in self._config.task_keys
+            model for _provider, model in self._task_routes.values()
         }
         if override_model in configured_models:
             return override_model
         return configured_model
+
+    def _task_route(self, task_key: str) -> tuple[str, str]:
+        try:
+            return self._task_routes[task_key]
+        except KeyError:
+            raise AIConfigError("Unknown AI task") from None
 
     def _call_ai(self, system_prompt: str, user_prompt: str,
                  model: str = None, max_tokens: int = 4000,
@@ -143,6 +166,10 @@ class AIReviewService:
 
     def close(self) -> None:
         """Close only the lazily-created client owned by this service."""
+        if self._owns_component_factory:
+            factory_close = getattr(self._component_factory, "close", None)
+            if callable(factory_close):
+                factory_close()
         with self._ai_client_lock:
             if self._ai_client is None or not self._owns_ai_client:
                 return
@@ -600,11 +627,17 @@ class AIReviewService:
                         kp['module'] = db_kp.module
                         kp['full_label'] = db_kp.full_label
                         matched_kps.append({'id': db_kp.id, 'module': db_kp.module})
-                        logger.info(f'[AI] matched knowledge point: ai="{ai_module}" -> id={db_kp.id} module="{db_kp.module}"')
+                        logger.info(
+                            '[AI] knowledge point matched',
+                            extra={'status': 'matched'},
+                        )
                     else:
                         kp['id'] = None
                         kp['full_label'] = ai_module
-                        logger.info(f'[AI] no DB match for knowledge point: "{ai_module}"')
+                        logger.info(
+                            '[AI] knowledge point unmatched',
+                            extra={'status': 'unmatched'},
+                        )
             question.ai_knowledge_enrichment = kp_data
             # 用匹配到 DB 的知识点更新题目的 knowledge_points 关联
             if matched_kps:
@@ -638,23 +671,15 @@ class AIReviewService:
 
         question.save()
 
-        # Log what was actually saved to DB
-        logger.info(f'[AI SAVE] question_id={question_id} DB state:')
-        if question.ai_answer_a:
-            for k2 in ('steps', 'answer', 'content', 'options', 'dialogue'):
-                if k2 in question.ai_answer_a:
-                    v = question.ai_answer_a[k2]
-                    logger.info(f'[AI SAVE] ai_answer_a.{k2} (len={len(str(v))}): {str(v)[:500]}')
-        if question.ai_answer_b:
-            for k2 in ('steps', 'answer', 'content', 'options', 'dialogue'):
-                if k2 in question.ai_answer_b:
-                    v = question.ai_answer_b[k2]
-                    logger.info(f'[AI SAVE] ai_answer_b.{k2} (len={len(str(v))}): {str(v)[:500]}')
-        if question.ai_answer_c:
-            for k2 in ('steps', 'answer', 'content', 'options', 'dialogue'):
-                if k2 in question.ai_answer_c:
-                    v = question.ai_answer_c[k2]
-                    logger.info(f'[AI SAVE] ai_answer_c.{k2} (len={len(str(v))}): {str(v)[:500]}')
+        logger.info(
+            '[AI SAVE] question fields persisted',
+            extra={
+                'question_id': str(question_id),
+                'answer_a_present': bool(question.ai_answer_a),
+                'answer_b_present': bool(question.ai_answer_b),
+                'answer_c_present': bool(question.ai_answer_c),
+            },
+        )
 
 
 def create_ai_review_service(**kwargs) -> AIReviewService:

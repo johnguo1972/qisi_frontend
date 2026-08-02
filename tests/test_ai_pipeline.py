@@ -56,7 +56,7 @@ class TestAIPipeline:
         assert callable(upload_crop_image_safe)
 
     def test_service_instantiation(self):
-        """Test that AIReviewService can be instantiated."""
-        service = AIReviewService()
-        assert service is not None
-        assert service.api_key != ''
+        """The facade is usable without retaining provider credentials."""
+        with AIReviewService() as service:
+            assert service is not None
+            assert not hasattr(service, 'api_key')

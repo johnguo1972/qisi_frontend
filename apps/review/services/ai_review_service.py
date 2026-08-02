@@ -14,20 +14,23 @@ def process_single_question(question_id: int, model: str = None) -> dict:
     Returns a summary dict even if some steps fail.
     """
     service = create_ai_review_service()
-    results = service.process_question_full(question_id, model=model)
-    service.save_results_to_question(question_id, results)
+    try:
+        results = service.process_question_full(question_id, model=model)
+        service.save_results_to_question(question_id, results)
 
-    question = ExamQuestion.objects.get(id=question_id)
-    return {
-        'question_id': question_id,
-        'knowledge_points_count': len(
-            question.ai_knowledge_enrichment.get('knowledge_points', [])
-        ) if question.ai_knowledge_enrichment else 0,
-        'answer_a_generated': bool(question.ai_answer_a),
-        'answer_b_generated': bool(question.ai_answer_b),
-        'answer_c_generated': bool(question.ai_answer_c),
-        'errors': results.get('errors', {}),
-    }
+        question = ExamQuestion.objects.get(id=question_id)
+        return {
+            'question_id': question_id,
+            'knowledge_points_count': len(
+                question.ai_knowledge_enrichment.get('knowledge_points', [])
+            ) if question.ai_knowledge_enrichment else 0,
+            'answer_a_generated': bool(question.ai_answer_a),
+            'answer_b_generated': bool(question.ai_answer_b),
+            'answer_c_generated': bool(question.ai_answer_c),
+            'errors': results.get('errors', {}),
+        }
+    finally:
+        service.close()
 
 
 def confirm_ai_answer(question_id: int, mode: str) -> dict:

@@ -134,9 +134,10 @@ class ModeAStepResponse(_StrictResponseModel):
 
 class ModeAResponse(_StrictResponseModel):
     mode: Literal["A"]
-    steps: list[ModeAStepResponse] = Field(min_length=3, max_length=4)
+    steps: list[ModeAStepResponse] = Field(min_length=3, max_length=5)
     final_answer: NonBlankStr
     summary: NonBlankStr
+    missing_conditions: list[NonBlankStr] = Field(default_factory=list)
 
 
 class ModeBOptionsResponse(_StrictResponseModel):

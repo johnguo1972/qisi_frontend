@@ -175,6 +175,7 @@ def _named_sections(
     parser: RawConfigParser, prefix: str
 ) -> list[tuple[str, str]]:
     sections: list[tuple[str, str]] = []
+    names: set[str] = set()
     marker = f"{prefix}:"
     for section in parser.sections():
         if not section.startswith(marker):
@@ -182,6 +183,11 @@ def _named_sections(
         name = section[len(marker) :].strip()
         if not name:
             raise AIConfigError(f"AI {prefix} section name cannot be empty")
+        if name in names:
+            raise AIConfigError(
+                f"AI configuration contains duplicate {prefix} section"
+            )
+        names.add(name)
         sections.append((section, name))
     return sections
 

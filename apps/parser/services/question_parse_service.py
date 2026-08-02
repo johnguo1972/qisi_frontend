@@ -20,6 +20,8 @@ class QuestionParseService:
     def __init__(self, component=None):
         if component is not None:
             self._component = component
+            self._owns_component = False
+            self._closed = False
             return
 
         failed = False
@@ -34,6 +36,23 @@ class QuestionParseService:
             component = None
             raise new_safe_ai_error(QUESTION_PARSE_FAILURE)
         self._component = created_component
+        self._owns_component = True
+        self._closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._owns_component:
+            close = getattr(self._component, "close", None)
+            if callable(close):
+                close()
 
     def parse_question(self, question_info: dict, page_images: list, page_nos: list) -> dict:
         """Parse a single question.
@@ -119,9 +138,23 @@ def parse_questions_stage2(position_results: list, page_map: dict, progress_call
     Returns:
         List of parsed question dicts ready for postprocessing.
     """
+    service = QuestionParseService()
+    try:
+        return _parse_questions_stage2_with_service(
+            service, position_results, page_map, progress_callback
+        )
+    finally:
+        service.close()
+
+
+def _parse_questions_stage2_with_service(
+    service: QuestionParseService,
+    position_results: list,
+    page_map: dict,
+    progress_callback=None,
+) -> list:
     from apps.parser.models import ExamPage
 
-    service = QuestionParseService()
     all_questions = []
 
     # Count total questions first

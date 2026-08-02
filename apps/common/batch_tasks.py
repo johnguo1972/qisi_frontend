@@ -60,7 +60,8 @@ def batch_ai_process_questions(self, question_ids, model=None):
                         'current_question': None, 'success_count': success_count,
                         'error_count': error_count, 'errors': errors,
                     }), timeout=3600)
-                    return {'status': 'cancelled', 'current': current, 'total': total}
+                    response = {'status': 'cancelled', 'current': current, 'total': total}
+                    return response
 
                 q_id, success, error = future.result()
                 current += 1
@@ -85,8 +86,9 @@ def batch_ai_process_questions(self, question_ids, model=None):
             'error_count': error_count, 'errors': errors,
         }), timeout=3600)
 
-        return {'status': 'completed', 'success_count': success_count,
-                'error_count': error_count, 'errors': errors}
+        response = {'status': 'completed', 'success_count': success_count,
+                    'error_count': error_count, 'errors': errors}
+        return response
 
     except Exception as e:
         logger.exception(f'Batch task {task_id} failed')
@@ -97,6 +99,8 @@ def batch_ai_process_questions(self, question_ids, model=None):
             'task_error': str(e),
         }), timeout=3600)
         return {'status': 'failed', 'error': str(e)}
+    finally:
+        service.close()
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)
@@ -109,6 +113,7 @@ def single_generate_ai_answers(self, question_id: int, model: str = None):
         question_id: 题目 ID
         model: 可选兼容参数，实际模型由 AIReviewService 配置路由决定
     """
+    service = None
     try:
         service = create_ai_review_service()
         results = service.process_question_full(question_id, model=model)
@@ -125,3 +130,6 @@ def single_generate_ai_answers(self, question_id: int, model: str = None):
     except Exception as e:
         logger.exception(f'AI generation failed for question {question_id}: {e}')
         raise self.retry(exc=e, countdown=30 * (2 ** self.request.retries))
+    finally:
+        if service is not None:
+            service.close()

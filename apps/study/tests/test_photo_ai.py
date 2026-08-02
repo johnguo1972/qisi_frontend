@@ -24,6 +24,9 @@ def test_photo_adapter_keeps_oss_then_local_fallback_order(monkeypatch):
         return None
 
     class Component:
+        def __init__(self):
+            self.close_calls = 0
+
         def recognize_photo(self, images):
             assert images == [
                 "https://bucket.example.test/first.png?Signature=secret",
@@ -31,11 +34,16 @@ def test_photo_adapter_keeps_oss_then_local_fallback_order(monkeypatch):
             ]
             return {"stem": "识别题干", "question_type": "short_answer"}
 
+        def close(self):
+            self.close_calls += 1
+
+    component = Component()
+
     monkeypatch.setattr(photo_views, "upload_crop_image_safe", upload)
     monkeypatch.setattr(
         photo_views,
         "vision_parser_component_factory",
-        lambda: Component(),
+        lambda: component,
         raising=False,
     )
 
@@ -48,6 +56,7 @@ def test_photo_adapter_keeps_oss_then_local_fallback_order(monkeypatch):
         ("first-private.png", "photo_questions"),
         ("second-private.png", "photo_questions"),
     ]
+    assert component.close_calls == 1
 
 
 def test_missing_crop_file_response_does_not_expose_local_path(

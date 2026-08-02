@@ -10,7 +10,6 @@ from apps.courses.ai_service import (
     deepseek_verification_available,
     get_deepseek_model,
 )
-from apps.common.ai.client import AIClient
 from apps.common.ai.components.base import QuestionInput
 from apps.common.ai.components.result_verifier import ResultVerifierComponent
 from apps.common.ai.components.variant_generator import VariantGeneratorComponent
@@ -26,7 +25,13 @@ def variant_generator_component_factory() -> VariantGeneratorComponent:
 
 
 def result_verifier_component_factory() -> ResultVerifierComponent:
-    return ResultVerifierComponent(AIClient())
+    return ResultVerifierComponent()
+
+
+def _close_component(component) -> None:
+    close = getattr(component, "close", None)
+    if callable(close):
+        close()
 
 
 def _build_question_data(question: ExamQuestion) -> dict:
@@ -169,9 +174,13 @@ def generate_variant_task(self, question_id: int, variant_mode: str,
 
         # 4. 调用 qwen3.7-plus 生成变式题
         logger.info("[VariantTask] Calling shared variant generator")
-        generation = variant_generator_component_factory().generate(
-            _build_question_input(question_data), variant_mode
-        )
+        generator = variant_generator_component_factory()
+        try:
+            generation = generator.generate(
+                _build_question_input(question_data), variant_mode
+            )
+        finally:
+            _close_component(generator)
         variant_data = generation['parsed']
         raw_response = generation['raw_response']
         qwen_model = generation['model']
@@ -209,34 +218,37 @@ def generate_variant_task(self, question_id: int, variant_mode: str,
         verifier_retry_budget = 1  # DeepSeek 校验器至少有 1 次重试，独立于 Celery 重试
         if verifier_available:
             verifier = result_verifier_component_factory()
-            for _attempt in range(verifier_retry_budget + 1):
-                try:
-                    verifier_result = verifier.verify(
-                        'variant_verify_deepseek',
-                        question_data,
-                        variant_data,
-                    )
-                    verifier_time_ms = int((time.time() - verifier_start) * 1000)
-                    verifier_result.setdefault('latency_ms', verifier_time_ms)
-                    verifier_result.setdefault('model', deepseek_model)
+            try:
+                for _attempt in range(verifier_retry_budget + 1):
+                    try:
+                        verifier_result = verifier.verify(
+                            'variant_verify_deepseek',
+                            question_data,
+                            variant_data,
+                        )
+                        verifier_time_ms = int((time.time() - verifier_start) * 1000)
+                        verifier_result.setdefault('latency_ms', verifier_time_ms)
+                        verifier_result.setdefault('model', deepseek_model)
 
-                    logger.info(f"[VariantTask] Verifier result: passed={verifier_result.get('passed')}, "
-                               f"score={verifier_result.get('score')}")
+                        logger.info(f"[VariantTask] Verifier result: passed={verifier_result.get('passed')}, "
+                                   f"score={verifier_result.get('score')}")
 
-                    # DeepSeek 校验不通过，重试一次
-                    if not verifier_result.get('passed'):
-                        logger.warning("[VariantTask] DeepSeek verifier failed, retrying once...")
-                        continue
+                        # DeepSeek 校验不通过，重试一次
+                        if not verifier_result.get('passed'):
+                            logger.warning("[VariantTask] DeepSeek verifier failed, retrying once...")
+                            continue
 
-                    break  # 校验通过，退出重试
+                        break  # 校验通过，退出重试
 
-                except (AIConfigError, AIRequestError, AIResponseError) as e:
-                    logger.warning("[VariantTask] DeepSeek verification failed")
-                    verifier_result = {'error': str(e), 'model': deepseek_model}
-                    if _attempt < verifier_retry_budget:
-                        time.sleep(15)
-                        continue
-                    break
+                    except (AIConfigError, AIRequestError, AIResponseError) as e:
+                        logger.warning("[VariantTask] DeepSeek verification failed")
+                        verifier_result = {'error': str(e), 'model': deepseek_model}
+                        if _attempt < verifier_retry_budget:
+                            time.sleep(15)
+                            continue
+                        break
+            finally:
+                _close_component(verifier)
 
         variant_task.verifier_result = verifier_result
         variant_task.generated_question = variant_data

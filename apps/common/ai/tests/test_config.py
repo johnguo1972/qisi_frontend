@@ -35,6 +35,26 @@ REQUIRED_TASKS = {
     "course_material_recognize",
 }
 
+EXPECTED_ROUTE_MATRIX = {
+    "question_probe": ("qwen", "qwen3.7-flash", 300.0),
+    "knowledge_analysis": ("qwen", "qwen3.7-flash", 300.0),
+    "mode_a_answer": ("qwen", "qwen3.7-plus", 300.0),
+    "mode_b_answer": ("qwen", "qwen3.7-plus", 300.0),
+    "mode_c_answer": ("qwen", "qwen3.7-plus", 300.0),
+    "result_verify": ("qwen", "qwen3.7-flash", 300.0),
+    "vision_fact_extract": ("qwen", "qwen3-vl-plus", 300.0),
+    "vision_page_parse": ("qwen", "qwen3-vl-plus", 300.0),
+    "vision_question_parse": ("qwen", "qwen3-vl-plus", 300.0),
+    "vision_position_detect": ("qwen", "qwen3.7-plus", 300.0),
+    "guidance_generate": ("qwen", "qwen3.7-flash", 300.0),
+    "guidance_evaluate": ("qwen", "qwen3.7-flash", 300.0),
+    "teacher_guidance_evaluate": ("qwen", "qwen3.7-flash", 300.0),
+    "variant_generate": ("qwen", "qwen3.7-plus", 300.0),
+    "variant_verify_deepseek": ("deepseek", "deepseek-v4-pro", 300.0),
+    "photo_recognize": ("qwen", "qwen3-vl-plus", 300.0),
+    "course_material_recognize": ("qwen", "qwen3-vl-plus", 300.0),
+}
+
 
 @pytest.fixture(autouse=True)
 def _reset_cached_config():
@@ -307,6 +327,68 @@ def test_default_config_declares_every_task_with_300_second_timeout(provider_env
         key: "deepseek" if key == "variant_verify_deepseek" else "qwen"
         for key in REQUIRED_TASKS
     }
+
+
+def test_default_config_matches_complete_approved_route_matrix(provider_env):
+    loaded = AIConfig.load()
+
+    assert {
+        key: (
+            loaded.get_task_config(key).provider,
+            loaded.get_task_config(key).model,
+            loaded.get_task_config(key).timeout_seconds,
+        )
+        for key in loaded.task_keys
+    } == EXPECTED_ROUTE_MATRIX
+
+
+@pytest.mark.parametrize("prefix", ["provider", "task"])
+def test_rejects_trim_normalized_section_name_collisions(
+    tmp_path, provider_env, prefix
+):
+    cfg = write_minimal_cfg(tmp_path)
+    section = cfg.read_text(encoding="utf-8").split(
+        f"[{prefix}:question_probe]" if prefix == "task" else "[provider:qwen]",
+        1,
+    )[1]
+    section_body = section.split("\n[", 1)[0]
+    name = "question_probe" if prefix == "task" else "qwen"
+    cfg.write_text(
+        cfg.read_text(encoding="utf-8")
+        + f"\n[{prefix}: {name} ]\n{section_body.strip()}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        AIConfigError, match=f"duplicate {prefix} section"
+    ) as caught:
+        AIConfig.load(cfg)
+
+    assert str(caught.value) == (
+        f"AI configuration contains duplicate {prefix} section"
+    )
+
+
+def test_env_example_placeholders_boot_default_ai_config(monkeypatch):
+    env_path = Path(__file__).resolve().parents[4] / ".env.example"
+    values = {}
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        values[name.strip()] = value.strip()
+
+    assert "AI_MODEL" not in values
+    for name in ("QWEN_API_URL", "QWEN_API_KEY", "DEEPSEEK_API_URL"):
+        assert values.get(name)
+        monkeypatch.setenv(name, values[name])
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    loaded = AIConfig.load()
+
+    assert loaded.get_provider_config("qwen").api_url == values["QWEN_API_URL"]
+    assert loaded.get_provider_config("deepseek").api_key == ""
 
 
 def test_default_config_allows_only_explicitly_optional_deepseek_key(

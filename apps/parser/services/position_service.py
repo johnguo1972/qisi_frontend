@@ -35,6 +35,21 @@ def detect_positions(page_images: list) -> list:
     except Exception:
         component_failed = True
         log_safe_failure(logger, POSITION_DETECTION_FAILURE)
+    try:
+        return _detect_positions_with_component(
+            component, component_failed, page_images
+        )
+    finally:
+        close = getattr(component, "close", None)
+        if callable(close):
+            close()
+        component = None
+        page_images = []
+
+
+def _detect_positions_with_component(
+    component, component_failed: bool, page_images: list
+) -> list:
     results = []
 
     for page_info in page_images:
@@ -90,8 +105,6 @@ def detect_positions(page_images: list) -> list:
                 'latency_ms': 0,
             })
 
-    component = None
-    page_images = []
     return results
 
 
