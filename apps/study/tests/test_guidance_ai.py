@@ -416,8 +416,32 @@ def test_legacy_generation_wrapper_keeps_empty_dict_fallback(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("content", "forbidden_marker"),
+    [
+        (
+            '{"steps": ['
+            '{"question": "第一问", "hint": "提示一", '
+            '"key_points": ["POISON"]},'
+            '{"question": "第二问", "hint": "提示二"},'
+            '{"question": "第三问", "hint": "提示三"}'
+            "]}",
+            "POISON",
+        ),
+        (
+            '{"steps": ['
+            '{"question": "\u200b", "hint": "提示一"},'
+            '{"question": "第二问", "hint": "提示二"},'
+            '{"question": "第三问", "hint": "提示三"}'
+            "]}",
+            "\u200b",
+        ),
+    ],
+)
 def test_student_start_endpoint_rejects_provider_extra_without_db_pollution(
     monkeypatch,
+    content,
+    forbidden_marker,
 ):
     from rest_framework.test import APIClient
 
@@ -449,15 +473,6 @@ def test_student_start_endpoint_rejects_provider_extra_without_db_pollution(
         stem="题目",
         answer="D",
     )
-    content = (
-        '{"steps": ['
-        '{"question": "第一问", "hint": "提示一", '
-        '"key_points": ["POISON"]},'
-        '{"question": "第二问", "hint": "提示二"},'
-        '{"question": "第三问", "hint": "提示三"}'
-        "]}"
-    )
-
     class Client:
         def complete(self, task_key, **kwargs):
             return AIResult(
@@ -493,4 +508,4 @@ def test_student_start_endpoint_rejects_provider_extra_without_db_pollution(
     )
     assert session.session_status == "downgraded"
     assert "ai_c_generated" not in session.content_log_json
-    assert "POISON" not in str(session.content_log_json)
+    assert forbidden_marker not in str(session.content_log_json)

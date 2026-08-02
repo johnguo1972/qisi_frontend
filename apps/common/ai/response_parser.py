@@ -11,7 +11,7 @@ from apps.common.utils import repair_json_string
 
 from .exceptions import AIResponseError
 from .redaction import safe_preview
-from .schemas import AIResponseEnvelope
+from .schemas import AIResponseEnvelope, has_visible_text
 
 
 class ResponseParser:
@@ -68,7 +68,7 @@ class ResponseParser:
 
     @staticmethod
     def parse_text(text: object) -> str:
-        if not isinstance(text, str) or not text.strip():
+        if not isinstance(text, str) or not has_visible_text(text):
             raise AIResponseError("AI response text is missing or invalid")
         return text.strip()
 

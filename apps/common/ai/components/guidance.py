@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
 import re
+from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -120,19 +121,58 @@ class GuidanceComponent:
             )
 
 
-_JSON_FENCE_PREFIX = re.compile(r"^```(?:json)?(?=\s|[\{\[])", re.IGNORECASE)
+_JSON_FENCE = re.compile(
+    r"\A```(?P<label>[^\r\n`]*)[ \t]*\r?\n"
+    r"(?P<body>.*?)\r?\n```[ \t]*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+_PLAIN_MARKER_LIMIT = 64
 
 
 def _parse_evaluation(content: str) -> str:
     stripped = ResponseParser.parse_text(content)
-    looks_structured = stripped.startswith(("{", "[")) or bool(
-        _JSON_FENCE_PREFIX.match(stripped)
-    )
-    if not looks_structured:
-        return stripped
+    if stripped.startswith("```"):
+        fence = _JSON_FENCE.fullmatch(stripped)
+        if (
+            fence is None
+            or fence.group("label").strip().lower() not in ("", "json")
+        ):
+            raise AIResponseError("AI guidance evaluation fence is malformed")
+        return _parse_structured_evaluation(fence.group("body").strip())
 
-    parsed = ResponseParser.parse_json(stripped, _GuidanceEvaluation)
+    if stripped.startswith(("{", "[")):
+        try:
+            json.loads(stripped)
+        except (json.JSONDecodeError, TypeError):
+            if _is_plain_marker(stripped):
+                return stripped
+            raise AIResponseError("AI guidance evaluation JSON is malformed")
+        return _parse_structured_evaluation(stripped)
+
+    return stripped
+
+
+def _parse_structured_evaluation(content: str) -> str:
+    try:
+        json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        raise AIResponseError("AI guidance evaluation JSON is malformed")
+
+    parsed = ResponseParser.parse_json(content, _GuidanceEvaluation)
     return ResponseParser.parse_text(parsed["evaluation"])
+
+
+def _is_plain_marker(content: str) -> bool:
+    if len(content) > _PLAIN_MARKER_LIMIT:
+        return False
+    pairs = {"{": "}", "[": "]"}
+    closing = pairs.get(content[0])
+    if closing is None or not content.endswith(closing):
+        return False
+    marker = content[1:-1]
+    if not marker.strip():
+        return False
+    return not any(character in marker for character in '\"\\:,{}[]')
 
 
 def _trace_id(value: object) -> str | None:

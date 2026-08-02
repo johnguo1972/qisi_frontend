@@ -145,8 +145,18 @@ def test_teacher_c_reply_keeps_existing_failure_wording(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("provider_content", "forbidden_marker"),
+    [
+        ('```JSON\n{"evaluation": "POISON"\n```', "POISON"),
+        ('```python\n{"evaluation": "POISON"}\n```', "POISON"),
+        ('{"evaluation": "\u200b"}', "\u200b"),
+    ],
+)
 def test_teacher_reply_endpoint_does_not_store_malformed_provider_content(
     monkeypatch,
+    provider_content,
+    forbidden_marker,
 ):
     from rest_framework.test import APIClient
 
@@ -177,17 +187,15 @@ def test_teacher_reply_endpoint_does_not_store_malformed_provider_content(
         stem="题目",
         answer="D",
     )
-    poison = '```JSON\n{"evaluation": "POISON"\n```'
-
     class Client:
         def complete(self, task_key, **kwargs):
             return AIResult(
-                content=poison,
+                content=provider_content,
                 provider="qwen",
                 model="qwen3.7-flash",
                 latency_ms=1,
                 raw_response={
-                    "choices": [{"message": {"content": poison}}]
+                    "choices": [{"message": {"content": provider_content}}]
                 },
             )
 
@@ -222,5 +230,5 @@ def test_teacher_reply_endpoint_does_not_store_malformed_provider_content(
     assert response.status_code == 200
     evaluation = response.json()["data"]["evaluation"]
     assert evaluation == "（AI评价调用失败：AIResponseError）"
-    assert "POISON" not in evaluation
-    assert "POISON" not in str(session["messages"])
+    assert forbidden_marker not in evaluation
+    assert forbidden_marker not in str(session["messages"])

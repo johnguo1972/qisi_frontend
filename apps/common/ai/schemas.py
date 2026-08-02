@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 
+def has_visible_text(value: str) -> bool:
+    """Return whether text contains content beyond whitespace/format controls."""
+    return any(
+        not (character.isspace() or unicodedata.category(character) == "Cf")
+        for character in value
+    )
+
+
 def _require_non_blank(value: str) -> str:
-    if not value.strip():
+    if not has_visible_text(value):
         raise ValueError("value must not be blank")
     return value
 
