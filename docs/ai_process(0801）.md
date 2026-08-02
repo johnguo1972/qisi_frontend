@@ -130,7 +130,7 @@ parser 旧 prompt 文件中的唯一非提示数据 `QUESTION_TYPE_LABELS` 已�
 - Task10 新增入口采用 RED -> GREEN：先复现缺 task key/旧私有调用失败，再通过公共组件修复；路由、Schema、权限、crop、envelope 和安全失败边界均有自动化测试。
 - 最终集中修复后完整相关套件：723 项通过；`python manage.py check` 为 0 issue；Python compile/关键模块 import 通过；`git diff --check` 通过。
 - 静态扫描结果：`apps/config` 中 Qwen 3.6 为 0 匹配；生产 Python 内嵌提示词为 0 匹配；已删除模块 import 为 0 匹配；`httpx.Client` 仅存在于公共客户端（以及测试），Key/兼容 URL 字样仅存在于 cfg 引用和测试夹具。
-- 上述均为本地单元/模拟/数据库契约验证；Qwen 和 DeepSeek 真实网络冒烟尚未在 Task10 执行，留待 Task11 单次显式 `--live` 验证。
+- 上述是本地单元/模拟/数据库契约验证；真实供应商证据另见 Task11，不能用本地测试替代。
 
 ## 8. Task11 受控冒烟命令状态（2026-08-03）
 
@@ -138,6 +138,8 @@ parser 旧 prompt 文件中的唯一非提示数据 `QUESTION_TYPE_LABELS` 已�
 - `--live` 是强制显式开关；缺少该开关时，在加载配置和构造 AI 客户端之前以非零退出码拒绝执行。成功输出仅包含 provider、cfg 配置模型、`status=ok`、耗时和 `schema=valid`；失败仅输出固定类别与退出码，不输出请求、响应或异常原文。
 - 命令单元测试使用注入客户端完成零联网验证，覆盖 Qwen/DeepSeek task 隔离、严格 Schema、摘要白名单、配置/传输或超时/HTTP/响应分类、退出码、客户端清理和 traceback 脱敏。
 - 本地实现证据：Task11 命令定向测试 15 项通过，本轮最终相关回归 723 项通过，Django `check` 为 0 issue；这些是组件和命令的模拟/本地证据，不等同于供应商调用成功。
-- Qwen live 当前为“未验证，等待新的显式授权”，不能标记为 Task11 live complete。唯一一次 `--live` 命令已执行且进程已经结束，但工具输出在上下文切换时被截断；取证未发现可恢复的文件日志、数据库审计、命令历史或仍在运行的进程。为遵守“每个提供商各一次”的调用限制，本轮没有重复请求。
-- DeepSeek 真实冒烟：唯一一次 `--live` 命令已执行，安全摘要为 `provider=deepseek status=error category=http_status http_status=401`。这是供应商认证/凭证失败，不是公共组件 Schema 失败或模拟测试失败；DeepSeek 失败后没有回退到 Qwen。
-- Task11 的外部证据结论是：Qwen live 未验证并等待新的显式授权；DeepSeek live 是外部 HTTP 401，且失败后没有 Qwen 回退。两者均不能记为真实调用成功。后续如需重新验证，必须先取得新的调用授权，不能把本次证据记录视作重试授权。
+- 历史受限证据：首次 Qwen `--live` 的输出在上下文切换时被截断，结果不可恢复；首次 DeepSeek `--live` 返回安全分类 HTTP 401，且没有回退到 Qwen。上述历史记录不曾被记作成功。
+- 2026-08-03 用户明确批准追加一次 Qwen 真实调用，并明确 DeepSeek 使用与 Qwen 相同的阿里 API URL/Key；本地 `.env` 已只在未提交状态下完成对应映射，不在本文记录任何 URL 或 Key 值。
+- Qwen 追加真实冒烟成功：`provider=qwen model=qwen3.7-flash status=ok latency_ms=16191 schema=valid`。
+- DeepSeek 追加真实冒烟成功：`provider=deepseek model=deepseek-v4-pro status=ok latency_ms=6074 schema=valid`；调用仍使用独立 DeepSeek task，未回退到 Qwen。
+- Task11 当前结论：两个最小真实供应商调用均成功并通过各自 Schema；该证据只证明受控最小冒烟成功，不等同于所有业务场景的真实数据 E2E。
