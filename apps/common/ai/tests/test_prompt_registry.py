@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -9,8 +8,6 @@ from apps.common.ai.config import AIConfig
 from apps.common.ai.exceptions import AIConfigError, AIPromptError
 from apps.common.ai.prompt_registry import PromptRegistry
 from apps.common.ai_prompts import AIPrompts
-from apps.missions import views as mission_views
-from apps.study import ai_helper, guidance_views
 
 
 @pytest.fixture
@@ -284,124 +281,55 @@ def test_question_probe_prompt_requests_complete_canonical_taxonomy(provider_env
         assert f"{field_name} (" in system
 
 
-class _CapturedResponse:
-    def raise_for_status(self):
-        return None
+_LEGACY_GUIDANCE_GENERATE_SYSTEM = """你是一位擅长苏格拉底式教学的中学教师。
+根据题目信息和学生可能的知识水平，设计3-5个递进式引导问题。
+每个问题应引导学生自主思考，而非直接给出答案。
 
-    def json(self):
-        return {"choices": [{"message": {"content": '{"steps": []}'}}]}
-
-
-def _capture_legacy_guidance_generate(monkeypatch, stem, answer):
-    captured = {}
-
-    class _CapturedClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def post(self, url, *, json, headers):
-            captured["messages"] = json["messages"]
-            return _CapturedResponse()
-
-    monkeypatch.setattr(ai_helper.httpx, "Client", _CapturedClient)
-    result = ai_helper.call_qwen_for_guidance_with_question(stem, answer)
-    assert result == {"steps": []}
-    return tuple(message["content"] for message in captured["messages"])
+输出严格JSON格式，不要包含markdown代码块：
+{
+  "steps": [
+    {"question": "第一个引导问题", "hint": "提示学生思考的方向"},
+    {"question": "第二个引导问题", "hint": "进一步深入提示"}
+  ]
+}"""
 
 
-def _plain_view_handler(decorated_view):
-    return decorated_view.cls.post.__closure__[0].cell_contents
-
-
-def _capture_legacy_student_evaluation(monkeypatch, answer):
-    captured = {}
-    session = SimpleNamespace(
-        id="student-session",
-        session_status="running",
-        mode_type="C",
-        invalid_input_count=0,
-        question_id=7,
-        content_log_json={"step_index": 0, "steps": [], "answers": []},
-        save=lambda: None,
-    )
-    question = SimpleNamespace(
-        stem="题目",
-        answer=answer,
-        ai_answer_b={},
-        ai_answer_c={"questions": [{"question": "第一问"}, {"question": "第二问"}]},
+def _legacy_guidance_generate_prompt(answer: str) -> tuple[str, str]:
+    return (
+        _LEGACY_GUIDANCE_GENERATE_SYSTEM,
+        "请为以下题目设计引导问题：\n"
+        "题干：题目\n"
+        f"答案：{answer or '见解析'}\n"
+        "请设计3-5个递进式引导问题，帮助学生自主思考。",
     )
 
-    class _SessionModel:
-        class DoesNotExist(Exception):
-            pass
 
-        objects = SimpleNamespace(get=lambda **kwargs: session)
-
-    class _QuestionModel:
-        class DoesNotExist(Exception):
-            pass
-
-        objects = SimpleNamespace(get=lambda **kwargs: question)
-
-    def capture(system, user):
-        captured["prompt"] = (system, user)
-        return "评价"
-
-    monkeypatch.setattr(guidance_views, "AIGuidanceSession", _SessionModel)
-    monkeypatch.setattr(guidance_views, "ExamQuestion", _QuestionModel)
-    monkeypatch.setattr(guidance_views, "call_qwen_for_guidance", capture)
-    request = SimpleNamespace(
-        data={"reply": "学生作答"}, user=SimpleNamespace(id=1)
+def _legacy_student_evaluation_prompt(answer: str) -> tuple[str, str]:
+    return (
+        "你是一位耐心的老师，对学生回答给出 1-2 句简明评价与鼓励。",
+        "题目：题目\n"
+        f"参考答案：{answer or '见解析'}\n"
+        "学生回答：学生作答\n"
+        "请评价。",
     )
-    _plain_view_handler(guidance_views.guidance_reply)(
-        request, "student-session"
+
+
+def _legacy_teacher_evaluation_prompt(answer: str) -> tuple[str, str]:
+    return (
+        "你是一位经验丰富的教师。请对学生回答进行简明评价（1-2句），"
+        "指出是否正确、有什么不足，然后给出鼓励。",
+        "题目：题目\n"
+        f"正确答案：{answer or '见解析'}\n"
+        "学生回答：学生作答\n"
+        "请评价学生的回答。",
     )
-    return captured["prompt"]
-
-
-def _capture_legacy_teacher_evaluation(monkeypatch, answer):
-    captured = {}
-    session_id = "teacher-session"
-    session = {
-        "question_id": 8,
-        "mode": "C",
-        "turn": 0,
-        "messages": [],
-        "ai_c": {"questions": [{"question": "第一问"}, {"question": "第二问"}]},
-    }
-    question = SimpleNamespace(stem="题目", answer=answer, ai_answer_c={})
-
-    class _QuestionModel:
-        class DoesNotExist(Exception):
-            pass
-
-        objects = SimpleNamespace(get=lambda **kwargs: question)
-
-    def capture(system, user, model):
-        captured["prompt"] = (system, user)
-        return "评价"
-
-    monkeypatch.setitem(
-        mission_views._teacher_guidance_sessions, session_id, session
-    )
-    monkeypatch.setattr(mission_views, "ExamQuestion", _QuestionModel)
-    monkeypatch.setattr(mission_views, "_call_qwen", capture)
-    request = SimpleNamespace(data={"user_answer": "学生作答"})
-    _plain_view_handler(mission_views.teacher_guidance_reply)(request, session_id)
-    return captured["prompt"]
 
 
 @pytest.mark.parametrize("answer", ["", "D"])
 def test_guidance_generate_matches_complete_legacy_messages(
-    provider_env, monkeypatch, answer
+    provider_env, answer
 ):
-    legacy = _capture_legacy_guidance_generate(monkeypatch, "题目", answer)
+    legacy = _legacy_guidance_generate_prompt(answer)
 
     rendered = PromptRegistry(AIConfig.load()).render(
         "guidance_generate", stem="题目", answer=answer
@@ -412,9 +340,9 @@ def test_guidance_generate_matches_complete_legacy_messages(
 
 @pytest.mark.parametrize("answer", ["", "D"])
 def test_guidance_evaluate_matches_complete_legacy_messages(
-    provider_env, monkeypatch, answer
+    provider_env, answer
 ):
-    legacy = _capture_legacy_student_evaluation(monkeypatch, answer)
+    legacy = _legacy_student_evaluation_prompt(answer)
 
     rendered = PromptRegistry(AIConfig.load()).render(
         "guidance_evaluate",
@@ -428,9 +356,9 @@ def test_guidance_evaluate_matches_complete_legacy_messages(
 
 @pytest.mark.parametrize("answer", ["", "D"])
 def test_teacher_guidance_evaluate_matches_complete_legacy_messages(
-    provider_env, monkeypatch, answer
+    provider_env, answer
 ):
-    legacy = _capture_legacy_teacher_evaluation(monkeypatch, answer)
+    legacy = _legacy_teacher_evaluation_prompt(answer)
 
     rendered = PromptRegistry(AIConfig.load()).render(
         "teacher_guidance_evaluate",

@@ -8,7 +8,15 @@ from apps.study.permissions import IsStudent
 from rest_framework.response import Response
 from apps.parser.models import ExamQuestion
 from apps.study.models import AIGuidanceSession
-from .ai_helper import call_qwen_for_guidance, call_qwen_for_guidance_with_question
+from apps.common.ai.components import (
+    GuidanceComponent,
+    GuidanceContext,
+    QuestionInput,
+)
+from apps.common.ai.exceptions import AIConfigError
+
+
+guidance_component_factory = GuidanceComponent
 
 
 def make_trace_id():
@@ -194,7 +202,9 @@ def start_guidance(request):
 
     # ai_answer_c 为空：实时调用 LLM 生成
     try:
-        generated = call_qwen_for_guidance_with_question(q.stem, q.answer)
+        generated = guidance_component_factory().generate(
+            QuestionInput(stem=q.stem or '', answer=q.answer or '')
+        )
         if generated and generated.get('steps'):
             llm_steps = generated['steps']
             total_steps = len(llm_steps)
@@ -306,12 +316,19 @@ def guidance_reply(request, session_id):
         total_steps = len(c_questions) or 3
         # 调用 LLM 进行评价（失败时返回兜底文案）
         try:
-            evaluation = call_qwen_for_guidance(
-                '你是一位耐心的老师，对学生回答给出 1-2 句简明评价与鼓励。',
-                f'题目：{q.stem}\n参考答案：{q.answer or "见解析"}\n学生回答：{user_reply}\n请评价。',
+            evaluation = guidance_component_factory().evaluate_student_reply(
+                GuidanceContext(
+                    question_text=q.stem or '',
+                    reference_answer=q.answer or '',
+                    student_answer=user_reply,
+                )
             )
-        except Exception:
-            evaluation = '（AI 评价暂不可用）'
+        except AIConfigError:
+            evaluation = '（AI 暂不可用）'
+        except Exception as error:
+            evaluation = (
+                f'（AI 评价暂时不可用：{error.__class__.__name__}）'
+            )
         log.setdefault('answers', []).append({
             'step': step_index, 'user_answer': user_reply,
         })

@@ -1,12 +1,13 @@
 import uuid
 import json
-import os
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from .models import LearningMission, MissionLevel, MissionQuestionRel
 from apps.parser.models import ExamQuestion, QuestionImage, QuestionOption
+from apps.common.ai.components import GuidanceComponent, GuidanceContext
+from apps.common.ai.exceptions import AIConfigError
 from .serializers import (
     MissionListSerializer, MissionDetailSerializer,
     CreateMissionSerializer, CreateLevelSerializer, AddQuestionsSerializer,
@@ -453,6 +454,7 @@ def mission_clone_with_class(request, mission_id):
 
 # In-memory session store for teacher practice guidance
 _teacher_guidance_sessions: dict = {}
+guidance_component_factory = GuidanceComponent
 
 
 def _get_question_image_urls(question, max_images=3):
@@ -468,38 +470,6 @@ def _get_question_image_urls(question, max_images=3):
             else:
                 urls.append(f'{settings.MEDIA_URL}{img.file_path}')
     return urls
-
-
-def _call_qwen(system_prompt, user_prompt, model='qwen3.6-flash'):
-    """Call Qwen API for C mode evaluation."""
-    import httpx
-    import time
-    api_key = os.environ.get('QWEN_API_KEY', '')
-    if not api_key:
-        return '（AI评价功能暂不可用，请配置QWEN_API_KEY）'
-    url = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-    headers = {
-        'Authorization': f'Bearer {api_key}',
-        'Content-Type': 'application/json',
-    }
-    messages = [
-        {'role': 'system', 'content': system_prompt},
-        {'role': 'user', 'content': user_prompt},
-    ]
-    payload = {
-        'model': model,
-        'messages': messages,
-        'max_tokens': 500,
-        'temperature': 0.7,
-    }
-    try:
-        with httpx.Client(timeout=60.0, trust_env=False) as client:
-            resp = client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            result = resp.json()
-            return result['choices'][0]['message']['content']
-    except Exception as e:
-        return f'（AI评价调用失败：{str(e)}）'
 
 
 @api_view(['POST'])
@@ -648,14 +618,23 @@ def teacher_guidance_reply(request, session_id):
                 except:
                     ai_c = {}
 
-        # 构建评价prompt
-        eval_system = '你是一位经验丰富的教师。请对学生回答进行简明评价（1-2句），指出是否正确、有什么不足，然后给出鼓励。'
-        eval_prompt = f'''题目：{q.stem}
-正确答案：{q.answer or "见解析"}
-学生回答：{user_answer}
-请评价学生的回答。'''
-
-        evaluation = _call_qwen(eval_system, eval_prompt, model='qwen3.6-flash')
+        try:
+            evaluation_result = (
+                guidance_component_factory().evaluate_teacher_reply(
+                    GuidanceContext(
+                        question_text=q.stem or '',
+                        reference_answer=q.answer or '',
+                        student_answer=user_answer,
+                    )
+                )
+            )
+            evaluation = evaluation_result.get('evaluation')
+            if not isinstance(evaluation, str) or not evaluation.strip():
+                raise ValueError('AI guidance evaluation is missing')
+        except AIConfigError:
+            evaluation = '（AI评价功能暂不可用，请配置QWEN_API_KEY）'
+        except Exception as error:
+            evaluation = f'（AI评价调用失败：{str(error)}）'
 
         # 获取下一个引导问题
         steps = ai_c.get('steps') or ai_c.get('dialogue') or []

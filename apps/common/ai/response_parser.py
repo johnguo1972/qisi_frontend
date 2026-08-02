@@ -66,6 +66,12 @@ class ResponseParser:
             raise AIResponseError("AI response failed schema validation")
         return validated.model_dump()
 
+    @staticmethod
+    def parse_text(text: object) -> str:
+        if not isinstance(text, str) or not text.strip():
+            raise AIResponseError("AI response text is missing or invalid")
+        return text.strip()
+
 
 def _extract_json_candidate(text: str) -> str:
     stripped = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.IGNORECASE)

@@ -1,6 +1,7 @@
 """Public question-oriented AI component API."""
 
 from .base import QuestionComponentFactory, QuestionInput
+from .guidance import GuidanceComponent, GuidanceContext
 from .mode_answers import (
     ModeAAnswerComponent,
     ModeBAnswerComponent,
@@ -15,6 +16,8 @@ from .result_verifier import ResultVerifierComponent
 
 __all__ = [
     "KnowledgeAnalysisComponent",
+    "GuidanceComponent",
+    "GuidanceContext",
     "ModeAAnswerComponent",
     "ModeBAnswerComponent",
     "ModeCAnswerComponent",
