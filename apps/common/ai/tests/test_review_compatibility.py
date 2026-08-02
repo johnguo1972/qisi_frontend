@@ -2,9 +2,11 @@
 
 from io import StringIO
 import json
+import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
+from django.core.management.base import CommandError
 from django.core.management import call_command
 
 from apps.common import ai_service as common_ai_service
@@ -350,7 +352,7 @@ def test_guidance_command_uses_facade_and_preserves_all_selection_and_output():
     ) as service_factory:
         call_command(
             "generate_ai_guidance",
-            "1",
+            str(existing.id),
             "--all",
             stdout=stdout,
         )
@@ -363,6 +365,79 @@ def test_guidance_command_uses_facade_and_preserves_all_selection_and_output():
     assert existing.ai_answer_b["final_answer"] == "old"
     assert "Found 1 questions with missing ai_answer_b" in stdout.getvalue()
     assert f"Question {missing.id} updated" in stdout.getvalue()
+
+
+@pytest.mark.django_db
+def test_guidance_command_preserves_explicit_uuid_selection():
+    """Explicit IDs must select the UUID-backed questions passed by callers."""
+    from apps.common.management.commands import generate_ai_guidance
+
+    selected = _make_question(stem="selected one")
+    also_selected = _make_question(stem="selected two")
+    untouched = _make_question(stem="untouched")
+    facade = MagicMock()
+    facade.process_question_full.return_value = {
+        "answer_b": {"mode": "B", "final_answer": "selected", "error": None}
+    }
+    stdout = StringIO()
+
+    with patch.object(
+        generate_ai_guidance,
+        "create_ai_review_service",
+        return_value=facade,
+    ):
+        call_command(
+            "generate_ai_guidance",
+            str(selected.id),
+            str(also_selected.id),
+            stdout=stdout,
+        )
+
+    called_question_ids = {
+        call.args[0]
+        for call in facade.process_question_full.call_args_list
+    }
+    assert called_question_ids == {selected.id, also_selected.id}
+    selected.refresh_from_db()
+    also_selected.refresh_from_db()
+    untouched.refresh_from_db()
+    assert selected.ai_answer_b["final_answer"] == "selected"
+    assert also_selected.ai_answer_b["final_answer"] == "selected"
+    assert untouched.ai_answer_b is None
+    assert f"Processing question {selected.id}" in stdout.getvalue()
+    assert f"Processing question {also_selected.id}" in stdout.getvalue()
+
+
+@pytest.mark.django_db
+def test_guidance_command_keeps_empty_success_for_unmatched_valid_uuid():
+    """A well-formed UUID with no row must remain a successful no-op."""
+    from apps.common.management.commands import generate_ai_guidance
+
+    facade = MagicMock()
+    stdout = StringIO()
+    missing_id = uuid.uuid4()
+
+    with patch.object(
+        generate_ai_guidance,
+        "create_ai_review_service",
+        return_value=facade,
+    ) as service_factory:
+        call_command(
+            "generate_ai_guidance",
+            str(missing_id),
+            stdout=stdout,
+        )
+
+    service_factory.assert_called_once_with()
+    facade.process_question_full.assert_not_called()
+    assert stdout.getvalue() == ""
+
+
+@pytest.mark.django_db
+def test_guidance_command_rejects_invalid_id_during_argument_parsing():
+    """Malformed IDs must still produce a management-command parse error."""
+    with pytest.raises(CommandError, match="question_ids"):
+        call_command("generate_ai_guidance", "not-a-valid-id")
 
 
 @pytest.mark.django_db

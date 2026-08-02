@@ -1,3 +1,5 @@
+import uuid
+
 from django.core.management.base import BaseCommand
 from apps.parser.models import ExamQuestion
 from apps.common.ai_service import AIReviewService, create_ai_review_service
@@ -7,7 +9,7 @@ class Command(BaseCommand):
     help = 'Generate AI guidance data (answer_b) for questions'
 
     def add_arguments(self, parser):
-        parser.add_argument('question_ids', nargs='+', type=int, help='Question IDs to process')
+        parser.add_argument('question_ids', nargs='+', type=uuid.UUID, help='Question IDs to process')
         parser.add_argument('--all', action='store_true', help='Process all questions with missing ai_answer_b')
 
     def handle(self, *args, **options):
