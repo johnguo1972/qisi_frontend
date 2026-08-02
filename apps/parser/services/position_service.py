@@ -1,24 +1,15 @@
-"""Position service: stage 1 - detect question positions using qwen3.6-plus."""
-import json
+"""Position service: stage 1 - detect question positions."""
 import logging
-import re
-from apps.parser.prompts.position_prompt import POSITION_SYSTEM_PROMPT, POSITION_USER_PROMPT
-from apps.parser.services.qwen_text_service import QwenTextService
+from apps.common.ai.components.vision_parser import VisionParserComponent
+from apps.common.ai.exceptions import AIConfigError
 from apps.parser.schemas.page_parse_schema import validate_position_result
 from apps.common.exceptions import AIRequestError
 
 logger = logging.getLogger(__name__)
 
 
-def _extract_json(text: str) -> str:
-    """Extract JSON from AI response that may be wrapped in markdown code fences."""
-    stripped = text.strip()
-    # Try to find ```json ... ``` or ``` ... ``` block
-    match = re.search(r'```(?:json)?\s*([\s\S]*?)```', stripped)
-    if match:
-        return match.group(1).strip()
-    # If no code fences, return as-is
-    return stripped
+def vision_parser_component_factory() -> VisionParserComponent:
+    return VisionParserComponent()
 
 
 def detect_positions(page_images: list) -> list:
@@ -32,9 +23,10 @@ def detect_positions(page_images: list) -> list:
         - page_no: int
         - questions: list of {question_no, section_title, page_start, page_end, bbox, is_cross_page}
         - raw_response: str
+        - response_json: str
         - latency_ms: int
     """
-    text_service = QwenTextService()
+    component = vision_parser_component_factory()
     results = []
 
     for page_info in page_images:
@@ -44,13 +36,10 @@ def detect_positions(page_images: list) -> list:
         logger.info(f'Stage 1: Detecting question positions for page {page_no}')
 
         try:
-            ai_result = text_service.detect_question_positions(
-                image_path, POSITION_SYSTEM_PROMPT, POSITION_USER_PROMPT
-            )
+            ai_result = component.detect_positions(image_path)
 
             # Use lightweight position schema instead of PageParseResult
-            cleaned = _extract_json(ai_result['raw_response'])
-            raw_data = json.loads(cleaned)
+            raw_data = ai_result['parsed']
             try:
                 validated = validate_position_result(raw_data)
                 questions = validated.model_dump().get('questions', [])
@@ -62,17 +51,19 @@ def detect_positions(page_images: list) -> list:
                 'page_no': page_no,
                 'questions': questions,
                 'raw_response': ai_result['raw_response'],
+                'response_json': ai_result['response_json'],
                 'latency_ms': ai_result['latency_ms'],
             })
 
             logger.info(f'Page {page_no}: detected {len(questions)} questions')
 
-        except AIRequestError as e:
+        except (AIConfigError, AIRequestError) as e:
             logger.exception(f'Position detection failed for page {page_no}: {e}')
             results.append({
                 'page_no': page_no,
                 'questions': [],
                 'raw_response': '',
+                'response_json': '',
                 'error': str(e),
                 'latency_ms': 0,
             })

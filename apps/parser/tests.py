@@ -1,6 +1,7 @@
 """Tests for parser app services."""
 import json
 from django.test import TestCase
+from apps.common.exceptions import AIRequestError
 from apps.common.utils import repair_json_string
 from apps.parser.services.schema_service import validate_and_repair_json
 from apps.parser.services.postprocess_service import (
@@ -201,3 +202,167 @@ class PostprocessTest(TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['question_type'], 'single_choice')
         self.assertEqual(result[0]['need_review'], False)
+
+
+def test_position_service_uses_injected_component_and_preserves_result_fields(
+    monkeypatch,
+):
+    from apps.parser.services import position_service
+
+    class Component:
+        def detect_positions(self, image_path):
+            assert image_path == "private-page.png"
+            return {
+                "raw_response": '{"page_no":1,"questions":[]}',
+                "response_json": '{"id":"provider-response"}',
+                "latency_ms": 42,
+                "parsed": {"page_no": 1, "questions": []},
+                "provider": "qwen",
+                "model": "qwen3.7-plus",
+            }
+
+    monkeypatch.setattr(
+        position_service,
+        "vision_parser_component_factory",
+        lambda: Component(),
+        raising=False,
+    )
+
+    assert position_service.detect_positions(
+        [{"page_no": 1, "path": "private-page.png"}]
+    ) == [
+        {
+            "page_no": 1,
+            "questions": [],
+            "raw_response": '{"page_no":1,"questions":[]}',
+            "response_json": '{"id":"provider-response"}',
+            "latency_ms": 42,
+        }
+    ]
+
+
+def test_position_service_failure_keeps_complete_empty_audit_shape(monkeypatch):
+    from apps.parser.services import position_service
+
+    class Component:
+        def detect_positions(self, _image_path):
+            raise AIRequestError("Vision AI request failed")
+
+    monkeypatch.setattr(
+        position_service,
+        "vision_parser_component_factory",
+        lambda: Component(),
+    )
+
+    assert position_service.detect_positions(
+        [{"page_no": 4, "path": "private-page.png"}]
+    ) == [
+        {
+            "page_no": 4,
+            "questions": [],
+            "raw_response": "",
+            "response_json": "",
+            "error": "Vision AI request failed",
+            "latency_ms": 0,
+        }
+    ]
+
+
+def test_question_parse_service_preserves_legacy_audit_and_parsed_fields():
+    from apps.parser.services.question_parse_service import QuestionParseService
+
+    calls = []
+
+    class Component:
+        def parse_question(self, images, context):
+            calls.append((images, context))
+            return {
+                "raw_response": '{"question_no":"9","stem":"题干"}',
+                "response_json": '{"id":"provider-response"}',
+                "latency_ms": 55,
+                "parsed": {"question_no": "9", "stem": "题干"},
+                "provider": "qwen",
+                "model": "qwen3-vl-plus",
+            }
+
+    service = QuestionParseService(component=Component())
+    result = service.parse_question(
+        {
+            "question_no": "9",
+            "question_type": "single_choice",
+            "section_title": "一、选择题",
+            "page_start": 2,
+            "page_end": 3,
+        },
+        ["page-2.png", "page-3.png"],
+        [2, 3],
+    )
+
+    assert calls == [
+        (
+            ["page-2.png", "page-3.png"],
+            {
+                "question_no": "9",
+                "question_type": "single_choice",
+                "question_type_label": "单选题",
+                "section_title": "一、选择题",
+                "page_start": 2,
+                "page_end": 3,
+                "multi_page_notice": (
+                    "**注意**：该题目跨页，涉及第 2, 3 页。"
+                    "请综合分析所有页面的内容，确保解析完整。"
+                ),
+            },
+        )
+    ]
+    assert result == {
+        "raw_response": '{"question_no":"9","stem":"题干"}',
+        "response_json": '{"id":"provider-response"}',
+        "latency_ms": 55,
+        "parsed": {
+            "question_no": "9",
+            "stem": "题干",
+            "page_no": 2,
+            "page_end": 3,
+        },
+    }
+
+
+def test_position_persistence_keeps_legacy_field_meanings_and_new_model_name(
+    monkeypatch,
+):
+    from apps.parser import tasks
+
+    created = []
+    monkeypatch.setattr(
+        tasks.AIParseResult.objects,
+        "create",
+        lambda **kwargs: created.append(kwargs),
+    )
+    paper = object()
+    page = object()
+
+    tasks.save_position_results(
+        paper,
+        {1: page},
+        [
+            {
+                "page_no": 1,
+                "raw_response": '{"page_no":1,"questions":[]}',
+                "response_json": {"id": "provider-response"},
+                "latency_ms": 67,
+            }
+        ],
+    )
+
+    assert created == [
+        {
+            "paper": paper,
+            "page": page,
+            "raw_response": '{"page_no":1,"questions":[]}',
+            "response_json": '{"page_no":1,"questions":[]}',
+            "latency_ms": 67,
+            "is_valid_json": True,
+            "model_name": "qwen3.7-plus-position",
+        }
+    ]

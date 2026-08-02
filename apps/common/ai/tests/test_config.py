@@ -116,6 +116,16 @@ def test_loads_task_and_provider_from_cfg(tmp_path, provider_env):
     assert loaded.get_task_config("question_probe").timeout_seconds == 300
 
 
+def test_position_detection_routes_to_qwen37_plus_with_300_second_timeout(
+    provider_env,
+):
+    loaded = AIConfig.load()
+
+    position_task = loaded.get_task_config("vision_position_detect")
+    assert position_task.model == "qwen3.7-plus"
+    assert position_task.timeout_seconds == 300
+
+
 def test_provider_repr_does_not_expose_api_key(tmp_path, provider_env):
     provider = AIConfig.load(write_minimal_cfg(tmp_path)).get_provider_config("qwen")
 

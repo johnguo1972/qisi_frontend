@@ -13,6 +13,7 @@ from .question_probe import (
     VisionExtractionComponent,
 )
 from .result_verifier import ResultVerifierComponent
+from .vision_parser import VisionParserComponent
 
 __all__ = [
     "KnowledgeAnalysisComponent",
@@ -26,4 +27,5 @@ __all__ = [
     "QuestionProbeComponent",
     "ResultVerifierComponent",
     "VisionExtractionComponent",
+    "VisionParserComponent",
 ]

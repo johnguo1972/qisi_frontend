@@ -31,15 +31,19 @@ def upload_crop_image(local_path: str, prefix: str = 'question_crops') -> str:
     filename = os.path.basename(local_path)
     oss_key = f'{prefix}/{filename}'
 
+    upload_failed = False
     try:
         with open(local_path, 'rb') as f:
             bucket.put_object(oss_key, f)
-    except oss2.exceptions.OssError as e:
-        logger.error(f'OSS upload failed for {local_path}: {e}')
-        raise OSError(f'OSS upload failed: {e}')
+    except (OSError, oss2.exceptions.OssError):
+        upload_failed = True
+
+    if upload_failed:
+        logger.error('OSS image upload failed')
+        raise OSError('OSS upload failed')
 
     url = f'https://{bucket.bucket_name}.{bucket.endpoint.replace("https://", "")}/{oss_key}'
-    logger.info(f'Uploaded to OSS: {url}')
+    logger.info('Image uploaded to OSS')
     return url
 
 
@@ -47,6 +51,6 @@ def upload_crop_image_safe(local_path: str, prefix: str = 'question_crops') -> s
     """Upload to OSS, returning None on failure (non-raising wrapper)."""
     try:
         return upload_crop_image(local_path, prefix)
-    except OSError as e:
-        logger.warning(f'OSS upload skipped (non-fatal): {e}')
+    except OSError:
+        logger.warning('OSS upload skipped (non-fatal)')
         return None

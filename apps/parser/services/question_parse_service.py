@@ -1,32 +1,21 @@
-"""Question parse service: stage 2 - parse individual questions using qwen3-VL-plus."""
-import json
+"""Question parse service: stage 2 - parse individual questions."""
 import logging
-import base64
 import os
-import time
-import httpx
 from django.conf import settings
+from apps.common.ai.components.vision_parser import VisionParserComponent
 from apps.common.exceptions import AIRequestError
 from apps.parser.prompts.question_parse_prompt import (
-    QUESTION_PARSE_SYSTEM_PROMPT,
-    QUESTION_PARSE_USER_PROMPT_TEMPLATE,
     QUESTION_TYPE_LABELS,
 )
 from apps.parser.services.schema_service import validate_and_repair_json
 
 logger = logging.getLogger(__name__)
 
-QWEN_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-QWEN_VL_MODEL = "qwen3-vl-plus"
-
-
 class QuestionParseService:
-    """Service for parsing individual questions using qwen3-VL-plus."""
+    """Compatibility adapter for shared question vision parsing."""
 
-    def __init__(self):
-        self.api_key = os.environ.get('QWEN_API_KEY', '')
-        if not self.api_key:
-            raise AIRequestError("QWEN_API_KEY environment variable is not set")
+    def __init__(self, component=None):
+        self._component = component or VisionParserComponent()
 
     def parse_question(self, question_info: dict, page_images: list, page_nos: list) -> dict:
         """Parse a single question.
@@ -39,16 +28,6 @@ class QuestionParseService:
         Returns:
             dict with keys: raw_response, response_json, latency_ms, parsed
         """
-        # Build multi-image content
-        content_parts = []
-        for img_path, page_no in zip(page_images, page_nos):
-            image_b64 = self._encode_image(img_path)
-            content_parts.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{image_b64}"}
-            })
-
-        # Build user prompt
         question_no = question_info.get('question_no', '?')
         question_type = question_info.get('question_type', 'unknown')
         section_title = question_info.get('section_title', '')
@@ -62,75 +41,39 @@ class QuestionParseService:
                 f"请综合分析所有页面的内容，确保解析完整。"
             )
 
-        user_prompt = QUESTION_PARSE_USER_PROMPT_TEMPLATE.format(
-            question_no=question_no,
-            question_type=question_type,
-            question_type_label=QUESTION_TYPE_LABELS.get(question_type, '未知'),
-            section_title=section_title,
-            page_start=page_start,
-            page_end=page_end,
-            multi_page_notice=multi_page_notice,
-        )
-
-        content_parts.append({"type": "text", "text": user_prompt})
-
-        messages = [
-            {"role": "system", "content": QUESTION_PARSE_SYSTEM_PROMPT},
-            {"role": "user", "content": content_parts}
-        ]
-
-        payload = {
-            "model": QWEN_VL_MODEL,
-            "messages": messages,
-            "max_tokens": 8000,
-            "temperature": 0.1,
-        }
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        start_time = time.time()
         try:
-            with httpx.Client(timeout=180.0, trust_env=False) as client:
-                response = client.post(QWEN_API_URL, json=payload, headers=headers)
-                response.raise_for_status()
-
-            latency_ms = int((time.time() - start_time) * 1000)
-            result = response.json()
-
-            choices = result.get("choices", [])
-            if not choices:
-                raise AIRequestError("No choices in qwen3-VL-plus response")
-
-            content = choices[0]["message"]["content"]
-            response_json = json.dumps(result, ensure_ascii=False)
+            ai_result = self._component.parse_question(
+                page_images,
+                {
+                    'question_no': question_no,
+                    'question_type': question_type,
+                    'question_type_label': QUESTION_TYPE_LABELS.get(
+                        question_type, '未知'
+                    ),
+                    'section_title': section_title,
+                    'page_start': page_start,
+                    'page_end': page_end,
+                    'multi_page_notice': multi_page_notice,
+                },
+            )
 
             # Parse and repair JSON
-            parsed = validate_and_repair_json(content)
+            parsed = validate_and_repair_json(ai_result['raw_response'])
 
             # Add page info
             parsed['page_no'] = page_start
             parsed['page_end'] = page_end
 
             return {
-                "raw_response": content,
-                "response_json": response_json,
-                "latency_ms": latency_ms,
+                "raw_response": ai_result['raw_response'],
+                "response_json": ai_result['response_json'],
+                "latency_ms": ai_result['latency_ms'],
                 "parsed": parsed,
             }
-
-        except httpx.HTTPError as e:
-            latency_ms = int((time.time() - start_time) * 1000)
-            raise AIRequestError(f"qwen3-VL-plus API request failed: {e}")
-        except Exception as e:
-            raise AIRequestError(f"Unexpected error calling qwen3-VL-plus: {e}")
-
-    def _encode_image(self, image_path: str) -> str:
-        """Read image file and return base64-encoded string."""
-        with open(image_path, "rb") as f:
-            return base64.b64encode(f.read()).decode("utf-8")
+        except AIRequestError:
+            raise
+        except Exception:
+            raise AIRequestError("Question vision parsing failed") from None
 
 
 def parse_questions_stage2(position_results: list, page_map: dict, progress_callback=None) -> list:

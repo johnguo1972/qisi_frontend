@@ -17,6 +17,22 @@ from apps.common.exceptions import AIRequestError
 logger = logging.getLogger(__name__)
 
 
+def save_position_results(paper, page_map, position_results):
+    """Persist position audit data without changing legacy field meanings."""
+    for result in position_results:
+        page = page_map.get(result['page_no'])
+        if page:
+            AIParseResult.objects.create(
+                paper=paper,
+                page=page,
+                raw_response=result.get('raw_response', ''),
+                response_json=result.get('raw_response', ''),
+                latency_ms=result.get('latency_ms', 0),
+                is_valid_json=True,
+                model_name='qwen3.7-plus-position',
+            )
+
+
 def update_task_progress(task, progress: int, current_step: str):
     """Update parse task progress."""
     task.progress = progress
@@ -72,8 +88,8 @@ def parse_paper_task(self, paper_id: int):
             dpi=100
         )
 
-        # Stage 1: Question position detection using qwen3.6-plus (150 DPI images)
-        update_task_progress(task, 30, '阶段1：题目位置检测（qwen3.6-plus）')
+        # Stage 1: Question position detection using qwen3.7-plus (100 DPI images)
+        update_task_progress(task, 30, '阶段1：题目位置检测（qwen3.7-plus）')
         paper.status = const.PAPER_PARSING
         paper.save(update_fields=['status'])
 
@@ -115,17 +131,7 @@ def parse_paper_task(self, paper_id: int):
             page_map[page.page_no] = page
 
         # Save stage 1 position results to AIParseResult for debugging
-        for result in position_results:
-            page_no = result['page_no']
-            page = page_map.get(page_no)
-            if page:
-                AIParseResult.objects.create(
-                    paper=paper, page=page,
-                    raw_response=result.get('raw_response', ''),
-                    response_json=result.get('raw_response', ''),
-                    latency_ms=result.get('latency_ms', 0),
-                    is_valid_json=True, model_name='qwen3.6-plus-position',
-                )
+        save_position_results(paper, page_map, position_results)
 
         paper.total_pages = len(page_images_300)
         paper.status = const.PAPER_PARSING
