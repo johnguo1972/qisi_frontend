@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from apps.common.ai.exceptions import AIConfigError, AIResponseError
+from apps.common.ai.types import AIResult
 from apps.common.exceptions import AIRequestError
 from apps.missions import views
 
@@ -105,7 +106,7 @@ def test_teacher_c_reply_uses_component_and_keeps_response_contract(monkeypatch)
         ),
         (
             AIResponseError("malformed response"),
-            "（AI评价调用失败：malformed response）",
+            "（AI评价调用失败：AIResponseError）",
         ),
     ],
 )
@@ -141,3 +142,85 @@ def test_teacher_c_reply_keeps_existing_failure_wording(
     assert response.data["data"]["evaluation"] == expected
     assert response.data["data"]["next_question"] == "第二问"
     assert response.data["data"]["is_completed"] is False
+
+
+@pytest.mark.django_db
+def test_teacher_reply_endpoint_does_not_store_malformed_provider_content(
+    monkeypatch,
+):
+    from rest_framework.test import APIClient
+
+    from apps.accounts.models import UserAccount
+    from apps.common.ai.components.guidance import GuidanceComponent
+    from apps.papers.models import ExamPaper
+    from apps.parser.models import ExamQuestion
+
+    teacher = UserAccount.objects.create(
+        role_type="teacher",
+        mobile="13970000072",
+        display_name="Task7教师",
+    )
+    paper = ExamPaper.objects.create(
+        title="Task7教师试卷",
+        subject="数学",
+        stage="初中",
+        grade="9",
+        source_file_path="task7/teacher.docx",
+        status="uploaded",
+        uploaded_by=teacher,
+    )
+    question = ExamQuestion.objects.create(
+        paper=paper,
+        question_no="1",
+        question_type="fill_blank",
+        subject="数学",
+        stem="题目",
+        answer="D",
+    )
+    poison = '```JSON\n{"evaluation": "POISON"\n```'
+
+    class Client:
+        def complete(self, task_key, **kwargs):
+            return AIResult(
+                content=poison,
+                provider="qwen",
+                model="qwen3.7-flash",
+                latency_ms=1,
+                raw_response={
+                    "choices": [{"message": {"content": poison}}]
+                },
+            )
+
+    monkeypatch.setattr(
+        views,
+        "guidance_component_factory",
+        lambda: GuidanceComponent(Client()),
+    )
+    session_id = "teacher-endpoint-task7"
+    session = {
+        "question_id": question.id,
+        "mode": "C",
+        "turn": 0,
+        "messages": [],
+        "ai_c": {
+            "steps": [
+                {"question": "第一问"},
+                {"question": "第二问"},
+            ]
+        },
+    }
+    monkeypatch.setitem(views._teacher_guidance_sessions, session_id, session)
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+
+    response = client.post(
+        f"/api/v1/missions/guidance/reply/{session_id}/",
+        {"user_answer": "学生回答"},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    evaluation = response.json()["data"]["evaluation"]
+    assert evaluation == "（AI评价调用失败：AIResponseError）"
+    assert "POISON" not in evaluation
+    assert "POISON" not in str(session["messages"])

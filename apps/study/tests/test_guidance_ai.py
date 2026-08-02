@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from apps.common.ai.exceptions import AIConfigError, AIResponseError
+from apps.common.ai.types import AIResult
 from apps.common.exceptions import AIRequestError
 from apps.study import ai_helper, guidance_views
 
@@ -151,6 +152,47 @@ def test_start_c_guidance_generates_three_steps_and_persists_legacy_shape(
         ]
     }
     assert session.saved_update_fields == [["content_log_json"]]
+
+
+def test_start_c_guidance_never_persists_component_extra_step_fields(
+    monkeypatch,
+):
+    session = _Session()
+    question = _question()
+    _install_study_models(monkeypatch, session, question)
+
+    class Component:
+        def generate(self, question_input):
+            return {
+                "steps": [
+                    {
+                        "question": "第一问",
+                        "hint": "提示一",
+                        "key_points": ["POISON"],
+                        "unexpected": "POISON",
+                    },
+                    {"question": "第二问", "hint": "提示二"},
+                    {"question": "第三问", "hint": "提示三"},
+                ],
+                "unexpected": "POISON",
+            }
+
+    monkeypatch.setattr(
+        guidance_views,
+        "guidance_component_factory",
+        lambda: Component(),
+    )
+    request = SimpleNamespace(
+        data={"question_id": 7, "mode_type": "C"},
+        user=SimpleNamespace(id=9),
+    )
+
+    response = _plain_view_handler(guidance_views.start_guidance)(request)
+
+    assert response.status_code == 200
+    generated = session.content_log_json["ai_c_generated"]
+    assert generated["questions"][0]["key_points"] == []
+    assert "POISON" not in str(generated)
 
 
 @pytest.mark.parametrize(
@@ -371,3 +413,84 @@ def test_legacy_generation_wrapper_keeps_empty_dict_fallback(
 
     assert ai_helper.call_qwen_for_guidance_with_question("题目", "D") == {}
     assert len(called) == 1
+
+
+@pytest.mark.django_db
+def test_student_start_endpoint_rejects_provider_extra_without_db_pollution(
+    monkeypatch,
+):
+    from rest_framework.test import APIClient
+
+    from apps.accounts.models import UserAccount
+    from apps.common.ai.components.guidance import GuidanceComponent
+    from apps.papers.models import ExamPaper
+    from apps.parser.models import ExamQuestion
+    from apps.study.models import AIGuidanceSession
+
+    student = UserAccount.objects.create(
+        role_type="student",
+        mobile="13970000071",
+        display_name="Task7学生",
+    )
+    paper = ExamPaper.objects.create(
+        title="Task7试卷",
+        subject="数学",
+        stage="初中",
+        grade="9",
+        source_file_path="task7/test.docx",
+        status="uploaded",
+        uploaded_by=student,
+    )
+    question = ExamQuestion.objects.create(
+        paper=paper,
+        question_no="1",
+        question_type="fill_blank",
+        subject="数学",
+        stem="题目",
+        answer="D",
+    )
+    content = (
+        '{"steps": ['
+        '{"question": "第一问", "hint": "提示一", '
+        '"key_points": ["POISON"]},'
+        '{"question": "第二问", "hint": "提示二"},'
+        '{"question": "第三问", "hint": "提示三"}'
+        "]}"
+    )
+
+    class Client:
+        def complete(self, task_key, **kwargs):
+            return AIResult(
+                content=content,
+                provider="qwen",
+                model="qwen3.7-flash",
+                latency_ms=1,
+                raw_response={
+                    "choices": [{"message": {"content": content}}]
+                },
+            )
+
+    monkeypatch.setattr(
+        guidance_views,
+        "guidance_component_factory",
+        lambda: GuidanceComponent(Client()),
+    )
+    client = APIClient()
+    client.force_authenticate(user=student)
+
+    response = client.post(
+        "/api/v1/student/guidance/sessions",
+        {"question_id": str(question.id), "mode_type": "C"},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["mode"] == "B"
+    assert response.json()["data"]["downgraded"] is True
+    session = AIGuidanceSession.objects.get(
+        student_user_id=student,
+        question_id=question.id,
+    )
+    assert session.session_status == "downgraded"
+    assert "ai_c_generated" not in session.content_log_json
+    assert "POISON" not in str(session.content_log_json)

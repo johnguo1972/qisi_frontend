@@ -212,9 +212,9 @@ def start_guidance(request):
             converted_questions = []
             for step in llm_steps:
                 converted_questions.append({
-                    'question': step.get('question', '请继续思考'),
-                    'reference_answer': step.get('hint', ''),
-                    'key_points': step.get('key_points', []),
+                    'question': step['question'],
+                    'reference_answer': step['hint'],
+                    'key_points': [],
                 })
             log = session.content_log_json or {'step_index': 0, 'steps': [], 'answers': []}
             log['ai_c_generated'] = {'questions': converted_questions}

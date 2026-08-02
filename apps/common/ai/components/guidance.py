@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,15 +16,21 @@ from apps.common.ai.schemas import NonBlankStr
 from .base import AICompleter, QuestionInput
 
 
+class _GuidanceEvaluation(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    evaluation: NonBlankStr
+
+
 class _GuidanceStep(BaseModel):
-    model_config = ConfigDict(extra="allow", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     question: NonBlankStr
-    hint: str = ""
+    hint: NonBlankStr
 
 
 class _GuidanceGeneration(BaseModel):
-    model_config = ConfigDict(extra="allow", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     steps: list[_GuidanceStep] = Field(min_length=3, max_length=5)
 
@@ -113,16 +120,19 @@ class GuidanceComponent:
             )
 
 
+_JSON_FENCE_PREFIX = re.compile(r"^```(?:json)?(?=\s|[\{\[])", re.IGNORECASE)
+
+
 def _parse_evaluation(content: str) -> str:
     stripped = ResponseParser.parse_text(content)
-    if not stripped.startswith(("{", "[")):
+    looks_structured = stripped.startswith(("{", "[")) or bool(
+        _JSON_FENCE_PREFIX.match(stripped)
+    )
+    if not looks_structured:
         return stripped
 
-    parsed = ResponseParser.parse_json(stripped)
-    if not isinstance(parsed, dict):
-        raise AIResponseError("AI guidance evaluation must be an object")
-    evaluation = parsed.get("evaluation")
-    return ResponseParser.parse_text(evaluation)
+    parsed = ResponseParser.parse_json(stripped, _GuidanceEvaluation)
+    return ResponseParser.parse_text(parsed["evaluation"])
 
 
 def _trace_id(value: object) -> str | None:

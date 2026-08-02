@@ -141,7 +141,48 @@ def test_student_evaluation_accepts_legacy_text_and_json(content, expected):
 
 @pytest.mark.parametrize(
     "content",
-    ["", "   ", '{"evaluation": ""}', '{"evaluation": 7}', "{broken"],
+    [
+        '```json\n{"evaluation": "围栏评价"}\n```',
+        '\n```JSON\r\n{"evaluation": "围栏评价"}\r\n```\t',
+        '```\n{"evaluation": "围栏评价"}\n```',
+    ],
+)
+def test_student_evaluation_parses_complete_json_fences(content):
+    from apps.common.ai.components.guidance import GuidanceContext
+
+    component, _, _ = _component({"guidance_evaluate": content})
+
+    assert component.evaluate_student_reply(
+        GuidanceContext("题目", "D", "我的思路")
+    ) == "围栏评价"
+
+
+def test_student_evaluation_keeps_plain_text_with_internal_braces():
+    from apps.common.ai.components.guidance import GuidanceContext
+
+    content = "先比较 {x} 与 y，再继续计算。"
+    component, _, _ = _component({"guidance_evaluate": content})
+
+    assert component.evaluate_student_reply(
+        GuidanceContext("题目", "D", "我的思路")
+    ) == content
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",
+        "   ",
+        '{"evaluation": ""}',
+        '{"evaluation": 7}',
+        '{"other": "ok"}',
+        '{"evaluation": "ok", "unexpected": "poison"}',
+        "[]",
+        "{broken",
+        '```json\n{"evaluation":\n```',
+        '```JSON\n[]\n```',
+        '```json\n{"evaluation": "ok", "unexpected": true}\n```',
+    ],
 )
 def test_student_evaluation_rejects_malformed_or_empty_content(content):
     from apps.common.ai.components.guidance import GuidanceContext
@@ -208,6 +249,93 @@ def test_generation_rejects_out_of_contract_step_count():
         GuidanceComponent(client, RecordingPromptRegistry()).generate(
             QuestionInput(stem="题目")
         )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        (
+            '{"steps": ['
+            '{"question": "第一问", "hint": "提示一"},'
+            '{"question": "第二问", "hint": "提示二"},'
+            '{"question": "第三问", "hint": "提示三"}'
+            '], "unexpected": "poison"}'
+        ),
+        (
+            '{"steps": ['
+            '{"question": "第一问", "hint": "提示一", '
+            '"key_points": ["poison"]},'
+            '{"question": "第二问", "hint": "提示二"},'
+            '{"question": "第三问", "hint": "提示三"}'
+            "]}"
+        ),
+        (
+            '{"steps": ['
+            '{"question": "第一问", "hint": "提示一", '
+            '"unexpected": true},'
+            '{"question": "第二问", "hint": "提示二"},'
+            '{"question": "第三问", "hint": "提示三"}'
+            "]}"
+        ),
+        (
+            '{"steps": ['
+            '{"question": "第一问"},'
+            '{"question": "第二问", "hint": "提示二"},'
+            '{"question": "第三问", "hint": "提示三"}'
+            "]}"
+        ),
+        (
+            '{"steps": ['
+            '{"question": "第一问", "hint": ""},'
+            '{"question": "第二问", "hint": "提示二"},'
+            '{"question": "第三问", "hint": "提示三"}'
+            "]}"
+        ),
+        (
+            '{"steps": ['
+            '{"question": " ", "hint": "提示一"},'
+            '{"question": "第二问", "hint": "提示二"},'
+            '{"question": "第三问", "hint": "提示三"}'
+            "]}"
+        ),
+        (
+            '{"steps": ['
+            '{"question": "第一问", "hint": 7},'
+            '{"question": "第二问", "hint": "提示二"},'
+            '{"question": "第三问", "hint": "提示三"}'
+            "]}"
+        ),
+    ],
+)
+def test_generation_rejects_fields_not_declared_by_frozen_prompt(content):
+    from apps.common.ai.components.guidance import GuidanceComponent, QuestionInput
+
+    client = RecordingAIClient({"guidance_generate": content})
+
+    with pytest.raises(AIResponseError):
+        GuidanceComponent(client, RecordingPromptRegistry()).generate(
+            QuestionInput(stem="题目")
+        )
+
+
+def test_generation_accepts_five_complete_declared_steps():
+    from apps.common.ai.components.guidance import GuidanceComponent, QuestionInput
+
+    content = (
+        '{"steps": ['
+        '{"question": "第一问", "hint": "提示一"},'
+        '{"question": "第二问", "hint": "提示二"},'
+        '{"question": "第三问", "hint": "提示三"},'
+        '{"question": "第四问", "hint": "提示四"},'
+        '{"question": "第五问", "hint": "提示五"}'
+        "]}"
+    )
+    component = GuidanceComponent(
+        RecordingAIClient({"guidance_generate": content}),
+        RecordingPromptRegistry(),
+    )
+
+    assert len(component.generate(QuestionInput(stem="题目"))["steps"]) == 5
 
 
 def test_all_guidance_tasks_are_qwen_flash_with_300_second_timeout():

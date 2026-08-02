@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from .models import LearningMission, MissionLevel, MissionQuestionRel
 from apps.parser.models import ExamQuestion, QuestionImage, QuestionOption
 from apps.common.ai.components import GuidanceComponent, GuidanceContext
-from apps.common.ai.exceptions import AIConfigError
+from apps.common.ai.exceptions import AIConfigError, AIResponseError
 from .serializers import (
     MissionListSerializer, MissionDetailSerializer,
     CreateMissionSerializer, CreateLevelSerializer, AddQuestionsSerializer,
@@ -633,6 +633,8 @@ def teacher_guidance_reply(request, session_id):
                 raise ValueError('AI guidance evaluation is missing')
         except AIConfigError:
             evaluation = '（AI评价功能暂不可用，请配置QWEN_API_KEY）'
+        except AIResponseError:
+            evaluation = '（AI评价调用失败：AIResponseError）'
         except Exception as error:
             evaluation = f'（AI评价调用失败：{str(error)}）'
 
