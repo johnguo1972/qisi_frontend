@@ -137,4 +137,7 @@ parser 旧 prompt 文件中的唯一非提示数据 `QUESTION_TYPE_LABELS` 已�
 - 已实现 `python manage.py ai_smoke_test --provider qwen --live` 与 `python manage.py ai_smoke_test --provider deepseek --live`。命令仅通过公共题目探查组件或 DeepSeek 结果校验组件调用 cfg 中的固定 task，不包含独立提示词、URL、Key、模型、超时、HTTP 或回退路由。
 - `--live` 是强制显式开关；缺少该开关时，在加载配置和构造 AI 客户端之前以非零退出码拒绝执行。成功输出仅包含 provider、cfg 配置模型、`status=ok`、耗时和 `schema=valid`；失败仅输出固定类别与退出码，不输出请求、响应或异常原文。
 - 命令单元测试使用注入客户端完成零联网验证，覆盖 Qwen/DeepSeek task 隔离、严格 Schema、摘要白名单、配置/传输或超时/HTTP/响应分类、退出码、客户端清理和 traceback 脱敏。
-- 本节当前只证明命令实现和本地模拟测试；本轮没有发起真实外网请求。Qwen 与 DeepSeek 各一次 `--live` 证据仍待获准执行后另行记录，不能据此宣称外部模型调用成功。
+- 本地实现证据：Task11 命令定向测试 15 项通过，公共 AI 回归 505 项通过，Django `check` 为 0 issue；这些是组件和命令的模拟/本地证据，不等同于供应商调用成功。
+- Qwen 真实冒烟：唯一一次 `--live` 命令已执行且进程已经结束，但工具输出在上下文切换时被截断。取证未发现文件日志、数据库审计、命令历史或仍在运行的进程，因此结果和退出码不可恢复。为遵守“每个提供商各一次”的调用限制，没有重复请求，也不宣称 Qwen 成功。
+- DeepSeek 真实冒烟：唯一一次 `--live` 命令已执行，安全摘要为 `provider=deepseek status=error category=http_status http_status=401`。这是供应商认证/凭证失败，不是公共组件 Schema 失败或模拟测试失败；DeepSeek 失败后没有回退到 Qwen。
+- Task11 的外部证据结论是：Qwen 结果不可恢复，DeepSeek 被供应商认证阻止；两者均不能记为真实调用成功。后续如需重新验证，必须先取得新的调用授权，不能把本次证据记录视作重试授权。
