@@ -632,7 +632,7 @@ def teacher_guidance_reply(request, session_id):
             if not isinstance(evaluation, str) or not evaluation.strip():
                 raise ValueError('AI guidance evaluation is missing')
         except AIConfigError:
-            evaluation = '（AI评价功能暂不可用，请配置QWEN_API_KEY）'
+            evaluation = '（AI评价功能暂不可用，请检查AI服务配置）'
         except AIResponseError:
             evaluation = '（AI评价调用失败：AIResponseError）'
         except Exception as error:

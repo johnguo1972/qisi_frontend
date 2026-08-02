@@ -15,6 +15,7 @@ from apps.common.ai.exceptions import (
 from apps.common.ai.image_codec import prepare_image_sources
 from apps.common.ai.prompt_registry import PromptRegistry
 from apps.common.ai.response_parser import ResponseParser
+from apps.common.ai.schemas import CourseMaterialRecognitionResponse
 from apps.common.exceptions import AIRequestError
 
 from .base import AICompleter
@@ -22,7 +23,7 @@ from .base import AICompleter
 
 @dataclass(frozen=True)
 class _Failure:
-    kind: Literal["config", "prompt", "request", "response"]
+    kind: Literal["config", "prompt", "request", "response", "schema"]
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,17 @@ class VisionParserComponent:
         images = ()
         return _unwrap(outcome)["parsed"]
 
+    def recognize_course_material(self, images) -> dict:
+        outcome = self._execute(
+            "course_material_recognize",
+            images,
+            {},
+            trace_id=None,
+            schema=CourseMaterialRecognitionResponse,
+        )
+        images = ()
+        return _unwrap(outcome)["parsed"]
+
     def extract_facts(self, images, stem: str) -> dict:
         outcome = self._execute(
             "vision_fact_extract",
@@ -108,6 +120,7 @@ class VisionParserComponent:
         variables: dict[str, object],
         *,
         trace_id: str | None,
+        schema=None,
     ) -> _Outcome:
         prepared_images: tuple[str, ...] = ()
         system = ""
@@ -122,7 +135,7 @@ class VisionParserComponent:
                 images=prepared_images,
                 trace_id=trace_id,
             )
-            parsed = ResponseParser.parse_json(result.content)
+            parsed = ResponseParser.parse_json(result.content, schema)
             if not isinstance(parsed, dict):
                 return _Outcome(failure=_Failure("response"))
             return _Outcome(
@@ -142,7 +155,9 @@ class VisionParserComponent:
         except AIPromptError:
             return _Outcome(failure=_Failure("prompt"))
         except AIResponseError:
-            return _Outcome(failure=_Failure("response"))
+            return _Outcome(
+                failure=_Failure("schema" if schema is not None else "response")
+            )
         except AIRequestError:
             return _Outcome(failure=_Failure("request"))
         except Exception:
@@ -163,6 +178,8 @@ def _raise_failure(failure: _Failure) -> None:
         raise AIPromptError("Vision AI prompt is unavailable")
     if failure.kind == "response":
         raise AIResponseError("Vision AI response must be a valid JSON object")
+    if failure.kind == "schema":
+        raise AIResponseError("Vision AI response failed schema validation")
     raise AIRequestError("Vision AI request failed")
 
 

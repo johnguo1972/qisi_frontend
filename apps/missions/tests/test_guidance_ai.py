@@ -94,7 +94,7 @@ def test_teacher_c_reply_uses_component_and_keeps_response_contract(monkeypatch)
     [
         (
             AIConfigError("missing key"),
-            "（AI评价功能暂不可用，请配置QWEN_API_KEY）",
+            "（AI评价功能暂不可用，请检查AI服务配置）",
         ),
         (
             AIRequestError("provider failed"),

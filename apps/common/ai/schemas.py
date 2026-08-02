@@ -5,7 +5,14 @@ from __future__ import annotations
 import unicodedata
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    model_validator,
+)
 
 
 def _is_visual_blank_character(character: str) -> bool:
@@ -181,3 +188,32 @@ class ResultVerifierResponse(_StrictResponseModel):
         if self.retry_needed and not self.retry_reason.strip():
             raise ValueError("retry reason is required when retry is needed")
         return self
+
+
+class CourseMaterialRecognitionSuccess(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    question_type: Literal[
+        "single_choice", "multiple_choice", "fill_blank", "solution"
+    ]
+    stem: NonBlankStr
+    options: dict[NonBlankStr, NonBlankStr]
+    answer: str
+    analysis: str
+    difficulty: int = Field(ge=1, le=5)
+    knowledge_points: list[NonBlankStr]
+    images: list[dict[str, Any]]
+
+
+class CourseMaterialRecognitionError(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    error: NonBlankStr
+
+
+class CourseMaterialRecognitionResponse(
+    RootModel[
+        CourseMaterialRecognitionSuccess | CourseMaterialRecognitionError
+    ]
+):
+    pass

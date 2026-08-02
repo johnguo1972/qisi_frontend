@@ -7,7 +7,6 @@ import pytest
 from apps.common.ai.config import AIConfig
 from apps.common.ai.exceptions import AIConfigError, AIPromptError
 from apps.common.ai.prompt_registry import PromptRegistry
-from apps.common.ai_prompts import AIPrompts
 
 
 @pytest.fixture
@@ -173,49 +172,53 @@ def test_default_registry_renders_every_declared_task(provider_env):
 
 
 @pytest.mark.parametrize(
-    ("task_key", "legacy_prompt", "variables"),
+    ("task_key", "variables", "system_marker", "user_marker"),
     [
         (
             "knowledge_analysis",
-            AIPrompts.analyze_knowledge("题目", ""),
             {"normalized_text": "题目", "subject_hint": ""},
+            "知识点标注器",
+            "学科提示：未知",
         ),
         (
             "mode_a_answer",
-            AIPrompts.solve_mode_a("题目", "{}", ""),
             {
                 "normalized_text": "题目",
                 "vision_json": "{}",
                 "knowledge_refs": "",
             },
+            "当前为 A 模式",
+            "知识点参考：\n无",
         ),
         (
             "mode_b_answer",
-            AIPrompts.solve_mode_b("题目", "{}", ""),
             {
                 "normalized_text": "题目",
                 "vision_json": "{}",
                 "knowledge_refs": "",
             },
+            "当前为 B 模式",
+            "知识点参考：\n无",
         ),
         (
             "mode_c_answer",
-            AIPrompts.solve_mode_c("题目", "{}", ""),
             {
                 "normalized_text": "题目",
                 "vision_json": "{}",
                 "knowledge_refs": "",
             },
+            "当前为 C 模式",
+            "知识点参考：\n无",
         ),
     ],
 )
-def test_registry_empty_values_match_legacy_common_prompt_defaults(
-    provider_env, task_key, legacy_prompt, variables
+def test_registry_empty_values_apply_declared_cfg_defaults(
+    provider_env, task_key, variables, system_marker, user_marker
 ):
     system, user = PromptRegistry(AIConfig.load()).render(task_key, **variables)
 
-    assert system == legacy_prompt["system"]
-    assert user == legacy_prompt["user"]
+    assert system_marker in system
+    assert user_marker in user
 
 
 @pytest.mark.parametrize(

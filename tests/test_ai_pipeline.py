@@ -6,7 +6,7 @@ django.setup()
 
 import pytest
 from apps.common.ai_service import AIReviewService
-from apps.common.ai_prompts import AIPrompts
+from apps.common.ai.prompt_registry import PromptRegistry
 
 
 @pytest.mark.skipif(not os.environ.get('QWEN_API_KEY'), reason="No QWEN_API_KEY")
@@ -14,30 +14,41 @@ class TestAIPipeline:
     """Integration tests for the AI pipeline (requires API key)."""
 
     def test_prompts_generate(self):
-        """Test that all 6 prompts generate valid system/user pairs."""
-        # Step 1: Probe & Norm
-        probe = AIPrompts.probe_and_norm("题目内容")
-        assert 'system' in probe and 'user' in probe
+        """All six pipeline prompts render from the central registry."""
+        registry = PromptRegistry()
+        cases = (
+            (
+                "question_probe",
+                {"ocr_text": "题目内容", "has_figure": True,
+                 "ocr_confidence": "unknown"},
+            ),
+            ("vision_fact_extract", {"normalized_text": "规范化题干"}),
+            (
+                "mode_a_answer",
+                {"normalized_text": "题干", "vision_json": "{}",
+                 "knowledge_refs": ""},
+            ),
+            (
+                "mode_b_answer",
+                {"normalized_text": "题干", "vision_json": "{}",
+                 "knowledge_refs": ""},
+            ),
+            (
+                "mode_c_answer",
+                {"normalized_text": "题干", "vision_json": "{}",
+                 "knowledge_refs": ""},
+            ),
+            (
+                "result_verify",
+                {"normalized_text": "题干", "vision_json": "{}",
+                 "solver_output": "{}"},
+            ),
+        )
 
-        # Step 2: Vision Extraction
-        vision = AIPrompts.vision_extraction("规范化题干")
-        assert 'system' in vision and 'user' in vision
-
-        # Step 3a: Mode A Solver
-        solver_a = AIPrompts.solve_mode_a("题干", '{"figure_present": true}')
-        assert 'system' in solver_a and 'user' in solver_a
-
-        # Step 3b: Mode B Solver
-        solver_b = AIPrompts.solve_mode_b("题干", '{"figure_present": true}')
-        assert 'system' in solver_b and 'user' in solver_b
-
-        # Step 3c: Mode C Solver
-        solver_c = AIPrompts.solve_mode_c("题干", '{"figure_present": true}')
-        assert 'system' in solver_c and 'user' in solver_c
-
-        # Step 4: Verifier
-        verifier = AIPrompts.verify_result("题干", {}, {})
-        assert 'system' in verifier and 'user' in verifier
+        for task_key, variables in cases:
+            system, user = registry.render(task_key, **variables)
+            assert system
+            assert user
 
     def test_oss_service_available(self):
         """Test that OSS service can be imported."""

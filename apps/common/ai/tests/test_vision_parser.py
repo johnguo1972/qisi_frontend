@@ -267,6 +267,56 @@ def test_photo_and_fact_methods_parse_objects_through_their_fixed_tasks():
     ]
 
 
+def test_course_material_recognition_uses_fixed_task_and_strict_schema():
+    content = json.dumps(
+        {
+            "question_type": "single_choice",
+            "stem": "若 x+1=2，则 x 等于多少？",
+            "options": {"A": "0", "B": "1", "C": "2", "D": "3"},
+            "answer": "B",
+            "analysis": "移项可得 x=1。",
+            "difficulty": 2,
+            "knowledge_points": ["一元一次方程"],
+            "images": [],
+        },
+        ensure_ascii=False,
+    )
+    client = RecordingAIClient({"course_material_recognize": content})
+    registry = RecordingPromptRegistry()
+
+    result = VisionParserComponent(
+        client, registry
+    ).recognize_course_material([SIGNED_URL])
+
+    assert result == json.loads(content)
+    assert registry.calls == [("course_material_recognize", {})]
+    assert client.calls[0][0] == "course_material_recognize"
+    assert client.calls[0][1]["images"] == (SIGNED_URL,)
+
+
+def test_course_material_recognition_rejects_incomplete_success_schema():
+    client = RecordingAIClient(
+        {"course_material_recognize": '{"question_type":"single_choice"}'}
+    )
+
+    with pytest.raises(AIResponseError, match="schema"):
+        VisionParserComponent(
+            client, RecordingPromptRegistry()
+        ).recognize_course_material([SIGNED_URL])
+
+
+def test_course_material_recognition_preserves_explicit_no_question_error():
+    client = RecordingAIClient(
+        {"course_material_recognize": '{"error":"未识别到试题"}'}
+    )
+
+    result = VisionParserComponent(
+        client, RecordingPromptRegistry()
+    ).recognize_course_material([SIGNED_URL])
+
+    assert result == {"error": "未识别到试题"}
+
+
 def test_non_object_vision_response_is_an_explicit_response_error():
     client = RecordingAIClient({"photo_recognize": '[{"stem": "题干"}]'})
 

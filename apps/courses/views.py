@@ -40,6 +40,75 @@ def batch_variant_task_dispatch(**kwargs):
     return batch_generate_variants_task.delay(**kwargs)
 
 
+def material_vision_component_factory():
+    """Construct the shared vision component for course material recognition."""
+    from apps.common.ai.components.vision_parser import VisionParserComponent
+
+    return VisionParserComponent()
+
+
+def _recognize_course_material_image(image_path, crop_region):
+    """Recognize a material image without retaining sensitive failure locals."""
+    failed = False
+    result = None
+    image_source = image_path
+    img = None
+    cropped = None
+    buffer = None
+    original_size = None
+    cropped_size = None
+    try:
+        if crop_region:
+            import base64
+            import io
+            from PIL import Image
+
+            with Image.open(image_path) as img:
+                x1 = max(0, min(crop_region.get('x1', 0), img.width))
+                y1 = max(0, min(crop_region.get('y1', 0), img.height))
+                x2 = max(0, min(crop_region.get('x2', 0), img.width))
+                y2 = max(0, min(crop_region.get('y2', 0), img.height))
+                if x2 > x1 and y2 > y1:
+                    cropped = img.crop((x1, y1, x2, y2))
+                    buffer = io.BytesIO()
+                    cropped.save(buffer, format='PNG')
+                    image_source = (
+                        'data:image/png;base64,'
+                        + base64.b64encode(buffer.getvalue()).decode('ascii')
+                    )
+                    original_size = img.size
+                    cropped_size = cropped.size
+
+        if original_size is not None:
+            logger.info(
+                'Cropped course material image from %s to %s',
+                original_size,
+                cropped_size,
+            )
+        result = material_vision_component_factory().recognize_course_material(
+            [image_source]
+        )
+    except Exception as error:
+        logger.error(
+            'Course material AI recognition failed: %s',
+            error.__class__.__name__,
+        )
+        failed = True
+    finally:
+        image_path = ''
+        crop_region = {}
+        image_source = ''
+        img = None
+        cropped = None
+        buffer = None
+        original_size = None
+        cropped_size = None
+
+    if failed:
+        raise ValidationError('AI 识别失败')
+    return result
+
+
 # ============================================================
 # 权限辅助函数
 # ============================================================
@@ -966,8 +1035,7 @@ def material_pages(request, course_id, material_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def material_ai_recognize(request, course_id, material_id):
-    """框选区域 AI 识别（qwen3.7-plus 多模态）"""
-    from apps.common.ai_service import AIReviewService
+    """框选区域 AI 识别，内部统一走公共视觉组件。"""
 
     course = _get_course_or_404(course_id)
     _check_course_owner(course, request.user)
@@ -995,117 +1063,26 @@ def material_ai_recognize(request, course_id, material_id):
     if not os.path.exists(image_path):
         raise NotFound('图片文件不存在')
 
-    # 调用 AI 识别
+    # 调用公共 AI 视觉组件；页面参数继续接受以保持接口兼容。
+    del page
     try:
-        ai_service = AIReviewService()
-        # 使用 qwen3.7-plus 模型进行多模态识别
-        prompt = """请识别图片中的试题内容，并以 JSON 格式返回：
-{
-  "question_type": "single_choice|multiple_choice|fill_blank|solution",
-  "stem": "题干内容（支持 LaTeX 公式）",
-  "options": {"A": "选项A", "B": "选项B", "C": "选项C", "D": "选项D"},
-  "answer": "正确答案",
-  "analysis": "解析",
-  "difficulty": 3,
-  "knowledge_points": ["知识点1", "知识点2"],
-  "images": [{"description": "图片描述", "url": "图片路径"}]
-}
-如果图片中没有试题，返回 {"error": "未识别到试题"}"""
-
-        # 读取图片并发送给 AI
-        with open(image_path, 'rb') as f:
-            import base64
-            img_data = base64.b64encode(f.read()).decode('utf-8')
-
-        # 如果有框选区域，裁剪图片
-        if crop_region:
-            from PIL import Image
-            import io
-            img = Image.open(io.BytesIO(base64.b64decode(img_data)))
-            x1, y1, x2, y2 = crop_region.get('x1', 0), crop_region.get('y1', 0), crop_region.get('x2', 0), crop_region.get('y2', 0)
-            # 确保坐标在图片范围内
-            x1 = max(0, min(x1, img.width))
-            y1 = max(0, min(y1, img.height))
-            x2 = max(0, min(x2, img.width))
-            y2 = max(0, min(y2, img.height))
-            if x2 > x1 and y2 > y1:
-                cropped = img.crop((x1, y1, x2, y2))
-                # 转换为 base64
-                buffer = io.BytesIO()
-                cropped.save(buffer, format='PNG')
-                img_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                logger.info(f'Cropped image from {img.size} to {cropped.size}')
-
-        # 使用视觉模型识别
-        response_text = ai_service._call_ai_multimodal(
-            system_prompt="你是试题识别专家，请准确识别图片中的试题内容。",
-            user_text=prompt,
-            image_urls=[f'data:image/png;base64,{img_data}'],
-            model='qwen3.7-plus',
+        result = _recognize_course_material_image(image_path, crop_region)
+    except ValidationError:
+        return Response(
+            {'detail': 'AI 识别失败'},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
-        import json
-        import re
-        # Try to extract JSON from response (handle markdown formatting)
-        response_text = response_text.strip() if response_text else ''
-        logger.info(f'AI response (first 500 chars): {response_text[:500]}')
-        # Remove markdown code blocks if present
-        json_match = re.search(r'```json\s*\n?(.*?)\n?```', response_text, re.DOTALL)
-        if json_match:
-            response_text = json_match.group(1).strip()
-        # Try to find JSON object if not already parsed
-        if not response_text.startswith('{'):
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                response_text = json_match.group(0).strip()
-
-        # Try to parse JSON, handle truncated responses
-        result = None
-        try:
-            result = json.loads(response_text) if response_text else {}
-        except json.JSONDecodeError as e:
-            # Try to fix truncated JSON by adding missing closing brackets
-            logger.warning(f'JSON parse error, trying to fix: {e}')
-            # Count open/close brackets
-            open_braces = response_text.count('{')
-            close_braces = response_text.count('}')
-            open_brackets = response_text.count('[')
-            close_brackets = response_text.count(']')
-
-            fixed = response_text
-            # Add missing closing brackets for arrays
-            while open_brackets > close_brackets:
-                fixed += ']'
-                close_brackets += 1
-            # Add missing closing braces for objects
-            while open_braces > close_braces:
-                fixed += '}'
-                close_braces += 1
-
-            try:
-                result = json.loads(fixed)
-                logger.info('Successfully fixed truncated JSON')
-            except json.JSONDecodeError:
-                # Still can't parse, return empty result with error
-                result = {'error': f'AI 响应格式错误，无法解析'}
-
-        if 'error' in result:
-            return Response({
-                'success': False,
-                'message': result['error'],
-            })
-
+    if result.get('error'):
         return Response({
-            'success': True,
-            'data': result,
+            'success': False,
+            'message': result['error'],
         })
 
-    except json.JSONDecodeError as e:
-        logger.error(f'JSON decode error. Response: {response_text[:200] if response_text else "empty"}')
-        raise ValidationError(f'AI 返回格式错误：{str(e)[:100]}')
-    except Exception as e:
-        logger.error(f'AI 识别失败: {e}')
-        raise ValidationError(f'AI 识别失败: {str(e)}')
+    return Response({
+        'success': True,
+        'data': result,
+    })
 
 
 @api_view(['POST'])

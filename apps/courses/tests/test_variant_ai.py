@@ -5,6 +5,8 @@ import traceback
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
+from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.accounts.models import UserAccount
@@ -16,9 +18,15 @@ from apps.common.ai.config import (
     reset_ai_config_for_tests,
 )
 from apps.common.ai.exceptions import AIConfigError, AIResponseError
+from apps.common.ai import legacy_variant_adapter
 from apps.common.exceptions import AIRequestError
 from apps.courses import ai_service, tasks, views
-from apps.courses.models import Course, CourseQuestionLink, VariantTask
+from apps.courses.models import (
+    Course,
+    CourseMaterial,
+    CourseQuestionLink,
+    VariantTask,
+)
 from apps.papers.models import ExamPaper
 from apps.parser.models import ExamQuestion
 
@@ -176,6 +184,227 @@ def _install_components(monkeypatch, generator, verifier, *, available=True):
         ),
         raising=False,
     )
+
+
+def _create_course_material(records, image_path):
+    return CourseMaterial.objects.create(
+        course=records.course,
+        name="题目图片",
+        file_path=str(image_path),
+        file_type="png",
+        file_size=image_path.stat().st_size,
+        mime_type="image/png",
+        uploaded_by=records.teacher,
+    )
+
+
+@pytest.mark.django_db
+def test_material_ai_recognize_uses_shared_component_and_keeps_envelope(
+    monkeypatch, tmp_path, variant_records
+):
+    image_path = tmp_path / "course-question.png"
+    Image.new("RGB", (80, 40), color="white").save(image_path)
+    material = _create_course_material(variant_records, image_path)
+    expected = {
+        "question_type": "single_choice",
+        "stem": "若 x+1=2，则 x 等于多少？",
+        "options": {"A": "0", "B": "1", "C": "2", "D": "3"},
+        "answer": "B",
+        "analysis": "移项可得 x=1。",
+        "difficulty": 2,
+        "knowledge_points": ["一元一次方程"],
+        "images": [],
+    }
+    calls = []
+
+    class Component:
+        def recognize_course_material(self, images):
+            calls.append(tuple(images))
+            return expected
+
+    monkeypatch.setattr(
+        views,
+        "material_vision_component_factory",
+        lambda: Component(),
+        raising=False,
+    )
+    request = APIRequestFactory().post(
+        "/unused",
+        {"image_url": str(image_path), "page": 1},
+        format="json",
+    )
+    force_authenticate(request, user=variant_records.teacher)
+
+    response = views.material_ai_recognize(
+        request, variant_records.course.id, material.id
+    )
+
+    assert response.status_code == 200
+    assert response.data == {"success": True, "data": expected}
+    assert len(calls) == 1
+    assert len(calls[0]) == 1
+
+
+@pytest.mark.django_db
+def test_material_ai_recognize_preserves_crop_and_owner_permission(
+    monkeypatch, tmp_path, variant_records
+):
+    image_path = tmp_path / "course-crop.png"
+    Image.new("RGB", (100, 60), color="white").save(image_path)
+    material = _create_course_material(variant_records, image_path)
+    calls = []
+
+    class Component:
+        def recognize_course_material(self, images):
+            calls.append(tuple(images))
+            return {"error": "未识别到试题"}
+
+    monkeypatch.setattr(
+        views,
+        "material_vision_component_factory",
+        lambda: Component(),
+        raising=False,
+    )
+    unauthorized = APIRequestFactory().post(
+        "/unused", {"image_url": str(image_path)}, format="json"
+    )
+    force_authenticate(unauthorized, user=variant_records.outsider)
+    unauthorized_response = views.material_ai_recognize(
+        unauthorized, variant_records.course.id, material.id
+    )
+    assert unauthorized_response.status_code == 403
+    assert calls == []
+
+    request = APIRequestFactory().post(
+        "/unused",
+        {
+            "image_url": str(image_path),
+            "crop_region": {"x1": 10, "y1": 5, "x2": 70, "y2": 45},
+        },
+        format="json",
+    )
+    force_authenticate(request, user=variant_records.teacher)
+    response = views.material_ai_recognize(
+        request, variant_records.course.id, material.id
+    )
+
+    assert response.status_code == 200
+    assert response.data == {"success": False, "message": "未识别到试题"}
+    assert len(calls) == 1
+    assert calls[0][0].startswith("data:image/png;base64,")
+
+
+@pytest.mark.django_db
+def test_material_ai_recognize_keeps_validation_error_envelope(
+    monkeypatch, tmp_path, variant_records
+):
+    image_path = tmp_path / "course-error.png"
+    Image.new("RGB", (40, 40), color="white").save(image_path)
+    material = _create_course_material(variant_records, image_path)
+
+    class Component:
+        def recognize_course_material(self, images):
+            raise AIResponseError("AI response failed schema validation")
+
+    monkeypatch.setattr(
+        views,
+        "material_vision_component_factory",
+        lambda: Component(),
+        raising=False,
+    )
+    request = APIRequestFactory().post(
+        "/unused", {"image_url": str(image_path)}, format="json"
+    )
+    force_authenticate(request, user=variant_records.teacher)
+
+    response = views.material_ai_recognize(
+        request, variant_records.course.id, material.id
+    )
+
+    assert response.status_code == 400
+    assert "AI 识别失败" in str(response.data)
+
+
+def test_material_recognition_helper_sanitizes_component_failure_traceback(
+    monkeypatch, tmp_path, caplog
+):
+    image_path = tmp_path / "private-course-material.png"
+    Image.new("RGB", (80, 60), color="white").save(image_path)
+    captured_source = []
+
+    class Component:
+        def recognize_course_material(self, images):
+            captured_source.append(images[0])
+            raise AIResponseError(f"provider echoed {images[0]}")
+
+    monkeypatch.setattr(
+        views,
+        "material_vision_component_factory",
+        lambda: Component(),
+        raising=False,
+    )
+    caplog.set_level("DEBUG")
+
+    with pytest.raises(ValidationError) as caught:
+        views._recognize_course_material_image(
+            str(image_path),
+            {"x1": 5, "y1": 5, "x2": 50, "y2": 40},
+        )
+
+    assert str(caught.value) == "[ErrorDetail(string='AI 识别失败', code='invalid')]"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    formatted = "".join(
+        traceback.TracebackException(
+            type(caught.value),
+            caught.value,
+            caught.value.__traceback__.tb_next,
+            capture_locals=True,
+        ).format()
+    )
+    assert captured_source[0].startswith("data:image/png;base64,")
+    for sensitive in (
+        str(image_path),
+        captured_source[0],
+        "provider echoed",
+    ):
+        assert sensitive not in formatted
+        assert sensitive not in caplog.text
+
+
+def test_material_recognition_helper_sanitizes_pil_failure(
+    monkeypatch, tmp_path, caplog
+):
+    image_path = tmp_path / "private-invalid-image.png"
+    image_path.write_text("not an image", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        views,
+        "material_vision_component_factory",
+        lambda: calls.append("constructed"),
+        raising=False,
+    )
+    caplog.set_level("DEBUG")
+
+    with pytest.raises(ValidationError) as caught:
+        views._recognize_course_material_image(
+            str(image_path),
+            {"x1": 0, "y1": 0, "x2": 10, "y2": 10},
+        )
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    formatted = "".join(
+        traceback.TracebackException(
+            type(caught.value),
+            caught.value,
+            caught.value.__traceback__.tb_next,
+            capture_locals=True,
+        ).format()
+    )
+    assert str(image_path) not in formatted
+    assert str(image_path) not in caplog.text
+    assert calls == []
 
 
 @pytest.mark.django_db
@@ -390,6 +619,19 @@ def test_deepseek_availability_converts_missing_config_to_skip(monkeypatch):
     assert ai_service.deepseek_verification_available() is False
 
 
+def test_deepseek_availability_does_not_fetch_raw_provider_key(monkeypatch):
+    monkeypatch.setattr(ai_service, "load_ai_config", _legacy_config)
+    monkeypatch.setattr(
+        ai_service,
+        "get_deepseek_api_key",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("raw provider key crossed compatibility boundary")
+        ),
+    )
+
+    assert ai_service.deepseek_verification_available() is True
+
+
 def test_real_course_factory_constructs_and_skips_optional_missing_deepseek_key(
     monkeypatch,
 ):
@@ -452,6 +694,105 @@ def _legacy_config(*, qwen_api_key: str = "qwen-test-key"):
         ),
     }
     return AIConfig(providers=providers, tasks=tasks_by_key, prompts={})
+
+
+def _format_adapter_traceback(error):
+    return "".join(
+        traceback.TracebackException(
+            type(error),
+            error,
+            error.__traceback__.tb_next,
+            capture_locals=True,
+        ).format()
+    )
+
+
+def test_shared_legacy_adapter_clears_locals_when_config_loading_fails():
+    private_system = "private-system-prompt"
+    private_user = "private-user-prompt"
+    private_key = "private-adapter-key"
+
+    with pytest.raises(AIConfigError) as caught:
+        legacy_variant_adapter.complete_legacy_variant_request(
+            private_system,
+            private_user,
+            "qwen3.7-plus",
+            api_key=private_key,
+            config_loader=lambda: (_ for _ in ()).throw(
+                AIConfigError("configuration unavailable")
+            ),
+        )
+
+    formatted = _format_adapter_traceback(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    for sensitive in (private_system, private_user, private_key):
+        assert sensitive not in formatted
+
+
+def test_shared_legacy_adapter_clears_matcher_config_and_request_locals():
+    class BrokenConfig:
+        def __repr__(self):
+            return "BrokenConfig(private-config-state)"
+
+        def get_task_config(self, _task_key):
+            raise AIConfigError("task lookup unavailable")
+
+    with pytest.raises(AIConfigError) as caught:
+        legacy_variant_adapter.complete_legacy_variant_request(
+            "private-match-system",
+            "private-match-user",
+            "qwen3.7-plus",
+            api_key="private-match-key",
+            config_loader=BrokenConfig,
+        )
+
+    formatted = _format_adapter_traceback(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    for sensitive in (
+        "private-config-state",
+        "private-match-system",
+        "private-match-user",
+        "private-match-key",
+    ):
+        assert sensitive not in formatted
+
+
+def test_shared_legacy_adapter_clears_client_and_request_locals_on_call_error():
+    class FailingClient:
+        def __repr__(self):
+            return "FailingClient(private-client-state)"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def complete(self, _task_key, **_kwargs):
+            raise AIRequestError("provider failed")
+
+    with pytest.raises(AIRequestError) as caught:
+        legacy_variant_adapter.complete_legacy_variant_request(
+            "private-client-system",
+            "private-client-user",
+            "qwen3.7-plus",
+            api_key="qwen-test-key",
+            config_loader=_legacy_config,
+            client_factory=FailingClient,
+        )
+
+    formatted = _format_adapter_traceback(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    for sensitive in (
+        "private-client-state",
+        "private-client-system",
+        "private-client-user",
+        "qwen-test-key",
+    ):
+        assert sensitive not in formatted
 
 
 def test_legacy_module_call_ai_accepts_default_positional_and_keyword_forms(

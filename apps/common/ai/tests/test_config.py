@@ -32,6 +32,7 @@ REQUIRED_TASKS = {
     "variant_generate",
     "variant_verify_deepseek",
     "photo_recognize",
+    "course_material_recognize",
 }
 
 
@@ -209,7 +210,7 @@ def test_rejects_unknown_section(tmp_path, provider_env):
         AIConfig.load(cfg)
 
 
-@pytest.mark.parametrize("model", ["qwen3.6-plus", "qwen3-vl-max", "deepseek-v4-pro"])
+@pytest.mark.parametrize("model", ["qwen-legacy-plus", "qwen3-vl-max", "deepseek-v4-pro"])
 def test_rejects_invalid_qwen_task_model(tmp_path, provider_env, model):
     with pytest.raises(AIConfigError, match="model"):
         AIConfig.load(write_minimal_cfg(tmp_path, model=model))

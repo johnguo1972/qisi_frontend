@@ -2,24 +2,20 @@
 
 from __future__ import annotations
 
-import hmac
-
 from apps.common.ai.client import AIClient
 from apps.common.ai.components.base import QuestionInput
 from apps.common.ai.components.result_verifier import ResultVerifierComponent
 from apps.common.ai.components.variant_generator import VariantGeneratorComponent
 from apps.common.ai.config import load_ai_config
 from apps.common.ai.exceptions import AIConfigError, AIResponseError
+from apps.common.ai.legacy_variant_adapter import (
+    complete_legacy_variant_request,
+    configured_provider_available,
+    get_configured_provider_key,
+    get_configured_task_model,
+)
 from apps.common.ai.response_parser import ResponseParser
 from apps.common.exceptions import AIRequestError
-
-
-_LEGACY_VARIANT_TASK_KEYS = (
-    "variant_generate",
-    "variant_verify_deepseek",
-)
-_LEGACY_MAX_TOKENS = frozenset({2000, 8000})
-_LEGACY_TEMPERATURE = 0.1
 
 
 def variant_generator_component_factory() -> VariantGeneratorComponent:
@@ -99,74 +95,26 @@ def call_ai(
     parameters must match shared cfg (or an old ignored token/temperature
     default); arbitrary overrides are rejected instead of being silently routed.
     """
-    task_key = _match_legacy_variant_task(
-        model=model,
-        api_url=api_url,
-        api_key=api_key,
-        max_tokens=max_tokens,
-        temperature=temperature,
-    )
-    model = ""
-    api_url = None
-    api_key = None
-    max_tokens = 0
-    temperature = 0.0
-    if task_key is None:
-        raise AIRequestError(
-            "Legacy AI request does not match configured task"
-        )
-    with AIClient() as client:
-        return client.complete(
-            task_key,
-            system=system_prompt,
-            user=user_prompt,
-        ).content
-
-
-def _match_legacy_variant_task(
-    *,
-    model: str,
-    api_url: str | None,
-    api_key: str | None,
-    max_tokens: int,
-    temperature: float,
-) -> str | None:
-    if (
-        type(model) is not str
-        or (api_url is not None and type(api_url) is not str)
-        or (api_key is not None and type(api_key) is not str)
-        or type(max_tokens) is not int
-        or type(temperature) not in (int, float)
-    ):
-        return None
-
-    config = load_ai_config()
-    for task_key in _LEGACY_VARIANT_TASK_KEYS:
-        task = config.get_task_config(task_key)
-        provider = config.get_provider_config(task.provider)
-        if model != task.model:
-            continue
-        if api_url is not None and api_url != provider.api_url:
-            continue
-        if api_key is not None and not _api_keys_match(
-            api_key, provider.api_key
-        ):
-            continue
-        if max_tokens not in {*_LEGACY_MAX_TOKENS, task.max_tokens}:
-            continue
-        if temperature not in {_LEGACY_TEMPERATURE, task.temperature}:
-            continue
-        return task_key
-    return None
-
-
-def _api_keys_match(provided: str, configured: str) -> bool:
     try:
-        provided_bytes = provided.encode("utf-8")
-        configured_bytes = configured.encode("utf-8")
-    except UnicodeEncodeError:
-        return False
-    return hmac.compare_digest(provided_bytes, configured_bytes)
+        return complete_legacy_variant_request(
+            system_prompt,
+            user_prompt,
+            model,
+            api_url,
+            api_key,
+            max_tokens,
+            temperature,
+            config_loader=load_ai_config,
+            client_factory=AIClient,
+        )
+    finally:
+        system_prompt = ""
+        user_prompt = ""
+        model = ""
+        api_url = None
+        api_key = None
+        max_tokens = 0
+        temperature = 0.0
 
 
 def parse_json_response(text: str) -> dict:
@@ -182,22 +130,23 @@ def parse_json_response(text: str) -> dict:
 def get_deepseek_api_key() -> str:
     """Retain the legacy accessor while delegating config ownership."""
     try:
-        return load_ai_config().get_provider_config("deepseek").api_key
+        return get_configured_provider_key(
+            "deepseek", config_loader=load_ai_config
+        )
     except AIConfigError:
-        raise AIRequestError("DEEPSEEK_API_KEY is not set") from None
+        raise AIRequestError("DeepSeek verifier is not configured") from None
 
 
 def deepseek_verification_available() -> bool:
-    try:
-        return bool(get_deepseek_api_key())
-    except AIRequestError:
-        return False
+    return configured_provider_available(
+        "deepseek", config_loader=load_ai_config
+    )
 
 
 def get_deepseek_model() -> str:
     try:
-        return load_ai_config().get_task_config(
-            "variant_verify_deepseek"
-        ).model
+        return get_configured_task_model(
+            "variant_verify_deepseek", config_loader=load_ai_config
+        )
     except AIConfigError:
         raise AIRequestError("DeepSeek verifier is not configured") from None

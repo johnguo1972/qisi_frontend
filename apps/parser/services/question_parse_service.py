@@ -9,9 +9,7 @@ from apps.common.ai.failure_safety import (
     new_safe_ai_error,
 )
 from apps.common.exceptions import AIRequestError
-from apps.parser.prompts.question_parse_prompt import (
-    QUESTION_TYPE_LABELS,
-)
+from apps.parser.question_types import QUESTION_TYPE_LABELS
 from apps.parser.services.schema_service import validate_and_repair_json
 
 logger = logging.getLogger(__name__)

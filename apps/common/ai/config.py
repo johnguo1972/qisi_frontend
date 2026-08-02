@@ -39,6 +39,7 @@ TASK_PROVIDER_SCHEMA = {
     "variant_generate": "qwen",
     "variant_verify_deepseek": "deepseek",
     "photo_recognize": "qwen",
+    "course_material_recognize": "qwen",
 }
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 PROMPT_VARIABLE_PATTERN = re.compile(
