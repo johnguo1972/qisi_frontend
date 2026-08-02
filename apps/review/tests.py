@@ -487,8 +487,8 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(self.question.ai_processing_status, 'success')
         self.assertIsNotNone(self.question.ai_processed_at)
 
-    def test_process_question_full_v2_normalizes_escaped_probe_tokens_and_saves(self):
-        """Real repaired taxonomy boundaries reach v2 and persistence cleanly."""
+    def test_process_question_full_v2_normalizes_mixed_probe_tokens_and_saves(self):
+        """Tight slash+whitespace boundaries reach v2 and persistence cleanly."""
         from apps.common.ai.components import (
             KnowledgeAnalysisComponent,
             ModeAAnswerComponent,
@@ -505,26 +505,37 @@ class AIProcessFullPipelineTest(TestCase):
             def complete(
                 self, task_key, *, system, user, images=(), trace_id=None
             ):
+                probe_payload = {
+                    'subject': 'math',
+                    'question_type': '\u200b\\t\n\f\r\u3000',
+                    'question_style': '__RAW_QUESTION_STYLE__',
+                    'difficulty': '__RAW_DIFFICULTY__',
+                    'difficulty_est': 'L4',
+                    'knowledge_points': ['方程'],
+                    'multi_part': False,
+                    'proof_or_calc': 'calc',
+                    'visual_risk_score': 0,
+                    'reasoning_risk_score': 20,
+                    'recommended_route': 'STANDARD',
+                    'brief_reason': '基础计算',
+                    'normalized_text': '解方程 x+1=2',
+                }
+                content = json.dumps(probe_payload, ensure_ascii=False)
+                question_style_source = (
+                    '\\' * 2 + 't' + 'calculation' + '\\' * 3 + 'n'
+                )
+                difficulty_source = (
+                    '\\' * 2 + 'f' + 'L2' + '\\' * 3 + 'r'
+                )
+                content = content.replace(
+                    '"__RAW_QUESTION_STYLE__"',
+                    f'"{question_style_source}"',
+                )
+                content = content.replace(
+                    '"__RAW_DIFFICULTY__"', f'"{difficulty_source}"'
+                )
                 return AIResult(
-                    content=json.dumps({
-                        'subject': 'math',
-                        'question_type': '\u200b\\t\n\f\r\u3000',
-                        'question_style': (
-                            '\r\u2060\\n\tcalculation\f\u3000\\r\ufeff'
-                        ),
-                        'difficulty': (
-                            '\n\u200b\\f\rL2\t\u3000\\n\ufeff'
-                        ),
-                        'difficulty_est': 'L4',
-                        'knowledge_points': ['方程'],
-                        'multi_part': False,
-                        'proof_or_calc': 'calc',
-                        'visual_risk_score': 0,
-                        'reasoning_risk_score': 20,
-                        'recommended_route': 'STANDARD',
-                        'brief_reason': '基础计算',
-                        'normalized_text': '解方程 x+1=2',
-                    }, ensure_ascii=False),
+                    content=content,
                     provider='qwen',
                     model='configured-model',
                     latency_ms=1,

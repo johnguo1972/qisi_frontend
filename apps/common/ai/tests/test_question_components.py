@@ -74,6 +74,20 @@ def _valid_probe_payload(**overrides):
     return payload
 
 
+def _probe_content_with_raw_string_values(payload, replacements):
+    """Inject reviewed raw JSON string bodies without changing other fields."""
+    encoded_payload = dict(payload)
+    markers = {}
+    for index, (key, raw_value) in enumerate(replacements.items()):
+        marker = f"__RAW_PROBE_SCALAR_{index}__"
+        encoded_payload[key] = marker
+        markers[marker] = raw_value
+    content = json.dumps(encoded_payload, ensure_ascii=False)
+    for marker, raw_value in markers.items():
+        content = content.replace(json.dumps(marker), f'"{raw_value}"')
+    return content
+
+
 def test_question_input_is_immutable_including_collection_fields():
     components = _components()
     question = components.QuestionInput(
@@ -439,6 +453,222 @@ def test_probe_normalizes_repaired_and_actual_escaped_whitespace_boundaries(
 
     assert result[canonical_key] == token
     assert result[legacy_key] == token
+
+
+@pytest.mark.parametrize(
+    ("canonical_key", "legacy_key", "token", "conflict"),
+    [
+        ("question_type", "question_style", "calculation", "legacy-conflict"),
+        ("difficulty", "difficulty_est", "L2", "L4"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("escape_letter", "actual_padding"),
+    [("t", "\t"), ("n", "\n"), ("f", "\f"), ("r", "\r")],
+)
+@pytest.mark.parametrize("edge", ["prefix", "suffix"])
+@pytest.mark.parametrize("source_key", ["canonical", "legacy"])
+def test_probe_strips_mixed_backslash_real_whitespace_pairs_at_token_edges(
+    canonical_key,
+    legacy_key,
+    token,
+    conflict,
+    escape_letter,
+    actual_padding,
+    edge,
+    source_key,
+):
+    """A repaired slash+decoded-whitespace pair is one boundary unit."""
+    components = _components()
+    # Prefix adjacency triggers the overlap with two raw slashes; at the
+    # suffix the equivalent repaired pair is produced from three raw slashes.
+    mixed_pair_source = "\\" * (2 if edge == "prefix" else 3) + escape_letter
+    padded_token_source = (
+        mixed_pair_source + token
+        if edge == "prefix"
+        else token + mixed_pair_source
+    )
+    payload = _valid_probe_payload()
+    if source_key == "canonical":
+        payload[legacy_key] = conflict
+        replacements = {canonical_key: padded_token_source}
+    else:
+        replacements = {
+            canonical_key: mixed_pair_source,
+            legacy_key: padded_token_source,
+        }
+    client = RecordingAIClient(
+        {
+            "question_probe": _probe_content_with_raw_string_values(
+                payload, replacements
+            )
+        }
+    )
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result[canonical_key] == token
+    assert result[legacy_key] == token
+    assert actual_padding not in result[canonical_key]
+
+
+@pytest.mark.parametrize(
+    ("canonical_key", "legacy_key", "token"),
+    [
+        ("question_type", "question_style", "calculation"),
+        ("difficulty", "difficulty_est", "L2"),
+    ],
+)
+def test_probe_strips_repeated_interleaved_mixed_taxonomy_boundaries(
+    canonical_key, legacy_key, token
+):
+    """Mixed pairs, literal escapes, Unicode whitespace and Cf may interleave."""
+    components = _components()
+    prefix_source = (
+        "\\" * 2
+        + "t"
+        + "\\" * 2
+        + "n"
+        + "\u200b"
+        + r"\f"
+        + "\u3000"
+        + "\\" * 2
+        + "r"
+        + "\u2060"
+    )
+    suffix_source = (
+        "\ufeff"
+        + "\\" * 3
+        + "f"
+        + "\u00a0"
+        + r"\t"
+        + "\u200d"
+        + "\\" * 3
+        + "n"
+        + "\\" * 3
+        + "r"
+    )
+    payload = _valid_probe_payload()
+    payload[legacy_key] = "legacy-conflict"
+    client = RecordingAIClient(
+        {
+            "question_probe": _probe_content_with_raw_string_values(
+                payload,
+                {canonical_key: prefix_source + token + suffix_source},
+            )
+        }
+    )
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result[canonical_key] == token
+    assert result[legacy_key] == token
+
+
+@pytest.mark.parametrize(
+    ("canonical_key", "legacy_key", "valid_value"),
+    [
+        ("question_type", "question_style", "calculation"),
+        ("difficulty", "difficulty_est", "L2"),
+    ],
+)
+def test_probe_mixed_boundary_only_canonical_uses_legacy_scalar_alias(
+    canonical_key, legacy_key, valid_value
+):
+    components = _components()
+    payload = _valid_probe_payload()
+    payload[legacy_key] = valid_value
+    client = RecordingAIClient(
+        {
+            "question_probe": _probe_content_with_raw_string_values(
+                payload,
+                {
+                    canonical_key: (
+                        "\\" * 2
+                        + "t"
+                        + "\\" * 2
+                        + "n"
+                        + "\u200b"
+                        + "\\" * 2
+                        + "f"
+                        + "\\" * 2
+                        + "r"
+                    )
+                },
+            )
+        }
+    )
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result[canonical_key] == valid_value
+    assert result[legacy_key] == valid_value
+
+
+@pytest.mark.parametrize(
+    ("canonical_key", "legacy_key"),
+    [
+        ("question_type", "question_style"),
+        ("difficulty", "difficulty_est"),
+    ],
+)
+def test_probe_rejects_two_mixed_boundary_only_scalar_aliases(
+    canonical_key, legacy_key
+):
+    components = _components()
+    payload = _valid_probe_payload()
+    client = RecordingAIClient(
+        {
+            "question_probe": _probe_content_with_raw_string_values(
+                payload,
+                {
+                    canonical_key: (
+                        "\\" * 2 + "t" + "\u200b" + "\\" * 2 + "n"
+                    ),
+                    legacy_key: (
+                        "\\" * 2 + "f" + "\u2060" + "\\" * 2 + "r"
+                    ),
+                },
+            )
+        }
+    )
+
+    with pytest.raises(AIResponseError):
+        components.QuestionProbeComponent(client).run(
+            components.QuestionInput(stem="solve x+1=2")
+        )
+
+
+def test_probe_preserves_internal_mixed_pair_and_latex_content():
+    from apps.common.ai.response_parser import ResponseParser
+
+    components = _components()
+    payload = _valid_probe_payload()
+    content = _probe_content_with_raw_string_values(
+        payload,
+        {
+            "question_type": (
+                "calcu" + "\\" * 2 + "t" + "lation" + r"-\frac{1}{2}"
+            )
+        },
+    )
+    parsed_value = ResponseParser.parse_json(content)["question_type"]
+    client = RecordingAIClient({"question_probe": content})
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert "\\" + "\t" in parsed_value
+    assert r"\frac{1}{2}" in parsed_value
+    assert result["question_type"] == parsed_value
+    assert result["question_style"] == parsed_value
 
 
 def test_probe_preserves_literal_escape_sequences_inside_question_type():

@@ -17,6 +17,28 @@ _BOUNDARY_FORMAT_CHARACTERS = frozenset(
 _LITERAL_ESCAPED_WHITESPACE = frozenset({r"\t", r"\n", r"\f", r"\r"})
 
 
+def _leading_boundary_width(value: str, start: int, end: int) -> int:
+    """Return one complete leading boundary unit, preserving token internals."""
+    if start + 1 < end and value[start] == "\\" and value[start + 1].isspace():
+        return 2
+    if value[start : start + 2] in _LITERAL_ESCAPED_WHITESPACE:
+        return 2
+    if value[start].isspace() or value[start] in _BOUNDARY_FORMAT_CHARACTERS:
+        return 1
+    return 0
+
+
+def _trailing_boundary_width(value: str, start: int, end: int) -> int:
+    """Return one complete trailing boundary unit, preserving token internals."""
+    if end - 2 >= start and value[end - 2] == "\\" and value[end - 1].isspace():
+        return 2
+    if value[max(start, end - 2) : end] in _LITERAL_ESCAPED_WHITESPACE:
+        return 2
+    if value[end - 1].isspace() or value[end - 1] in _BOUNDARY_FORMAT_CHARACTERS:
+        return 1
+    return 0
+
+
 def _normalize_scalar_token(value: object) -> object:
     """Trim taxonomy-token padding without changing token internals."""
     if not isinstance(value, str):
@@ -25,25 +47,15 @@ def _normalize_scalar_token(value: object) -> object:
     start = 0
     end = len(value)
     while start < end:
-        previous = (start, end)
-        while start < end and (
-            value[start].isspace()
-            or value[start] in _BOUNDARY_FORMAT_CHARACTERS
-        ):
-            start += 1
-        if value[start : start + 2] in _LITERAL_ESCAPED_WHITESPACE:
-            start += 2
+        leading_width = _leading_boundary_width(value, start, end)
+        if leading_width:
+            start += leading_width
             continue
-        while end > start and (
-            value[end - 1].isspace()
-            or value[end - 1] in _BOUNDARY_FORMAT_CHARACTERS
-        ):
-            end -= 1
-        if value[max(start, end - 2) : end] in _LITERAL_ESCAPED_WHITESPACE:
-            end -= 2
+        trailing_width = _trailing_boundary_width(value, start, end)
+        if trailing_width:
+            end -= trailing_width
             continue
-        if (start, end) == previous:
-            break
+        break
     return value[start:end]
 
 
