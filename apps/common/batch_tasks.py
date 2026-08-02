@@ -107,7 +107,7 @@ def single_generate_ai_answers(self, question_id: int, model: str = None):
 
     Args:
         question_id: 题目 ID
-        model: 可选 AI 模型覆盖（如 'qwen3.7-plus'），默认由 AIReviewService 决定
+        model: 可选兼容参数，实际模型由 AIReviewService 配置路由决定
     """
     try:
         service = create_ai_review_service()
