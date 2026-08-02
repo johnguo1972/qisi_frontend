@@ -195,17 +195,16 @@ class ResultVerifierResponse(_StrictResponseModel):
         return self
 
 
-_SENSITIVE_COURSE_IMAGE_URL_KEYS = (
-    "accesskey",
-    "apikey",
-    "credential",
-    "password",
-    "secret",
-    "signature",
-    "token",
-)
 _COURSE_IMAGE_SECURITY_MAX_INPUT_LENGTH = 4096
 _COURSE_IMAGE_SECURITY_MAX_TRANSFORMS = 16
+_SENSITIVE_MARKER_VALUE_PATTERN = re.compile(
+    r"(?<![a-z0-9])"
+    r"(?:access[\s_.-]*key|api[\s_.-]*key|bearer|credential|"
+    r"password|secret|signature|token)"
+    r"[\s_\-:=./\\]+"
+    r"(?=[^\s_\-:=./\\])",
+    re.IGNORECASE,
+)
 
 
 def _course_image_security_copy(value: str) -> str:
@@ -245,18 +244,9 @@ def _contains_sensitive_course_image_text(value: str) -> bool:
         re.search(r"(^|[^a-z])(?:data|file)\s*:", lowered)
         or re.search(r"(^|[^a-z0-9])base64([^a-z0-9]|$)", lowered)
         or re.search(
-            r"(^|[^a-z0-9])bearer(?:[\s:_=-]+)[a-z0-9._-]+",
-            lowered,
-        )
-        or re.search(
             r"(^|[^a-z0-9])(?:provider[\s_-]*)?raw"
             r"(?:[\s_-]*(?:response|output|bytes|data))?"
             r"([^a-z0-9]|$)",
-            lowered,
-        )
-        or re.search(
-            r"(^|[^a-z0-9])(?:access[\s_-]*key|api[\s_-]*key|"
-            r"credential|password|secret|signature|token)\s*[:=]",
             lowered,
         )
         or re.search(r"(^|[\s('\"=])(?:[a-z]:[\\/]|[/\\]{1,2}\w)", lowered)
@@ -264,9 +254,16 @@ def _contains_sensitive_course_image_text(value: str) -> bool:
     )
 
 
+def _contains_sensitive_marker_value(value: str) -> bool:
+    return _SENSITIVE_MARKER_VALUE_PATTERN.search(value) is not None
+
+
 def _validate_course_image_description(value: str) -> str:
     security_copy = _course_image_security_copy(value)
-    if _contains_sensitive_course_image_text(security_copy):
+    if (
+        _contains_sensitive_course_image_text(security_copy)
+        or _contains_sensitive_marker_value(security_copy)
+    ):
         raise ValueError("course image description is unsafe")
     return value
 
@@ -284,10 +281,8 @@ def _validate_course_image_url(value: str) -> str:
 
     decoded = security_copy.casefold()
     if (
-        _contains_sensitive_course_image_text(security_copy)
-        or re.match(r"^[a-z]:[\\/]", decoded)
+        re.match(r"^[a-z]:[\\/]", decoded)
         or decoded.startswith(("/", "\\"))
-        or re.search(r"(^|[/\\])raw([/\\]|$)", decoded)
     ):
         raise ValueError("course image URL is unsafe")
 
@@ -299,22 +294,46 @@ def _validate_course_image_url(value: str) -> str:
             raise ValueError("course image URL is unsafe")
     elif parsed.netloc:
         raise ValueError("course image URL is unsafe")
-    path_segments = parsed.path.replace("\\", "/").split("/")
-    if ".." in path_segments:
-        raise ValueError("course image URL is unsafe")
 
-    query_keys = (
-        "".join(character for character in key.casefold() if character.isalnum())
-        for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
-    )
-    if any(
-        marker in key
-        for key in query_keys
-        for marker in _SENSITIVE_COURSE_IMAGE_URL_KEYS
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("course image URL is unsafe") from exc
+    hostname = parsed.netloc
+    if hostname.startswith("["):
+        hostname = hostname[1 : hostname.find("]")]
+    elif port is not None:
+        hostname = hostname.rsplit(":", 1)[0]
+    if (
+        _contains_sensitive_course_image_text(hostname)
+        or _contains_sensitive_marker_value(hostname)
     ):
         raise ValueError("course image URL is unsafe")
-    fragment = parsed.fragment.casefold()
-    if any(marker in fragment for marker in _SENSITIVE_COURSE_IMAGE_URL_KEYS):
+    path_segments = parsed.path.replace("\\", "/").split("/")
+    if (
+        ".." in path_segments
+        or _contains_sensitive_marker_value(parsed.path)
+        or any(
+            _contains_sensitive_course_image_text(segment)
+            for segment in path_segments
+            if segment
+        )
+    ):
+        raise ValueError("course image URL is unsafe")
+
+    if any(
+        _contains_sensitive_course_image_text(key)
+        or _contains_sensitive_course_image_text(query_value)
+        or _contains_sensitive_marker_value(f"{key}={query_value}")
+        for key, query_value in parse_qsl(
+            parsed.query, keep_blank_values=True
+        )
+    ):
+        raise ValueError("course image URL is unsafe")
+    if (
+        _contains_sensitive_course_image_text(parsed.fragment)
+        or _contains_sensitive_marker_value(parsed.fragment)
+    ):
         raise ValueError("course image URL is unsafe")
     return value
 

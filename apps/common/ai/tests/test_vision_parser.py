@@ -34,6 +34,68 @@ def _percent_encode_layers(value: str, layers: int) -> str:
     return encoded
 
 
+_REVIEWER_SENSITIVE_IMAGE_CASES = (
+    {"description": "token PRIVATE_PROVIDER_TOKEN"},
+    {"description": "secret_PRIVATE_PROVIDER_SECRET"},
+    {"description": "credential-PRIVATE_PROVIDER_CREDENTIAL"},
+    {"description": "signature:PRIVATE_PROVIDER_SIGNATURE"},
+    {"description": "api_key=PRIVATE_PROVIDER_KEY"},
+    {
+        "description": "敏感路径",
+        "url": "https://cdn.example.test/assets/token/PRIVATE_PROVIDER_TOKEN/a.png",
+    },
+    {
+        "description": "敏感路径",
+        "url": r"https://cdn.example.test/assets/secret\PRIVATE_PROVIDER_SECRET/a.png",
+    },
+    {
+        "description": "敏感路径",
+        "url": "https://cdn.example.test/assets/credential-PRIVATE_PROVIDER_CREDENTIAL/a.png",
+    },
+    {
+        "description": "敏感路径",
+        "url": "https://cdn.example.test/assets/signature.PRIVATE_PROVIDER_SIGNATURE/a.png",
+    },
+    {
+        "description": "敏感路径",
+        "url": "https://cdn.example.test/assets/api-key/PRIVATE_PROVIDER_KEY/a.png",
+    },
+    {"description": "password/PRIVATE_PROVIDER_PASSWORD"},
+    {"description": "access-key.PRIVATE_PROVIDER_ACCESS_KEY"},
+    {"description": "access key/PRIVATE_PROVIDER_ACCESS_KEY"},
+    {"description": "access_key.PRIVATE_PROVIDER_ACCESS_KEY"},
+    {"description": r"access.key\PRIVATE_PROVIDER_ACCESS_KEY"},
+    {"description": "api key/PRIVATE_PROVIDER_KEY"},
+    {"description": "api-key.PRIVATE_PROVIDER_KEY"},
+    {"description": r"api.key\PRIVATE_PROVIDER_KEY"},
+    {"description": "secret/private"},
+    {"description": "token.value"},
+    {
+        "description": _percent_encode_layers(
+            "ａｐｉ－ｋｅｙ／PRIVATE_PROVIDER_KEY", 5
+        )
+    },
+    {
+        "description": "多层 NFKC 路径",
+        "url": _percent_encode_layers(
+            "https://cdn.example.test/assets/ｔｏｋｅｎ．PRIVATE_PROVIDER_TOKEN/a.png",
+            5,
+        ),
+    },
+    {
+        "description": "敏感 host",
+        "url": "https://token-PRIVATE_PROVIDER_TOKEN.example.test/a.png",
+    },
+    {
+        "description": "高熵 host",
+        "url": (
+            "https://MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY"
+            ".example.test/a.png"
+        ),
+    },
+)
+
+
 def _write_image(path, *, size=(2000, 1000), image_format="PNG"):
     Image.new("RGB", size, color=(20, 40, 60)).save(path, format=image_format)
 
@@ -346,6 +408,37 @@ def test_course_material_recognition_accepts_only_safe_image_fields_and_urls():
                     "description": "站内相对图片（角Ａ）：",
                     "url": "course-images/%E5%9B%BE.png",
                 },
+                {"description": "tokenization 方法示意图"},
+                {
+                    "description": "边界词安全路径",
+                    "url": (
+                        "https://cdn.example.test/tokenization/secretary/"
+                        "credentialed/signatured/api-keyboard.png"
+                    ),
+                },
+                {
+                    "description": "边界词安全参数",
+                    "url": (
+                        "https://cdn.example.test/diagram.png"
+                        "?tokenization=value#credentialed"
+                    ),
+                },
+                {
+                    "description": "边界词安全 host",
+                    "url": "https://tokenization.example.test/diagram.png",
+                },
+                {
+                    "description": "正常 host 与端口",
+                    "url": "https://cdn.example.test:8443/diagram.png",
+                },
+                {"description": "token..."},
+                {
+                    "description": "空值敏感标记不是泄密值",
+                    "url": (
+                        "https://cdn.example.test/secret/"
+                        "?api_key=#token..."
+                    ),
+                },
             ],
         },
         ensure_ascii=False,
@@ -503,6 +596,7 @@ def test_course_material_recognition_accepts_only_safe_image_fields_and_urls():
             "url": _percent_encode_layers("images/safe.png", 64),
         },
         {"description": "普通描述" * 2000},
+        *_REVIEWER_SENSITIVE_IMAGE_CASES,
     ],
 )
 def test_course_material_recognition_rejects_unsafe_image_payloads(

@@ -59,6 +59,68 @@ def _course_material_provider_payload(image: dict) -> dict:
     }
 
 
+_REVIEWER_SENSITIVE_IMAGE_CASES = (
+    {"description": "token PRIVATE_PROVIDER_TOKEN"},
+    {"description": "secret_PRIVATE_PROVIDER_SECRET"},
+    {"description": "credential-PRIVATE_PROVIDER_CREDENTIAL"},
+    {"description": "signature:PRIVATE_PROVIDER_SIGNATURE"},
+    {"description": "api_key=PRIVATE_PROVIDER_KEY"},
+    {
+        "description": "敏感路径",
+        "url": "https://cdn.example.test/assets/token/PRIVATE_PROVIDER_TOKEN/a.png",
+    },
+    {
+        "description": "敏感路径",
+        "url": r"https://cdn.example.test/assets/secret\PRIVATE_PROVIDER_SECRET/a.png",
+    },
+    {
+        "description": "敏感路径",
+        "url": "https://cdn.example.test/assets/credential-PRIVATE_PROVIDER_CREDENTIAL/a.png",
+    },
+    {
+        "description": "敏感路径",
+        "url": "https://cdn.example.test/assets/signature.PRIVATE_PROVIDER_SIGNATURE/a.png",
+    },
+    {
+        "description": "敏感路径",
+        "url": "https://cdn.example.test/assets/api-key/PRIVATE_PROVIDER_KEY/a.png",
+    },
+    {"description": "password/PRIVATE_PROVIDER_PASSWORD"},
+    {"description": "access-key.PRIVATE_PROVIDER_ACCESS_KEY"},
+    {"description": "access key/PRIVATE_PROVIDER_ACCESS_KEY"},
+    {"description": "access_key.PRIVATE_PROVIDER_ACCESS_KEY"},
+    {"description": r"access.key\PRIVATE_PROVIDER_ACCESS_KEY"},
+    {"description": "api key/PRIVATE_PROVIDER_KEY"},
+    {"description": "api-key.PRIVATE_PROVIDER_KEY"},
+    {"description": r"api.key\PRIVATE_PROVIDER_KEY"},
+    {"description": "secret/private"},
+    {"description": "token.value"},
+    {
+        "description": _percent_encode_layers(
+            "ａｐｉ－ｋｅｙ／PRIVATE_PROVIDER_KEY", 5
+        )
+    },
+    {
+        "description": "多层 NFKC 路径",
+        "url": _percent_encode_layers(
+            "https://cdn.example.test/assets/ｔｏｋｅｎ．PRIVATE_PROVIDER_TOKEN/a.png",
+            5,
+        ),
+    },
+    {
+        "description": "敏感 host",
+        "url": "https://token-PRIVATE_PROVIDER_TOKEN.example.test/a.png",
+    },
+    {
+        "description": "高熵 host",
+        "url": (
+            "https://MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY"
+            ".example.test/a.png"
+        ),
+    },
+)
+
+
 VALID_VARIANT = {
     "stem": "若 x + 3 = 8，则 x 等于多少？",
     "question_type": "single_choice",
@@ -485,6 +547,10 @@ def test_material_ai_recognize_keeps_validation_error_envelope(
         ),
         _course_material_provider_payload(
             {"description": "普通描述" * 2000}
+        ),
+        *(
+            _course_material_provider_payload(image)
+            for image in _REVIEWER_SENSITIVE_IMAGE_CASES
         ),
     ],
 )
