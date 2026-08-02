@@ -148,8 +148,8 @@ def _match_legacy_variant_task(
             continue
         if api_url is not None and api_url != provider.api_url:
             continue
-        if api_key is not None and not hmac.compare_digest(
-            api_key.encode("utf-8"), provider.api_key.encode("utf-8")
+        if api_key is not None and not _api_keys_match(
+            api_key, provider.api_key
         ):
             continue
         if max_tokens not in {*_LEGACY_MAX_TOKENS, task.max_tokens}:
@@ -158,6 +158,15 @@ def _match_legacy_variant_task(
             continue
         return task_key
     return None
+
+
+def _api_keys_match(provided: str, configured: str) -> bool:
+    try:
+        provided_bytes = provided.encode("utf-8")
+        configured_bytes = configured.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return hmac.compare_digest(provided_bytes, configured_bytes)
 
 
 def parse_json_response(text: str) -> dict:

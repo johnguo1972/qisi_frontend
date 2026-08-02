@@ -346,6 +346,30 @@ def test_rejects_invalid_api_key_optional_declaration(tmp_path, provider_env):
         AIConfig.load(cfg)
 
 
+def test_rejects_optional_qwen_key_in_independent_config(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("QWEN_API_URL", "https://example.test/qwen")
+    monkeypatch.delenv("QWEN_API_KEY", raising=False)
+    cfg = write_minimal_cfg(tmp_path)
+    cfg.write_text(
+        cfg.read_text(encoding="utf-8").replace(
+            "api_key_env = QWEN_API_KEY",
+            "api_key_env = QWEN_API_KEY\napi_key_optional = true",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AIConfigError) as caught:
+        AIConfig.load(cfg)
+
+    assert str(caught.value) == (
+        "Optional AI provider credentials are restricted"
+    )
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
 def test_runtime_loader_caches_first_successful_load(tmp_path, provider_env):
     cfg = write_minimal_cfg(tmp_path)
     first = load_ai_config(cfg)

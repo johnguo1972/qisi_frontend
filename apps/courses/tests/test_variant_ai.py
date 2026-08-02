@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import traceback
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,10 @@ from apps.courses import ai_service, tasks, views
 from apps.courses.models import Course, CourseQuestionLink, VariantTask
 from apps.papers.models import ExamPaper
 from apps.parser.models import ExamQuestion
+
+
+_SURROGATE_API_KEYS = ("\ud800", "\udfff", "正常\ud800key")
+_NORMAL_UNICODE_API_KEY = "正常共享密钥"
 
 
 VALID_VARIANT = {
@@ -405,12 +410,12 @@ def test_real_course_factory_constructs_and_skips_optional_missing_deepseek_key(
     assert available is False
 
 
-def _legacy_config():
+def _legacy_config(*, qwen_api_key: str = "qwen-test-key"):
     providers = {
         "qwen": AIProviderConfig(
             name="qwen",
             api_url="https://example.test/qwen",
-            api_key="qwen-test-key",
+            api_key=qwen_api_key,
         ),
         "deepseek": AIProviderConfig(
             name="deepseek",
@@ -538,6 +543,88 @@ def test_legacy_module_call_ai_rejects_unconfigured_overrides_safely(
     assert calls == []
     assert "wrong-key" not in str(caught.value)
     assert "attacker" not in str(caught.value)
+
+
+def _capture_surrogate_key_error(key_index: int) -> AIRequestError:
+    try:
+        ai_service.call_ai(
+            "system",
+            "user",
+            model="qwen3.7-plus",
+            api_key=_SURROGATE_API_KEYS[key_index],
+        )
+    except AIRequestError as error:
+        return error
+    raise AssertionError("legacy surrogate key was not rejected")
+
+
+@pytest.mark.parametrize("key_index", range(len(_SURROGATE_API_KEYS)))
+def test_legacy_module_call_ai_rejects_surrogate_keys_without_leaking(
+    monkeypatch, key_index
+):
+    calls = []
+    monkeypatch.setattr(ai_service, "load_ai_config", _legacy_config)
+    monkeypatch.setattr(
+        ai_service,
+        "AIClient",
+        lambda: calls.append("constructed") or None,
+    )
+
+    error = _capture_surrogate_key_error(key_index)
+    formatted = "".join(
+        traceback.TracebackException(
+            type(error),
+            error,
+            error.__traceback__,
+            capture_locals=True,
+        ).format()
+    )
+    escaped_key = _SURROGATE_API_KEYS[key_index].encode(
+        "unicode_escape"
+    ).decode("ascii")
+
+    assert str(error) == "Legacy AI request does not match configured task"
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert _SURROGATE_API_KEYS[key_index] not in formatted
+    assert escaped_key not in formatted
+    assert calls == []
+
+
+def test_legacy_module_call_ai_preserves_matching_normal_unicode_key(
+    monkeypatch,
+):
+    calls = []
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def complete(self, task_key, **kwargs):
+            calls.append((task_key, kwargs))
+            return SimpleNamespace(content="unicode-key-ok")
+
+    config = _legacy_config(qwen_api_key=_NORMAL_UNICODE_API_KEY)
+    monkeypatch.setattr(ai_service, "load_ai_config", lambda: config)
+    monkeypatch.setattr(ai_service, "AIClient", FakeClient)
+
+    result = ai_service.call_ai(
+        "system",
+        "user",
+        model="qwen3.7-plus",
+        api_key=_NORMAL_UNICODE_API_KEY,
+    )
+
+    assert result == "unicode-key-ok"
+    assert calls == [
+        (
+            "variant_generate",
+            {"system": "system", "user": "user"},
+        )
+    ]
 
 
 def _question_input():

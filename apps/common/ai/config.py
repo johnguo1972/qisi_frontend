@@ -222,6 +222,10 @@ def _load_provider(
         "api_key_optional",
         fallback=False,
     )
+    if api_key_optional and name != "deepseek":
+        raise AIConfigError(
+            "Optional AI provider credentials are restricted"
+        )
     api_url = _read_env_reference(section, "api_url_env", api_url_env)
     api_key = _read_env_reference(
         section,
