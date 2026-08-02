@@ -14,6 +14,7 @@ from .question_probe import (
 )
 from .result_verifier import ResultVerifierComponent
 from .vision_parser import VisionParserComponent
+from .variant_generator import VariantGeneratorComponent
 
 __all__ = [
     "KnowledgeAnalysisComponent",
@@ -28,4 +29,5 @@ __all__ = [
     "ResultVerifierComponent",
     "VisionExtractionComponent",
     "VisionParserComponent",
+    "VariantGeneratorComponent",
 ]

@@ -1,36 +1,32 @@
 """Celery tasks for variant question generation."""
-import json
 import logging
 import time
 from celery import shared_task
-from django.conf import settings
 from django.utils import timezone
 
 from apps.courses.models import VariantTask, CourseQuestionLink
-from apps.courses.prompts import (
-    VARIANT_SYSTEM_PROMPT,
-    VERIFIER_SYSTEM_PROMPT,
-    build_variant_user_prompt,
-    build_verifier_user_prompt,
-)
 from apps.courses.validator import VariantValidator
-from apps.courses.ai_service import call_ai, parse_json_response, get_deepseek_api_key
+from apps.courses.ai_service import (
+    deepseek_verification_available,
+    get_deepseek_model,
+)
+from apps.common.ai.client import AIClient
+from apps.common.ai.components.base import QuestionInput
+from apps.common.ai.components.result_verifier import ResultVerifierComponent
+from apps.common.ai.components.variant_generator import VariantGeneratorComponent
+from apps.common.ai.exceptions import AIConfigError, AIResponseError
 from apps.common.exceptions import AIRequestError
 from apps.parser.models import ExamQuestion, QuestionOption
 
 logger = logging.getLogger(__name__)
 
 
-def _get_ai_model(model_key: str) -> str:
-    """从 Django settings 获取 AI 模型名称。"""
-    model_map = {
-        'qwen3.6-flash': getattr(settings, 'AI_MODEL_QWEN_36_FLASH', 'qwen3.6-flash'),
-        'qwen3.6-plus': getattr(settings, 'AI_MODEL_QWEN_36_PLUS', 'qwen3.6-plus'),
-        'qwen3.7-flash': getattr(settings, 'AI_MODEL_QWEN_37_FLASH', 'qwen3.7-flash'),
-        'qwen3.7-plus': getattr(settings, 'AI_MODEL_QWEN_37_PLUS', 'qwen3.7-plus'),
-        'deepseek': getattr(settings, 'DEEPSEEK_MODEL', 'deepseek-v4-pro'),
-    }
-    return model_map.get(model_key, model_key)
+def variant_generator_component_factory() -> VariantGeneratorComponent:
+    return VariantGeneratorComponent()
+
+
+def result_verifier_component_factory() -> ResultVerifierComponent:
+    return ResultVerifierComponent(AIClient())
 
 
 def _build_question_data(question: ExamQuestion) -> dict:
@@ -56,10 +52,23 @@ def _build_question_data(question: ExamQuestion) -> dict:
     return data
 
 
+def _build_question_input(question_data: dict) -> QuestionInput:
+    return QuestionInput(
+        stem=question_data.get('stem', ''),
+        options=question_data.get('options'),
+        answer=question_data.get('answer', ''),
+        solution=question_data.get('solution', ''),
+        metadata={
+            'question_type': question_data.get('question_type', 'unknown'),
+            'analysis': question_data.get('analysis', ''),
+            'difficulty': question_data.get('difficulty', 3),
+            'knowledge_points': question_data.get('knowledge_points', []),
+        },
+    )
+
+
 def _save_variant_as_question(variant_task: VariantTask, variant_data: dict) -> ExamQuestion:
     """将生成的变式题保存为 ExamQuestion 记录，并建立课程关联。"""
-    from django.conf import settings
-
     original = variant_task.original_question
 
     # 创建 ExamQuestion 记录
@@ -159,24 +168,14 @@ def generate_variant_task(self, question_id: int, variant_mode: str,
         variant_task.save(update_fields=['generator_result'])
 
         # 4. 调用 qwen3.7-plus 生成变式题
-        logger.info(f"[VariantTask] Calling qwen3.7-plus for generation...")
-        qwen_model = _get_ai_model('qwen3.7-plus')
-        user_prompt = build_variant_user_prompt(question_data, variant_mode)
-
-        generator_start = time.time()
-        raw_response = call_ai(
-            system_prompt=VARIANT_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            model=qwen_model,
-            max_tokens=8000,
-            temperature=0.1,
+        logger.info("[VariantTask] Calling shared variant generator")
+        generation = variant_generator_component_factory().generate(
+            _build_question_input(question_data), variant_mode
         )
-        generation_time_ms = int((time.time() - generator_start) * 1000)
-
-        try:
-            variant_data = parse_json_response(raw_response)
-        except AIRequestError as e:
-            raise ValueError(f"AI 生成结果 JSON 解析失败: {e}")
+        variant_data = generation['parsed']
+        raw_response = generation['raw_response']
+        qwen_model = generation['model']
+        generation_time_ms = generation['latency_ms']
 
         logger.info(f"[VariantTask] Generation complete in {generation_time_ms}ms")
         variant_task.generator_result = {
@@ -199,35 +198,27 @@ def generate_variant_task(self, question_id: int, variant_mode: str,
             raise ValueError(f"变式题校验不通过: {', '.join(validation_issues)}")
 
         # 6. DeepSeek 校验器验证
-        logger.info(f"[VariantTask] Calling DeepSeek verifier...")
-        deepseek_model = _get_ai_model('deepseek')
-        verifier_prompt = build_verifier_user_prompt(variant_data, question_data)
-
+        logger.info("[VariantTask] Calling shared DeepSeek verifier")
         verifier_start = time.time()
-        verifier_api_key = None
-        try:
-            verifier_api_key = get_deepseek_api_key()
-        except AIRequestError:
+        verifier_available = deepseek_verification_available()
+        deepseek_model = get_deepseek_model() if verifier_available else None
+        if not verifier_available:
             logger.warning("[VariantTask] DeepSeek API key not configured, skipping AI verification")
 
         verifier_result = None
         verifier_retry_budget = 1  # DeepSeek 校验器至少有 1 次重试，独立于 Celery 重试
-        if verifier_api_key:
+        if verifier_available:
+            verifier = result_verifier_component_factory()
             for _attempt in range(verifier_retry_budget + 1):
                 try:
-                    raw_verifier = call_ai(
-                        system_prompt=VERIFIER_SYSTEM_PROMPT,
-                        user_prompt=verifier_prompt,
-                        model=deepseek_model,
-                        api_url="https://api.deepseek.com/v1/chat/completions",
-                        api_key=verifier_api_key,
-                        max_tokens=2000,
-                        temperature=0.1,
+                    verifier_result = verifier.verify(
+                        'variant_verify_deepseek',
+                        question_data,
+                        variant_data,
                     )
                     verifier_time_ms = int((time.time() - verifier_start) * 1000)
-                    verifier_result = parse_json_response(raw_verifier)
-                    verifier_result['latency_ms'] = verifier_time_ms
-                    verifier_result['model'] = deepseek_model
+                    verifier_result.setdefault('latency_ms', verifier_time_ms)
+                    verifier_result.setdefault('model', deepseek_model)
 
                     logger.info(f"[VariantTask] Verifier result: passed={verifier_result.get('passed')}, "
                                f"score={verifier_result.get('score')}")
@@ -239,8 +230,8 @@ def generate_variant_task(self, question_id: int, variant_mode: str,
 
                     break  # 校验通过，退出重试
 
-                except AIRequestError as e:
-                    logger.warning(f"[VariantTask] DeepSeek verification failed (AIRequestError): {e}")
+                except (AIConfigError, AIRequestError, AIResponseError) as e:
+                    logger.warning("[VariantTask] DeepSeek verification failed")
                     verifier_result = {'error': str(e), 'model': deepseek_model}
                     if _attempt < verifier_retry_budget:
                         time.sleep(15)

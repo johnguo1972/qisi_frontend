@@ -26,6 +26,20 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
+def generate_variant_task_dispatch(**kwargs):
+    """Dispatch a single variant task through the existing Celery signature."""
+    from .tasks import generate_variant_task
+
+    return generate_variant_task.delay(**kwargs)
+
+
+def batch_variant_task_dispatch(**kwargs):
+    """Dispatch a batch variant task through the existing Celery signature."""
+    from .tasks import batch_generate_variants_task
+
+    return batch_generate_variants_task.delay(**kwargs)
+
+
 # ============================================================
 # 权限辅助函数
 # ============================================================
@@ -627,8 +641,7 @@ def question_generate_variant(request, course_id, question_id):
         raise ValidationError('variant_mode 不能为空')
 
     # 调用 Celery 任务
-    from .tasks import generate_variant_task as celery_generate_variant
-    task = celery_generate_variant.delay(
+    task = generate_variant_task_dispatch(
         question_id=question_id,
         variant_mode=variant_mode,
         tree_node_id=tree_node_id,
@@ -657,8 +670,7 @@ def question_batch_generate_variant(request, course_id):
     if not variant_mode:
         raise ValidationError('variant_mode 不能为空')
 
-    from .tasks import batch_generate_variants_task as celery_batch_generate
-    task = celery_batch_generate.delay(
+    task = batch_variant_task_dispatch(
         question_ids=question_ids,
         variant_mode=variant_mode,
         tree_node_id=tree_node_id,
