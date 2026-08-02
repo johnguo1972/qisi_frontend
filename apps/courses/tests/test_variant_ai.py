@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import traceback
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.accounts.models import UserAccount
 from apps.common.ai.components.base import QuestionInput
+from apps.common.ai.components.vision_parser import VisionParserComponent
 from apps.common.ai.config import (
     AIConfig,
     AIProviderConfig,
@@ -19,6 +21,7 @@ from apps.common.ai.config import (
 )
 from apps.common.ai.exceptions import AIConfigError, AIResponseError
 from apps.common.ai import legacy_variant_adapter
+from apps.common.ai.types import AIResult
 from apps.common.exceptions import AIRequestError
 from apps.courses import ai_service, tasks, views
 from apps.courses.models import (
@@ -323,6 +326,87 @@ def test_material_ai_recognize_keeps_validation_error_envelope(
 
     assert response.status_code == 400
     assert "AI 识别失败" in str(response.data)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "provider_payload",
+    [
+        {
+            "error": (
+                "provider failed: "
+                "https://private.example.test/a.png?Signature=secret"
+            )
+        },
+        {
+            "question_type": "solution",
+            "stem": "证明题",
+            "options": {},
+            "answer": "略",
+            "analysis": "证明过程",
+            "difficulty": 3,
+            "knowledge_points": ["全等三角形"],
+            "images": [
+                {
+                    "description": "恶意图片",
+                    "url": "data:image/png;base64,PRIVATE_PROVIDER_DATA",
+                }
+            ],
+        },
+        {
+            "question_type": "solution",
+            "stem": "证明题",
+            "options": {},
+            "answer": "略",
+            "analysis": "证明过程",
+            "difficulty": 3,
+            "knowledge_points": ["全等三角形"],
+            "images": [
+                {"description": "provider raw response: PRIVATE_PROVIDER_DATA"}
+            ],
+        },
+    ],
+)
+def test_material_ai_recognize_maps_malicious_provider_payload_to_fixed_400(
+    monkeypatch, tmp_path, variant_records, provider_payload
+):
+    image_path = tmp_path / "course-malicious-provider.png"
+    Image.new("RGB", (40, 40), color="white").save(image_path)
+    material = _create_course_material(variant_records, image_path)
+    provider_content = json.dumps(provider_payload, ensure_ascii=False)
+
+    class ProviderClient:
+        def complete(self, _task_key, **_kwargs):
+            return AIResult(
+                content=provider_content,
+                provider="qwen",
+                model="qwen3-vl-plus",
+                latency_ms=1,
+                raw_response={"choices": []},
+            )
+
+    class Registry:
+        def render(self, _task_key, **_variables):
+            return "system", "user"
+
+    monkeypatch.setattr(
+        views,
+        "material_vision_component_factory",
+        lambda: VisionParserComponent(ProviderClient(), Registry()),
+    )
+    request = APIRequestFactory().post(
+        "/unused", {"image_url": str(image_path)}, format="json"
+    )
+    force_authenticate(request, user=variant_records.teacher)
+
+    response = views.material_ai_recognize(
+        request, variant_records.course.id, material.id
+    )
+
+    assert response.status_code == 400
+    assert response.data == {"detail": "AI 识别失败"}
+    assert "PRIVATE_PROVIDER_DATA" not in str(response.data)
+    assert "Signature" not in str(response.data)
 
 
 def test_material_recognition_helper_sanitizes_component_failure_traceback(

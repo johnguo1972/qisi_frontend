@@ -102,7 +102,7 @@
 - 入口：`apps/courses/tasks.py:generate_variant_task`、`batch_generate_variants_task` 及对应 views；`apps/courses/ai_service.py` 仅保留旧模块级签名的薄转发。
 - 输入：原题题干、题型、选项、答案、解析、详解、难度、知识点与 `variant_mode`。
 - 处理顺序：`variant_generate`（Qwen）-> `VariantValidator` 程序硬校验 -> `variant_verify_deepseek`（DeepSeek）。
-- DeepSeek 保留策略：DeepSeek 校验仍启用；密钥缺失时只执行既有“显式跳过 AI 校验”分支；校验不通过或请求失败按原契约额外生成/校验一次。DeepSeek 故障绝不切换成 Qwen 校验，也不会把 Qwen 结果伪装成 DeepSeek 结果。
+- DeepSeek 保留策略：DeepSeek 校验仍启用；密钥缺失时只执行既有“显式跳过 AI 校验”分支；校验不通过或请求失败时，仅额外调用 DeepSeek 校验一次，不重新生成变式题。DeepSeek 故障绝不切换成 Qwen 校验，也不会把 Qwen 结果伪装成 DeepSeek 结果。
 - 错误策略：生成/校验响应均经严格 Schema；Celery 仍 `max_retries=2`、30 秒指数退避；任务失败写固定状态和脱敏错误。
 - 持久化：保持 `VariantTask.generator_result`、`verifier_result`、`generated_question`、`status`、`error_message`、`completed_at`；成功后继续创建 `ExamQuestion`、`QuestionOption` 和可选 `CourseQuestionLink`。
 

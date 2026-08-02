@@ -308,10 +308,8 @@ def test_question_parse_service_preserves_legacy_audit_and_parsed_fields():
                 "section_title": "一、选择题",
                 "page_start": 2,
                 "page_end": 3,
-                "multi_page_notice": (
-                    "**注意**：该题目跨页，涉及第 2, 3 页。"
-                    "请综合分析所有页面的内容，确保解析完整。"
-                ),
+                "page_numbers": [2, 3],
+                "is_multi_page": True,
             },
         )
     ]

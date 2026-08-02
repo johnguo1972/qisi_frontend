@@ -112,13 +112,16 @@ def test_default_registry_preserves_prompt_constraints(provider_env):
         section_title="一、选择题",
         page_start=1,
         page_end=2,
-        multi_page_notice="请综合两页内容。",
+        page_numbers=[1, 2],
+        is_multi_page=True,
     )
     assert "## 输出格式要求" in system
     assert "question_no" in system
     assert "images" in system
     assert "第 7 题" in user
-    assert "请综合两页内容。" in user
+    assert "[1, 2]" in user
+    assert "True" in user
+    assert "必须综合分析 page_numbers 中列出的所有页面" in user
 
     _, user = registry.render(
         "variant_generate",
@@ -159,7 +162,8 @@ def test_default_registry_renders_every_declared_task(provider_env):
         "section_title": "一、选择题",
         "page_start": 1,
         "page_end": 1,
-        "multi_page_notice": "",
+        "page_numbers": [1],
+        "is_multi_page": False,
     }
 
     for task_key in registry.task_keys:

@@ -60,16 +60,19 @@ class VisionParserComponent:
     def parse_question(
         self, images, context: dict[str, object]
     ) -> dict[str, Any]:
+        page_start = context.get("page_start", 1)
+        page_end = context.get("page_end", page_start)
         prompt_context = {
             "question_no": context.get("question_no", "?"),
             "question_type": context.get("question_type", "unknown"),
             "question_type_label": context.get("question_type_label", "未知"),
             "section_title": context.get("section_title", ""),
-            "page_start": context.get("page_start", 1),
-            "page_end": context.get(
-                "page_end", context.get("page_start", 1)
+            "page_start": page_start,
+            "page_end": page_end,
+            "page_numbers": context.get("page_numbers", [page_start]),
+            "is_multi_page": context.get(
+                "is_multi_page", page_end != page_start
             ),
-            "multi_page_notice": context.get("multi_page_notice", ""),
         }
         trace_id = context.get("trace_id")
         outcome = self._execute(
@@ -82,6 +85,8 @@ class VisionParserComponent:
         context = {}
         prompt_context = {}
         trace_id = None
+        page_start = 0
+        page_end = 0
         return _unwrap(outcome)
 
     def recognize_photo(self, images) -> dict:

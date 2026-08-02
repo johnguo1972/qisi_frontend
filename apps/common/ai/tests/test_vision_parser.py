@@ -215,7 +215,8 @@ def test_parse_question_preserves_multimage_order_and_all_prompt_context():
         "section_title": "一、选择题",
         "page_start": 2,
         "page_end": 3,
-        "multi_page_notice": "跨页提示",
+        "page_numbers": [2, 3],
+        "is_multi_page": True,
     }
 
     result = VisionParserComponent(client, registry).parse_question(
@@ -315,6 +316,151 @@ def test_course_material_recognition_preserves_explicit_no_question_error():
     ).recognize_course_material([SIGNED_URL])
 
     assert result == {"error": "未识别到试题"}
+
+
+def test_course_material_recognition_accepts_only_safe_image_fields_and_urls():
+    content = json.dumps(
+        {
+            "question_type": "solution",
+            "stem": "证明三角形全等。",
+            "options": {},
+            "answer": "略",
+            "analysis": "使用边角边。",
+            "difficulty": 3,
+            "knowledge_points": ["全等三角形"],
+            "images": [
+                {"description": "题目中的几何图"},
+                {
+                    "description": "公开示意图",
+                    "url": "https://cdn.example.test/diagram.png?v=2",
+                },
+                {
+                    "description": "站内相对图片（角Ａ）：",
+                    "url": "course-images/%E5%9B%BE.png",
+                },
+            ],
+        },
+        ensure_ascii=False,
+    )
+    client = RecordingAIClient({"course_material_recognize": content})
+
+    result = VisionParserComponent(
+        client, RecordingPromptRegistry()
+    ).recognize_course_material([SIGNED_URL])
+
+    assert result["images"] == json.loads(content)["images"]
+
+
+@pytest.mark.parametrize(
+    "unsafe_image",
+    [
+        {"description": "内嵌图片", "url": "data:image/png;base64,PRIVATE"},
+        {"description": "本地文件", "url": "file:///srv/private/a.png"},
+        {"description": "Windows 文件", "url": r"C:\\private\\a.png"},
+        {"description": "绝对路径", "url": "/srv/private/a.png"},
+        {
+            "description": "签名地址",
+            "url": "https://cdn.example.test/a.png?Signature=private-signature",
+        },
+        {
+            "description": "带凭据地址",
+            "url": "https://user:password@cdn.example.test/a.png",
+        },
+        {"description": "原始数据", "url": "raw/base64/PRIVATE"},
+        {
+            "description": "额外字段",
+            "url": "images/a.png",
+            "raw": "provider-private-output",
+        },
+        {"description": "data:image/png;base64,PRIVATE"},
+        {"description": "provider raw response: PRIVATE"},
+        {
+            "description": (
+                "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+            )
+        },
+        {
+            "description": (
+                "-__7__v_-__7__v_-__7__v_-__7__v_-__7__v_-__7__v_-__7_w=="
+            )
+        },
+        {"description": "/srv/private/a.png"},
+        {"description": r"C:\\private\\a.png"},
+        {"description": "正常\u200b描述"},
+        {"description": "正常%E2%80%8B描述"},
+        {
+            "description": (
+                "https://private.example.test/a.png?Signature=secret"
+            )
+        },
+        {"description": "内嵌图片", "url": "da\u200bta:image/png,PRIVATE"},
+        {
+            "description": "编码零宽混淆",
+            "url": "da%E2%80%8Bta:image/png,PRIVATE",
+        },
+        {"description": "内嵌图片", "url": "ｄａｔａ：image/png,PRIVATE"},
+        {
+            "description": "编码内嵌图片",
+            "url": "%2564%2561%2574%2561%253Aimage/png%253Bbase64,PRIVATE",
+        },
+        {"description": "编码本地文件", "url": "%66ile%3A%2F%2Fsrv/a.png"},
+        {"description": "编码 Windows 文件", "url": "%43%3A%5Cprivate%5Ca.png"},
+        {"description": "编码 UNC 文件", "url": "%5C%5Cserver%5Cprivate%5Ca.png"},
+        {"description": "编码绝对路径", "url": "%2Fsrv%2Fprivate%2Fa.png"},
+        {"description": "路径穿越", "url": "images/../private/a.png"},
+        {"description": "编码路径穿越", "url": "images/%2e%2e/private/a.png"},
+        {
+            "description": "编码签名参数",
+            "url": "https://cdn.example.test/a.png?%53ignature=secret",
+        },
+        {
+            "description": "编码敏感片段",
+            "url": "https://cdn.example.test/a.png#%74oken=secret",
+        },
+    ],
+)
+def test_course_material_recognition_rejects_unsafe_image_payloads(
+    unsafe_image,
+):
+    content = json.dumps(
+        {
+            "question_type": "solution",
+            "stem": "证明三角形全等。",
+            "options": {},
+            "answer": "略",
+            "analysis": "使用边角边。",
+            "difficulty": 3,
+            "knowledge_points": ["全等三角形"],
+            "images": [unsafe_image],
+        },
+        ensure_ascii=False,
+    )
+    client = RecordingAIClient({"course_material_recognize": content})
+
+    with pytest.raises(AIResponseError, match="schema"):
+        VisionParserComponent(
+            client, RecordingPromptRegistry()
+        ).recognize_course_material([SIGNED_URL])
+
+
+def test_course_material_recognition_rejects_provider_supplied_error_detail():
+    private_detail = (
+        "provider failed: https://private.example.test/a.png?Signature=secret"
+    )
+    client = RecordingAIClient(
+        {
+            "course_material_recognize": json.dumps(
+                {"error": private_detail}, ensure_ascii=False
+            )
+        }
+    )
+
+    with pytest.raises(AIResponseError, match="schema") as caught:
+        VisionParserComponent(
+            client, RecordingPromptRegistry()
+        ).recognize_course_material([SIGNED_URL])
+
+    assert private_detail not in str(caught.value)
 
 
 def test_non_object_vision_response_is_an_explicit_response_error():

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import unicodedata
+import re
 from typing import Annotated, Any, Literal
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from pydantic import (
     AfterValidator,
@@ -11,8 +13,11 @@ from pydantic import (
     ConfigDict,
     Field,
     RootModel,
+    field_validator,
     model_validator,
 )
+
+from apps.common.ai.redaction import safe_preview
 
 
 def _is_visual_blank_character(character: str) -> bool:
@@ -190,6 +195,141 @@ class ResultVerifierResponse(_StrictResponseModel):
         return self
 
 
+_SENSITIVE_COURSE_IMAGE_URL_KEYS = (
+    "accesskey",
+    "apikey",
+    "credential",
+    "password",
+    "secret",
+    "signature",
+    "token",
+)
+
+
+def _course_image_security_copy(value: str) -> str:
+    def contains_format_control(text: str) -> bool:
+        return any(
+            unicodedata.category(character) == "Cf" for character in text
+        )
+
+    if contains_format_control(value):
+        raise ValueError("course image text is unsafe")
+    decoded = unicodedata.normalize("NFKC", value)
+    if contains_format_control(decoded):
+        raise ValueError("course image text is unsafe")
+    for _ in range(4):
+        next_decoded = unquote(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = unicodedata.normalize("NFKC", next_decoded)
+        if contains_format_control(decoded):
+            raise ValueError("course image text is unsafe")
+    return decoded
+
+
+def _contains_sensitive_course_image_text(value: str) -> bool:
+    lowered = value.casefold()
+    return bool(
+        re.search(r"(^|[^a-z])(?:data|file)\s*:", lowered)
+        or re.search(r"(^|[^a-z0-9])base64([^a-z0-9]|$)", lowered)
+        or re.search(
+            r"(^|[^a-z0-9])(?:provider[\s_-]*)?raw"
+            r"(?:[\s_-]*(?:response|output|bytes|data))?"
+            r"([^a-z0-9]|$)",
+            lowered,
+        )
+        or re.search(
+            r"(^|[^a-z0-9])(?:access[\s_-]*key|api[\s_-]*key|"
+            r"credential|password|secret|signature|token)\s*[:=]",
+            lowered,
+        )
+        or re.search(r"(^|[\s('\"=])(?:[a-z]:[\\/]|[/\\]{1,2}\w)", lowered)
+    )
+
+
+def _validate_course_image_description(value: str) -> str:
+    security_copy = _course_image_security_copy(value)
+    comparison = re.sub(r"\s+", " ", security_copy).strip()
+    redacted = safe_preview(
+        security_copy, limit=max(160, len(security_copy) + 1)
+    )
+    if (
+        _contains_sensitive_course_image_text(security_copy)
+        or redacted != comparison
+    ):
+        raise ValueError("course image description is unsafe")
+    return value
+
+
+def _validate_course_image_url(value: str) -> str:
+    normalized = strip_visual_boundaries(value)
+    if not normalized or normalized != value or len(normalized) > 2048:
+        raise ValueError("course image URL is unsafe")
+    security_copy = _course_image_security_copy(value)
+    if any(
+        character.isspace() or ord(character) < 32
+        for character in security_copy
+    ):
+        raise ValueError("course image URL is unsafe")
+
+    decoded = security_copy.casefold()
+    if (
+        _contains_sensitive_course_image_text(decoded)
+        or re.match(r"^[a-z]:[\\/]", decoded)
+        or decoded.startswith(("/", "\\"))
+        or re.search(r"(^|[/\\])raw([/\\]|$)", decoded)
+    ):
+        raise ValueError("course image URL is unsafe")
+
+    parsed = urlsplit(security_copy)
+    if parsed.scheme:
+        if parsed.scheme.casefold() not in {"http", "https"}:
+            raise ValueError("course image URL is unsafe")
+        if not parsed.netloc or parsed.username or parsed.password:
+            raise ValueError("course image URL is unsafe")
+    elif parsed.netloc:
+        raise ValueError("course image URL is unsafe")
+    path_segments = parsed.path.replace("\\", "/").split("/")
+    if ".." in path_segments:
+        raise ValueError("course image URL is unsafe")
+
+    query_keys = (
+        "".join(character for character in key.casefold() if character.isalnum())
+        for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
+    )
+    if any(
+        marker in key
+        for key in query_keys
+        for marker in _SENSITIVE_COURSE_IMAGE_URL_KEYS
+    ):
+        raise ValueError("course image URL is unsafe")
+    fragment = parsed.fragment.casefold()
+    if any(marker in fragment for marker in _SENSITIVE_COURSE_IMAGE_URL_KEYS):
+        raise ValueError("course image URL is unsafe")
+    return value
+
+
+class CourseMaterialRecognitionImage(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    description: NonBlankStr
+    url: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @field_validator("url")
+    @classmethod
+    def require_safe_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_course_image_url(value)
+
+    @field_validator("description")
+    @classmethod
+    def require_safe_description(cls, value: str) -> str:
+        return _validate_course_image_description(value)
+
+
 class CourseMaterialRecognitionSuccess(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -202,13 +342,13 @@ class CourseMaterialRecognitionSuccess(BaseModel):
     analysis: str
     difficulty: int = Field(ge=1, le=5)
     knowledge_points: list[NonBlankStr]
-    images: list[dict[str, Any]]
+    images: list[CourseMaterialRecognitionImage]
 
 
 class CourseMaterialRecognitionError(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    error: NonBlankStr
+    error: Literal["未识别到试题"]
 
 
 class CourseMaterialRecognitionResponse(

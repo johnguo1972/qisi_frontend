@@ -36,6 +36,21 @@ class UnsafeComponent:
         raise AIRequestError(UNSAFE_DETAIL)
 
 
+class RecordingQuestionComponent:
+    def __init__(self):
+        self.calls = []
+
+    def parse_question(self, images, context):
+        self.calls.append((tuple(images), dict(context)))
+        content = '{"question_no":"8","stem":"题干"}'
+        return {
+            "raw_response": content,
+            "response_json": content,
+            "latency_ms": 1,
+            "parsed": {"question_no": "8", "stem": "题干"},
+        }
+
+
 def _assert_no_sensitive(value) -> None:
     rendered = str(value)
     for sensitive in SENSITIVE_VALUES:
@@ -127,6 +142,50 @@ def test_question_adapter_raises_chainless_safe_error_and_clears_locals():
     assert caught.value.__context__ is None
     _assert_no_sensitive(caught.value)
     _assert_no_sensitive(_format_captured_locals(caught.value))
+
+
+@pytest.mark.parametrize(
+    ("page_images", "page_numbers", "is_multi_page"),
+    [
+        (["page-2.png"], [2], False),
+        (["page-2.png", "page-3.png"], [2, 3], True),
+    ],
+)
+def test_question_adapter_passes_only_page_data_for_single_and_multi_page(
+    page_images, page_numbers, is_multi_page
+):
+    component = RecordingQuestionComponent()
+    service = question_parse_service.QuestionParseService(component)
+
+    result = service.parse_question(
+        {
+            "question_no": "8",
+            "question_type": "single_choice",
+            "section_title": "一、选择题",
+            "page_start": 2,
+            "page_end": page_numbers[-1],
+        },
+        page_images,
+        page_numbers,
+    )
+
+    assert result["parsed"]["page_no"] == 2
+    assert result["parsed"]["page_end"] == page_numbers[-1]
+    assert component.calls == [
+        (
+            tuple(page_images),
+            {
+                "question_no": "8",
+                "question_type": "single_choice",
+                "question_type_label": "单选题",
+                "section_title": "一、选择题",
+                "page_start": 2,
+                "page_end": page_numbers[-1],
+                "page_numbers": page_numbers,
+                "is_multi_page": is_multi_page,
+            },
+        )
+    ]
 
 
 def test_question_component_factory_failure_is_chainless_and_safe(

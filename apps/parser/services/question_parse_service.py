@@ -52,13 +52,6 @@ class QuestionParseService:
         page_start = question_info.get('page_start', 1)
         page_end = question_info.get('page_end', page_start)
 
-        multi_page_notice = ""
-        if len(page_images) > 1:
-            multi_page_notice = (
-                f"**注意**：该题目跨页，涉及第 {', '.join(str(p) for p in page_nos)} 页。"
-                f"请综合分析所有页面的内容，确保解析完整。"
-            )
-
         failed = False
         result = None
         ai_result = None
@@ -72,7 +65,8 @@ class QuestionParseService:
             'section_title': section_title,
             'page_start': page_start,
             'page_end': page_end,
-            'multi_page_notice': multi_page_notice,
+            'page_numbers': list(page_nos),
+            'is_multi_page': len(page_images) > 1,
         }
         try:
             ai_result = self._component.parse_question(
@@ -107,7 +101,6 @@ class QuestionParseService:
             section_title = ""
             page_start = 0
             page_end = 0
-            multi_page_notice = ""
             self = None
 
         if failed:
