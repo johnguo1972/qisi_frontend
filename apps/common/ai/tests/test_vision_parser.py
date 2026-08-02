@@ -5,6 +5,7 @@ import json
 import logging
 import traceback
 from io import BytesIO
+from urllib.parse import quote
 
 import pytest
 from PIL import Image
@@ -24,6 +25,13 @@ SIGNED_URL = (
     "https://bucket.example.test/page.png?OSSAccessKeyId=private-key"
     "&Signature=private-signature"
 )
+
+
+def _percent_encode_layers(value: str, layers: int) -> str:
+    encoded = value
+    for _ in range(layers):
+        encoded = quote(encoded, safe="")
+    return encoded
 
 
 def _write_image(path, *, size=(2000, 1000), image_format="PNG"):
@@ -417,6 +425,84 @@ def test_course_material_recognition_accepts_only_safe_image_fields_and_urls():
             "description": "编码敏感片段",
             "url": "https://cdn.example.test/a.png#%74oken=secret",
         },
+        {
+            "description": "URL 裸 base64",
+            "url": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+        },
+        {
+            "description": "URL 裸 base64url",
+            "url": "-__7__v_-__7__v_-__7__v_-__7__v_-__7__v_-__7_w==",
+        },
+        {
+            "description": "Bearer 混淆",
+            "url": "Bearer_PRIVATE_PROVIDER_TOKEN",
+        },
+        {
+            "description": "深层 data",
+            "url": _percent_encode_layers(
+                "data:image/png;base64,PRIVATE_PROVIDER_DATA", 5
+            ),
+        },
+        {
+            "description": "深层 file",
+            "url": _percent_encode_layers("file:///srv/private/a.png", 5),
+        },
+        {
+            "description": "深层绝对路径",
+            "url": _percent_encode_layers("/srv/private/a.png", 5),
+        },
+        {
+            "description": "深层 UNC",
+            "url": _percent_encode_layers(r"\\server\private\a.png", 5),
+        },
+        {
+            "description": "深层路径穿越",
+            "url": _percent_encode_layers("images/../private/a.png", 5),
+        },
+        {
+            "description": "深层零宽混淆",
+            "url": _percent_encode_layers(
+                "da\u200bta:image/png,PRIVATE_PROVIDER_DATA", 5
+            ),
+        },
+        {
+            "description": "深层 NFKC 混淆",
+            "url": _percent_encode_layers(
+                "ｄａｔａ：image/png,PRIVATE_PROVIDER_DATA", 5
+            ),
+        },
+        {
+            "description": _percent_encode_layers(
+                "provider raw response: PRIVATE_PROVIDER_DATA", 5
+            )
+        },
+        {
+            "description": _percent_encode_layers(
+                "api_key=PRIVATE_PROVIDER_TOKEN", 5
+            )
+        },
+        {
+            "description": _percent_encode_layers(
+                "Bearer PRIVATE_PROVIDER_TOKEN", 5
+            )
+        },
+        {
+            "description": "六层签名参数",
+            "url": _percent_encode_layers(
+                "https://cdn.example.test/a.png?Signature=PRIVATE", 6
+            ),
+        },
+        {
+            "description": "六层 fragment token",
+            "url": _percent_encode_layers(
+                "https://cdn.example.test/a.png#token=PRIVATE", 6
+            ),
+        },
+        {
+            "description": "超过解码上限",
+            "url": _percent_encode_layers("images/safe.png", 64),
+        },
+        {"description": "普通描述" * 2000},
     ],
 )
 def test_course_material_recognition_rejects_unsafe_image_payloads(

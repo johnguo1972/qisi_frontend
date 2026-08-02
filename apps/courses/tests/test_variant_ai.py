@@ -4,6 +4,7 @@ import inspect
 import json
 import traceback
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from PIL import Image
@@ -36,6 +37,26 @@ from apps.parser.models import ExamQuestion
 
 _SURROGATE_API_KEYS = ("\ud800", "\udfff", "正常\ud800key")
 _NORMAL_UNICODE_API_KEY = "正常共享密钥"
+
+
+def _percent_encode_layers(value: str, layers: int) -> str:
+    encoded = value
+    for _ in range(layers):
+        encoded = quote(encoded, safe="")
+    return encoded
+
+
+def _course_material_provider_payload(image: dict) -> dict:
+    return {
+        "question_type": "solution",
+        "stem": "证明题",
+        "options": {},
+        "answer": "略",
+        "analysis": "证明过程",
+        "difficulty": 3,
+        "knowledge_points": ["全等三角形"],
+        "images": [image],
+    }
 
 
 VALID_VARIANT = {
@@ -338,37 +359,137 @@ def test_material_ai_recognize_keeps_validation_error_envelope(
                 "https://private.example.test/a.png?Signature=secret"
             )
         },
-        {
-            "question_type": "solution",
-            "stem": "证明题",
-            "options": {},
-            "answer": "略",
-            "analysis": "证明过程",
-            "difficulty": 3,
-            "knowledge_points": ["全等三角形"],
-            "images": [
-                {
-                    "description": "恶意图片",
-                    "url": "data:image/png;base64,PRIVATE_PROVIDER_DATA",
-                }
-            ],
-        },
-        {
-            "question_type": "solution",
-            "stem": "证明题",
-            "options": {},
-            "answer": "略",
-            "analysis": "证明过程",
-            "difficulty": 3,
-            "knowledge_points": ["全等三角形"],
-            "images": [
-                {"description": "provider raw response: PRIVATE_PROVIDER_DATA"}
-            ],
-        },
+        _course_material_provider_payload(
+            {
+                "description": "恶意图片",
+                "url": "data:image/png;base64,PRIVATE_PROVIDER_DATA",
+            }
+        ),
+        _course_material_provider_payload(
+            {"description": "provider raw response: PRIVATE_PROVIDER_DATA"}
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "URL 裸 base64",
+                "url": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "URL 裸 base64url",
+                "url": "-__7__v_-__7__v_-__7__v_-__7__v_-__7__v_-__7_w==",
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "Bearer 混淆",
+                "url": "Bearer_PRIVATE_PROVIDER_TOKEN",
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "深层 data",
+                "url": _percent_encode_layers(
+                    "data:image/png;base64,PRIVATE_PROVIDER_DATA", 5
+                ),
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "深层 file",
+                "url": _percent_encode_layers(
+                    "file:///srv/private/a.png", 5
+                ),
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "深层绝对路径",
+                "url": _percent_encode_layers("/srv/private/a.png", 5),
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "深层 UNC",
+                "url": _percent_encode_layers(
+                    r"\\server\private\a.png", 5
+                ),
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "深层路径穿越",
+                "url": _percent_encode_layers(
+                    "images/../private/a.png", 5
+                ),
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "深层零宽",
+                "url": _percent_encode_layers(
+                    "da\u200bta:image/png,PRIVATE_PROVIDER_DATA", 5
+                ),
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "深层 NFKC",
+                "url": _percent_encode_layers(
+                    "ｄａｔａ：image/png,PRIVATE_PROVIDER_DATA", 5
+                ),
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": _percent_encode_layers(
+                    "provider raw response: PRIVATE_PROVIDER_DATA", 5
+                )
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": _percent_encode_layers(
+                    "api_key=PRIVATE_PROVIDER_TOKEN", 5
+                )
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": _percent_encode_layers(
+                    "Bearer PRIVATE_PROVIDER_TOKEN", 5
+                )
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "六层签名",
+                "url": _percent_encode_layers(
+                    "https://cdn.example.test/a.png?Signature=PRIVATE", 6
+                ),
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "六层 fragment token",
+                "url": _percent_encode_layers(
+                    "https://cdn.example.test/a.png#token=PRIVATE", 6
+                ),
+            }
+        ),
+        _course_material_provider_payload(
+            {
+                "description": "超过解码上限",
+                "url": _percent_encode_layers("images/safe.png", 64),
+            }
+        ),
+        _course_material_provider_payload(
+            {"description": "普通描述" * 2000}
+        ),
     ],
 )
 def test_material_ai_recognize_maps_malicious_provider_payload_to_fixed_400(
-    monkeypatch, tmp_path, variant_records, provider_payload
+    monkeypatch, tmp_path, variant_records, provider_payload, caplog
 ):
     image_path = tmp_path / "course-malicious-provider.png"
     Image.new("RGB", (40, 40), color="white").save(image_path)
@@ -398,6 +519,7 @@ def test_material_ai_recognize_maps_malicious_provider_payload_to_fixed_400(
         "/unused", {"image_url": str(image_path)}, format="json"
     )
     force_authenticate(request, user=variant_records.teacher)
+    caplog.set_level("DEBUG")
 
     response = views.material_ai_recognize(
         request, variant_records.course.id, material.id
@@ -405,8 +527,25 @@ def test_material_ai_recognize_maps_malicious_provider_payload_to_fixed_400(
 
     assert response.status_code == 400
     assert response.data == {"detail": "AI 识别失败"}
+    assert provider_content not in str(response.data)
     assert "PRIVATE_PROVIDER_DATA" not in str(response.data)
     assert "Signature" not in str(response.data)
+
+    with pytest.raises(ValidationError) as caught:
+        views._recognize_course_material_image(str(image_path), None)
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    formatted = "".join(
+        traceback.TracebackException(
+            type(caught.value),
+            caught.value,
+            caught.value.__traceback__.tb_next,
+            capture_locals=True,
+        ).format()
+    )
+    assert provider_content not in formatted
+    assert provider_content not in caplog.text
 
 
 def test_material_recognition_helper_sanitizes_component_failure_traceback(

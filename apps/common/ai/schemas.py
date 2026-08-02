@@ -204,6 +204,8 @@ _SENSITIVE_COURSE_IMAGE_URL_KEYS = (
     "signature",
     "token",
 )
+_COURSE_IMAGE_SECURITY_MAX_INPUT_LENGTH = 4096
+_COURSE_IMAGE_SECURITY_MAX_TRANSFORMS = 16
 
 
 def _course_image_security_copy(value: str) -> str:
@@ -212,26 +214,40 @@ def _course_image_security_copy(value: str) -> str:
             unicodedata.category(character) == "Cf" for character in text
         )
 
-    if contains_format_control(value):
-        raise ValueError("course image text is unsafe")
-    decoded = unicodedata.normalize("NFKC", value)
-    if contains_format_control(decoded):
-        raise ValueError("course image text is unsafe")
-    for _ in range(4):
-        next_decoded = unquote(decoded)
-        if next_decoded == decoded:
-            break
-        decoded = unicodedata.normalize("NFKC", next_decoded)
-        if contains_format_control(decoded):
+    current = value
+    for transform_count in range(
+        _COURSE_IMAGE_SECURITY_MAX_TRANSFORMS + 1
+    ):
+        if (
+            len(current) > _COURSE_IMAGE_SECURITY_MAX_INPUT_LENGTH
+            or contains_format_control(current)
+        ):
             raise ValueError("course image text is unsafe")
-    return decoded
+        candidate = unicodedata.normalize("NFKC", unquote(current))
+        if (
+            len(candidate) > _COURSE_IMAGE_SECURITY_MAX_INPUT_LENGTH
+            or contains_format_control(candidate)
+        ):
+            raise ValueError("course image text is unsafe")
+        if candidate == current:
+            return current
+        if transform_count == _COURSE_IMAGE_SECURITY_MAX_TRANSFORMS:
+            raise ValueError("course image text is unsafe")
+        current = candidate
+    raise ValueError("course image text is unsafe")
 
 
 def _contains_sensitive_course_image_text(value: str) -> bool:
     lowered = value.casefold()
-    return bool(
+    comparison = re.sub(r"\s+", " ", value).strip()
+    redacted = safe_preview(value, limit=max(160, len(value) + 1))
+    return redacted != comparison or bool(
         re.search(r"(^|[^a-z])(?:data|file)\s*:", lowered)
         or re.search(r"(^|[^a-z0-9])base64([^a-z0-9]|$)", lowered)
+        or re.search(
+            r"(^|[^a-z0-9])bearer(?:[\s:_=-]+)[a-z0-9._-]+",
+            lowered,
+        )
         or re.search(
             r"(^|[^a-z0-9])(?:provider[\s_-]*)?raw"
             r"(?:[\s_-]*(?:response|output|bytes|data))?"
@@ -244,19 +260,13 @@ def _contains_sensitive_course_image_text(value: str) -> bool:
             lowered,
         )
         or re.search(r"(^|[\s('\"=])(?:[a-z]:[\\/]|[/\\]{1,2}\w)", lowered)
+        or re.search(r"(^|[/\\])\.\.([/\\]|$)", lowered)
     )
 
 
 def _validate_course_image_description(value: str) -> str:
     security_copy = _course_image_security_copy(value)
-    comparison = re.sub(r"\s+", " ", security_copy).strip()
-    redacted = safe_preview(
-        security_copy, limit=max(160, len(security_copy) + 1)
-    )
-    if (
-        _contains_sensitive_course_image_text(security_copy)
-        or redacted != comparison
-    ):
+    if _contains_sensitive_course_image_text(security_copy):
         raise ValueError("course image description is unsafe")
     return value
 
@@ -274,7 +284,7 @@ def _validate_course_image_url(value: str) -> str:
 
     decoded = security_copy.casefold()
     if (
-        _contains_sensitive_course_image_text(decoded)
+        _contains_sensitive_course_image_text(security_copy)
         or re.match(r"^[a-z]:[\\/]", decoded)
         or decoded.startswith(("/", "\\"))
         or re.search(r"(^|[/\\])raw([/\\]|$)", decoded)
