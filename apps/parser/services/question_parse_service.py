@@ -3,6 +3,11 @@ import logging
 import os
 from django.conf import settings
 from apps.common.ai.components.vision_parser import VisionParserComponent
+from apps.common.ai.failure_safety import (
+    QUESTION_PARSE_FAILURE,
+    log_safe_failure,
+    new_safe_ai_error,
+)
 from apps.common.exceptions import AIRequestError
 from apps.parser.prompts.question_parse_prompt import (
     QUESTION_TYPE_LABELS,
@@ -15,7 +20,22 @@ class QuestionParseService:
     """Compatibility adapter for shared question vision parsing."""
 
     def __init__(self, component=None):
-        self._component = component or VisionParserComponent()
+        if component is not None:
+            self._component = component
+            return
+
+        failed = False
+        created_component = None
+        try:
+            created_component = VisionParserComponent()
+        except Exception:
+            failed = True
+
+        if failed:
+            created_component = None
+            component = None
+            raise new_safe_ai_error(QUESTION_PARSE_FAILURE)
+        self._component = created_component
 
     def parse_question(self, question_info: dict, page_images: list, page_nos: list) -> dict:
         """Parse a single question.
@@ -41,20 +61,25 @@ class QuestionParseService:
                 f"请综合分析所有页面的内容，确保解析完整。"
             )
 
+        failed = False
+        result = None
+        ai_result = None
+        parsed = None
+        prompt_context = {
+            'question_no': question_no,
+            'question_type': question_type,
+            'question_type_label': QUESTION_TYPE_LABELS.get(
+                question_type, '未知'
+            ),
+            'section_title': section_title,
+            'page_start': page_start,
+            'page_end': page_end,
+            'multi_page_notice': multi_page_notice,
+        }
         try:
             ai_result = self._component.parse_question(
                 page_images,
-                {
-                    'question_no': question_no,
-                    'question_type': question_type,
-                    'question_type_label': QUESTION_TYPE_LABELS.get(
-                        question_type, '未知'
-                    ),
-                    'section_title': section_title,
-                    'page_start': page_start,
-                    'page_end': page_end,
-                    'multi_page_notice': multi_page_notice,
-                },
+                prompt_context,
             )
 
             # Parse and repair JSON
@@ -64,16 +89,32 @@ class QuestionParseService:
             parsed['page_no'] = page_start
             parsed['page_end'] = page_end
 
-            return {
+            result = {
                 "raw_response": ai_result['raw_response'],
                 "response_json": ai_result['response_json'],
                 "latency_ms": ai_result['latency_ms'],
                 "parsed": parsed,
             }
-        except AIRequestError:
-            raise
         except Exception:
-            raise AIRequestError("Question vision parsing failed") from None
+            failed = True
+        finally:
+            question_info = {}
+            page_images = []
+            page_nos = []
+            prompt_context = {}
+            ai_result = None
+            parsed = None
+            question_no = ""
+            question_type = ""
+            section_title = ""
+            page_start = 0
+            page_end = 0
+            multi_page_notice = ""
+            self = None
+
+        if failed:
+            raise new_safe_ai_error(QUESTION_PARSE_FAILURE)
+        return result
 
 
 def parse_questions_stage2(position_results: list, page_map: dict, progress_callback=None) -> list:
@@ -136,8 +177,14 @@ def parse_questions_stage2(position_results: list, page_map: dict, progress_call
                     f'(pages {q_info["page_start"]}-{q_info["page_end"]}, {parse_result["latency_ms"]}ms)'
                 )
 
-            except AIRequestError as e:
-                logger.exception(f'Failed to parse Q{q_info.get("question_no")}: {e}')
+            except AIRequestError:
+                log_safe_failure(logger, QUESTION_PARSE_FAILURE)
+            finally:
+                page_images = []
+                page_nos = []
+                img_path = ""
+                parse_result = None
+                parsed = None
 
             parsed_count += 1
             if progress_callback:

@@ -262,7 +262,7 @@ def test_position_service_failure_keeps_complete_empty_audit_shape(monkeypatch):
             "questions": [],
             "raw_response": "",
             "response_json": "",
-            "error": "Vision AI request failed",
+            "error": "POSITION_DETECTION_FAILED: 题目位置检测失败",
             "latency_ms": 0,
         }
     ]

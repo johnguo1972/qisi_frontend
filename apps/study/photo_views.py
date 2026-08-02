@@ -16,6 +16,10 @@ from apps.parser.models import ExamQuestion, QuestionOption, QuestionImage, AIPa
 from apps.papers.models import ExamPaper
 from apps.common.codegen import generate_question_system_id
 from apps.common.ai.components.vision_parser import VisionParserComponent
+from apps.common.ai.failure_safety import (
+    PHOTO_RECOGNITION_FAILURE,
+    new_safe_ai_error,
+)
 from apps.common.ai.image_codec import encode_image_source
 from apps.common.oss_service import upload_crop_image_safe
 from apps.common.batch_tasks import single_generate_ai_answers
@@ -42,12 +46,31 @@ def _call_vision_api(image_paths: list) -> dict:
     Retries up to 2 times on transient network errors.
     """
     image_sources = []
-    for img_path in image_paths:
-        url = upload_crop_image_safe(img_path, prefix='photo_questions')
-        image_sources.append(url or img_path)
-    parsed = vision_parser_component_factory().recognize_photo(image_sources)
-    image_sources = []
-    image_paths = []
+    img_path = ""
+    url = ""
+    parsed = None
+    component = None
+    failed = False
+    try:
+        for img_path in image_paths:
+            url = upload_crop_image_safe(
+                img_path, prefix='photo_questions'
+            )
+            image_sources.append(url or img_path)
+        component = vision_parser_component_factory()
+        parsed = component.recognize_photo(image_sources)
+    except Exception:
+        failed = True
+    finally:
+        image_sources.clear()
+        image_paths = []
+        img_path = ""
+        url = ""
+        component = None
+
+    if failed:
+        parsed = None
+        raise new_safe_ai_error(PHOTO_RECOGNITION_FAILURE)
     return parsed
 
 

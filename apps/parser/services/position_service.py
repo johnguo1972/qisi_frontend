@@ -1,9 +1,11 @@
 """Position service: stage 1 - detect question positions."""
 import logging
 from apps.common.ai.components.vision_parser import VisionParserComponent
-from apps.common.ai.exceptions import AIConfigError
 from apps.parser.schemas.page_parse_schema import validate_position_result
-from apps.common.exceptions import AIRequestError
+from apps.common.ai.failure_safety import (
+    POSITION_DETECTION_FAILURE,
+    log_safe_failure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +28,13 @@ def detect_positions(page_images: list) -> list:
         - response_json: str
         - latency_ms: int
     """
-    component = vision_parser_component_factory()
+    component = None
+    component_failed = False
+    try:
+        component = vision_parser_component_factory()
+    except Exception:
+        component_failed = True
+        log_safe_failure(logger, POSITION_DETECTION_FAILURE)
     results = []
 
     for page_info in page_images:
@@ -34,6 +42,17 @@ def detect_positions(page_images: list) -> list:
         image_path = page_info['path']
 
         logger.info(f'Stage 1: Detecting question positions for page {page_no}')
+
+        if component_failed:
+            results.append({
+                'page_no': page_no,
+                'questions': [],
+                'raw_response': '',
+                'response_json': '',
+                'error': POSITION_DETECTION_FAILURE.detail,
+                'latency_ms': 0,
+            })
+            continue
 
         try:
             ai_result = component.detect_positions(image_path)
@@ -43,8 +62,11 @@ def detect_positions(page_images: list) -> list:
             try:
                 validated = validate_position_result(raw_data)
                 questions = validated.model_dump().get('questions', [])
-            except Exception as e:
-                logger.warning(f"Position schema validation failed for page {page_no}: {e}")
+            except Exception:
+                logger.warning(
+                    "Position schema validation failed",
+                    extra={"failure_code": "POSITION_SCHEMA_INVALID"},
+                )
                 questions = raw_data.get('questions', [])
 
             results.append({
@@ -57,17 +79,19 @@ def detect_positions(page_images: list) -> list:
 
             logger.info(f'Page {page_no}: detected {len(questions)} questions')
 
-        except (AIConfigError, AIRequestError) as e:
-            logger.exception(f'Position detection failed for page {page_no}: {e}')
+        except Exception:
+            log_safe_failure(logger, POSITION_DETECTION_FAILURE)
             results.append({
                 'page_no': page_no,
                 'questions': [],
                 'raw_response': '',
                 'response_json': '',
-                'error': str(e),
+                'error': POSITION_DETECTION_FAILURE.detail,
                 'latency_ms': 0,
             })
 
+    component = None
+    page_images = []
     return results
 
 

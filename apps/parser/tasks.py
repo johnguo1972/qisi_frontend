@@ -12,7 +12,13 @@ from apps.parser.services.save_service import save_questions
 from apps.parser.services.position_service import detect_positions
 from apps.parser.services.question_parse_service import parse_questions_stage2
 from apps.common import status as const
-from apps.common.exceptions import AIRequestError
+from apps.common.ai.failure_safety import (
+    PAGE_REPARSE_FAILURE,
+    PAPER_PARSE_FAILURE,
+    QUESTION_REPARSE_FAILURE,
+    log_safe_failure,
+    new_safe_ai_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +46,7 @@ def update_task_progress(task, progress: int, current_step: str):
     task.save(update_fields=['progress', 'current_step'])
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=30)
-def parse_paper_task(self, paper_id: int):
+def _run_parse_paper_task(paper_id: int):
     """Main parse task: Word -> PDF -> PNG -> AI -> postprocess -> crop -> save."""
     paper = ExamPaper.objects.get(id=paper_id, is_deleted=False)
     task = ParseTask.objects.filter(paper=paper, status=const.TASK_RUNNING).first()
@@ -75,8 +80,11 @@ def parse_paper_task(self, paper_id: int):
                            f'{len(word_info["images"])} images, {len(word_info["image_refs"])} image refs')
             else:
                 logger.info(f'Skipping Word preprocessing: source is not .docx')
-        except Exception as e:
-            logger.warning(f'Word preprocessing failed (non-fatal): {e}')
+        except Exception:
+            logger.warning(
+                'Word preprocessing failed (non-fatal)',
+                extra={"failure_code": "WORD_PREPROCESS_FAILED"},
+            )
 
         # Step 3: PDF -> PNG at 100 DPI for Stage 1 position detection (fast)
         update_task_progress(task, 22, '正在将 PDF 转换为页面图（100 DPI 用于定位）')
@@ -208,20 +216,38 @@ def parse_paper_task(self, paper_id: int):
         paper.save(update_fields=['status'])
         return {'status': 'success', 'paper_id': paper_id}
 
-    except Exception as e:
-        logger.exception(f'Paper {paper_id} parsing failed')
+    except Exception:
+        log_safe_failure(logger, PAPER_PARSE_FAILURE)
         task.status = const.TASK_FAILED
-        task.error_message = str(e)
+        task.error_message = PAPER_PARSE_FAILURE.detail
         task.finished_at = timezone.now()
         task.save()
         paper.status = const.PAPER_FAILED
-        paper.error_message = str(e)
+        paper.error_message = PAPER_PARSE_FAILURE.detail
         paper.save()
-        self.retry(exc=e, countdown=30 * (2 ** self.request.retries))
+        return PAPER_PARSE_FAILURE
 
 
-@shared_task(bind=True, max_retries=1, default_retry_delay=15)
-def reparse_question_task(self, question_id: int):
+@shared_task(bind=True, max_retries=2, default_retry_delay=30)
+def parse_paper_task(self, paper_id: int):
+    """Run the paper pipeline and retry with a chainless fixed error."""
+    outcome = None
+    runner_failed = False
+    try:
+        outcome = _run_parse_paper_task(paper_id)
+    except Exception:
+        runner_failed = True
+    if runner_failed or outcome is PAPER_PARSE_FAILURE:
+        log_safe_failure(logger, PAPER_PARSE_FAILURE)
+        safe_error = new_safe_ai_error(PAPER_PARSE_FAILURE)
+        self.retry(
+            exc=safe_error,
+            countdown=30 * (2 ** self.request.retries),
+        )
+    return outcome
+
+
+def _run_reparse_question_task(question_id: int):
     """Re-parse a single question using Stage 2 (qwen3-VL-plus) only."""
     from apps.parser.models import ExamQuestion, QuestionOption, QuestionImage
     from apps.parser.services.question_parse_service import QuestionParseService
@@ -366,18 +392,36 @@ def reparse_question_task(self, question_id: int):
         logger.info(f'Single question re-parse complete: question_id={question_id}')
         return {'status': 'success', 'question_id': question_id}
 
-    except Exception as e:
-        logger.exception(f'Question {question_id} re-parse failed')
+    except Exception:
+        log_safe_failure(logger, QUESTION_REPARSE_FAILURE)
         if task:
             task.status = const.TASK_FAILED
-            task.error_message = str(e)
+            task.error_message = QUESTION_REPARSE_FAILURE.detail
             task.finished_at = timezone.now()
             task.save()
-        self.retry(exc=e, countdown=15 * (2 ** self.request.retries))
+        return QUESTION_REPARSE_FAILURE
 
 
 @shared_task(bind=True, max_retries=1, default_retry_delay=15)
-def reparse_page_task(self, paper_id: int, page_no: int):
+def reparse_question_task(self, question_id: int):
+    """Run one-question parsing and retry with a chainless fixed error."""
+    outcome = None
+    runner_failed = False
+    try:
+        outcome = _run_reparse_question_task(question_id)
+    except Exception:
+        runner_failed = True
+    if runner_failed or outcome is QUESTION_REPARSE_FAILURE:
+        log_safe_failure(logger, QUESTION_REPARSE_FAILURE)
+        safe_error = new_safe_ai_error(QUESTION_REPARSE_FAILURE)
+        self.retry(
+            exc=safe_error,
+            countdown=15 * (2 ** self.request.retries),
+        )
+    return outcome
+
+
+def _run_reparse_page_task(paper_id: int, page_no: int):
     """Re-parse a single page: delete questions for that page, re-run Stage 1 + Stage 2."""
     from apps.parser.models import QuestionOption, QuestionImage
 
@@ -424,13 +468,32 @@ def reparse_page_task(self, paper_id: int, page_no: int):
         task.save()
         return {'status': 'success', 'paper_id': paper_id, 'page_no': page_no}
 
-    except Exception as e:
-        logger.exception(f'Page {page_no} re-parse failed for paper {paper_id}')
+    except Exception:
+        log_safe_failure(logger, PAGE_REPARSE_FAILURE)
         task.status = const.TASK_FAILED
-        task.error_message = str(e)
+        task.error_message = PAGE_REPARSE_FAILURE.detail
         task.finished_at = timezone.now()
         task.save()
-        self.retry(exc=e, countdown=15 * (2 ** self.request.retries))
+        return PAGE_REPARSE_FAILURE
+
+
+@shared_task(bind=True, max_retries=1, default_retry_delay=15)
+def reparse_page_task(self, paper_id: int, page_no: int):
+    """Run one-page parsing and retry with a chainless fixed error."""
+    outcome = None
+    runner_failed = False
+    try:
+        outcome = _run_reparse_page_task(paper_id, page_no)
+    except Exception:
+        runner_failed = True
+    if runner_failed or outcome is PAGE_REPARSE_FAILURE:
+        log_safe_failure(logger, PAGE_REPARSE_FAILURE)
+        safe_error = new_safe_ai_error(PAGE_REPARSE_FAILURE)
+        self.retry(
+            exc=safe_error,
+            countdown=15 * (2 ** self.request.retries),
+        )
+    return outcome
 
 
 @shared_task
