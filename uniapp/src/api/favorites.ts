@@ -15,11 +15,11 @@ export interface Favorite {
 
 export const favoriteApi = {
   // GET /api/v1/teacher/favorites
-  list: (params?: { question_type?: string; search?: string; knowledge_point_id?: number }) => get<Favorite[]>('/teacher/favorites/', params || {}),
+  list: (params?: { subject?: string; question_type?: string; search?: string; knowledge_point_id?: string | number }) => get<Favorite[]>('/teacher/favorites/', params || {}),
 
   // POST /api/v1/teacher/favorites/add
-  add: (question_id: number) => post<{ id: number }>('/teacher/favorites/add/', { question_id }),
+  add: (question_id: string | number) => post<{ id: number }>('/teacher/favorites/add/', { question_id }),
 
   // DELETE /api/v1/teacher/favorites/{question_id}
-  remove: (question_id: number) => del(`/teacher/favorites/${question_id}/`),
+  remove: (question_id: string | number) => del(`/teacher/favorites/${question_id}/`),
 }

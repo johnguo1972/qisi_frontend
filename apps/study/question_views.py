@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Q
 from apps.parser.models import ExamQuestion
+from apps.knowledge.models import KnowledgePoint
 from .serializers import QuestionListSerializer, QuestionDetailSerializer
 
 
@@ -47,11 +48,18 @@ def question_list(request):
 
     # Filter by knowledge point ID (JSONField containment)
     if knowledge_point_id:
-        try:
-            kp_id = int(knowledge_point_id)
-            qs = qs.filter(ai_knowledge_enrichment__contains=[{'id': kp_id}])
-        except (ValueError, TypeError):
-            pass
+        if knowledge_point_id == '-1':
+            qs = qs.filter(Q(knowledge_points__isnull=True) | Q(knowledge_points=[]))
+        else:
+            try:
+                kp_id = int(knowledge_point_id)
+                qs = qs.filter(ai_knowledge_enrichment__contains=[{'id': kp_id}])
+            except (ValueError, TypeError):
+                try:
+                    kp = KnowledgePoint.objects.get(pk=knowledge_point_id)
+                    qs = qs.filter(knowledge_points__contains=[{'module': kp.module}])
+                except (KnowledgePoint.DoesNotExist, ValueError, TypeError):
+                    pass
 
     page = int(request.GET.get('page', 1))
     page_size = int(request.GET.get('page_size', 20))

@@ -672,8 +672,10 @@ class AIReviewService:
                         )
             question.ai_knowledge_enrichment = kp_data
             # 用匹配到 DB 的知识点更新题目的 knowledge_points 关联
-            if matched_kps:
-                question.knowledge_points = matched_kps
+            # No match means the question belongs to the virtual root/未分类 node.
+            # Clear stale associations when re-running AI, so the tree and question
+            # query remain consistent with the latest AI result.
+            question.knowledge_points = matched_kps
             # 难度更新
             diff = kp_data.get('difficulty')
             if diff and isinstance(diff, str) and len(diff) == 2 and diff[0] == 'L' and diff[1].isdigit():

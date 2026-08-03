@@ -9,6 +9,7 @@
     <button class="action-btn" @click="$emit('share-multiple')">分享多题</button>
     <button class="action-btn" @click="$emit('share-history')">分享历史</button>
     <button class="action-btn btn-warning" @click="$emit('basket')">加入篮子</button>
+    <button class="action-btn btn-ai" @click="$emit('ai-process')">AI处理</button>
     <view class="basket-count" v-if="basketCount > 0">
       &#128465; 篮子: {{ basketCount }}题
     </view>
@@ -21,7 +22,7 @@ defineProps<{
   allShown?: boolean
 }>()
 
-defineEmits(['random', 'query-params', 'refresh', 'toggle-answer', 'share-multiple', 'share-history', 'basket'])
+defineEmits(['random', 'query-params', 'refresh', 'toggle-answer', 'share-multiple', 'share-history', 'basket', 'ai-process'])
 </script>
 
 <style scoped>
@@ -45,6 +46,7 @@ defineEmits(['random', 'query-params', 'refresh', 'toggle-answer', 'share-multip
 .btn-success { background: #67c23a; color: #fff; border-color: #67c23a; }
 .btn-success:hover { background: #85ce61; color: #fff; }
 .btn-warning { background: #e6a23c; color: #fff; border-color: #e6a23c; }
+.btn-ai { background: #9254de; color: #fff; border-color: #9254de; }
 .btn-warning:hover { background: #ebb563; color: #fff; }
 .basket-count {
   font-size: 12px; color: #409eff; text-align: center;

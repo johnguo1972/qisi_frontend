@@ -2,10 +2,12 @@
 from rest_framework import serializers
 from apps.parser.models import ExamQuestion
 from apps.papers.models import ParseTask, ExamPaper
+from apps.knowledge.models import KnowledgePoint
 
 
 class QuestionListSerializer(serializers.ModelSerializer):
     knowledge_points_count = serializers.SerializerMethodField()
+    knowledge_points_display = serializers.SerializerMethodField()
     stem_preview = serializers.SerializerMethodField()
     ai_answer_a = serializers.SerializerMethodField()
     ai_answer_b = serializers.SerializerMethodField()
@@ -32,7 +34,7 @@ class QuestionListSerializer(serializers.ModelSerializer):
         model = ExamQuestion
         fields = ['id', 'question_no', 'system_id', 'question_type', 'difficulty',
                   'subject', 'review_status', 'stem', 'stem_preview', 'answer', 'analysis', 'solution',
-                  'knowledge_points_count',
+                  'knowledge_points_count', 'knowledge_points_display',
                   'ai_answer_a', 'ai_answer_b', 'ai_answer_c',
                   'ai_answer_a_confirmed', 'ai_answer_b_confirmed', 'ai_answer_c_confirmed',
                   'paper_title',
@@ -51,6 +53,34 @@ class QuestionListSerializer(serializers.ModelSerializer):
         if obj.knowledge_points:
             return len(obj.knowledge_points) if isinstance(obj.knowledge_points, list) else 0
         return 0
+
+    def get_knowledge_points_display(self, obj):
+        raw = obj.knowledge_points or []
+        if isinstance(raw, dict):
+            raw = raw.get('points', [])
+        if not isinstance(raw, list):
+            return []
+        modules = [x.get('module') for x in raw if isinstance(x, dict) and x.get('module')]
+        ids = [str(x.get('id')) for x in raw if isinstance(x, dict) and x.get('id') is not None]
+        points = list(KnowledgePoint.objects.filter(id__in=ids)) if ids else []
+        by_id = {str(p.id): p for p in points}
+        module_qs = KnowledgePoint.objects.filter(subject=obj.subject, module__in=modules)
+        if not module_qs.exists():
+            module_qs = KnowledgePoint.objects.filter(module__in=modules)
+        for p in module_qs:
+            by_id.setdefault(str(p.id), p)
+        result, seen = [], set()
+        for item in raw:
+            module = item.get('module') if isinstance(item, dict) else None
+            key = str(item.get('id')) if isinstance(item, dict) and item.get('id') is not None else None
+            point = by_id.get(key)
+            if point is None and module:
+                point = next((p for p in by_id.values() if p.module == module), None)
+            name = point.module if point else module
+            if name and name not in seen:
+                result.append({'id': str(point.id) if point else key, 'name': name})
+                seen.add(name)
+        return result
 
     def get_ai_answer_a(self, obj):
         return obj.ai_answer_a
