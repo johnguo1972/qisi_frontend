@@ -49,12 +49,33 @@
 
 ## 4. 活跃入口详细处理流程
 
+### 4.0 题目 AI 的手动触发策略（2026-08-03）
+
+- 题目探查和 A/B/C 答案生成均为**仅手动触发**的操作。创建、导入、解析、保存、编辑、确认、拍照创建题目或页面加载，均不会自动发起题目探查，也不会自动发起 A/B/C。
+- 前端仅提供以下五个明确点击操作，任何批处理也必须由用户显式选题后点击触发：
+
+| 操作 | 精确处理范围 | 不会隐式执行的步骤 |
+| --- | --- | --- |
+| `一键全部 AI 处理` | `question_probe`、知识分析、视觉事实提取、A/B/C 以及 DeepSeek 校验 | 无；该操作只在用户明确点击后执行完整链路 |
+| `AI 探查` | `question_probe`、知识分析及其属性持久化 | 视觉事实提取、A/B/C 和 DeepSeek 校验 |
+| `A 模式` | 仅 `mode_a_answer` | 探查、知识分析、视觉事实提取、B/C 和 DeepSeek 校验 |
+| `B 模式` | 仅 `mode_b_answer` | 探查、知识分析、视觉事实提取、A/C 和 DeepSeek 校验 |
+| `C 模式` | 仅 `mode_c_answer` | 探查、知识分析、视觉事实提取、A/B 和 DeepSeek 校验 |
+
+- 后端手动入口为：
+  - `POST /api/v1/review/question/<question_id>/ai-process/`：一键全部 AI 处理；
+  - `POST /api/v1/review/question/<question_id>/ai-process-probe/`：仅 AI 探查；
+  - `POST /api/v1/review/question/<question_id>/ai-process-mode/<A|B|C>/`：仅所选答案模式。
+- 批量入口同样只接受显式选题和显式点击，不能由保存、创建、导入、解析、拍照或页面加载信号间接调度。
+- 目标题目不存在时，入口以终态 `skipped` / `question_not_found` 结束，且在此之前不创建 AI 客户端、不发起 AI 调用。
+- 历史兼容任务 `apps.common.batch_tasks.single_generate_ai_answers` 已注册为禁用墓碑：仅返回 `automatic_generation_disabled`，从不调用 AI。保留该任务只为兼容旧任务名，不能作为自动生成入口。
+
 ### 4.1 common/review：题目探查、知识分析和 A/B/C 答案（已迁移）
 
 - 入口：`apps/common/batch_tasks.py`、`apps/common/management/commands/generate_ai_guidance.py`、`apps/review/tasks.py`、`apps/review/views.py`、`apps/review/services/ai_review_service.py`。
 - 兼容外壳：`apps/common/ai_service.py:AIReviewService` 保留原公开方法和 mock 注入点，不再拥有 provider HTTP、URL、Key 或提示词。
 - 输入：题干、已有答案/解析、选项、题图、知识点和题目元数据，统一转换为 `QuestionInput`。
-- 处理链：`question_probe` -> 可选 `vision_fact_extract` -> `knowledge_analysis` -> `mode_a_answer`/`mode_b_answer`/`mode_c_answer` -> `result_verify`。
+- 一键全部 AI 处理链：`question_probe` -> `knowledge_analysis` -> `vision_fact_extract` -> `mode_a_answer`/`mode_b_answer`/`mode_c_answer` -> DeepSeek 校验；探查入口只执行 `question_probe` 和 `knowledge_analysis` 并持久化属性；A/B/C 入口各自只执行已选模式，不隐式探查。
 - 错误策略：公共客户端执行 HTTP 分类重试；组件拒绝不可恢复 JSON/Schema；完整流程保留 partial/error 状态，单模式失败不伪造其它模式成功。
 - 持久化：兼容服务写回 `ExamQuestion.ai_probe_result`、`ai_vision_extract`、`ai_knowledge_enrichment`、`ai_answer_a/b/c`、`ai_verifier_result`、`ai_processing_status`、`ai_processed_at`；任务/缓存进度结构不变。
 - 输出兼容：A 保留 `steps/final_answer/summary`；B 保留 `questions/options/correct_answer/explanation`；C 保留开放问题、参考答案、评分点、追问和总结字段。
@@ -79,7 +100,7 @@
 - 入口：`apps/study/photo_views.py:photo_create_question`。
 - 处理链：图片经 `image_codec` 校验、压缩并转换安全多模态输入 -> `photo_recognize` -> `VisionParserComponent.recognize_photo` -> JSON 对象。
 - 错误策略：组件/编码/网络/Schema 异常转换为固定安全错误；日志和 traceback 不保留完整 base64、本地路径或签名 URL；HTTP 重试统一由 `AIClient` 处理。
-- 持久化：继续创建/更新 `ExamPaper`、`ExamQuestion`、`QuestionOption`、`QuestionImage`、`ExamPage`、`AIParseResult`，然后触发既有答案生成任务。
+- 持久化：继续创建/更新 `ExamPaper`、`ExamQuestion`、`QuestionOption`、`QuestionImage`、`ExamPage`、`AIParseResult`；创建完成后不触发题目探查或 A/B/C，后续 AI 处理须由用户手动选择上述五个操作之一。
 
 ### 4.5 parser：位置、整页和逐题解析（已迁移）
 
