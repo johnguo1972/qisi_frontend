@@ -181,6 +181,27 @@ def ai_process_question(request, question_id):
     })
 
 
+@api_view(['POST'])
+def ai_process_probe(request, question_id):
+    """Start probe-only attribute extraction for one question via Celery."""
+    try:
+        ExamQuestion.objects.get(id=question_id)
+    except ExamQuestion.DoesNotExist:
+        raise NotFound(f'Question {question_id} not found')
+
+    serializer = AIProcessRequestSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    model = serializer.validated_data.get('model')
+
+    from .tasks import single_probe_ai_process_question
+    task = single_probe_ai_process_question.delay(question_id, model=model)
+
+    return Response({
+        'success': True,
+        'data': {'task_id': task.id, 'status': 'pending', 'mode': 'probe'},
+    })
+
+
 @api_view(['GET'])
 def single_ai_task_status(request, task_id):
     """Get async single AI task progress."""

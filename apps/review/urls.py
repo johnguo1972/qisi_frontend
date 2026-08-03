@@ -12,6 +12,7 @@ urlpatterns = [
     path('review/questions/<str:question_id>/delete/', views.question_delete, name='question-delete'),
     # AI Review endpoints
     path('review/question/<str:question_id>/ai-process/', views.ai_process_question, name='ai-process-question'),
+    path('review/question/<str:question_id>/ai-process-probe/', views.ai_process_probe, name='ai-process-probe'),
     path('review/ai-task/<str:task_id>/status/', views.single_ai_task_status, name='single-ai-task-status'),
     path('review/question/<str:question_id>/ai-process-mode/<str:mode>/', views.ai_process_single_mode, name='ai-process-single-mode'),
     path('review/ai-task/<str:task_id>/status-v2/', views.ai_task_status, name='ai-task-status'),

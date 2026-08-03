@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.core.management.base import CommandError
 from django.core.management import call_command
+from django.urls import reverse
+from rest_framework.test import APIClient
 
 from apps.common import ai_service as common_ai_service
 from apps.common.ai.components import (
@@ -21,6 +23,7 @@ from apps.common.ai.components import (
     VisionExtractionComponent,
 )
 from apps.parser.models import ExamPaper, ExamQuestion
+from apps.knowledge.models import KnowledgePoint
 
 
 def _make_question(*, stem="1 + 1 = ?"):
@@ -102,6 +105,201 @@ def test_shared_factory_builds_the_compatibility_facade():
     )
 
     assert isinstance(service, common_ai_service.AIReviewService)
+
+
+@pytest.mark.django_db
+def test_probe_pipeline_runs_only_probe_and_knowledge_then_persists_attributes():
+    """Probe-only processing must not generate vision or any answer mode."""
+    question = _make_question()
+    knowledge_point = KnowledgePoint.objects.create(
+        subject="math",
+        stage="junior",
+        grade_index=7,
+        grade_name="Grade 7",
+        term="up",
+        chapter="Numbers",
+        module="integer addition",
+        node_type="method",
+        content="integer addition",
+    )
+    responses = _component_responses()
+    responses[KnowledgeAnalysisComponent] = {
+        "subject": "math",
+        "difficulty": "L2",
+        "knowledge_points": [{"subject": "math", "module": "integer addition"}],
+    }
+    components = {}
+
+    def component_factory(component_type):
+        component = MagicMock()
+        component.run.return_value = responses[component_type]
+        components[component_type] = component
+        return component
+
+    service = common_ai_service.AIReviewService(component_factory=component_factory)
+    service._get_question_image_urls = MagicMock(return_value=[])
+
+    results = service.process_question_probe(str(question.id))
+
+    assert set(results) == {"probe", "knowledge", "errors"}
+    components[QuestionProbeComponent].run.assert_called_once()
+    components[KnowledgeAnalysisComponent].run.assert_called_once()
+    for component_type in (
+        VisionExtractionComponent,
+        ModeAAnswerComponent,
+        ModeBAnswerComponent,
+        ModeCAnswerComponent,
+        ResultVerifierComponent,
+    ):
+        assert component_type not in components
+
+    service.save_results_to_question(str(question.id), results)
+    question.refresh_from_db()
+    assert question.ai_probe_result == results["probe"]
+    assert question.ai_knowledge_enrichment["difficulty"] == "L2"
+    assert question.knowledge_points == [
+        {"id": str(knowledge_point.id), "module": "integer addition"}
+    ]
+    assert question.difficulty == 2
+    assert question.ai_answer_a is None
+    assert question.ai_answer_b is None
+    assert question.ai_answer_c is None
+
+
+@pytest.mark.parametrize(
+    ("errors", "status"),
+    [({}, "complete"), ({"knowledge": "unavailable"}, "partial")],
+)
+def test_probe_task_persists_probe_results_and_terminal_progress(errors, status):
+    """Removing probe task persistence or partial reporting must break this test."""
+    from apps.review import tasks
+
+    question = MagicMock()
+    facade = MagicMock()
+    facade.process_question_probe.return_value = {
+        "probe": {"subject": "math"},
+        "knowledge": {"knowledge_points": []},
+        "errors": errors,
+    }
+    writes = []
+
+    with (
+        patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(tasks, "create_ai_review_service", return_value=facade),
+        patch.object(
+            tasks.cache,
+            "set",
+            side_effect=lambda key, value, timeout: writes.append(
+                (key, json.loads(value), timeout)
+            ),
+        ),
+    ):
+        result = tasks.single_probe_ai_process_question.run("probe-question")
+
+    assert result == {
+        "status": status,
+        "question_id": "probe-question",
+        "mode": "probe",
+    }
+    facade.process_question_probe.assert_called_once_with(
+        "probe-question", model=None
+    )
+    facade.save_results_to_question.assert_called_once_with(
+        "probe-question", facade.process_question_probe.return_value
+    )
+    assert writes[-1] == (
+        "single_ai_progress:None",
+        {
+            "status": status,
+            "question_id": "probe-question",
+            "step": "complete",
+            "step_label": "处理完成",
+            "result": {"errors": errors},
+            "error": None,
+        },
+        3600,
+    )
+    facade.close.assert_called_once_with()
+
+
+def test_probe_task_skips_missing_question_without_creating_facade():
+    """A deleted probe target must not instantiate an AI client."""
+    from apps.review import tasks
+
+    writes = []
+    with (
+        patch.object(
+            tasks.ExamQuestion.objects,
+            "get",
+            side_effect=tasks.ExamQuestion.DoesNotExist,
+        ),
+        patch.object(
+            tasks,
+            "create_ai_review_service",
+            side_effect=AssertionError("missing question created a facade"),
+        ) as service_factory,
+        patch.object(
+            tasks.cache,
+            "set",
+            side_effect=lambda key, value, timeout: writes.append(
+                (key, json.loads(value), timeout)
+            ),
+        ),
+    ):
+        result = tasks.single_probe_ai_process_question.run("missing")
+
+    assert result == {
+        "status": "skipped",
+        "question_id": "missing",
+        "reason": "question_not_found",
+    }
+    service_factory.assert_not_called()
+    assert writes[-1][1]["status"] == "skipped"
+
+
+@pytest.mark.django_db
+def test_probe_endpoint_dispatches_only_probe_task_with_validated_model():
+    """Probe POST must dispatch the dedicated task and return its pending contract."""
+    question = _make_question()
+    client = APIClient()
+    client.force_authenticate(user=MagicMock(is_authenticated=True))
+    delayed_task = MagicMock(id="probe-task-id")
+
+    with patch(
+        "apps.review.tasks.single_probe_ai_process_question.delay",
+        return_value=delayed_task,
+    ) as delay:
+        response = client.post(
+            reverse("ai-process-probe", args=[question.id]),
+            {"model": "qwen"},
+            format="json",
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "data": {"task_id": "probe-task-id", "status": "pending", "mode": "probe"},
+    }
+    delay.assert_called_once_with(str(question.id), model="qwen")
+
+
+@pytest.mark.django_db
+def test_probe_endpoint_returns_not_found_without_dispatching():
+    """A missing probe target must not enqueue any task."""
+    client = APIClient()
+    client.force_authenticate(user=MagicMock(is_authenticated=True))
+
+    with patch(
+        "apps.review.tasks.single_probe_ai_process_question.delay"
+    ) as delay:
+        response = client.post(
+            reverse("ai-process-probe", args=[uuid.uuid4()]),
+            {},
+            format="json",
+        )
+
+    assert response.status_code == 404
+    delay.assert_not_called()
 
 
 @pytest.mark.django_db(transaction=True)

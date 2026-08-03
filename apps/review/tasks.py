@@ -138,6 +138,73 @@ def single_ai_process_question(self, question_id, model=None):
 
 
 @shared_task(bind=True, max_retries=0)
+def single_probe_ai_process_question(self, question_id, model=None):
+    """Run the manual probe-only AI path for one existing question."""
+    task_id = self.request.id
+
+    def set_progress(status, step, label, result=None, error=None):
+        cache.set(f'{PROGRESS_KEY_PREFIX}{task_id}', json.dumps({
+            'status': status,
+            'question_id': question_id,
+            'step': step,
+            'step_label': label,
+            'result': result,
+            'error': error,
+        }), timeout=3600)
+
+    set_progress('running', 'starting', STEP_LABELS['starting'])
+
+    try:
+        ExamQuestion.objects.get(id=question_id)
+    except ExamQuestion.DoesNotExist:
+        return _skip_missing_question(set_progress, question_id)
+    except Exception:
+        raise
+
+    service = create_ai_review_service()
+    try:
+        results = service.process_question_probe(question_id, model=model)
+        service.save_results_to_question(question_id, results)
+        task_status = 'complete' if not results.get('errors') else 'partial'
+        set_progress(
+            task_status,
+            'complete',
+            '处理完成',
+            result={'errors': results.get('errors', {})},
+        )
+        logger.info(
+            'AI probe processing complete',
+            extra={
+                'question_id': str(question_id),
+                'status': task_status,
+                'mode': 'probe',
+            },
+        )
+        return {
+            'status': task_status,
+            'question_id': str(question_id),
+            'mode': 'probe',
+        }
+    except Exception:
+        logger.error(
+            'AI probe processing failed',
+            extra={
+                'question_id': str(question_id),
+                'status': 'failed',
+                'mode': 'probe',
+            },
+        )
+        set_progress('failed', 'failed', '处理失败', error='processing_failed')
+        return {
+            'status': 'failed',
+            'question_id': str(question_id),
+            'mode': 'probe',
+        }
+    finally:
+        service.close()
+
+
+@shared_task(bind=True, max_retries=0)
 def single_mode_ai_process_question(self, question_id, mode, model=None):
     """AI processing for a single mode (A/B/C only), reusing existing probe/vision results.
 

@@ -479,6 +479,38 @@ class AIReviewService:
             self._component(KnowledgeAnalysisComponent), question_input
         )
 
+    def process_question_probe(self, question_id: int, model: str = None) -> dict:
+        """Run only probe/normalization and knowledge analysis for one question."""
+        from apps.parser.models import ExamQuestion
+
+        question = ExamQuestion.objects.get(id=question_id)
+        results = {}
+        errors = {}
+        image_urls = self._get_question_image_urls(question)
+
+        try:
+            probe_result = self.probe_and_norm(question, image_urls, model=model)
+            results['probe'] = probe_result
+            normalized_text = probe_result.get('normalized_text', question.stem or '')
+        except AIRequestError as error:
+            errors['probe'] = str(error)
+            results['probe'] = {'error': str(error)}
+            normalized_text = question.stem or ''
+
+        try:
+            results['knowledge'] = self.analyze_knowledge_points(
+                question,
+                normalized_text,
+                subject_hint=results['probe'].get('subject', ''),
+                model=model,
+            )
+        except AIRequestError as error:
+            errors['knowledge'] = str(error)
+            results['knowledge'] = {'error': str(error)}
+
+        results['errors'] = errors
+        return results
+
     def process_question_full_v2(self, question_id: int, model: str = None) -> dict:
         """Full 6-step pipeline: Probe -> Vision -> Solver A/B/C -> Verifier."""
         from django.utils import timezone
@@ -623,10 +655,10 @@ class AIReviewService:
                     if not db_kp:
                         db_kp = KnowledgePoint.objects.filter(module__icontains=ai_module).first()
                     if db_kp:
-                        kp['id'] = db_kp.id
+                        kp['id'] = str(db_kp.id)
                         kp['module'] = db_kp.module
                         kp['full_label'] = db_kp.full_label
-                        matched_kps.append({'id': db_kp.id, 'module': db_kp.module})
+                        matched_kps.append({'id': str(db_kp.id), 'module': db_kp.module})
                         logger.info(
                             '[AI] knowledge point matched',
                             extra={'status': 'matched'},
