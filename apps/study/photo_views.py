@@ -240,7 +240,7 @@ def photo_create_question(request):
 
         return Response({
             'code': 0,
-            'message': '\u7487\u55d7\u57c6\u93b4\u612c\u59db\u951b\u5c7d\u5f72\u93b5\u5b2a\u4f10\u6769\u6d9c\ue511 AI \u6fb6\u52ed\u608a',
+            'message': '识别成功，可手工进行 AI 处理',
             'data': {
                 'question_id': question.id,
                 'system_id': system_id,

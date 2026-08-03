@@ -87,6 +87,6 @@ def test_successful_photo_create_keeps_ai_processing_manual(tmp_path, monkeypatc
         response = _plain_view_handler(photo_views.photo_create_question)(request)
 
     assert response.status_code == 200
-    assert response.data["message"] == "璇嗗埆鎴愬姛锛屽彲鎵嬪伐杩涜 AI 澶勭悊"
+    assert response.data["message"] == "识别成功，可手工进行 AI 处理"
     assert response.data["data"]["ai_generation_status"] == "not_started"
     delay.assert_not_called()
