@@ -110,15 +110,22 @@
         </view>
       </view>
     </view>
+    <QuestionAIControls
+      :visible="showAiControls"
+      :question-id="selectedAiQuestionId"
+      @close="closeAiControls"
+      @completed="handleAiCompleted"
+    />
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
-import { photoListQuestions, confirmAiAnswer as apiConfirmAiAnswer, aiProcessQuestion, getAiTaskStatus, aiProcessSingleMode } from '@/api/questions'
+import { ref, onMounted, watch } from 'vue'
+import { photoListQuestions, confirmAiAnswer as apiConfirmAiAnswer } from '@/api/questions'
 import { knowledgeApi } from '@/api/knowledge'
 import { useUserStore } from '@/store/index.ts'
 import { renderWithKatex } from '@/utils/katex-renderer'
+import QuestionAIControls from '@/components/QuestionAIControls.vue'
 
 const userStore = useUserStore()
 
@@ -157,11 +164,11 @@ const selectedKP = ref<number | null>(null)
 const tree = ref<TreeNode[]>([])
 const modes = ['a', 'b', 'c']
 
-const aiPollTimers: Array<{ taskId: string; timer: ReturnType<typeof setInterval> }> = []
-
 const aiConfirmVisible = ref(false)
 const currentQuestion = ref<Question | null>(null)
 const aiAnswerHtml = ref<Record<string, string>>({ a: '', b: '', c: '' })
+const selectedAiQuestionId = ref<string | number | null>(null)
+const showAiControls = ref(false)
 
 function navigateTo(url: string) { uni.navigateTo({ url }) }
 function goPhotoUpload() { uni.navigateTo({ url: '/pages/teacher/photo-upload' }) }
@@ -260,43 +267,19 @@ async function doConfirmAiAnswer(mode: string) {
   }
 }
 
-async function handleAiProcess(questionId: number) {
-  uni.showToast({ title: `已开始AI处理（题${questionId}），可继续其他操作`, icon: 'none', duration: 2000 })
-  try {
-    const res: any = await aiProcessQuestion(questionId)
-    const taskId = res.data?.task_id
-    if (!taskId) throw new Error('No task ID')
-    const timer = setInterval(async () => {
-      try {
-        const statusRes: any = await getAiTaskStatus(taskId)
-        if (statusRes.success === false || !statusRes.data) {
-          clearInterval(timer)
-          const idx = aiPollTimers.findIndex(t => t.taskId === taskId)
-          if (idx >= 0) aiPollTimers.splice(idx, 1)
-          uni.showToast({ title: `任务进度已失效（题${questionId}），请重新AI处理`, icon: 'none' })
-          loadQuestions()
-          return
-        }
-        const data = statusRes.data
-        if (data.status === 'complete' || data.status === 'failed' || data.status === 'partial') {
-          clearInterval(timer)
-          const idx = aiPollTimers.findIndex(t => t.taskId === taskId)
-          if (idx >= 0) aiPollTimers.splice(idx, 1)
-          if (data.status === 'complete') {
-            uni.showToast({ title: `AI处理完成（题${questionId}）`, icon: 'success' })
-          } else if (data.status === 'partial') {
-            uni.showToast({ title: `AI处理完成，部分步骤失败（题${questionId}）`, icon: 'none' })
-          } else {
-            uni.showToast({ title: data.error || `AI处理失败（题${questionId}）`, icon: 'none' })
-          }
-          loadQuestions()
-        }
-      } catch (e) { /* silent */ }
-    }, 2000)
-    aiPollTimers.push({ taskId, timer })
-  } catch (e: any) {
-    uni.showToast({ title: e?.message || '启动失败', icon: 'none' })
-  }
+function handleAiProcess(questionId: number) {
+  selectedAiQuestionId.value = questionId
+  showAiControls.value = true
+}
+
+function closeAiControls() {
+  showAiControls.value = false
+  selectedAiQuestionId.value = null
+}
+
+function handleAiCompleted() {
+  loadQuestions()
+  closeAiControls()
 }
 
 async function handleDelete(questionId: number) {
@@ -323,7 +306,6 @@ onMounted(() => {
   loadKnowledgeTree()
   loadQuestions()
 })
-onUnmounted(() => { aiPollTimers.forEach(t => clearInterval(t.timer)); aiPollTimers.length = 0 })
 </script>
 
 <style scoped>

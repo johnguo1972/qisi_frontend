@@ -149,32 +149,12 @@
       </view>
     </view>
 
-    <!-- AI处理弹窗 -->
-    <view v-if="showProcessModal" class="modal-overlay" @click.self="closeProcessModal">
-      <view class="modal-box modal-sm">
-        <view class="modal-header">
-          <text class="modal-title">AI处理 - 题目 #{{ processModalQId }}</text>
-          <text class="modal-close" @click="closeProcessModal">✕</text>
-        </view>
-        <view class="modal-body">
-          <view v-if="!processing" class="process-form">
-            <text class="form-label">选择模型：</text>
-            <picker :value="processModelIndex" :range="processModelOptions" @change="onProcessModelChange">
-              <view class="picker-value">{{ processModelOptions[processModelIndex] }}</view>
-            </picker>
-            <text class="process-hint">将依次执行：知识点分析 → A模式答案 → B模式答案 → C模式答案</text>
-          </view>
-          <view v-else class="process-running">
-            <view class="spinner"></view>
-            <text class="process-status">{{ processStatus }}</text>
-          </view>
-        </view>
-        <view class="modal-footer">
-          <button class="btn-cancel" @click="closeProcessModal" :disabled="processing">取消</button>
-          <button class="btn-start" @click="startAIProcess" :disabled="processing">开始处理</button>
-        </view>
-      </view>
-    </view>
+    <QuestionAIControls
+      :visible="showAiControls"
+      :question-id="selectedAiQuestionId"
+      @close="closeAiControls"
+      @completed="handleAiCompleted"
+    />
   </view>
 </template>
 
@@ -182,6 +162,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { questionApi } from '@/api/index.ts'
 import { knowledgeApi, type KnowledgePoint } from '@/api/knowledge.ts'
+import QuestionAIControls from '@/components/QuestionAIControls.vue'
 
 interface GradeNode { name: string; semesters: SemesterNode[]; expanded: boolean }
 interface SemesterNode { name: string; chapters: ChapterNode[]; expanded: boolean }
@@ -208,16 +189,8 @@ const showAIModal = ref(false)
 const aiLoading = ref(false)
 const aiModalQId = ref(0)
 const aiStatusData = ref<any>(null)
-
-// Process modal
-const showProcessModal = ref(false)
-const processModalQId = ref(0)
-const processing = ref(false)
-const processStatus = ref('')
-const processModelIndex = ref(0)
-const processModelOptions = ['默认模型', 'qwen3.6-plus']
-let pollTimer: any = null
-let currentTaskId = ''
+const selectedAiQuestionId = ref<string | number | null>(null)
+const showAiControls = ref(false)
 
 onMounted(async () => {
   loadTree()
@@ -362,74 +335,19 @@ async function confirmAllAI() {
   if (selectedKpId.value) loadQuestions()
 }
 
-// AI Process
 function processAI(qId: number) {
-  processModalQId.value = qId
-  processing.value = false
-  processStatus.value = ''
-  processModelIndex.value = 0
-  showProcessModal.value = true
+  selectedAiQuestionId.value = qId
+  showAiControls.value = true
 }
 
-function onProcessModelChange(e: any) {
-  processModelIndex.value = e.detail.value
+function closeAiControls() {
+  showAiControls.value = false
+  selectedAiQuestionId.value = null
 }
 
-function closeProcessModal() {
-  if (processing.value) return
-  showProcessModal.value = false
-}
-
-async function startAIProcess() {
-  const qId = processModalQId.value
-  const modelIdx = processModelIndex.value
-  const model = modelIdx > 0 ? processModelOptions[modelIdx] : undefined
-
-  processing.value = true
-  processStatus.value = '正在提交任务，请稍候...'
-
-  try {
-    const res = await questionApi.aiProcess(qId, model ? { model } : undefined)
-    currentTaskId = res.data.task_id
-    startPolling(qId)
-  } catch (e) {
-    processing.value = false
-    processStatus.value = '提交失败'
-    uni.showToast({ title: 'AI处理启动失败', icon: 'none' })
-  }
-}
-
-function startPolling(qId: number) {
-  if (pollTimer) clearInterval(pollTimer)
-  pollTimer = setInterval(async () => {
-    if (!currentTaskId) return
-    try {
-      const res = await questionApi.getTaskStatus(currentTaskId)
-      const data = res.data
-      if (data.status === 'pending' || data.status === 'running') {
-        processStatus.value = data.step_label || '处理中...'
-      } else if (data.status === 'success' || data.status === 'partial') {
-        stopPolling()
-        processStatus.value = '处理完成！'
-        setTimeout(() => {
-          closeProcessModal()
-          if (selectedKpId.value) loadQuestions()
-        }, 1500)
-      } else if (data.status === 'failed') {
-        stopPolling()
-        processStatus.value = '处理失败：' + (data.error || '未知错误')
-      }
-    } catch {}
-  }, 2000)
-}
-
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
-  processing.value = false
-  currentTaskId = ''
+function handleAiCompleted() {
+  if (selectedKpId.value) loadQuestions()
+  closeAiControls()
 }
 
 async function deleteQuestion(qId: number) {

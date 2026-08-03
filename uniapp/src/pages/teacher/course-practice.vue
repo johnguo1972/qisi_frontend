@@ -236,6 +236,12 @@
         </view>
       </view>
     </view>
+    <QuestionAIControls
+      :visible="showAiControls"
+      :question-id="selectedAiQuestionId"
+      @close="closeAiControls"
+      @completed="handleAiCompleted"
+    />
   </view>
 </template>
 
@@ -245,12 +251,15 @@ import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import DirTree from '@/components/DirTree.vue'
 import { treeApi, courseQuestionApi, variantApi, materialApi } from '@/api/courses'
 import { aiProcessQuestion, getAiTaskStatus } from '@/api/questions'
+import QuestionAIControls from '@/components/QuestionAIControls.vue'
 
 // ============================================================
 // Course info
 // ============================================================
 const courseId = ref<number>(0)
 const courseName = ref('课程加载中...')
+const selectedAiQuestionId = ref<string | number | null>(null)
+const showAiControls = ref(false)
 
 async function loadCourseInfo() {
   try {
@@ -706,9 +715,24 @@ async function importFromBank() {
 // ============================================================
 // AI processing (polling pattern from bank.vue)
 // ============================================================
-const aiPollTimers: Array<{ taskId: string; timer: ReturnType<typeof setInterval> }> = []
+const batchAiPollTimers: Array<{ taskId: string; timer: ReturnType<typeof setInterval> }> = []
 
-async function handleAiProcess(questionId: number) {
+function handleAiProcess(questionId: number) {
+  selectedAiQuestionId.value = questionId
+  showAiControls.value = true
+}
+
+function closeAiControls() {
+  showAiControls.value = false
+  selectedAiQuestionId.value = null
+}
+
+function handleAiCompleted() {
+  loadQuestions()
+  closeAiControls()
+}
+
+async function startBatchAiProcess(questionId: number) {
   uni.showToast({ title: `已开始AI处理（题${questionId}），可继续其他操作`, icon: 'none', duration: 2000 })
   try {
     const res: any = await aiProcessQuestion(questionId)
@@ -719,8 +743,8 @@ async function handleAiProcess(questionId: number) {
         const statusRes: any = await getAiTaskStatus(taskId)
         if (statusRes.success === false || !statusRes.data) {
           clearInterval(timer)
-          const idx = aiPollTimers.findIndex(t => t.taskId === taskId)
-          if (idx >= 0) aiPollTimers.splice(idx, 1)
+          const idx = batchAiPollTimers.findIndex(t => t.taskId === taskId)
+          if (idx >= 0) batchAiPollTimers.splice(idx, 1)
           uni.showToast({ title: `任务进度已失效（题${questionId}），请重新AI处理`, icon: 'none' })
           loadQuestions()
           return
@@ -728,8 +752,8 @@ async function handleAiProcess(questionId: number) {
         const data = statusRes.data
         if (data.status === 'complete' || data.status === 'failed' || data.status === 'partial') {
           clearInterval(timer)
-          const idx = aiPollTimers.findIndex(t => t.taskId === taskId)
-          if (idx >= 0) aiPollTimers.splice(idx, 1)
+          const idx = batchAiPollTimers.findIndex(t => t.taskId === taskId)
+          if (idx >= 0) batchAiPollTimers.splice(idx, 1)
           if (data.status === 'complete') {
             uni.showToast({ title: `AI处理完成（题${questionId}）`, icon: 'success' })
           } else if (data.status === 'partial') {
@@ -741,7 +765,7 @@ async function handleAiProcess(questionId: number) {
         }
       } catch (e) { /* silent */ }
     }, 2000)
-    aiPollTimers.push({ taskId, timer })
+    batchAiPollTimers.push({ taskId, timer })
   } catch (e: any) {
     uni.showToast({ title: e?.message || '启动失败', icon: 'none' })
   }
@@ -751,7 +775,7 @@ async function batchAiProcess() {
   const ids = [...selectedIds.value]
   if (ids.length === 0) return
   for (const id of ids) {
-    handleAiProcess(id)
+    startBatchAiProcess(id)
   }
   uni.showToast({ title: `已启动 ${ids.length} 题AI处理`, icon: 'none' })
 }
@@ -1035,8 +1059,8 @@ async function confirmGenerateMission() {
 // Cleanup
 // ============================================================
 onUnmounted(() => {
-  aiPollTimers.forEach(t => clearInterval(t.timer))
-  aiPollTimers.length = 0
+  batchAiPollTimers.forEach(t => clearInterval(t.timer))
+  batchAiPollTimers.length = 0
   variantPollTimers.forEach(t => clearInterval(t.timer))
   variantPollTimers.length = 0
 })

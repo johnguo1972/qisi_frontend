@@ -74,9 +74,6 @@
               <text>{{ formatAiAnswer(currentQuestion?.ai_answer_a) }}</text>
             </scroll-view>
             <view class="column-actions">
-              <button size="mini" type="primary" @click="handleModeAiProcess('A')" :disabled="modeAiState.loading && modeAiState.mode === 'A'">
-                {{ modeAiState.loading && modeAiState.mode === 'A' ? modeAiState.label : 'AI处理' }}
-              </button>
               <button size="mini" type="success" @click="doConfirmAiAnswer('a')">确认</button>
             </view>
           </view>
@@ -86,9 +83,6 @@
               <text>{{ formatAiAnswer(currentQuestion?.ai_answer_b) }}</text>
             </scroll-view>
             <view class="column-actions">
-              <button size="mini" type="primary" @click="handleModeAiProcess('B')" :disabled="modeAiState.loading && modeAiState.mode === 'B'">
-                {{ modeAiState.loading && modeAiState.mode === 'B' ? modeAiState.label : 'AI处理' }}
-              </button>
               <button size="mini" type="success" @click="doConfirmAiAnswer('b')">确认</button>
             </view>
           </view>
@@ -98,9 +92,6 @@
               <text>{{ formatAiAnswer(currentQuestion?.ai_answer_c) }}</text>
             </scroll-view>
             <view class="column-actions">
-              <button size="mini" type="primary" @click="handleModeAiProcess('C')" :disabled="modeAiState.loading && modeAiState.mode === 'C'">
-                {{ modeAiState.loading && modeAiState.mode === 'C' ? modeAiState.label : 'AI处理' }}
-              </button>
               <button size="mini" type="success" @click="doConfirmAiAnswer('c')">确认</button>
             </view>
           </view>
@@ -111,7 +102,12 @@
       </view>
     </view>
 
-    <!-- AI处理已改为后台静默轮询：启动后不阻塞界面，完成时弹 toast 并刷新列表 -->
+    <QuestionAIControls
+      :visible="showAiControls"
+      :question-id="selectedAiQuestionId"
+      @close="closeAiControls"
+      @completed="handleAiCompleted"
+    />
   </view>
 </template>
 
@@ -123,9 +119,9 @@ import {
   getPaperQuestions,
   confirmAiAnswer,
   aiProcessQuestion,
-  aiProcessSingleMode,
   getAiTaskStatus,
 } from '@/api/questions'
+import QuestionAIControls from '@/components/QuestionAIControls.vue'
 
 interface Question {
   id: number
@@ -167,18 +163,11 @@ const currentPaperId = computed(() => papers.value[paperIndex.value]?.id)
 // AI confirm modal
 const aiConfirmVisible = ref(false)
 const currentQuestion = ref<Question | null>(null)
+const selectedAiQuestionId = ref<string | number | null>(null)
+const showAiControls = ref(false)
 
 // AI 后台轮询（支持多任务并行）：{ taskId, timer }
 const aiPollTimers: Array<{ taskId: string; timer: ReturnType<typeof setInterval> }> = []
-
-// 单模式 AI 处理轮询：{ mode, taskId, timer, loading }
-const modeAiState = ref<{
-  mode: 'A' | 'B' | 'C' | null;
-  taskId: string | null;
-  loading: boolean;
-  label: string;
-  timer: ReturnType<typeof setInterval> | null;
-}>({ mode: null, taskId: null, loading: false, label: '', timer: null })
 
 function navigateTo(url: string) {
   uni.navigateTo({ url })
@@ -275,7 +264,7 @@ function handleBatchAiProcess() {
   const ids = [...selectedIds.value]
   if (ids.length === 0) return
   uni.showToast({ title: `已开始 ${ids.length} 题AI处理，可继续操作`, icon: 'none', duration: 2000 })
-  for (const id of ids) { handleAiProcess(id) }
+  for (const id of ids) { startBatchAiProcess(id) }
   selectedIds.value = []
 }
 function setFilter(value: string) {
@@ -329,64 +318,22 @@ async function doConfirmAiAnswer(mode: string) {
   }
 }
 
-/**
- * 单模式 AI 处理（针对弹窗中某个模式）
- */
-async function handleModeAiProcess(mode: string) {
-  if (!currentQuestion.value) return
-  const modeKey = mode.toLowerCase()
-  const state = modeAiState.value
-
-  // 防止重复点击
-  if (state.loading && state.mode === mode) return
-
-  state.mode = mode as 'A' | 'B' | 'C'
-  state.loading = true
-  state.label = '准备中...'
-  state.taskId = null
-
-  try {
-    const res: any = await aiProcessSingleMode(currentQuestion.value.id, mode)
-    const taskId = res.data?.task_id
-    if (!taskId) throw new Error('No task ID')
-    state.taskId = taskId
-    state.label = '处理中...'
-
-    state.timer = setInterval(async () => {
-      try {
-        const statusRes: any = await getAiTaskStatus(taskId)
-        if (statusRes.success === false || !statusRes.data) {
-          clearInterval(state.timer!)
-          state.timer = null
-          state.loading = false
-          uni.showToast({ title: `任务失效（${mode}模式）`, icon: 'none' })
-          loadQuestions()
-          return
-        }
-        const data = statusRes.data
-        state.label = data.step_label || '处理中...'
-
-        if (data.status === 'complete' || data.status === 'failed') {
-          clearInterval(state.timer!)
-          state.timer = null
-          state.loading = false
-          if (data.status === 'complete') {
-            uni.showToast({ title: `${mode}模式处理完成`, icon: 'success' })
-          } else {
-            uni.showToast({ title: data.error || `${mode}模式处理失败`, icon: 'none' })
-          }
-          loadQuestions()
-        }
-      } catch (e) { /* silent */ }
-    }, 2000)
-  } catch (e: any) {
-    state.loading = false
-    state.mode = null
-    uni.showToast({ title: e?.message || '启动失败', icon: 'none' })
-  }
+function handleAiProcess(questionId: number) {
+  selectedAiQuestionId.value = questionId
+  showAiControls.value = true
 }
 
-async function handleAiProcess(questionId: number) {
+function closeAiControls() {
+  showAiControls.value = false
+  selectedAiQuestionId.value = null
+}
+
+function handleAiCompleted() {
+  loadQuestions()
+  closeAiControls()
+}
+
+async function startBatchAiProcess(questionId: number) {
   uni.showToast({ title: `已开始AI处理（题${questionId}），可继续其他操作`, icon: 'none', duration: 2000 })
   try {
     const res: any = await aiProcessQuestion(questionId)
@@ -430,7 +377,6 @@ onMounted(() => {
 })
 onUnmounted(() => {
   aiPollTimers.forEach(t => clearInterval(t.timer)); aiPollTimers.length = 0
-  if (modeAiState.value.timer) clearInterval(modeAiState.value.timer)
 })
 
 // Accept paper_id from URL query and auto-select
