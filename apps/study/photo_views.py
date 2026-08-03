@@ -22,7 +22,6 @@ from apps.common.ai.failure_safety import (
 )
 from apps.common.ai.image_codec import encode_image_source
 from apps.common.oss_service import upload_crop_image_safe
-from apps.common.batch_tasks import single_generate_ai_answers
 
 logger = logging.getLogger(__name__)
 
@@ -238,16 +237,15 @@ def photo_create_question(request):
         )
 
         # 异步触发 AI 答案生成（不阻塞返回）
-        single_generate_ai_answers.delay(question.id)
 
         return Response({
             'code': 0,
-            'message': '识别成功，AI 答案正在生成中...',
+            'message': '\u7487\u55d7\u57c6\u93b4\u612c\u59db\u951b\u5c7d\u5f72\u93b5\u5b2a\u4f10\u6769\u6d9c\ue511 AI \u6fb6\u52ed\u608a',
             'data': {
                 'question_id': question.id,
                 'system_id': system_id,
                 'parsed': parsed,
-                'ai_generation_status': 'pending',
+                'ai_generation_status': 'not_started',
             },
             'trace_id': make_trace_id(),
         })
