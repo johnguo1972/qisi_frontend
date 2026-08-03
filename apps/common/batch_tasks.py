@@ -5,7 +5,6 @@ from celery import shared_task
 from django.core.cache import cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from apps.common.ai_service import AIReviewService, create_ai_review_service
-from apps.parser.models import ExamQuestion
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +51,6 @@ def batch_ai_process_questions(self, question_ids, model=None):
             current = 0
 
             for future in as_completed(futures):
-                # Check cancel flag
                 if cache.get(f'{CANCEL_KEY_PREFIX}{task_id}'):
                     logger.info(f'Batch task {task_id} cancelled at {current}/{total}')
                     cache.set(f'{PROGRESS_KEY_PREFIX}{task_id}', json.dumps({
@@ -60,8 +58,7 @@ def batch_ai_process_questions(self, question_ids, model=None):
                         'current_question': None, 'success_count': success_count,
                         'error_count': error_count, 'errors': errors,
                     }), timeout=3600)
-                    response = {'status': 'cancelled', 'current': current, 'total': total}
-                    return response
+                    return {'status': 'cancelled', 'current': current, 'total': total}
 
                 q_id, success, error = future.result()
                 current += 1
@@ -72,23 +69,20 @@ def batch_ai_process_questions(self, question_ids, model=None):
                     error_count += 1
                     errors[str(q_id)] = error or 'Unknown error'
 
-                # Update progress
                 cache.set(f'{PROGRESS_KEY_PREFIX}{task_id}', json.dumps({
                     'current': current, 'total': total, 'status': 'running',
                     'current_question': q_id, 'success_count': success_count,
                     'error_count': error_count, 'errors': dict(errors),
                 }), timeout=3600)
 
-        # All done
         cache.set(f'{PROGRESS_KEY_PREFIX}{task_id}', json.dumps({
             'current': total, 'total': total, 'status': 'completed',
             'current_question': None, 'success_count': success_count,
             'error_count': error_count, 'errors': errors,
         }), timeout=3600)
 
-        response = {'status': 'completed', 'success_count': success_count,
-                    'error_count': error_count, 'errors': errors}
-        return response
+        return {'status': 'completed', 'success_count': success_count,
+                'error_count': error_count, 'errors': errors}
 
     except Exception as e:
         logger.exception(f'Batch task {task_id} failed')
@@ -105,31 +99,18 @@ def batch_ai_process_questions(self, question_ids, model=None):
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)
 def single_generate_ai_answers(self, question_id: int, model: str = None):
-    """为单道题生成 A/B/C 模式 AI 答案（轻量任务，不跑全流程）。
-
-    此任务被 auto_trigger_ai_generation signal 触发，也可手动调用。
-
-    Args:
-        question_id: 题目 ID
-        model: 可选兼容参数，实际模型由 AIReviewService 配置路由决定
-    """
-    service = None
-    try:
-        service = create_ai_review_service()
-        results = service.process_question_full(question_id, model=model)
-        service.save_results_to_question(question_id, results)
-
-        # 记录失败信息（可选，需 ExamQuestion 有 ai_generation_error 字段）
-        if results.get('errors'):
-            question = ExamQuestion.objects.get(id=question_id)
-            if hasattr(question, 'ai_generation_error') or 'ai_generation_error' in [f.name for f in ExamQuestion._meta.get_fields()]:
-                question.ai_generation_error = json.dumps(results['errors'])
-                question.save(update_fields=['ai_generation_error'])
-
-        return {'status': 'success', 'question_id': question_id}
-    except Exception as e:
-        logger.exception(f'AI generation failed for question {question_id}: {e}')
-        raise self.retry(exc=e, countdown=30 * (2 ** self.request.retries))
-    finally:
-        if service is not None:
-            service.close()
+    """Keep legacy automatic jobs registered while safely disabling them."""
+    result = {
+        'status': 'skipped',
+        'question_id': str(question_id),
+        'reason': 'automatic_generation_disabled',
+    }
+    logger.info(
+        'Automatic AI generation skipped',
+        extra={
+            'question_id': str(question_id),
+            'status': result['status'],
+            'reason': result['reason'],
+        },
+    )
+    return result

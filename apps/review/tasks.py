@@ -23,6 +23,30 @@ STEP_LABELS = {
 }
 
 
+def _skip_missing_question(set_progress, question_id):
+    """Persist terminal progress and return the stable missing-question result."""
+    result = {
+        'status': 'skipped',
+        'question_id': str(question_id),
+        'reason': 'question_not_found',
+    }
+    set_progress(
+        'skipped',
+        'starting',
+        STEP_LABELS['starting'],
+        error=result['reason'],
+    )
+    logger.info(
+        'AI processing skipped because question was not found',
+        extra={
+            'question_id': result['question_id'],
+            'status': result['status'],
+            'reason': result['reason'],
+        },
+    )
+    return result
+
+
 @shared_task(bind=True, max_retries=0)
 def single_ai_process_question(self, question_id, model=None):
     """AI processing for a single question (6-step pipeline)."""
@@ -40,17 +64,14 @@ def single_ai_process_question(self, question_id, model=None):
 
     set_progress('running', 'starting', STEP_LABELS['starting'])
 
-    service = create_ai_review_service()
-
     try:
         question = ExamQuestion.objects.get(id=question_id)
     except ExamQuestion.DoesNotExist:
-        service.close()
-        set_progress('failed', 'starting', '题目不存在', error=f'Question {question_id} not found')
-        return {'status': 'failed', 'error': f'Question {question_id} not found'}
+        return _skip_missing_question(set_progress, question_id)
     except Exception:
-        service.close()
         raise
+
+    service = create_ai_review_service()
 
     try:
         # Call the new 6-step pipeline
@@ -137,17 +158,14 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
 
     set_progress('running', 'starting', STEP_LABELS['starting'])
 
-    service = create_ai_review_service()
-
     try:
         question = ExamQuestion.objects.get(id=question_id)
     except ExamQuestion.DoesNotExist:
-        service.close()
-        set_progress('failed', 'starting', '题目不存在', error=f'Question {question_id} not found')
-        return {'status': 'failed', 'error': f'Question {question_id} not found'}
+        return _skip_missing_question(set_progress, question_id)
     except Exception:
-        service.close()
         raise
+
+    service = create_ai_review_service()
 
     try:
         # Load existing probe/vision results from DB to avoid redundant API calls

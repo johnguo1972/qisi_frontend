@@ -173,19 +173,15 @@ def test_batch_task_uses_injected_facade_and_preserves_result_and_progress():
 
 
 @pytest.mark.django_db
-def test_signal_generation_task_uses_injected_facade_and_keeps_result_shape():
-    """The signal-triggered task must use the same injectable facade seam."""
+def test_legacy_automatic_task_skips_without_creating_a_facade():
+    """Legacy queued auto-generation messages must be harmless tombstones."""
     from apps.common import batch_tasks
-
-    question = _make_question()
-    facade = MagicMock()
-    facade.process_question_full.return_value = {"errors": {}}
 
     with (
         patch.object(
             batch_tasks,
             "create_ai_review_service",
-            return_value=facade,
+            side_effect=AssertionError("automatic task created a facade"),
         ) as service_factory,
         patch.object(
             batch_tasks,
@@ -193,39 +189,71 @@ def test_signal_generation_task_uses_injected_facade_and_keeps_result_shape():
             side_effect=AssertionError("legacy constructor used"),
         ),
     ):
-        result = batch_tasks.single_generate_ai_answers.run(str(question.id))
+        result = batch_tasks.single_generate_ai_answers.run("legacy-question")
 
-    assert result == {"status": "success", "question_id": str(question.id)}
-    service_factory.assert_called_once_with()
-    facade.process_question_full.assert_called_once_with(
-        str(question.id), model=None
-    )
-    facade.save_results_to_question.assert_called_once_with(
-        str(question.id), facade.process_question_full.return_value
-    )
-    facade.close.assert_called_once_with()
+    assert result == {
+        "status": "skipped",
+        "question_id": "legacy-question",
+        "reason": "automatic_generation_disabled",
+    }
+    service_factory.assert_not_called()
 
 
-def test_review_task_closes_facade_on_early_missing_question():
+@pytest.mark.parametrize(
+    ("task_name", "args"),
+    [
+        ("single_ai_process_question", ("missing",)),
+        ("single_mode_ai_process_question", ("missing", "A")),
+        ("single_mode_ai_process_question", ("missing", "B")),
+        ("single_mode_ai_process_question", ("missing", "C")),
+    ],
+)
+def test_missing_question_manual_tasks_skip_before_creating_facade(
+    task_name, args
+):
+    """Manual full and A/B/C jobs must terminate safely when their row is gone."""
     from apps.review import tasks
 
-    facade = MagicMock()
+    writes = []
     with (
-        patch.object(tasks, "create_ai_review_service", return_value=facade),
+        patch.object(
+            tasks,
+            "create_ai_review_service",
+            side_effect=AssertionError("missing question created a facade"),
+        ) as service_factory,
         patch.object(
             tasks.ExamQuestion.objects,
             "get",
             side_effect=tasks.ExamQuestion.DoesNotExist,
         ),
-        patch.object(tasks.cache, "set"),
+        patch.object(
+            tasks.cache,
+            "set",
+            side_effect=lambda key, value, timeout: writes.append(
+                (key, json.loads(value), timeout)
+            ),
+        ),
     ):
-        result = tasks.single_ai_process_question.run("missing")
+        result = getattr(tasks, task_name).run(*args)
 
     assert result == {
-        "status": "failed",
-        "error": "Question missing not found",
+        "status": "skipped",
+        "question_id": "missing",
+        "reason": "question_not_found",
     }
-    facade.close.assert_called_once_with()
+    service_factory.assert_not_called()
+    assert writes[-1] == (
+        "single_ai_progress:None",
+        {
+            "status": "skipped",
+            "question_id": "missing",
+            "step": "starting",
+            "step_label": tasks.STEP_LABELS["starting"],
+            "result": None,
+            "error": "question_not_found",
+        },
+        3600,
+    )
 
 
 @pytest.mark.parametrize(
@@ -235,14 +263,17 @@ def test_review_task_closes_facade_on_early_missing_question():
         ("single_mode_ai_process_question", ("db-error", "A")),
     ],
 )
-def test_review_tasks_close_facade_on_unexpected_question_lookup_error(
+def test_review_tasks_propagate_lookup_error_before_creating_facade(
     task_name, args
 ):
     from apps.review import tasks
 
-    facade = MagicMock()
     with (
-        patch.object(tasks, "create_ai_review_service", return_value=facade),
+        patch.object(
+            tasks,
+            "create_ai_review_service",
+            side_effect=AssertionError("lookup error created a facade"),
+        ) as service_factory,
         patch.object(
             tasks.ExamQuestion.objects,
             "get",
@@ -253,7 +284,7 @@ def test_review_tasks_close_facade_on_unexpected_question_lookup_error(
     ):
         getattr(tasks, task_name).run(*args)
 
-    facade.close.assert_called_once_with()
+    service_factory.assert_not_called()
 
 
 def test_review_task_logs_metadata_without_ai_content_or_provider_errors(caplog):
