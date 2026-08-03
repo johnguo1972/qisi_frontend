@@ -36,7 +36,7 @@ def _skip_missing_question(set_progress, question_id):
         STEP_LABELS['starting'],
         error=result['reason'],
     )
-    logger.info(
+    logger.warning(
         'AI processing skipped because question was not found',
         extra={
             'question_id': result['question_id'],

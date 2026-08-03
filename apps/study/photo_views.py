@@ -236,7 +236,7 @@ def photo_create_question(request):
             model_name='qwen3-vl-plus-photo',
         )
 
-        # 异步触发 AI 答案生成（不阻塞返回）
+        # AI 答案不会自动生成，需由用户在界面手动触发
 
         return Response({
             'code': 0,

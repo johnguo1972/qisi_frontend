@@ -182,7 +182,7 @@
           <view class="form-actions-bar">
             <view class="actions-left"><text class="shortcut-hint">Ctrl+S: 保存 | Ctrl+Enter: 确认</text></view>
             <view class="actions-right">
-              <button size="mini" type="warning" @click="handleReparse" :loading="reparseLoading">重解析</button>
+              <button size="mini" type="warning" @click="handleAiProcess">AI处理</button>
               <button size="mini" type="primary" @click="handleSave" :loading="saving" style="background: #1a237e">保存修改</button>
               <button size="mini" type="success" @click="handleConfirm">确认正确</button>
             </view>
@@ -193,6 +193,13 @@
 
     <view v-else-if="loading" class="loading"><text>加载中...</text></view>
     <view v-else class="empty"><text>题目不存在</text></view>
+
+    <QuestionAIControls
+      :visible="showAiControls"
+      :question-id="selectedAiQuestionId"
+      @close="closeAiControls"
+      @completed="handleAiCompleted"
+    />
   </view>
 </template>
 
@@ -204,11 +211,13 @@ import { renderWithKatex } from '@/utils/katex-renderer'
 import { renderImagePlaceholders } from '@/utils/image-placeholder'
 import { filterKnowledgePoints, type KnowledgePoint } from '@/utils/knowledge-filter'
 import { get } from '@/utils/request'
+import QuestionAIControls from '@/components/QuestionAIControls.vue'
 
 const question = ref<any>(null)
 const loading = ref(true)
 const saving = ref(false)
-const reparseLoading = ref(false)
+const selectedAiQuestionId = ref<string | number | null>(null)
+const showAiControls = ref(false)
 const form = ref({ stem: '', answer: '', analysis: '', solution: '', difficulty: 1, question_type: '', question_no: '', page_start: 1, page_end: 1, options: [{ label: 'A', content: '' }, { label: 'B', content: '' }, { label: 'C', content: '' }, { label: 'D', content: '' }] })
 const pages = ref<any[]>([])
 const currentPage = ref(1)
@@ -447,25 +456,17 @@ async function handleConfirm() {
     uni.showToast({ title: e?.message || '确认失败', icon: 'none' })
   }
 }
-async function handleReparse() {
-  if (!question.value) return
-  uni.showModal({
-    title: '确认重解析', content: '确定要重新解析此题目？',
-    success: async (res) => {
-      if (res.confirm) {
-        reparseLoading.value = true
-        try {
-          const { aiProcessQuestion } = await import('@/api/questions')
-          await aiProcessQuestion(questionId)
-          uni.showToast({ title: '开始重新解析', icon: 'success' })
-        } catch (e) {
-          uni.showToast({ title: '重新解析失败', icon: 'none' })
-        } finally {
-          reparseLoading.value = false
-        }
-      }
-    }
-  })
+function handleAiProcess() {
+  selectedAiQuestionId.value = question.value.id
+  showAiControls.value = true
+}
+function closeAiControls() {
+  showAiControls.value = false
+  selectedAiQuestionId.value = null
+}
+function handleAiCompleted() {
+  loadQuestion(questionId)
+  closeAiControls()
 }
 function handleBackToList() {
   uni.reLaunch({ url: paperId.value ? `/pages/teacher/review-list?paper_id=${paperId.value}` : '/pages/teacher/review-list' })

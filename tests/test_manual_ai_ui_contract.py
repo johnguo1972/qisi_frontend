@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -7,6 +8,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 API_PATH = ROOT / 'uniapp' / 'src' / 'api' / 'questions.ts'
 COMPONENT_PATH = ROOT / 'uniapp' / 'src' / 'components' / 'QuestionAIControls.vue'
+QUESTION_EDIT_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'teacher' / 'question-edit.vue'
+PHOTO_VIEWS_PATH = ROOT / 'apps' / 'study' / 'photo_views.py'
+STUDY_RECEIVERS_PATH = ROOT / 'apps' / 'study' / 'receivers.py'
 TEACHER_PAGES = {
     'review-list': ROOT / 'uniapp' / 'src' / 'pages' / 'teacher' / 'review-list.vue',
     'audit': ROOT / 'uniapp' / 'src' / 'pages' / 'teacher' / 'audit.vue',
@@ -38,8 +42,24 @@ def function_body(source: str, name: str) -> str:
 
 def test_question_ai_controls_exposes_the_five_manual_actions():
     source = read(COMPONENT_PATH)
-    for label in ('一键全部AI处理', 'AI探查', 'A模式', 'B模式', 'C模式'):
-        assert label in source
+    labels = {
+        'all': '一键全部 AI 处理',
+        'probe': 'AI 探查',
+        'A': 'A 模式',
+        'B': 'B 模式',
+        'C': 'C 模式',
+    }
+    for action, label in labels.items():
+        assert re.search(
+            rf'<button\b[^>]*@click="startAction\(\'{action}\'\)"[^>]*>{label}</button>',
+            source,
+        )
+
+
+def test_question_ai_controls_explains_the_full_pipeline_scope():
+    source = read(COMPONENT_PATH)
+    assert '一键全部' in source
+    assert '题目探查、知识点分析、读图、A/B/C 模式答案、DeepSeek 校验' in source
 
 
 def test_question_ai_controls_has_required_props_and_events():
@@ -149,4 +169,114 @@ def test_teacher_question_page_delegates_single_ai_processing_to_shared_controls
         assert re.search(rf'@click="{batch_handler}"', source)
         batch_body = function_body(source, batch_handler)
         assert re.search(r'if\s*\(ids\.length\s*===\s*0\)\s*return', batch_body)
+        assert 'startBatchAiProcess(' in batch_body
+        assert 'handleAiProcess(' not in batch_body
         assert 'showAiControls.value = true' not in batch_body
+
+
+@pytest.mark.parametrize(
+    ('page_name', 'timer_collection'),
+    [
+        ('review-list', 'aiPollTimers'),
+        ('course-practice', 'batchAiPollTimers'),
+    ],
+)
+def test_batch_ai_pollers_stop_and_refresh_for_every_terminal_status(
+    page_name: str, timer_collection: str
+):
+    source = read(TEACHER_PAGES[page_name])
+    poller = function_body(source, 'startBatchAiProcess')
+    terminal = re.search(
+        r'if\s*\((?P<condition>data\.status[\s\S]*?)\)\s*\{'
+        r'(?P<body>[\s\S]*?)\n\s*loadQuestions\(\)\s*\n\s*\}',
+        poller,
+    )
+    assert terminal, f'Missing terminal-status branch in {page_name}'
+    condition = terminal.group('condition')
+    body = terminal.group('body')
+    for status in ('complete', 'partial', 'failed', 'skipped'):
+        assert f"data.status === '{status}'" in condition
+    assert 'clearInterval(timer)' in body
+    assert f'{timer_collection}.findIndex' in body
+    assert f'{timer_collection}.splice' in body
+    assert re.search(
+        r"data\.status === 'skipped'[\s\S]*?showToast\(\{\s*title:\s*`[^`]*(?:跳过|不存在)[^`]*`",
+        body,
+    )
+
+
+def test_question_edit_delegates_ai_processing_to_one_shared_control():
+    source = read(QUESTION_EDIT_PATH)
+    forbidden_calls = r'aiProcessQuestion|aiProcessSingleMode|aiProcessProbe|getAiTaskStatus'
+
+    assert re.search(
+        r"import\s+QuestionAIControls\s+from\s+['\"]@/components/QuestionAIControls\.vue['\"]",
+        source,
+    )
+    assert len(re.findall(r'<QuestionAIControls\b', source)) == 1
+    assert re.search(
+        r'<QuestionAIControls\b[^>]*:visible="showAiControls"[^>]*:question-id="selectedAiQuestionId"',
+        source,
+    )
+    assert '@close="closeAiControls"' in source
+    assert '@completed="handleAiCompleted"' in source
+    assert re.search(r'<button\b[^>]*@click="handleAiProcess"[^>]*>AI处理</button>', source)
+    assert re.search(r'selectedAiQuestionId\s*=\s*ref<\s*string\s*\|\s*number\s*\|\s*null\s*>\(null\)', source)
+    assert re.search(r'showAiControls\s*=\s*ref\(false\)', source)
+
+    open_body = function_body(source, 'handleAiProcess')
+    assert re.fullmatch(
+        r'\s*selectedAiQuestionId\.value\s*=\s*question\.value\.id\s*'
+        r'showAiControls\.value\s*=\s*true\s*',
+        open_body,
+    )
+    close_body = function_body(source, 'closeAiControls')
+    assert re.search(r'showAiControls\.value\s*=\s*false', close_body)
+    assert re.search(r'selectedAiQuestionId\.value\s*=\s*null', close_body)
+    completed_body = function_body(source, 'handleAiCompleted')
+    assert 'loadQuestion(questionId)' in completed_body
+    assert 'closeAiControls()' in completed_body
+
+    assert '重解析' not in source
+    assert 'reparseLoading' not in source
+    assert 'handleReparse' not in source
+    assert not re.search(forbidden_calls, source)
+    for function_name in (
+        'loadQuestion', 'handleSave', 'handleConfirm', 'handleBackToList',
+        'handlePrevQuestion', 'handleNextQuestion',
+    ):
+        assert not re.search(forbidden_calls, function_body(source, function_name)), function_name
+
+
+def test_study_creation_sources_describe_manual_ai_without_dispatch_code():
+    photo_source = read(PHOTO_VIEWS_PATH)
+    receiver_source = read(STUDY_RECEIVERS_PATH)
+
+    assert '# AI 答案不会自动生成，需由用户在界面手动触发' in photo_source
+    assert 'AI 答案自动生成' not in receiver_source
+    assert '异步触发 AI 答案生成' not in photo_source
+    assert 'single_generate_ai_answers.delay' not in photo_source
+    assert 'single_generate_ai_answers.delay' not in receiver_source
+
+
+def test_missing_manual_ai_target_is_logged_at_warning_without_content():
+    from apps.review import tasks
+
+    set_progress = MagicMock()
+    with patch.object(tasks.logger, 'warning') as warning:
+        result = tasks._skip_missing_question(set_progress, 'missing-question')
+
+    assert result == {
+        'status': 'skipped',
+        'question_id': 'missing-question',
+        'reason': 'question_not_found',
+    }
+    warning.assert_called_once_with(
+        'AI processing skipped because question was not found',
+        extra={
+            'question_id': 'missing-question',
+            'status': 'skipped',
+            'reason': 'question_not_found',
+        },
+    )
+    assert 'content' not in warning.call_args.kwargs['extra']

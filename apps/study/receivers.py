@@ -1,4 +1,4 @@
-"""学生端信号接收器：学生加入班级后回填任务进度 + AI 答案自动生成。"""
+"""学生端信号接收器：学生加入班级后回填任务进度。"""
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from apps.institutions.models import ClassStudent

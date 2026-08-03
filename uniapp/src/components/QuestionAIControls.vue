@@ -6,12 +6,13 @@
         <button class="question-ai-controls__close" @click="handleClose">关闭</button>
       </view>
       <view class="question-ai-controls__actions">
-        <button :disabled="isRunningForSelectedQuestion" @click="startAction('all')">一键全部AI处理</button>
-        <button :disabled="isRunningForSelectedQuestion" @click="startAction('probe')">AI探查</button>
-        <button :disabled="isRunningForSelectedQuestion" @click="startAction('A')">A模式</button>
-        <button :disabled="isRunningForSelectedQuestion" @click="startAction('B')">B模式</button>
-        <button :disabled="isRunningForSelectedQuestion" @click="startAction('C')">C模式</button>
+        <button :disabled="isRunningForSelectedQuestion" @click="startAction('all')">一键全部 AI 处理</button>
+        <button :disabled="isRunningForSelectedQuestion" @click="startAction('probe')">AI 探查</button>
+        <button :disabled="isRunningForSelectedQuestion" @click="startAction('A')">A 模式</button>
+        <button :disabled="isRunningForSelectedQuestion" @click="startAction('B')">B 模式</button>
+        <button :disabled="isRunningForSelectedQuestion" @click="startAction('C')">C 模式</button>
       </view>
+      <text class="question-ai-controls__scope">一键全部将运行：题目探查、知识点分析、读图、A/B/C 模式答案、DeepSeek 校验</text>
       <text v-if="isRunningForSelectedQuestion" class="question-ai-controls__status">AI任务处理中，请稍候</text>
     </view>
   </view>
@@ -232,5 +233,12 @@ onUnmounted(() => {
   font-size: 24rpx;
   color: #666;
   text-align: center;
+}
+
+.question-ai-controls__scope {
+  display: block;
+  margin-top: 20rpx;
+  font-size: 24rpx;
+  color: #666;
 }
 </style>

@@ -750,7 +750,7 @@ async function startBatchAiProcess(questionId: number) {
           return
         }
         const data = statusRes.data
-        if (data.status === 'complete' || data.status === 'failed' || data.status === 'partial') {
+        if (data.status === 'complete' || data.status === 'failed' || data.status === 'partial' || data.status === 'skipped') {
           clearInterval(timer)
           const idx = batchAiPollTimers.findIndex(t => t.taskId === taskId)
           if (idx >= 0) batchAiPollTimers.splice(idx, 1)
@@ -758,6 +758,8 @@ async function startBatchAiProcess(questionId: number) {
             uni.showToast({ title: `AI处理完成（题${questionId}）`, icon: 'success' })
           } else if (data.status === 'partial') {
             uni.showToast({ title: `AI处理完成，部分步骤失败（题${questionId}）`, icon: 'none' })
+          } else if (data.status === 'skipped') {
+            uni.showToast({ title: `AI处理已跳过，题目可能不存在（题${questionId}）`, icon: 'none' })
           } else {
             uni.showToast({ title: data.error || `AI处理失败（题${questionId}）`, icon: 'none' })
           }
