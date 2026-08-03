@@ -158,15 +158,19 @@ export function confirmAiAnswer(questionId: number, mode: string) {
   return post<any>(`/review/question/${questionId}/ai-confirm/${mode}/`)
 }
 
-export function aiProcessQuestion(questionId: number) {
+export function aiProcessQuestion(questionId: string | number) {
   return post<any>(`/review/question/${questionId}/ai-process/`)
+}
+
+export function aiProcessProbe(questionId: string | number) {
+  return post<any>(`/review/question/${questionId}/ai-process-probe/`)
 }
 
 export function getAiTaskStatus(taskId: string) {
   return get<any>(`/review/ai-task/${taskId}/status/`)
 }
 
-export function aiProcessSingleMode(questionId: number, mode: string) {
+export function aiProcessSingleMode(questionId: string | number, mode: string) {
   return post<any>(`/review/question/${questionId}/ai-process-mode/${mode}/`)
 }
 
@@ -332,4 +336,3 @@ export function getQuestionBarcodeUrl(questionId: string): string {
 export function scanBarcode(barcodeData: string) {
   return post<any>('/questions/barcode/scan/', { barcode_data: barcodeData })
 }
-
