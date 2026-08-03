@@ -56,3 +56,19 @@ def test_polling_handles_all_terminal_states_and_cleans_up():
         assert f"'{status}'" in source
     assert re.search(r"function handleClose\(\)[\s\S]*?clearInterval", source)
     assert re.search(r"onUnmounted\s*\(\s*\(\)\s*=>[\s\S]*?clearInterval", source)
+
+
+def test_pending_start_request_is_invalidated_before_it_can_begin_polling():
+    source = read(COMPONENT_PATH)
+    assert re.search(r'let requestGeneration\s*=\s*0', source)
+    assert re.search(r'function invalidatePendingRequest\(\)\s*\{\s*requestGeneration \+= 1', source)
+    assert re.search(r'function handleClose\(\)[\s\S]*?invalidatePendingRequest\(\)', source)
+    assert re.search(r'\(visible\)\s*=>\s*\{\s*if \(!visible\)\s*\{\s*invalidatePendingRequest\(\)', source)
+    assert re.search(r'watch\s*\(\s*\(\)\s*=>\s*props\.questionId[\s\S]*?invalidatePendingRequest\(\)', source)
+    assert re.search(r'onUnmounted[\s\S]*?isUnmounted\s*=\s*true[\s\S]*?invalidatePendingRequest\(\)', source)
+    assert re.search(
+        r'const questionId = props\.questionId[\s\S]*?const requestToken = \+\+requestGeneration[\s\S]*?'
+        r'await[\s\S]*?if \(requestToken !== requestGeneration \|\| isUnmounted \|\| !props\.visible '
+        r'\|\| props\.questionId !== questionId\) return[\s\S]*?activeTaskId\.value',
+        source,
+    )

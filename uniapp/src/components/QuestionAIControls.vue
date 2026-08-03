@@ -39,11 +39,17 @@ const runningQuestionId = ref<string | number | null>(null)
 const activeTaskId = ref<string | null>(null)
 const activeAction = ref<AIAction | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let requestGeneration = 0
+let isUnmounted = false
 
 const terminalStatuses: TerminalStatus[] = ['complete', 'partial', 'failed', 'skipped']
 const isRunningForSelectedQuestion = computed(() => (
   running.value && runningQuestionId.value === props.questionId
 ))
+
+function invalidatePendingRequest() {
+  requestGeneration += 1
+}
 
 function stopPolling() {
   if (pollTimer) {
@@ -61,6 +67,7 @@ function showToast(title: string, icon: 'none' | 'success' = 'none') {
 }
 
 function handleClose() {
+  invalidatePendingRequest()
   if (pollTimer) clearInterval(pollTimer)
   stopPolling()
   emit('close')
@@ -100,14 +107,16 @@ function startPolling() {
 }
 
 async function startAction(action: AIAction) {
-  if (props.questionId === null) {
+  const questionId = props.questionId
+  if (questionId === null) {
     showToast('请先保存题目')
     return
   }
   if (running.value) return
 
+  const requestToken = ++requestGeneration
   running.value = true
-  runningQuestionId.value = props.questionId
+  runningQuestionId.value = questionId
   activeAction.value = action
   try {
     let response: any
@@ -123,11 +132,13 @@ async function startAction(action: AIAction) {
       response = await aiProcessSingleMode(props.questionId, 'C')
     }
 
+    if (requestToken !== requestGeneration || isUnmounted || !props.visible || props.questionId !== questionId) return
     const taskId = response?.data?.task_id ?? response?.task_id
     if (!taskId) throw new Error('Missing AI task ID')
     activeTaskId.value = String(taskId)
     startPolling()
   } catch {
+    if (requestToken !== requestGeneration || isUnmounted || !props.visible || props.questionId !== questionId) return
     stopPolling()
     showToast('AI处理启动失败，请稍后重试')
   }
@@ -136,11 +147,24 @@ async function startAction(action: AIAction) {
 watch(
   () => props.visible,
   (visible) => {
-    if (!visible) stopPolling()
+    if (!visible) {
+      invalidatePendingRequest()
+      stopPolling()
+    }
+  },
+)
+
+watch(
+  () => props.questionId,
+  () => {
+    invalidatePendingRequest()
+    stopPolling()
   },
 )
 
 onUnmounted(() => {
+  isUnmounted = true
+  invalidatePendingRequest()
   if (pollTimer) clearInterval(pollTimer)
   stopPolling()
 })
