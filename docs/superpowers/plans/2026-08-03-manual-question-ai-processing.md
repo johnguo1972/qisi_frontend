@@ -51,7 +51,7 @@ def test_saving_auto_parsed_question_does_not_dispatch_ai():
 @pytest.mark.django_db
 def test_photo_create_returns_manual_message_without_dispatch(success_photo_request):
     with patch(
-        "apps.study.photo_views.single_generate_ai_answers.delay"
+        "apps.common.batch_tasks.single_generate_ai_answers.delay"
     ) as delay:
         response = _plain_view_handler(photo_views.photo_create_question)(
             success_photo_request
