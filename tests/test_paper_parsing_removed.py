@@ -1,0 +1,43 @@
+from pathlib import Path
+
+import pytest
+from django.urls import Resolver404, resolve
+
+ROOT = Path(__file__).resolve().parents[1]
+TASK_NAMES = (
+    "apps.parser.tasks.parse_paper_task",
+    "apps.parser.tasks.reparse_page_task",
+    "apps.parser.tasks.reparse_question_task",
+)
+
+
+@pytest.mark.parametrize("url", [
+    "/api/v1/papers/00000000-0000-0000-0000-000000000001/parse/",
+    "/api/v1/papers/00000000-0000-0000-0000-000000000001/stop-parse/",
+    "/api/v1/papers/00000000-0000-0000-0000-000000000001/reparse/",
+    "/api/v1/papers/00000000-0000-0000-0000-000000000001/progress/",
+    "/api/v1/questions/import-batches",
+])
+def test_removed_paper_parsing_urls_do_not_resolve(url):
+    with pytest.raises(Resolver404):
+        resolve(url)
+
+
+def test_removed_tasks_and_beat_are_absent_from_production_sources():
+    sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "apps").rglob("*.py")
+        if "tests" not in path.parts and path.name != "models.py"
+    )
+    for task_name in TASK_NAMES:
+        assert task_name not in sources
+        assert task_name.rsplit(".", 1)[-1] not in sources
+    settings_source = (ROOT / "config/settings.py").read_text(encoding="utf-8")
+    assert "periodic_stale_task_check" not in settings_source
+
+
+def test_teacher_import_ui_and_api_are_removed():
+    assert not (ROOT / "uniapp/src/pages/teacher/import.vue").exists()
+    api_source = (ROOT / "uniapp/src/api/questions.ts").read_text(encoding="utf-8")
+    for name in ("importFile", "importBatches", "importBatchDetail", "stopParse", "reparsePaper", "getParseProgress"):
+        assert name not in api_source
