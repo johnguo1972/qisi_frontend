@@ -4,6 +4,7 @@ from . import question_views, import_views, dict_views, create_views, photo_view
 from . import json_import_views, basket_views, batch_views
 # 新增导入（barcode_views 依赖 python-barcode，设为可选）
 from . import tag_views
+from . import qr_views
 try:
     from . import barcode_views
     HAS_BARCODE = True
@@ -19,10 +20,10 @@ urlpatterns = [
     path('photo-create/', photo_views.photo_create_question, name='photo-create'),
     path('photo-list/', photo_views.photo_list_questions, name='photo-list'),
     path('import-batches', import_views.import_batch_list, name='import-batch-list'),
-    path('import-batches/<int:batch_id>', import_views.import_batch_detail, name='import-batch-detail'),
+    path('import-batches/<uuid:batch_id>', import_views.import_batch_detail, name='import-batch-detail'),
     path('papers', import_views.paper_list, name='paper-list'),
 
-    # === 新增路由（必须在 <int:question_id> 之前注册！）===
+    # === 新增路由（必须在通用题目 UUID 路由之前注册！）===
 
     # 标签管理
     path('tags/', tag_views.tag_list, name='tag-list'),
@@ -43,13 +44,15 @@ urlpatterns = [
 
     # 批量操作
     path('batch-update/', batch_views.batch_update, name='batch-update'),
+    path('<str:question_id>/qr/', qr_views.question_qr, name='question-qr'),
+    path('<str:question_id>/similar/', question_views.similar_questions, name='similar-questions'),
 
     # 条形码（需要 python-barcode 包）
     path('barcode/scan/', barcode_views.barcode_scan if HAS_BARCODE else lambda r: __import__('django.http', fromlist=['JsonResponse']).JsonResponse({'code': 503, 'message': 'python-barcode not installed'}, status=503), name='barcode-scan'),
 
     # ️ 以下通配路由必须放在最后
-    path('<int:question_id>', question_views.question_detail, name='question-detail'),
-    path('<int:question_id>/publish', question_views.question_publish, name='question-publish'),
+    path('<uuid:question_id>', question_views.question_detail, name='question-detail'),
+    path('<uuid:question_id>/publish', question_views.question_publish, name='question-publish'),
 
     # 题目标签（通配路由，放在最后）
     path('<str:question_id>/tags/', tag_views.question_tags, name='question-tags'),

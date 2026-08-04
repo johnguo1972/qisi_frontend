@@ -20,6 +20,11 @@ class LearningMission(models.Model):
         verbose_name='所属班级',
     )
     default_mode_policy = models.CharField(max_length=50, blank=True, null=True)
+    target_student_ids = models.JSONField(default=list, blank=True)
+    course = models.ForeignKey(
+        'courses.Course', on_delete=models.SET_NULL, null=True, blank=True,
+        db_column='course_id', related_name='learning_missions',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

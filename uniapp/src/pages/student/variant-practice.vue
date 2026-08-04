@@ -70,7 +70,7 @@ const isObjective = computed(() =>
 const hasNext = computed(() => currentIndex.value < questions.value.length - 1)
 
 onLoad((options: any) => {
-  itemId.value = parseInt(options?.itemId || '0')
+  itemId.value = String(options?.itemId || '')
 })
 
 onMounted(async () => {

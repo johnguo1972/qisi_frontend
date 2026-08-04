@@ -14,7 +14,7 @@ class MissionListSerializer(serializers.ModelSerializer):
         fields = ['id', 'mission_no', 'mission_name', 'goal_text',
                   'status', 'start_at', 'end_at', 'creator_name',
                   'level_count', 'class_name', 'question_count',
-                  'default_mode_policy', 'class_obj']
+                  'default_mode_policy', 'class_obj', 'target_student_ids', 'course']
 
     def get_level_count(self, obj):
         return obj.levels.count()
@@ -38,7 +38,7 @@ class MissionDetailSerializer(serializers.ModelSerializer):
         model = LearningMission
         fields = ['id', 'mission_no', 'mission_name', 'goal_text',
                   'creator_teacher', 'creator_name', 'start_at', 'end_at',
-                  'status', 'default_mode_policy', 'levels', 'class_obj']
+                  'status', 'default_mode_policy', 'levels', 'class_obj', 'target_student_ids', 'course']
 
     def get_levels(self, obj):
         levels = obj.levels.all()
@@ -52,19 +52,25 @@ class MissionDetailSerializer(serializers.ModelSerializer):
 
 class CreateMissionSerializer(serializers.ModelSerializer):
     class_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    target_student_ids = serializers.ListField(child=serializers.UUIDField(), required=False, default=list)
+    course_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
 
     class Meta:
         model = LearningMission
-        fields = ['mission_name', 'goal_text', 'start_at', 'end_at', 'default_mode_policy', 'class_id']
+        fields = ['mission_name', 'goal_text', 'start_at', 'end_at', 'default_mode_policy', 'class_id', 'course_id', 'target_student_ids']
 
     def create(self, validated_data):
         class_id = validated_data.pop('class_id', None)
+        course_id = validated_data.pop('course_id', None)
         if class_id:
             from apps.institutions.models import Class
             try:
                 validated_data['class_obj'] = Class.objects.get(pk=class_id)
             except Class.DoesNotExist:
                 pass
+        if course_id:
+            from apps.courses.models import Course
+            validated_data['course_id'] = course_id if Course.objects.filter(pk=course_id).exists() else None
         return super().create(validated_data)
 
 

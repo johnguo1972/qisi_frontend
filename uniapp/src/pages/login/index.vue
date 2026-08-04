@@ -3,7 +3,7 @@
     <view class="login-container">
       <!-- 左侧品牌区 -->
       <view class="brand-side">
-        <view class="logo">A自习室</view>
+        <view class="logo">优途AI辅学系统</view>
         <text class="brand-desc">AI 智能学习辅导系统</text>
         <view class="feature-list">
           <view class="feature-item">

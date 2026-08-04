@@ -183,8 +183,8 @@ import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import { materialApi, importApi, treeApi } from '@/api/courses'
 
 // Page state
-const courseId = ref(0)
-const materialId = ref(0)
+const courseId = ref<string>('')
+const materialId = ref<string>('')
 const materialName = ref('')
 const pages = ref<Array<{ url: string; page: number }>>([])
 const currentPage = ref(0)
@@ -259,8 +259,8 @@ onMounted(async () => {
   const currentPage_obj = pages_list[pages_list.length - 1] as any
   const options = currentPage_obj.options || {}
   console.log('[ImportPage] options:', options)
-  courseId.value = Number(options.course_id || options.id)
-  materialId.value = Number(options.material_id)
+  courseId.value = String(options.course_id || options.id || '')
+  materialId.value = String(options.material_id || '')
   console.log('[ImportPage] courseId:', courseId.value, 'materialId:', materialId.value)
 
   if (!courseId.value || !materialId.value) {

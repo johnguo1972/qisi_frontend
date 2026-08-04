@@ -384,7 +384,7 @@ onUnmounted(() => {
 // Accept paper_id from URL query and auto-select
 onLoad((options: any) => {
   if (options && options.paper_id) {
-    const targetId = parseInt(options.paper_id)
+    const targetId = String(options.paper_id || '')
     const unwatch = watch(papers, (list) => {
       if (list.length > 0) {
         const idx = list.findIndex(p => p.id === targetId)

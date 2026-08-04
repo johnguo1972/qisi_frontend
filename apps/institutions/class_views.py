@@ -333,6 +333,49 @@ def class_students(request, class_id):
     })
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def class_learning_stats(request, class_id):
+    """Return assignment and answer statistics for students in a class."""
+    try:
+        cls = Class.objects.get(id=class_id)
+    except Class.DoesNotExist:
+        return Response({'code': 404, 'message': '班级不存在', 'data': None}, status=404)
+    if not _check_teacher_of_class(request.user, class_id):
+        return Response({'code': 403, 'message': '无权访问'}, status=403)
+
+    from apps.missions.models import LearningMission
+    from apps.study.models import StudentMissionProgress, AnswerAttempt
+
+    missions = LearningMission.objects.filter(class_obj_id=class_id)
+    rows = []
+    for relation in cls.class_students.filter(status='active').select_related('student'):
+        student_id = relation.student_id
+        progress = StudentMissionProgress.objects.filter(
+            mission__in=missions, student_user_id_id=student_id,
+        )
+        attempts = AnswerAttempt.objects.filter(
+            mission__in=missions, student_user_id_id=student_id,
+        )
+        attempt_count = attempts.count()
+        correct_count = attempts.filter(is_correct=True).count()
+        rows.append({
+            'student_id': student_id,
+            'student_name': relation.student.display_name or relation.student.mobile,
+            'mission_count': progress.count(),
+            'completed_count': progress.filter(progress_status__in=('completed', 'passed')).count(),
+            'attempt_count': attempt_count,
+            'correct_count': correct_count,
+            'accuracy': round(correct_count * 100 / attempt_count, 2) if attempt_count else 0,
+        })
+    return Response({'code': 0, 'data': {
+        'class_id': class_id,
+        'class_name': cls.class_name,
+        'mission_count': missions.count(),
+        'students': rows,
+    }, 'trace_id': _trace()})
+
+
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated])
 def remove_student(request, class_id, student_id):

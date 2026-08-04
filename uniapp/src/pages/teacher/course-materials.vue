@@ -94,7 +94,7 @@ import { materialApi, courseApi } from '@/api/courses'
 // ============================================================
 // Course info
 // ============================================================
-const courseId = ref<number>(0)
+const courseId = ref<string>('')
 const courseName = ref<string>('课程资料')
 
 // ============================================================
@@ -386,7 +386,7 @@ onMounted(() => {
   const pages = getCurrentPages()
   const currentPage = pages[pages.length - 1] as any
   const options = currentPage.options || {}
-  const id = Number(options.id)
+  const id = String(options.id || '')
 
   if (!id) {
     uni.showToast({ title: '缺少课程ID参数', icon: 'none' })

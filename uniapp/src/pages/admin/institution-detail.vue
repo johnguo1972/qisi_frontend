@@ -157,7 +157,7 @@ import { ref, computed, onMounted } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
 import { institutionApi } from '@/api/institutions.ts'
 
-const institutionId = ref<number>(0)
+const institutionId = ref<string>('')
 const institution = ref<any>({})
 const members = ref<any[]>([])
 const loading = ref(false)
@@ -240,7 +240,7 @@ const roleLabels = computed(() => roleOptions.map(o => o.label))
 const subjectLabels = computed(() => subjectOptions.map(o => o.label))
 
 onLoad((options: any) => {
-  const id = parseInt(options?.id || '0')
+  const id = String(options?.id || '')
   institutionId.value = id
 })
 

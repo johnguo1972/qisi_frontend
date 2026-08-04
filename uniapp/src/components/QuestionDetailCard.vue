@@ -1,20 +1,33 @@
 <template>
-  <view class="q-card" :id="'q-' + question.id">
+  <view class="q-card" :class="{ compact, selected }" :id="'q-' + question.id">
     <!-- 题头 -->
     <view class="card-header">
       <text class="q-num" :style="{ background: diffColor }">{{ index }}</text>
       <text class="q-title" :class="'diff-l' + question.difficulty">第 {{ question.question_no }} 题</text>
+      <text class="q-uuid" @click.stop="copyUuid">UUID: {{ question.id }}</text>
       <text class="q-type-tag">{{ questionTypeLabel }}</text>
+      <button size="mini" class="qr-button" @click.stop="previewImg(qrUrl)">二维码</button>
       <text class="q-creator">{{ question.creator_name || question.paper_title || '' }} {{ formatDate(question.created_at) }}</text>
     </view>
 
     <!-- 题干 -->
-    <view class="q-body">
-      <view class="stem-content" v-html="stemHtml"></view>
+    <view class="q-body" :class="{ 'compact-body': compact }">
+      <text v-if="compact" class="compact-stem">{{ compactStem }}</text>
+      <view v-else class="stem-content" v-html="stemHtml"></view>
+    </view>
+
+    <view v-if="compact" class="compact-actions">
+      <view class="check-box footer-check" :class="{ checked: selected }" @click.stop="toggleCheck">
+        <text v-if="selected" class="check-mark">&#10003;</text>
+      </view>
+      <button size="mini" @click="$emit('edit', question.id)">编辑</button>
+      <button size="mini" @click="$emit('related', question.id)">类似题</button>
+      <button size="mini" @click="$emit('edit-tags', question)">标签编辑</button>
+      <button size="mini" @click="$emit('add-favorite', question.id)">加入精选</button>
     </view>
 
     <!-- 题目配图 -->
-    <view v-if="diagramImages.length > 0" class="q-images">
+    <view v-if="!compact && diagramImages.length > 0" class="q-images">
       <view class="image-row">
         <view v-for="(img, idx) in diagramImages" :key="idx" class="img-cell">
           <image :src="img.url" mode="widthFix" class="q-img" @click="previewImg(img.url)" />
@@ -24,7 +37,7 @@
     </view>
 
     <!-- 选择题选项 -->
-    <view v-if="isChoiceType" class="q-options">
+    <view v-if="!compact && isChoiceType" class="q-options">
       <view v-for="opt in options" :key="opt.label" class="opt-row">
         <text class="opt-label" :style="{ color: optColor }">{{ opt.label }}.</text>
         <view class="opt-content" v-html="opt.html"></view>
@@ -32,7 +45,7 @@
     </view>
 
     <!-- 子问题 -->
-    <view v-if="subquestions.length > 0" class="q-subquestions">
+    <view v-if="!compact && subquestions.length > 0" class="q-subquestions">
       <view v-for="(sub, idx) in subquestions" :key="idx" class="sub-row">
         <text class="sub-label">({{ sub.label || (idx + 1) }})</text>
         <view class="sub-content" v-html="sub.html"></view>
@@ -40,7 +53,7 @@
     </view>
 
     <!-- 知识点标签 -->
-    <view class="q-tags">
+    <view v-if="!compact" class="q-tags">
       <view class="tag-group">
         <text class="tag-title">● 知识点</text>
         <view v-for="kp in question.knowledge_points_display || []" :key="kp.id" class="tag kp-tag">{{ kp.name }}</view>
@@ -51,7 +64,7 @@
       </view>
       <view class="tag-group">
         <text class="tag-title">● 难度</text>
-        <text class="tag label-tag difficulty-tag">{{ question.difficulty ?? '-' }}</text>
+        <text class="tag label-tag difficulty-tag">{{ difficultyStars }}</text>
       </view>
       <view v-if="question.source_collection" class="tag-group">
         <text class="tag-title">● 来源</text>
@@ -60,19 +73,16 @@
     </view>
 
     <!-- 底部操作栏 -->
-    <view class="q-footer">
+    <view v-if="!compact" class="q-footer">
       <view class="q-footer-right">
-        <button size="mini" @click="$emit('toggle-answer')">答案</button>
-        <button size="mini">分享</button>
-        <button size="mini">二维码</button>
-        <button size="mini">导出</button>
-        <button size="mini" @click="$emit('whiteboard', question.id)">白板</button>
-        <button size="mini" @click="$emit('related', question.id)">关联</button>
-        <button size="mini">更多</button>
-        <button size="mini" @click="$emit('add-basket', question.id)">加入篮子</button>
-        <view class="check-box" :class="{ checked: selected }" @click="toggleCheck">
+        <view class="check-box footer-check" :class="{ checked: selected }" @click.stop="toggleCheck">
           <text v-if="selected" class="check-mark">&#10003;</text>
         </view>
+        <button size="mini" @click="$emit('toggle-answer')">答案</button>
+        <button size="mini" @click="$emit('edit', question.id)">编辑</button>
+        <button size="mini" @click="$emit('related', question.id)">类似题</button>
+        <button size="mini" @click="$emit('edit-tags', question)">标签编辑</button>
+        <button size="mini" @click="$emit('add-favorite', question.id)">加入精选</button>
       </view>
     </view>
 
@@ -99,6 +109,7 @@ const props = defineProps<{
   index: number
   showAnswer: boolean
   selected?: boolean
+  compact?: boolean
 }>()
 
 const stemHtml = ref('')
@@ -106,7 +117,7 @@ const answerHtml = ref('')
 const analysisHtml = ref('')
 const optionHtmls = ref<Record<string, string>>({})
 const subquestionHtmls = ref<string[]>([])
-const emit = defineEmits(['whiteboard', 'related', 'toggle-answer', 'add-favorite', 'add-basket', 'check'])
+const emit = defineEmits(['edit', 'related', 'toggle-answer', 'add-favorite', 'edit-tags', 'check'])
 function toggleCheck() { emit('check', props.question.id) }
 
 const options = computed(() => {
@@ -146,6 +157,25 @@ const QUESTION_TYPE_LABELS: Record<string, string> = {
 const questionTypeLabel = computed(() =>
   QUESTION_TYPE_LABELS[props.question.question_type] || props.question.question_type || ''
 )
+
+const difficultyStars = computed(() => {
+  const level = Math.max(0, Math.min(5, Math.round(Number(props.question.difficulty || 0))))
+  return level ? '★'.repeat(level) + '☆'.repeat(5 - level) : '-'
+})
+
+const compactStem = computed(() => {
+  const stem = String(props.question.stem || '').replace(/\s+/g, ' ').trim()
+  return stem.length > 25 ? `${stem.slice(0, 25)}...` : stem
+})
+
+const qrUrl = computed(() => {
+  // #ifdef APP-PLUS
+  return `https://qisi.chengxuelu.com/api/v1/questions/${props.question.id}/qr/`
+  // #endif
+  // #ifndef APP-PLUS
+  return `/api/v1/questions/${props.question.id}/qr/`
+  // #endif
+})
 
 const diffColor = computed(() => {
   const colors: Record<number, string> = { 1: '#67c23a', 2: '#409eff', 3: '#e6a23c', 4: '#f56c6c', 5: '#9924ff' }
@@ -200,6 +230,13 @@ function previewImg(url: string) {
   uni.previewImage({ urls: [url] })
 }
 
+function copyUuid() {
+  uni.setClipboardData({
+    data: String(props.question.id),
+    success: () => uni.showToast({ title: 'UUID已复制', icon: 'none' }),
+  })
+}
+
 function formatDate(dateStr: string): string {
   if (!dateStr) return ''
   return dateStr.slice(0, 10)
@@ -242,12 +279,28 @@ onMounted(renderContent)
 
 <style scoped>
 .q-card {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   background: #fff;
   border-radius: 8px;
   padding: 20px;
   margin-bottom: 16px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  border: 1px solid transparent;
 }
+.q-card.selected { border-color: #409eff; box-shadow: 0 0 0 2px rgba(64, 158, 255, .15); }
+.q-card.compact { padding: 14px 20px; }
+.q-uuid { font-size: 11px; color: #409eff; word-break: break-all; cursor: pointer; }
+.q-qr { width: 42px; height: 42px; margin-left: 8px; }
+.qr-button { margin: 0; padding: 0 8px; color: #409eff; border: 1px solid #b3d8ff; background: #ecf5ff; }
+.footer-check { margin-right: 2px; order: 99; }
+.compact-body { margin-bottom: 8px; }
+.compact-body .stem-content { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.compact-stem { font-size: 14px; line-height: 1.6; color: #303133; }
+.compact-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
 .card-header {
   display: flex;
@@ -257,6 +310,7 @@ onMounted(renderContent)
   padding-bottom: 12px;
   border-bottom: 1px solid #f0f0f0;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .q-num {

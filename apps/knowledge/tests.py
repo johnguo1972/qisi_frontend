@@ -1,6 +1,7 @@
 """Tests for knowledge app."""
 from django.test import SimpleTestCase, TransactionTestCase
 from apps.knowledge.models import KnowledgePoint
+from apps.knowledge.teacher_api_views import _deduplicate_knowledge_points
 
 
 class KnowledgePointModelUnitTest(SimpleTestCase):
@@ -40,6 +41,21 @@ class KnowledgePointModelUnitTest(SimpleTestCase):
         self.assertEqual(len(KnowledgePoint.STAGE_CHOICES), 3)
         self.assertEqual(len(KnowledgePoint.TERM_CHOICES), 2)
         self.assertEqual(len(KnowledgePoint.NODE_TYPE_CHOICES), 5)
+
+    def test_deduplicate_knowledge_points_by_name(self):
+        points = [
+            {'id': 1, 'name': '长度与时间的测量', 'question_count': 2},
+            {'id': 2, 'name': '长度与时间的测量', 'question_count': 2},
+            {'id': 3, 'name': '机械运动与参照物', 'question_count': 1},
+        ]
+
+        self.assertEqual(
+            _deduplicate_knowledge_points(points),
+            [
+                {'id': 1, 'name': '长度与时间的测量', 'question_count': 2},
+                {'id': 3, 'name': '机械运动与参照物', 'question_count': 1},
+            ],
+        )
 
     def test_meta_db_table(self):
         """Verify model maps to correct table."""

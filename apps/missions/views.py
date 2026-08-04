@@ -1,5 +1,7 @@
 import uuid
 import json
+import os
+from django.conf import settings
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -19,6 +21,90 @@ def make_trace_id():
     return uuid.uuid4().hex[:16]
 
 
+def _mission_student_ids(mission):
+    """Return active students assigned to the mission, honoring targeted students."""
+    from apps.institutions.models import ClassStudent
+
+    students = ClassStudent.objects.filter(
+        class_obj_id=mission.class_obj_id, status='active',
+    ).values_list('student_id', flat=True)
+    targets = {str(student_id) for student_id in (mission.target_student_ids or [])}
+    if targets:
+        students = students.filter(student_id__in=targets)
+    return students
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mission_add_favorites(request, mission_id):
+    """Add the teacher's selected favorite questions to a mission."""
+    try:
+        mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': 'mission not found'}, status=404)
+    question_ids = request.data.get('question_ids') or []
+    if not isinstance(question_ids, list) or not question_ids:
+        return Response({'code': 400, 'message': 'question_ids required'}, status=400)
+    from apps.study.models import Favorite
+    allowed = set(Favorite.objects.filter(user=request.user, question_id__in=question_ids)
+                  .values_list('question_id', flat=True))
+    level = mission.levels.order_by('level_no').first()
+    if level is None:
+        level = MissionLevel.objects.create(
+            mission=mission, level_no=1, level_name='精选题目',
+            level_type='practice', mode_policy=mission.default_mode_policy or 'free_practice',
+        )
+    existing = set(MissionQuestionRel.objects.filter(mission=mission).values_list('question_id', flat=True))
+    added = 0
+    for question_id in allowed - existing:
+        MissionQuestionRel.objects.create(
+            mission=mission, level=level, question_id=question_id,
+            sort_no=MissionQuestionRel.objects.filter(level=level).count(),
+            source_type='favorite',
+        )
+        added += 1
+    return Response({'code': 0, 'message': 'success', 'data': {'added': added}})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def mission_export_pdf(request, mission_id):
+    """Export a teacher-owned mission as a downloadable PDF."""
+    try:
+        mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': 'mission not found'}, status=404)
+    rel_ids = MissionQuestionRel.objects.filter(mission=mission).values_list('question_id', flat=True)
+    questions = []
+    for question in ExamQuestion.objects.filter(id__in=list(rel_ids)).values(
+        'id', 'question_no', 'question_type', 'stem', 'stem_html', 'answer', 'analysis', 'knowledge_points'
+    )[:50]:
+        options = QuestionOption.objects.filter(question_id=question['id']).values(
+            'option_label', 'content'
+        ).order_by('sort_order')
+        images = QuestionImage.objects.filter(question_id=question['id']).values(
+            'file_path'
+        ).order_by('sort_order')
+        questions.append({
+            **question,
+            'options_html': list(options),
+            'image_urls': [item['file_path'] for item in images],
+        })
+    if not questions:
+        return Response({'code': 404, 'message': 'no questions'}, status=404)
+    try:
+        from apps.study.student_views import _build_pdf
+        pdf_bytes = _build_pdf('mission', questions, False, '')
+    except ImportError:
+        return Response({'code': 503, 'message': 'PDF dependency unavailable'}, status=503)
+    export_dir = os.path.join(settings.MEDIA_ROOT, 'exports')
+    os.makedirs(export_dir, exist_ok=True)
+    filename = f'mission_{uuid.uuid4().hex[:12]}.pdf'
+    with open(os.path.join(export_dir, filename), 'wb') as output:
+        output.write(pdf_bytes)
+    return Response({'code': 0, 'data': {'download_url': f'{settings.MEDIA_URL}exports/{filename}'}})
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def mission_list(request):
@@ -29,6 +115,9 @@ def mission_list(request):
         missions = LearningMission.objects.filter(
             creator_teacher_id=user
         ).order_by('-created_at')
+        class_id = request.GET.get('class_id')
+        if class_id:
+            missions = missions.filter(class_obj_id=class_id)
         return Response({
             'code': 0, 'message': 'success', 'trace_id': make_trace_id(),
             'data': MissionListSerializer(missions, many=True).data,
@@ -70,6 +159,8 @@ def mission_detail(request, mission_id):
             if field in ('start_at', 'end_at') and val == '':
                 val = None
             setattr(mission, field, val)
+    if 'target_student_ids' in request.data:
+        mission.target_student_ids = request.data.get('target_student_ids') or []
 
     # Handle class_id separately (ForeignKey field)
     old_class_id = mission.class_obj_id
@@ -110,9 +201,7 @@ def mission_detail(request, mission_id):
 
         if new_class_id:
             # Create progress records for new students in the class
-            new_student_ids = ClassStudent.objects.filter(
-                class_obj_id=new_class_id, status='active',
-            ).values_list('student_id', flat=True)
+            new_student_ids = _mission_student_ids(mission)
             for student_id in new_student_ids:
                 StudentMissionProgress.objects.get_or_create(
                     mission=mission,
@@ -326,9 +415,7 @@ def mission_publish(request, mission_id):
         from apps.institutions.models import ClassStudent
         from apps.study.models import StudentMissionProgress
 
-        student_ids = ClassStudent.objects.filter(
-            class_obj_id=mission.class_obj_id, status='active',
-        ).values_list('student_id', flat=True)
+        student_ids = _mission_student_ids(mission)
 
         for student_id in student_ids:
             StudentMissionProgress.objects.get_or_create(

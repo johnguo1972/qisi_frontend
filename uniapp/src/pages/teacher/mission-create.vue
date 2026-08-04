@@ -47,6 +47,18 @@
             <text class="date-arrow">📅</text>
           </view>
         </view>
+        <view v-if="form.class_id" class="form-item target-students-item">
+          <text class="label">指定学生（不选择则布置给全班）</text>
+          <view class="target-students">
+            <view v-for="student in classStudents" :key="student.student || student.id"
+                  :class="['target-student', { selected: targetStudentIds.includes(String(student.student || student.id)) }]"
+                  @click="toggleTargetStudent(String(student.student || student.id))">
+              <text>{{ student.student_name || student.display_name || student.student_mobile || student.mobile }}</text>
+              <text>{{ targetStudentIds.includes(String(student.student || student.id)) ? '✓' : '' }}</text>
+            </view>
+            <text v-if="!classStudents.length" class="target-empty">该班级暂无学生</text>
+          </view>
+        </view>
         <button class="next-btn" @click="nextStep">下一步：选择题目</button>
       </view>
 
@@ -530,9 +542,11 @@ const userStore = useUserStore()
 const step = ref(1)
 
 const editMode = ref(false)
-const editMissionId = ref(0)
+const editMissionId = ref<string>('')
 
-const form = ref({ mission_name: '', goal_text: '', start_at: '', end_at: '', class_id: null as number | null })
+const form = ref({ mission_name: '', goal_text: '', start_at: '', end_at: '', class_id: null as string | null })
+const courseId = ref<number | null>(null)
+const pendingFavoriteQuestionIds = ref<Array<string | number>>([])
 const levels = ref([{ name: '基础练习', type: 'practice', mode: 'block_a', questionIds: [] as number[] }])
 const searchQuery = ref('')
 const showDatePicker = ref(false)
@@ -544,6 +558,8 @@ const tempStartDate = ref('')
 const classList = ref<any[]>([])
 const showClassDropdown = ref(false)
 const selectedClassName = ref('')
+const classStudents = ref<any[]>([])
+const targetStudentIds = ref<string[]>([])
 
 // === Step 2: 知识树 ===
 const treeData = ref<any[]>([])
@@ -1099,7 +1115,7 @@ async function publish() {
   try {
     uni.showLoading({ title: editMode.value ? '保存中...' : '发布中...' })
 
-    let missionId: number
+    let missionId: string
 
     if (editMode.value) {
       // 编辑模式：更新任务
@@ -1110,6 +1126,8 @@ async function publish() {
         start_at: form.value.start_at,
         end_at: form.value.end_at,
         class_id: form.value.class_id,
+        course_id: courseId.value,
+        target_student_ids: targetStudentIds.value,
       })
 
       // 重新创建关卡和题目
@@ -1130,12 +1148,17 @@ async function publish() {
         start_at: form.value.start_at,
         end_at: form.value.end_at,
         class_id: form.value.class_id,
+        course_id: courseId.value,
+        target_student_ids: targetStudentIds.value,
       })
       missionId = res.data?.id
       if (!missionId) {
         uni.hideLoading()
         uni.showToast({ title: '任务创建失败', icon: 'none' })
         return
+      }
+      if (pendingFavoriteQuestionIds.value.length) {
+        await missionApi.addFavorites(missionId, pendingFavoriteQuestionIds.value)
       }
 
       // 2. 批量创建关卡和题目（一次请求完成）
@@ -1171,7 +1194,11 @@ onMounted(async () => {
 
   const pages = getCurrentPages()
   const page = pages[pages.length - 1] as any
-  const id = parseInt(page.options?.id)
+  const id = String(page.options?.id || '')
+  courseId.value = page.options?.courseId ? String(page.options.courseId) : null
+  if (page.options?.favoriteQuestionIds) {
+    pendingFavoriteQuestionIds.value = String(page.options.favoriteQuestionIds).split(',').filter(Boolean)
+  }
 
   if (id) {
     // 编辑模式：加载已有任务数据
@@ -1185,7 +1212,7 @@ onMounted(async () => {
 })
 
 // 加载已有任务数据（编辑模式）
-async function loadMissionData(id: number) {
+async function loadMissionData(id: string) {
   try {
     const res: any = await missionApi.detail(id)
     const data = res.data
@@ -1196,6 +1223,8 @@ async function loadMissionData(id: number) {
     form.value.start_at = data.start_at || ''
     form.value.end_at = data.end_at || ''
     form.value.class_id = data.class_obj || null
+    targetStudentIds.value = (data.target_student_ids || []).map((value: any) => String(value))
+    if (data.class_obj) await loadClassStudents(data.class_obj)
 
     // 加载班级名称（此时 classList 已加载）
     if (data.class_obj) {
@@ -1253,6 +1282,24 @@ function selectClass(cls: any) {
   form.value.class_id = cls.id
   selectedClassName.value = cls.class_name
   showClassDropdown.value = false
+  targetStudentIds.value = []
+  loadClassStudents(cls.id)
+}
+
+async function loadClassStudents(classId: number) {
+  try {
+    const res: any = await classApi.students(classId)
+    classStudents.value = res.data?.items || []
+  } catch (e) {
+    classStudents.value = []
+    console.error('加载班级学生失败:', e)
+  }
+}
+
+function toggleTargetStudent(studentId: string) {
+  const index = targetStudentIds.value.indexOf(studentId)
+  if (index >= 0) targetStudentIds.value.splice(index, 1)
+  else targetStudentIds.value.push(studentId)
 }
 </script>
 
@@ -1267,6 +1314,10 @@ function selectClass(cls: any) {
   flex: 1;
   padding: 30rpx 40rpx;
 }
+.target-students { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.target-student { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border: 1px solid #dcdfe6; border-radius: 4px; color: #606266; cursor: pointer; }
+.target-student.selected { color: #409eff; border-color: #409eff; background: #ecf5ff; }
+.target-empty { color: #909399; font-size: 12px; }
 .form-title {
   font-size: 32rpx;
   font-weight: bold;

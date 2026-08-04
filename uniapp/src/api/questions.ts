@@ -9,7 +9,7 @@ const UPLOAD_BASE = '/api/v1'
 
 export const questionApi = {
   // GET /api/v1/questions
-  list: (params?: { page?: number; page_size?: number; question_no?: string; status?: string }) =>
+  list: (params?: { page?: number; page_size?: number; question_no?: string; status?: string; question_type?: string; difficulty?: string; knowledge_point_id?: string | number; tag?: string; uuid?: string }) =>
     get<any>('/questions/', params),
 
   // GET /api/v1/questions/{id}
@@ -83,6 +83,11 @@ export const questionApi = {
   // AI process (review API)
   aiProcess: (questionId: string | number, data?: { model?: string }) =>
     post<any>(`/review/question/${questionId}/ai-process/`, data),
+  aiProcessMode: (questionId: string | number, mode: string) =>
+    post<any>(`/review/question/${questionId}/ai-process-mode/${mode}/`),
+  batchAi: (questionIds: string[], model?: string) =>
+    post<any>('/review/batch-ai-process/', { question_ids: questionIds, model }),
+  similar: (questionId: string) => get<any>(`/questions/${questionId}/similar/`),
 
   // AI task status polling
   getTaskStatus: (taskId: string) =>

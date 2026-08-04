@@ -83,6 +83,15 @@ function navigateByRole(role: string) {
 </template>
 
 <style>
+html, body, #app, #app-container, page {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
 page {
   background-color: #f5f5f5;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;

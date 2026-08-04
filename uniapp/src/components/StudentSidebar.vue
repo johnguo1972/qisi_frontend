@@ -1,6 +1,6 @@
 <template>
   <view class="sidebar">
-    <view class="sidebar-logo" @click="goHome">A自习室</view>
+    <view class="sidebar-logo" @click="goHome">优途AI辅学系统</view>
     <view class="sidebar-user">
       <view class="user-info-row">
         <text class="user-name">{{ userInfo.display_name || '同学' }}</text>

@@ -241,8 +241,8 @@ import { missionApi } from '@/api/index.ts'
 import { chooseImage } from '@/utils/image-upload'
 import { renderWithKatex } from '@/utils/katex-renderer'
 
-const missionId = ref(0)
-const levelId = ref(0)
+const missionId = ref<string>('')
+const levelId = ref<string>('')
 const levelName = ref('')
 const levelType = ref('')
 const questions = ref<any[]>([])
@@ -343,8 +343,8 @@ async function renderCurrentQuestion() {
 }
 
 onLoad((options: any) => {
-  missionId.value = parseInt(options?.missionId || '0')
-  levelId.value = parseInt(options?.levelId || '0')
+  missionId.value = String(options?.missionId || '')
+  levelId.value = String(options?.levelId || '')
 })
 
 onMounted(async () => {

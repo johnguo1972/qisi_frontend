@@ -2,7 +2,7 @@
   <view class="admin-home">
     <!-- 左侧导航栏 -->
     <view class="sidebar">
-      <view class="sidebar-logo">A自习室</view>
+      <view class="sidebar-logo">优途AI辅学系统</view>
       <view class="sidebar-user">
         <text class="user-name">{{ userInfo.display_name }}</text>
         <text class="user-role">管理员</text>

@@ -1,8 +1,8 @@
 <template>
   <view class="container">
     <view class="page-header">
-      <text class="page-title">任务列表</text>
-      <button class="btn-create" @click="goCreateMission">+ 创建任务</button>
+      <text class="page-title">作业列表</text>
+      <button class="btn-create" @click="goCreateMission">+ 新增作业</button>
     </view>
 
     <view v-if="loading" class="loading">加载中...</view>
@@ -23,6 +23,9 @@
         <view v-if="m.end_at" class="card-footer">
           <text class="mission-end">截止: {{ m.end_at }}</text>
         </view>
+        <view class="card-actions">
+          <button size="mini" @click.stop="goGradeMission(m.id)">批改作业</button>
+        </view>
       </view>
     </view>
   </view>
@@ -30,10 +33,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { missionApi, type Mission } from '@/api/missions'
 
 const missions = ref<Mission[]>([])
 const loading = ref(false)
+const classId = ref<string | undefined>()
+
+onLoad((options: any) => { classId.value = options?.classId || undefined })
 
 onMounted(() => {
   loadMissions()
@@ -42,7 +49,7 @@ onMounted(() => {
 async function loadMissions() {
   loading.value = true
   try {
-    const res: any = await missionApi.list()
+    const res: any = await missionApi.list(classId.value ? { class_id: classId.value } : undefined)
     missions.value = (res.data || []) as Mission[]
   } catch (e) {
     console.error('加载任务列表失败:', e)
@@ -67,6 +74,10 @@ function goCreateMission() {
 
 function goMissionDetail(id: number) {
   uni.navigateTo({ url: `/pages/teacher/mission-detail?id=${id}` })
+}
+
+function goGradeMission(id: number) {
+  uni.navigateTo({ url: `/pages/teacher/mission-detail?id=${id}&mode=grading` })
 }
 </script>
 
@@ -160,5 +171,10 @@ function goMissionDetail(id: number) {
 .mission-end {
   font-size: 12px;
   color: #e6a23c;
+}
+.card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 </style>

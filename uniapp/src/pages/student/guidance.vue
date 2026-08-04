@@ -185,8 +185,8 @@ import { studentApi } from '@/api/student.ts'
 import { renderWithKatex } from '@/utils/katex-renderer'
 
 // 页面核心状态
-const questionId = ref(0)
-const levelId = ref(0)
+const questionId = ref<string>('')
+const levelId = ref<string>('')
 const questions = ref<any[]>([])
 const currentIndex = ref(0)
 const showStem = ref(true)
@@ -275,8 +275,8 @@ const hasNextQuestion = computed(() => currentIndex.value < questions.value.leng
 
 // 页面加载
 onLoad((options: any) => {
-  questionId.value = parseInt(options?.questionId || '0')
-  levelId.value = parseInt(options?.levelId || '0')
+  questionId.value = String(options?.questionId || '')
+  levelId.value = String(options?.levelId || '')
   mode.value = options?.mode || ''
 })
 

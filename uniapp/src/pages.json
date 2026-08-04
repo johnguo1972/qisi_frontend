@@ -7,8 +7,8 @@
     { "path": "pages/admin/institution-edit", "style": { "navigationBarTitleText": "编辑机构" } },
     { "path": "pages/admin/institution-detail", "style": { "navigationBarTitleText": "机构详情" } },
 
-    { "path": "pages/student/layout", "style": { "navigationBarTitleText": "A自习室" } },
-    { "path": "pages/teacher/layout", "style": { "navigationBarTitleText": "A自习室" } },
+    { "path": "pages/student/layout", "style": { "navigationBarTitleText": "优途AI辅学系统" } },
+    { "path": "pages/teacher/layout", "style": { "navigationBarTitleText": "优途AI辅学系统" } },
 
     { "path": "pages/teacher/audit", "style": { "navigationBarTitleText": "OCR审核" } },
     { "path": "pages/teacher/review-list", "style": { "navigationBarTitleText": "试卷审阅" } },
@@ -39,7 +39,7 @@
   ],
   "globalStyle": {
     "navigationBarTextStyle": "black",
-    "navigationBarTitleText": "A自习室",
+    "navigationBarTitleText": "优途AI辅学系统",
     "navigationBarBackgroundColor": "#F8F8F8",
     "backgroundColor": "#F8F8F8"
   }

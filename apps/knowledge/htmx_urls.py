@@ -167,8 +167,8 @@ def point_delete(request, point_id):
 urlpatterns = [
     path('knowledge/chapter/<str:chapter_name>/', chapter_points, name='knowledge-chapter-points'),
     path('knowledge/point/new/', point_form_new, name='knowledge-point-form-new'),
-    path('knowledge/point/<int:point_id>/edit/', point_form_edit, name='knowledge-point-form-edit'),
+    path('knowledge/point/<uuid:point_id>/edit/', point_form_edit, name='knowledge-point-form-edit'),
     path('knowledge/point/new/submit/', point_create, name='knowledge-point-create'),
-    path('knowledge/point/<int:point_id>/update/', point_update, name='knowledge-point-update'),
-    path('knowledge/point/<int:point_id>/delete/', point_delete, name='knowledge-point-delete'),
+    path('knowledge/point/<uuid:point_id>/update/', point_update, name='knowledge-point-update'),
+    path('knowledge/point/<uuid:point_id>/delete/', point_delete, name='knowledge-point-delete'),
 ]

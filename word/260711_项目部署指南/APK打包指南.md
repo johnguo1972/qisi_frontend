@@ -1,4 +1,4 @@
-# 齐思 · A自习室 前端 APK 打包指南（HBuilderX 云打包）
+# 齐思 · 优途AI辅学系统 前端 APK 打包指南（HBuilderX 云打包）
 # ============================================================
 
 ## 前置条件
@@ -13,9 +13,9 @@
 
 ```json
 {
-  "name": "A自习室",
+  "name": "优途AI辅学系统",
   "appid": "",  // 留空，HBuilderX 会自动生成或手动填写
-  "description": "A自习室题库系统",
+  "description": "优途AI辅学系统",
   "versionName": "1.0.0",
   "versionCode": "100",
   "transformPx": false,

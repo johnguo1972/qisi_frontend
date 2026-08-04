@@ -1,6 +1,6 @@
 <template>
   <view class="sidebar">
-    <view class="sidebar-logo" @click="goWorkbench">A自习室</view>
+    <view class="sidebar-logo" @click="goWorkbench">优途AI辅学系统</view>
     <view class="sidebar-user">
       <text class="user-name">{{ userInfo.display_name }}</text>
       <text class="user-role">教师</text>
@@ -10,36 +10,35 @@
         <text class="nav-icon">&#128203;</text>
         <text class="nav-text">工作台</text>
       </view>
-      <view class="nav-item" :class="{ active: activeItem === 'import' }" @click="goImport">
-        <text class="nav-icon">&#128220;</text>
-        <text class="nav-text">上传试卷</text>
+      <view class="nav-item" :class="{ active: activeItem === 'question-bank' }" @click="goQuestionBank">
+        <text class="nav-icon">&#128218;</text>
+        <text class="nav-text">题库管理</text>
       </view>
-      <view class="nav-item" :class="{ active: activeItem === 'new-question' }" @click="goNewQuestion">
-        <text class="nav-icon">&#10133;</text>
-        <text class="nav-text">新增试题</text>
+      <view class="nav-item" :class="{ active: activeItem === 'favorites' }" @click="goFavorites">
+        <text class="nav-icon">&#11088;</text>
+        <text class="nav-text">我的精选</text>
       </view>
-      <view class="nav-group">
-        <view class="nav-group-title">题库管理</view>
-        <view class="nav-item" :class="{ active: activeItem === 'question-bank' }" @click="goQuestionBank">
-          <text class="nav-icon">&#128218;</text>
-          <text class="nav-text">题库管理</text>
+      <view class="nav-group class-group">
+        <view class="nav-item" :class="{ active: isClassSectionActive }" @click="toggleClassMenu">
+          <text class="nav-icon">&#127963;</text>
+          <text class="nav-text">班级管理</text>
+          <text class="nav-arrow">{{ classMenuExpanded ? '⌄' : '›' }}</text>
         </view>
-        <view class="nav-item" :class="{ active: activeItem === 'favorites' }" @click="goFavorites">
-          <text class="nav-icon">&#11088;</text>
-          <text class="nav-text">我的精选</text>
+        <view v-if="classMenuExpanded" class="nav-subitems">
+          <view class="nav-item nav-subitem" :class="{ active: activeItem === 'student-management' }" @click="goStudentManagement">
+            <text class="nav-text">学生管理</text>
+          </view>
+          <view class="nav-item nav-subitem" :class="{ active: activeItem === 'assignment-list' }" @click="goAssignmentList">
+            <text class="nav-text">作业列表</text>
+          </view>
+          <view class="nav-item nav-subitem" :class="{ active: activeItem === 'learning-stats' }" @click="goLearningStats">
+            <text class="nav-text">学情统计</text>
+          </view>
         </view>
       </view>
       <view class="nav-item" :class="{ active: activeItem === 'course-list' }" @click="goCourseList">
         <text class="nav-icon">&#127891;</text>
-        <text class="nav-text">课程列表</text>
-      </view>
-      <view class="nav-item" :class="{ active: activeItem === 'classes' }" @click="goClasses">
-        <text class="nav-icon">&#127963;</text>
-        <text class="nav-text">班级管理</text>
-      </view>
-      <view class="nav-item" :class="{ active: activeItem === 'missions' }" @click="goMissionList">
-        <text class="nav-icon">&#128203;</text>
-        <text class="nav-text">任务列表</text>
+        <text class="nav-text">课程管理</text>
       </view>
       <view class="nav-item nav-logout" @click="handleLogout">
         <text class="nav-icon">&#128682;</text>
@@ -50,7 +49,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { authApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
 
@@ -62,6 +61,8 @@ const emit = defineEmits(['navigate'])
 
 const userInfo = ref({ display_name: '老师' })
 const userStore = useUserStore()
+const classMenuExpanded = ref(['student-management', 'assignment-list', 'learning-stats'].includes(props.activeItem))
+const isClassSectionActive = computed(() => classMenuExpanded.value && ['student-management', 'assignment-list', 'learning-stats'].includes(props.activeItem))
 
 onMounted(async () => {
   try {
@@ -71,14 +72,16 @@ onMounted(async () => {
 })
 
 function goWorkbench() { emit('navigate', 'workbench') }
-function goImport() { emit('navigate', 'import') }
-function goNewQuestion() { emit('navigate', 'new-question') }
-function goBank() { emit('navigate', 'bank') }
 function goQuestionBank() { emit('navigate', 'question-bank') }
 function goFavorites() { emit('navigate', 'favorites') }
 function goCourseList() { emit('navigate', 'course-list') }
-function goClasses() { emit('navigate', 'classes') }
-function goMissionList() { emit('navigate', 'missions') }
+function toggleClassMenu() {
+  classMenuExpanded.value = !classMenuExpanded.value
+  if (classMenuExpanded.value) emit('navigate', 'student-management')
+}
+function goStudentManagement() { classMenuExpanded.value = true; emit('navigate', 'student-management') }
+function goAssignmentList() { classMenuExpanded.value = true; emit('navigate', 'assignment-list') }
+function goLearningStats() { classMenuExpanded.value = true; emit('navigate', 'learning-stats') }
 
 async function handleLogout() {
   uni.showModal({
@@ -167,6 +170,21 @@ async function handleLogout() {
 .nav-text {
   font-size: 26rpx;
   color: #333;
+}
+.nav-arrow {
+  margin-left: auto;
+  color: #999;
+  font-size: 30rpx;
+}
+.nav-subitems {
+  padding-left: 24rpx;
+}
+.nav-subitem {
+  padding-top: 12rpx;
+  padding-bottom: 12rpx;
+}
+.nav-subitem .nav-text {
+  font-size: 24rpx;
 }
 .nav-item.active .nav-text {
   color: #409eff;

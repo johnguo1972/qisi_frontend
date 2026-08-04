@@ -149,7 +149,7 @@ class QuestionDetailSerializer(serializers.ModelSerializer):
                   'sort_order', 'confidence', 'formula_need_review',
                   'need_review', 'review_status', 'parse_status',
                   'ai_answer_a', 'ai_answer_b', 'ai_answer_c',
-                  'ai_knowledge_enrichment', 'created_at', 'updated_at']
+                  'ai_knowledge_enrichment', 'tags', 'created_at', 'updated_at']
 
 
 class ImportBatchSerializer(serializers.ModelSerializer):

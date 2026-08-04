@@ -41,6 +41,7 @@ export const classApi = {
   remove: (id: number) => del(`/classes/${id}`),
   regenerateCode: (id: number) => post(`/classes/${id}/regenerate-code`),
   students: (id: number) => get(`/classes/${id}/students`),
+  learningStats: (id: number | string) => get(`/classes/${id}/learning-stats`),
   removeStudent: (classId: number, studentId: number) =>
     put(`/classes/${classId}/students/${studentId}`),
   joinRequests: (classId: number) => get(`/classes/${classId}/join-requests`),

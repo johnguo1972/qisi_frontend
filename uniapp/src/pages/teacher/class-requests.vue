@@ -76,10 +76,10 @@ const loading = ref(false)
 const activeTab = ref<'all' | 'pending' | 'approved' | 'rejected'>('pending')
 const allRequests = ref<JoinRequest[]>([])
 
-let classId = 0
+let classId = ''
 
 onLoad((options: any) => {
-  classId = Number(options?.classId || 0)
+  classId = String(options?.classId || '')
 })
 
 onMounted(async () => {

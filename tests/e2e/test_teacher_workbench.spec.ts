@@ -15,7 +15,7 @@ test.describe('Teacher Workbench', () => {
   test('should display sidebar with logo', async ({ page }) => {
     const logo = page.locator('.sidebar-logo');
     await expect(logo.first()).toBeVisible();
-    await expect(logo.first()).toContainText('A自习室');
+    await expect(logo.first()).toContainText('优途AI辅学系统');
   });
 
   test('should display teacher role', async ({ page }) => {

@@ -1,36 +1,5 @@
 <template>
   <view class="question-bank">
-    <!-- 顶部筛选工具栏 -->
-    <view class="filter-bar">
-      <view class="filter-left">
-        <view class="filter-chips">
-          <view
-            v-for="item in filterItems"
-            :key="item.key"
-            :class="['chip', { active: item.active }]"
-            @click="toggleFilter(item.key)"
-          >
-            {{ item.label }}
-            <text v-if="item.active" class="chip-remove">&times;</text>
-          </view>
-        </view>
-      </view>
-      <view class="filter-right">
-        <view class="pagination">
-          <select v-model.number="currentPage" class="page-select" @change="goToPage">
-            <option v-for="page in totalPages" :key="page" :value="page">第 {{ page }} 页</option>
-          </select>
-          <select v-model.number="pageSize" class="page-size-select" @change="changePageSize">
-            <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }} 条/页</option>
-          </select>
-          <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
-          <text class="page-info">{{ currentPage }}/{{ totalPages }}页</text>
-          <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
-        </view>
-        <button size="mini" @click="resetFilters">重置</button>
-      </view>
-    </view>
-
     <view class="main-layout">
       <!-- 左侧：知识树 -->
       <view class="left-panel">
@@ -53,7 +22,6 @@
 
         <view class="tree-actions">
           <button size="mini" @click="toggleSelectMode">{{ selectMode ? '单选' : '多选' }}目录集合</button>
-          <button size="mini" type="primary" @click="queryRelatedData">查询相关数据</button>
         </view>
 
         <view v-if="treeLoading" class="loading">加载中...</view>
@@ -104,34 +72,46 @@
             <text class="total-count">({{ totalCount }}题)</text>
           </view>
           <view class="header-right">
-            <button class="btn-import" @click="showImportModal">&#128229; 导入题目</button>
+            <view class="pagination-new">
+              <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
+              <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
+              <select v-model.number="currentPage" class="page-picker" @change="selectPage">
+                <option v-for="page in pageNumbers" :key="page" :value="page">{{ pageOptionLabel(page) }}</option>
+              </select>
+              <select v-model.number="pageSize" class="page-size-picker" @change="changePageSize">
+                <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ pageSizeOptionLabel(size) }}</option>
+              </select>
+            </view>
+            <view class="pagination">
+              <text class="page-total">共 {{ totalCount }} 题</text>
+              <text class="page-size-label">每页</text>
+              <select v-model.number="pageSize" class="page-size-select" @change="changePageSize">
+                <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }}</option>
+              </select>
+              <input v-model.number="jumpPage" class="jump-page-input" type="number" min="1" :max="totalPages" placeholder="页码" />
+              <button size="mini" @click="goToPage">跳转</button>
+              <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
+              <text class="page-info">{{ currentPage }}/{{ totalPages }}页</text>
+              <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
+            </view>
             <button class="btn-add" @click="showAddMenu">+ 新增</button>
           </view>
         </view>
 
-        <!-- 题型/难度快捷筛选 -->
+        <!-- 题目筛选 -->
         <view class="quick-filters">
           <view class="filter-group">
-            <text class="filter-label">题型：</text>
-            <view
-              v-for="t in questionTypes"
-              :key="t.value"
-              :class="['filter-chip', { active: activeType === t.value }]"
-              @click="setType(t.value)"
-            >
-              {{ t.label }}
-            </view>
+            <text class="filter-label">题型</text>
+            <select v-model="activeType" class="filter-select"><option value="">全部题型</option><option v-for="t in questionTypes" :key="t.value" :value="t.value">{{ t.label }}</option></select>
+            <text class="filter-label">难度</text>
+            <select v-model="activeDifficulty" class="filter-select"><option value="">全部难度</option><option v-for="d in difficultyLevels" :key="d.value" :value="d.value">{{ d.stars }}</option></select>
           </view>
           <view class="filter-group">
-            <text class="filter-label">难度：</text>
-            <view
-              v-for="d in difficultyLevels"
-              :key="d.value"
-              :class="['filter-chip', { active: activeDifficulty === d.value }]"
-              @click="setDifficulty(d.value)"
-            >
-              {{ d.stars }}
-            </view>
+            <text class="filter-label">知识点</text>
+            <select v-model="activeKnowledgePoint" class="filter-select"><option value="">全部知识点</option><option v-for="kp in knowledgeOptions" :key="kp.id" :value="kp.id">{{ kp.name }}</option></select>
+            <input v-model="tagSearch" class="tag-search" placeholder="自定义标签" />
+            <input v-model="uuidSearch" class="uuid-search" placeholder="按UUID查询" />
+            <button size="mini" type="primary" @click="applyFilters">查询</button>
           </view>
         </view>
 
@@ -144,11 +124,12 @@
             :index="index + 1"
             :show-answer="showAnswerMap[q.id]"
             :selected="selectedQuestionIds.includes(String(q.id))"
-            @whiteboard="goEdit(q.id)"
+            :compact="viewMode === 'compact'"
+            @edit="goEdit"
             @related="handleRelated"
+            @edit-tags="openTagEditor"
             @toggle-answer="toggleAnswer(q.id)"
             @add-favorite="addFavorite(q.id)"
-            @add-basket="addSelectedToBasket"
             @check="toggleQuestionSelection"
           />
           <view v-if="loading" class="loading-more">加载中...</view>
@@ -160,49 +141,45 @@
 
       <!-- 右侧：操作面板 -->
       <RightActionPanel
-        :basket-count="basketCount"
         :all-shown="allAnswersShown"
-        @random="handleRandom"
-        @query-params="showQueryParams"
         @refresh="handleRefresh"
         @toggle-answer="toggleAllAnswers"
-        @share-multiple="handleShareMultiple"
-        @share-history="handleShareHistory"
+        :compact-mode="viewMode === 'compact'"
+        @toggle-mode="toggleViewMode"
         @basket="handleBasket"
-        @ai-process="handleAiProcess"
+        @batch-ai="handleBatchAi"
+        @ai-explore="handleAiExplore"
+        @ai-mode-a="handleAiModeA"
       />
     </view>
 
     <!-- 导入弹窗 -->
-    <ImportModal
-      v-if="importVisible"
-      @close="importVisible = false"
-      @photo-import="handlePhotoImport"
-      @file-import="handleFileImport"
-      @json-import="handleJsonImport"
-    />
-
     <!-- 新增菜单 -->
     <AddMenuModal
       v-if="addMenuVisible"
       @close="addMenuVisible = false"
       @photo="goPhotoUpload"
-      @file="handleFileImport"
       @json="handleJsonImport"
-      @manual="goManualCreate"
     />
+
+    <view v-if="relatedVisible" class="modal-overlay" @click.self="relatedVisible = false">
+      <view class="data-modal"><view class="modal-title">类似题</view><view v-if="relatedLoading">加载中...</view><view v-else-if="!relatedQuestions.length">暂无符合条件的类似题</view><view v-for="item in relatedQuestions" :key="item.id" class="related-item" @click="goEdit(item.id)">{{ item.question_no }}：{{ item.stem_preview || item.stem }}</view><button size="mini" @click="relatedVisible = false">关闭</button></view>
+    </view>
+
+    <view v-if="tagVisible" class="modal-overlay" @click.self="tagVisible = false">
+      <view class="data-modal"><view class="modal-title">标签编辑</view><view class="tag-editor"><text v-for="tag in questionTags" :key="tag.id" class="tag-chip">{{ tag.name }} <text @click="removeQuestionTagFromCurrent(tag.id)">×</text></text></view><input v-model="newTag" placeholder="输入标签后添加" @confirm="addQuestionTagToCurrent" /><view class="modal-actions"><button size="mini" @click="addQuestionTagToCurrent">添加</button><button size="mini" type="primary" @click="tagVisible = false">完成</button></view></view>
+    </view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { questionApi, importJsonPackage, getBasket, addToBasket as apiAddToBasket } from '@/api/questions'
+import { questionApi, importJsonPackage, getQuestionTags, addQuestionTag, removeQuestionTag } from '@/api/questions'
 import { knowledgeApi } from '@/api/knowledge'
 import { favoriteApi } from '@/api/favorites'
 import { useUserStore } from '@/store/index.ts'
 
 import QuestionDetailCard from '@/components/QuestionDetailCard.vue'
-import ImportModal from '@/components/ImportModal.vue'
 import AddMenuModal from '@/components/AddMenuModal.vue'
 import RightActionPanel from '@/components/RightActionPanel.vue'
 
@@ -211,6 +188,9 @@ const userStore = useUserStore()
 // === 状态 ===
 const selectedSubject = ref('physics')
 const selectedKP = ref<number | null>(null)
+const activeKnowledgePoint = ref('')
+const tagSearch = ref('')
+const uuidSearch = ref('')
 const knowledgeTree = ref<any[]>([])
 const treeLoading = ref(false)
 const treeSearch = ref('')
@@ -219,34 +199,27 @@ const selectMode = ref(false)
 const questions = ref<any[]>([])
 const loading = ref(false)
 const currentPage = ref(1)
+const jumpPage = ref(1)
 const totalPages = ref(1)
 const totalCount = ref(0)
 const pageSize = ref(20)
 const pageSizeOptions = [10, 20, 30, 50]
+const pageNumbers = computed(() => Array.from({ length: totalPages.value }, (_, index) => index + 1))
 
 const activeType = ref('')
 const activeDifficulty = ref('')
 const showAnswerMap = ref<Record<string, boolean>>({})
-const basketCount = ref(0)
 const selectedQuestionIds = ref<string[]>([])
+const viewMode = ref<'compact' | 'detail'>('detail')
 
-const importVisible = ref(false)
 const addMenuVisible = ref(false)
-
-// === 筛选项 ===
-const filterItems = ref([
-  { key: 'question', label: '题目', active: false },
-  { key: 'knowledge', label: '知识', active: false },
-  { key: 'year', label: '年份', active: false },
-  { key: 'title', label: '标题', active: false },
-  { key: 'questionNo', label: '题号', active: false },
-  { key: 'tag', label: '标签', active: false },
-  { key: 'kp', label: '知识点', active: false },
-  { key: 'keyword', label: '关键词查询', active: false },
-  { key: 'sort', label: '排序', active: false },
-  { key: 'id', label: 'ID', active: false },
-  { key: 'similar', label: '相似题', active: false },
-])
+const relatedVisible = ref(false)
+const relatedLoading = ref(false)
+const relatedQuestions = ref<any[]>([])
+const tagVisible = ref(false)
+const editingQuestion = ref<any>(null)
+const questionTags = ref<any[]>([])
+const newTag = ref('')
 
 const questionTypes = [
   { label: '选择题', value: 'single_choice' },
@@ -261,16 +234,30 @@ const difficultyLevels = [
   { label: '较难', value: '4', stars: '★★★★★' },
   { label: '困难', value: '5', stars: '★★★★★' },
 ]
+difficultyLevels.forEach((item, index) => {
+  item.stars = '★'.repeat(index + 1) + '☆'.repeat(4 - index)
+})
 
 const allAnswersShown = computed(() => {
   return questions.value.length > 0 && questions.value.every(q => showAnswerMap.value[q.id])
+})
+
+const knowledgeOptions = computed(() => {
+  const result: any[] = []
+  knowledgeTree.value.forEach((grade: any) => {
+    grade.semesters?.forEach((sem: any) => {
+      sem.chapters?.forEach((chapter: any) => {
+        chapter.knowledge_points?.forEach((kp: any) => result.push(kp))
+      })
+    })
+  })
+  return result
 })
 
 // === 初始化 ===
 onMounted(() => {
   loadKnowledgeTree()
   loadQuestions()
-  loadBasketCount()
 })
 
 // === 知识树 ===
@@ -297,10 +284,9 @@ async function loadKnowledgeTree() {
 }
 
 function toggleNode(node: any) { node.expanded = !node.expanded }
-function selectKP(kp: any) { selectedKP.value = kp.id; currentPage.value = 1; loadQuestions() }
+function selectKP(kp: any) { selectedKP.value = kp.id; currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
 function onTreeSearch() { /* 过滤树节点 */ }
 function toggleSelectMode() { selectMode.value = !selectMode.value }
-function queryRelatedData() { /* 查询相关数据 */ }
 function onSubjectChange() { loadKnowledgeTree(); loadQuestions() }
 
 // === 题目加载 ===
@@ -311,6 +297,9 @@ async function loadQuestions() {
     if (selectedKP.value) params.knowledge_point_id = selectedKP.value
     if (activeType.value) params.question_type = activeType.value
     if (activeDifficulty.value) params.difficulty = activeDifficulty.value
+    if (activeKnowledgePoint.value) params.knowledge_point_id = activeKnowledgePoint.value
+    if (tagSearch.value.trim()) params.tag = tagSearch.value.trim()
+    if (uuidSearch.value.trim()) params.uuid = uuidSearch.value.trim()
     const subject = userStore.userInfo?.subject || selectedSubject.value
     if (subject) params.subject = subject
 
@@ -320,6 +309,7 @@ async function loadQuestions() {
     selectedQuestionIds.value = selectedQuestionIds.value.filter(id => questions.value.some(q => String(q.id) === id))
     totalCount.value = data?.total || questions.value.length
     totalPages.value = Math.max(1, Math.ceil(totalCount.value / pageSize.value))
+    jumpPage.value = currentPage.value
   } catch (e) {
     console.error('加载题目失败:', e)
   } finally {
@@ -330,14 +320,19 @@ async function loadQuestions() {
 function loadMore() { if (currentPage.value < totalPages.value) { currentPage.value++; loadQuestions() } }
 function prevPage() { if (currentPage.value > 1) { currentPage.value--; loadQuestions() } }
 function nextPage() { if (currentPage.value < totalPages.value) { currentPage.value++; loadQuestions() } }
-function goToPage() { loadQuestions() }
-function changePageSize() { currentPage.value = 1; loadQuestions() }
+function pageOptionLabel(page: number) { return page === currentPage.value ? `${page} / ${totalPages.value}页` : `第 ${page} 页` }
+function pageSizeOptionLabel(size: number) { return size === pageSize.value ? `${size} / ${totalCount.value}` : `${size} 个 / 页` }
+function selectPage() { loadQuestions() }
+function goToPage() {
+  const target = Math.max(1, Math.min(totalPages.value, Number(jumpPage.value) || 1))
+  currentPage.value = target
+  jumpPage.value = target
+  loadQuestions()
+}
+function changePageSize() { currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
 
 // === 筛选 ===
-function toggleFilter(key: string) { const item = filterItems.value.find(f => f.key === key); if (item) item.active = !item.active }
-function setType(val: string) { activeType.value = activeType.value === val ? '' : val; currentPage.value = 1; loadQuestions() }
-function setDifficulty(val: string) { activeDifficulty.value = activeDifficulty.value === val ? '' : val; currentPage.value = 1; loadQuestions() }
-function resetFilters() { activeType.value = ''; activeDifficulty.value = ''; selectedKP.value = null; currentPage.value = 1; filterItems.value.forEach(f => f.active = false); loadQuestions() }
+function applyFilters() { currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
 
 // === 答案控制 ===
 function toggleAnswer(id: string) { showAnswerMap.value[id] = !showAnswerMap.value[id] }
@@ -345,9 +340,14 @@ function toggleAllAnswers() { const allShown = allAnswersShown.value; questions.
 
 // === 操作 ===
 function goEdit(id: string) { uni.navigateTo({ url: `/pages/teacher/question-edit?id=${id}` }) }
-function handleRelated() { uni.showToast({ title: '关联功能开发中', icon: 'none' }) }
+async function handleRelated(id: string) {
+  relatedVisible.value = true
+  relatedLoading.value = true
+  try { const res: any = await questionApi.similar(id); relatedQuestions.value = res.data || [] }
+  catch { relatedQuestions.value = [] }
+  finally { relatedLoading.value = false }
+}
 function goPhotoUpload() { uni.navigateTo({ url: '/pages/teacher/photo-upload' }); addMenuVisible.value = false }
-function goManualCreate() { addMenuVisible.value = false; uni.showToast({ title: '手动创建功能开发中', icon: 'none' }) }
 
 async function addFavorite(id: number) {
   try { await favoriteApi.add(id); uni.showToast({ title: '已加入精选', icon: 'success' }) }
@@ -366,30 +366,15 @@ async function addSelectedToBasket() {
     uni.showToast({ title: '请先选择题目', icon: 'none' })
     return
   }
-  let added = 0
   let favorited = 0
   for (const id of selectedQuestionIds.value) {
-    try { await apiAddToBasket(id); added++ } catch (e: any) { if (e?.statusCode !== 409) console.warn(e) }
     try { await favoriteApi.add(id); favorited++ } catch (e: any) { if (e?.statusCode !== 409) console.warn(e) }
   }
-  await loadBasketCount()
-  uni.showToast({ title: `篮子 ${added} 题，精选 ${favorited} 题`, icon: 'success' })
+  uni.showToast({ title: `已加入精选 ${favorited} 题`, icon: 'success' })
 }
-
-async function addToBasket(id: number) {
-  try { await apiAddToBasket(String(id)); basketCount.value++; uni.showToast({ title: '已加入篮子', icon: 'success' }) }
-  catch (e) { uni.showToast({ title: '加入失败', icon: 'none' }) }
-}
-
-async function loadBasketCount() { try { const res = await getBasket(); basketCount.value = res.data?.length || 0 } catch {} }
 
 // === 导入 ===
-function showImportModal() { importVisible.value = true }
-function handlePhotoImport() { importVisible.value = false; goPhotoUpload() }
-function handleFileImport() { importVisible.value = false; uni.navigateTo({ url: '/pages/teacher/import' }) }
-
 async function handleJsonImport(file: any) {
-  importVisible.value = false
   uni.showLoading({ title: '正在导入...' })
   try {
     // 处理 uni.chooseFile 返回的对象 { path, name } 或原生 File 对象
@@ -415,61 +400,62 @@ async function handleJsonImport(file: any) {
 
 // === 其他 ===
 function showAddMenu() { addMenuVisible.value = true }
-function showQueryParams() { uni.showToast({ title: '查询参数功能开发中', icon: 'none' }) }
-function handleRandom() { uni.showToast({ title: '随机选题功能开发中', icon: 'none' }) }
+function toggleViewMode() { viewMode.value = viewMode.value === 'compact' ? 'detail' : 'compact' }
 async function handleRefresh() {
   currentPage.value = 1
   showAnswerMap.value = {}
   await loadQuestions()
   uni.showToast({ title: '已刷新', icon: 'success', duration: 1000 })
 }
-function handleShareMultiple() { uni.showToast({ title: '分享功能开发中', icon: 'none' }) }
-function handleShareHistory() { uni.showToast({ title: '分享历史功能开发中', icon: 'none' }) }
 function handleBasket() { addSelectedToBasket() }
-async function handleAiProcess() {
-  uni.showLoading({ title: 'AI处理中...' })
+async function handleBatchAi(model?: string) {
   if (!selectedQuestionIds.value.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
-  for (const id of selectedQuestionIds.value) {
-    try {
-      const started: any = await questionApi.aiProcess(id)
-      const taskId = started?.data?.task_id || started?.data?.data?.task_id
-      if (taskId) {
-        for (let attempt = 0; attempt < 120; attempt++) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
-          const status: any = await questionApi.getTaskStatus(taskId)
-          const state = status?.data?.status || status?.data?.data?.status
-          if (state === 'complete' || state === 'partial' || state === 'failed') break
-        }
-      }
-    } catch (e) { console.warn('AI处理失败', id, e) }
-  }
-  uni.hideLoading()
-  await loadKnowledgeTree()
-  await loadQuestions()
-  uni.showToast({ title: `已提交 ${selectedQuestionIds.value.length} 题AI处理`, icon: 'success' })
+  try { await questionApi.batchAi(selectedQuestionIds.value, model); uni.showToast({ title: '批量AI任务已提交', icon: 'success' }) }
+  catch { uni.showToast({ title: '批量AI提交失败', icon: 'none' }) }
+}
+function handleAiExplore() { handleBatchAi() }
+async function handleAiModeA() {
+  if (!selectedQuestionIds.value.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
+  try {
+    await Promise.all(selectedQuestionIds.value.map(id => questionApi.aiProcessMode(id, 'A')))
+    uni.showToast({ title: 'AI-A模式任务已提交', icon: 'success' })
+  } catch { uni.showToast({ title: 'AI-A模式提交失败', icon: 'none' }) }
+}
+
+async function openTagEditor(question: any) {
+  editingQuestion.value = question
+  tagVisible.value = true
+  newTag.value = ''
+  try { const res: any = await getQuestionTags(String(question.id)); questionTags.value = res.data || [] }
+  catch { questionTags.value = [] }
+}
+async function addQuestionTagToCurrent() {
+  if (!editingQuestion.value || !newTag.value.trim()) return
+  try { await addQuestionTag(String(editingQuestion.value.id), { tag_name: newTag.value.trim() }); await openTagEditor(editingQuestion.value); newTag.value = '' }
+  catch { uni.showToast({ title: '标签添加失败', icon: 'none' }) }
+}
+async function removeQuestionTagFromCurrent(tagId: string) {
+  if (!editingQuestion.value) return
+  try { await removeQuestionTag(String(editingQuestion.value.id), tagId); await openTagEditor(editingQuestion.value) }
+  catch { uni.showToast({ title: '标签移除失败', icon: 'none' }) }
 }
 </script>
 
 <style scoped>
-.question-bank { display: flex; flex-direction: column; height: 100vh; background: #f0f2f5; overflow: hidden; }
+.question-bank { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: #f0f2f5; overflow: hidden; }
 
-.filter-bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 24px; background: #fff; border-bottom: 1px solid #e4e7ed; }
-.filter-left { flex: 1; min-width: 0; }
-.filter-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-.filter-chips { display: flex; gap: 8px; flex-wrap: wrap; }
-.chip { padding: 4px 12px; border-radius: 12px; font-size: 12px; background: #f0f0f0; cursor: pointer; display: flex; align-items: center; gap: 4px; }
-.chip.active { background: #409eff; color: #fff; }
-.chip-remove { font-size: 14px; margin-left: 2px; }
-.pagination { display: flex; align-items: center; gap: 8px; }
+.pagination { display: none; }
+.pagination-new { display: flex; align-items: center; gap: 8px; }
 .page-info { font-size: 13px; color: #606266; }
-.page-select, .page-size-select {
-  height: 28px; min-width: 88px; padding: 0 8px;
-  border: 1px solid #dcdfe6; border-radius: 4px;
-  background: #fff; color: #606266; font-size: 12px;
-}
-.page-size-select { min-width: 82px; }
+.page-total, .page-size-label { font-size: 12px; color: #606266; }
+.page-size-select, .jump-page-input { height: 26px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 12px; color: #606266; background: #fff; }
+.page-size-select { width: 58px; }
+.jump-page-input { width: 54px; padding: 0 6px; }
+.page-picker, .page-size-picker { height: 28px; border: 1px solid #dcdfe6; border-radius: 6px; font-size: 12px; color: #303133; background: #fff; padding: 0 8px; }
+.page-picker { width: 92px; }
+.page-size-picker { width: 112px; }
 
-.main-layout { display: flex; flex: 1; overflow: hidden; }
+.main-layout { display: flex; flex: 1 1 auto; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 
 .left-panel { width: 260px; background: #fff; border-right: 1px solid #e4e7ed; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
 .left-panel .tree-content { overflow-y: auto; flex: 1; }
@@ -488,7 +474,7 @@ async function handleAiProcess() {
 .count { font-size: 10px; color: #909399; margin-left: 4px; flex-shrink: 0; }
 .tree-children { padding-left: 12px; }
 
-.center-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.center-panel { flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; }
 .panel-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #fff; border-bottom: 1px solid #e4e7ed; }
 .panel-title { font-size: 16px; font-weight: 600; color: #303133; }
 .total-count { font-size: 13px; color: #909399; margin-left: 8px; }
@@ -497,12 +483,23 @@ async function handleAiProcess() {
 .btn-add { background: #409eff; color: #fff; border: none; border-radius: 4px; padding: 6px 14px; font-size: 13px; }
 
 .quick-filters { padding: 10px 20px; background: #fff; border-bottom: 1px solid #f0f0f0; }
-.filter-group { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.quick-filters { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; overflow: visible; }
+.filter-group { display: flex; align-items: center; gap: 8px; margin-bottom: 0; flex-shrink: 0; }
 .filter-label { font-size: 12px; color: #909399; }
+.filter-select, .tag-search { height: 28px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; color: #606266; font-size: 12px; }
+.tag-search { width: 130px; }
+.uuid-search { width: 220px; }
 .filter-chip { padding: 3px 10px; border-radius: 10px; font-size: 11px; background: #f0f0f0; cursor: pointer; }
 .filter-chip.active { background: #409eff; color: #fff; }
 
-.question-scroll { flex: 1; overflow-y: auto; padding: 16px 20px; background: #f5f7fa; }
+.question-scroll { flex: 1 1 auto; width: 100%; min-width: 0; box-sizing: border-box; overflow-y: auto; padding: 10px; background: #f5f7fa; }
 .loading-more, .empty-state { text-align: center; padding: 40px 0; color: #909399; }
 .loading { text-align: center; color: #909399; padding: 20px 0; }
+.modal-overlay { position: fixed; inset: 0; z-index: 1001; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
+.data-modal { width: 520px; max-width: 90vw; max-height: 80vh; overflow-y: auto; padding: 20px; background: #fff; border-radius: 8px; }
+.modal-title { margin-bottom: 16px; font-size: 18px; font-weight: 600; color: #303133; }
+.related-item { padding: 10px 0; border-bottom: 1px solid #f0f0f0; color: #606266; cursor: pointer; }
+.tag-editor { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.tag-chip { padding: 4px 8px; border-radius: 12px; background: #ecf5ff; color: #409eff; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>

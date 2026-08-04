@@ -53,7 +53,7 @@ import { institutionApi } from '@/api/institutions.ts'
 const statusOptions = ['active', 'suspended', 'closed']
 const statusLabels: Record<string, string> = { active: '正常', suspended: '已暂停', closed: '已关闭' }
 
-const institutionId = ref(0)
+const institutionId = ref<string>('')
 const form = ref({
   institution_name: '',
   contact_name: '',
@@ -65,7 +65,7 @@ const form = ref({
 const submitting = ref(false)
 
 onLoad((options: any) => {
-  institutionId.value = parseInt(options?.id || '0')
+  institutionId.value = String(options?.id || '')
 })
 
 onMounted(async () => {

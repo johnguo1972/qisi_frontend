@@ -399,7 +399,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
   <view class="bank">
     <!-- Left sidebar -->
     <view class="sidebar">
-      <view class="sidebar-logo">A自习室</view>
+      <view class="sidebar-logo">优途AI辅学系统</view>
       <view class="sidebar-user">
         <text class="user-name">{{ userInfo.display_name }}</text>
         <text class="user-role">教师</text>
@@ -715,7 +715,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
   <view class="favorites">
     <!-- Left sidebar -->
     <view class="sidebar">
-      <view class="sidebar-logo">A自习室</view>
+      <view class="sidebar-logo">优途AI辅学系统</view>
       <view class="sidebar-user">
         <text class="user-name">{{ userInfo.display_name }}</text>
         <text class="user-role">教师</text>

@@ -5,6 +5,7 @@
     <view class="main">
       <!-- 任务信息卡片 -->
       <view v-if="mission" class="mission-card">
+        <text class="page-title">{{ isGrading ? '批改作业' : '作业详情' }}</text>
         <text class="mission-name">{{ mission.mission_name }}</text>
         <text class="mission-no">{{ mission.mission_no }}</text>
         <view class="status-badge" :class="mission.status">{{ statusText(mission.status) }}</view>
@@ -28,6 +29,7 @@
           开始任务
         </button>
         <button @click="cloneMission" class="action-btn clone">克隆任务</button>
+        <button @click="exportPdf" class="action-btn export">导出PDF</button>
       </view>
       <!-- 关卡列表 -->
       <view class="levels-panel">
@@ -67,10 +69,12 @@ import { type Mission } from '@/api/missions.ts'
 
 const mission = ref<Mission | null>(null)
 const levels = ref<any[]>([])
-const missionId = ref<number>(0)
+const missionId = ref<string>('')
+const isGrading = ref(false)
 
 onLoad((options: any) => {
-  const id = parseInt(options?.id)
+  const id = String(options?.id || '')
+  isGrading.value = options?.mode === 'grading'
   if (!id) {
     uni.showToast({ title: '缺少任务ID', icon: 'none' })
     return
@@ -142,6 +146,20 @@ async function cloneMission() {
   }
 }
 
+async function exportPdf() {
+  try {
+    const res: any = await missionApi.exportPdf(missionId.value)
+    const url = res.data?.download_url
+    if (url) {
+      // H5/native callers can open the generated media URL.
+      window.open?.(url, '_blank')
+      uni.showToast({ title: 'PDF已生成', icon: 'success' })
+    }
+  } catch (e) {
+    uni.showToast({ title: '导出失败', icon: 'none' })
+  }
+}
+
 function goPractice(levelId: number) {
   uni.navigateTo({ url: `/pages/teacher/level-practice?missionId=${missionId.value}&levelId=${levelId}` })
 }
@@ -164,6 +182,13 @@ function goPractice(levelId: number) {
   padding: 32rpx;
   box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.05);
   margin-bottom: 20rpx;
+}
+.page-title {
+  display: block;
+  margin-bottom: 18rpx;
+  font-size: 30rpx;
+  font-weight: bold;
+  color: #303133;
 }
 .mission-name {
   font-size: 32rpx;

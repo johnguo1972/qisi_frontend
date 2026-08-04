@@ -13,25 +13,11 @@
             <text class="menu-desc">拍照或选图，AI自动识别</text>
           </view>
         </view>
-        <view class="menu-item" @click="$emit('file')">
-          <text class="menu-icon">&#128196;</text>
-          <view class="menu-info">
-            <text class="menu-name">PDF/Word导入</text>
-            <text class="menu-desc">上传文档自动解析</text>
-          </view>
-        </view>
         <view class="menu-item" @click="$emit('json')">
           <text class="menu-icon">&#128230;</text>
           <view class="menu-info">
             <text class="menu-name">JSON数据包导入</text>
             <text class="menu-desc">上传ZIP压缩包批量导入</text>
-          </view>
-        </view>
-        <view class="menu-item" @click="$emit('manual')">
-          <text class="menu-icon">&#9998;&#65039;</text>
-          <view class="menu-info">
-            <text class="menu-name">手动创建</text>
-            <text class="menu-desc">手动填写题目信息</text>
           </view>
         </view>
       </view>

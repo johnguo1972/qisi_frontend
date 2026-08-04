@@ -38,7 +38,7 @@
   <view class="audit-page">
     <!-- 左侧导航栏 -->
     <view class="sidebar">
-      <view class="sidebar-logo" @click="goWorkbench">A自习室</view>
+      <view class="sidebar-logo" @click="goWorkbench">优途AI辅学系统</view>
       <view class="sidebar-user">
         <text class="user-name">{{ userInfo.display_name }}</text>
         <text class="user-role">教师</text>
@@ -956,7 +956,7 @@ git commit -m "feat: rewrite audit.vue as 新增试题 page with knowledge tree 
   <view class="camera-page">
     <!-- 左侧导航栏 -->
     <view class="sidebar">
-      <view class="sidebar-logo" @click="goWorkbench">A自习室</view>
+      <view class="sidebar-logo" @click="goWorkbench">优途AI辅学系统</view>
       <view class="sidebar-user">
         <text class="user-name">{{ userInfo.display_name }}</text>
         <text class="user-role">教师</text>

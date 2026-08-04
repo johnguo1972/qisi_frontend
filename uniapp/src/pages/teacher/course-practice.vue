@@ -28,6 +28,7 @@
           <text class="panel-title">习题列表</text>
           <view class="header-actions">
             <button class="btn-action" size="mini" @click="showAddPanel">+ 新增习题</button>
+            <button class="btn-action" size="mini" type="warning" @click="goAssignMission">布置作业</button>
             <button class="btn-action" size="mini" type="primary" @click="batchAiProcess" :disabled="selectedIds.length === 0">批量AI处理</button>
             <button class="btn-action" size="mini" type="success" @click="batchGenerateVariant" :disabled="selectedIds.length === 0">批量生成变式题</button>
             <button class="btn-action" size="mini" type="warning" @click="showGenerateMission">生成任务</button>
@@ -96,8 +97,7 @@
         <!-- Tabs -->
         <view class="tab-bar">
           <view :class="['tab', { active: activeTab === 'upload' }]" @click="activeTab = 'upload'">拍照/上传</view>
-          <view :class="['tab', { active: activeTab === 'material' }]" @click="activeTab = 'material'; loadMaterials()">从课程资料选择</view>
-          <view :class="['tab', { active: activeTab === 'bank' }]" @click="activeTab = 'bank'; loadBankQuestions()">从题库引入</view>
+          <view class="tab" @click="importJsonPackage">JSON数据包导入</view>
         </view>
 
         <!-- Tab: Upload -->
@@ -113,7 +113,7 @@
         </scroll-view>
 
         <!-- Tab: From materials -->
-        <scroll-view v-show="activeTab === 'material'" class="tab-content" scroll-y>
+        <scroll-view v-if="false" v-show="activeTab === 'material'" class="tab-content" scroll-y>
           <view v-if="materialsLoading" class="loading-sm">加载中...</view>
           <view v-else-if="materials.length === 0" class="empty-sm">暂无课程资料</view>
           <view v-else class="material-list">
@@ -128,7 +128,7 @@
         </scroll-view>
 
         <!-- Tab: From bank -->
-        <scroll-view v-show="activeTab === 'bank'" class="tab-content" scroll-y>
+        <scroll-view v-if="false" v-show="activeTab === 'bank'" class="tab-content" scroll-y>
           <view class="bank-search">
             <input class="search-input" placeholder="搜索题干或题号..." v-model="bankSearchText" @confirm="searchBank" />
             <button size="mini" type="primary" @click="searchBank">搜索</button>
@@ -251,12 +251,13 @@ import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import DirTree from '@/components/DirTree.vue'
 import { treeApi, courseQuestionApi, variantApi, materialApi } from '@/api/courses'
 import { aiProcessQuestion, getAiTaskStatus } from '@/api/questions'
+import { importJsonPackage as importJsonPackageApi } from '@/api/questions'
 import QuestionAIControls from '@/components/QuestionAIControls.vue'
 
 // ============================================================
 // Course info
 // ============================================================
-const courseId = ref<number>(0)
+const courseId = ref<string>('')
 const courseName = ref('课程加载中...')
 const selectedAiQuestionId = ref<string | number | null>(null)
 const showAiControls = ref(false)
@@ -280,7 +281,7 @@ onMounted(() => {
   const currentPage = pages[pages.length - 1] as any
   const id = currentPage.options?.id
   if (id) {
-    courseId.value = parseInt(id, 10)
+    courseId.value = String(id)
     loadCourseInfo()
   }
   loadTree()
@@ -615,6 +616,29 @@ function chooseImage() {
         },
       })
       closeAddPanel()
+    },
+  })
+}
+
+function goAssignMission() {
+  uni.navigateTo({ url: `/pages/teacher/mission-create?courseId=${courseId.value}` })
+}
+
+function importJsonPackage() {
+  // Keep the course entry point limited to the supported JSON package flow.
+  // @ts-ignore
+  uni.chooseFile({
+    count: 1,
+    extension: ['zip', 'json'],
+    success: async (res: any) => {
+      try {
+        const file = res.tempFiles?.[0]?.file || res.tempFiles?.[0]
+        await importJsonPackageApi(file)
+        uni.showToast({ title: '导入任务已提交', icon: 'success' })
+        closeAddPanel()
+      } catch (e) {
+        uni.showToast({ title: 'JSON导入失败', icon: 'none' })
+      }
     },
   })
 }

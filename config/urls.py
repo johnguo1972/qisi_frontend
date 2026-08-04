@@ -25,7 +25,7 @@ urlpatterns = [
     # Teacher favorites
     path('api/v1/teacher/favorites/', favorites_list, name='favorites-list'),
     path('api/v1/teacher/favorites/add/', favorites_add, name='favorites-add'),
-    path('api/v1/teacher/favorites/<int:question_id>/', favorites_remove, name='favorites-remove'),
+    path('api/v1/teacher/favorites/<uuid:question_id>/', favorites_remove, name='favorites-remove'),
 ]
 
 if settings.DEBUG:

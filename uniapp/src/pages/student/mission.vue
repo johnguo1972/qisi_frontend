@@ -68,7 +68,7 @@ import { ref, computed, onMounted } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
 
-const missionId = ref(0)
+const missionId = ref<string>('')
 const missionName = ref('')
 const goalText = ref('')
 const className = ref('')
@@ -105,7 +105,7 @@ function statusText(status: string): string {
 }
 
 onLoad((options: any) => {
-  missionId.value = parseInt(options?.id)
+  missionId.value = String(options?.id || '')
 })
 
 onMounted(async () => {

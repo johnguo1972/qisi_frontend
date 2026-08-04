@@ -66,6 +66,7 @@
               <text class="col-name">{{ s.display_name || s.student_name }}</text>
               <text class="col-phone">{{ maskPhone(s.phone || s.mobile) }}</text>
               <text class="col-join" :class="'badge-' + s.join_type">{{ joinTypeText(s.join_type) }}</text>
+              <button size="mini" class="remove-student" @click="removeStudent(s)">移除</button>
             </view>
           </view>
         </view>
@@ -91,6 +92,7 @@ interface ClassInfo {
 
 interface Student {
   id: number
+  student?: number
   display_name?: string
   student_name?: string
   phone?: string
@@ -102,11 +104,11 @@ const loading = ref(false)
 const classInfo = reactive<ClassInfo>({} as ClassInfo)
 const students = ref<Student[]>([])
 
-let classId = 0
+let classId = ''
 
 // Use onLoad to get route parameters (works in H5 mode)
 onLoad(async (options: any) => {
-  classId = Number(options?.classId || 0)
+  classId = String(options?.classId || '')
   if (!classId) {
     uni.showToast({ title: '缺少班级ID', icon: 'none' })
     return
@@ -177,6 +179,21 @@ async function handleRefreshCode() {
 function goBack() { uni.navigateBack() }
 function goEdit() { uni.navigateTo({ url: `/pages/teacher/class-edit?id=${classId}` }) }
 function goRequests() { uni.navigateTo({ url: `/pages/teacher/class-requests?classId=${classId}` }) }
+
+async function removeStudent(student: Student) {
+  const studentId = String(student.student || student.id)
+  const result = await new Promise<UniApp.ShowModalRes>(resolve => {
+    uni.showModal({ title: '移除学生', content: `确定移除${student.student_name || student.display_name || ''}？`, success: resolve })
+  })
+  if (!result.confirm) return
+  try {
+    await classApi.removeStudent(classId, studentId)
+    students.value = students.value.filter(item => String(item.student || item.id) !== studentId)
+    uni.showToast({ title: '已移除', icon: 'success' })
+  } catch (e) {
+    uni.showToast({ title: '移除失败', icon: 'none' })
+  }
+}
 
 async function confirmDelete() {
   uni.showModal({

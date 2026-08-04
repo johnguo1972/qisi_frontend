@@ -52,6 +52,19 @@ def _chapter_sort_key(chapter_name):
     return _parse_chinese_numeral(text)
 
 
+def _deduplicate_knowledge_points(knowledge_points):
+    """Remove duplicate point names while preserving the first point's data."""
+    unique_points = []
+    seen_names = set()
+    for point in knowledge_points:
+        name = str(point.get('name') or '').strip()
+        if name in seen_names:
+            continue
+        seen_names.add(name)
+        unique_points.append(point)
+    return unique_points
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def knowledge_tree(request):
@@ -145,6 +158,7 @@ def knowledge_tree(request):
             # Sort chapters by chapter number (extract numeric part)
             sorted_chapters = sorted(sem_data['chapters'].items(), key=lambda x: _chapter_sort_key(x[0]))
             for ch_name, kps in sorted_chapters:
+                kps = _deduplicate_knowledge_points(kps)
                 ch_question_count = sum(kp.get('question_count', 0) for kp in kps)
                 ch_obj = {'name': ch_name, 'knowledge_points': kps, 'question_count': ch_question_count}
                 sem_obj['chapters'].append(ch_obj)

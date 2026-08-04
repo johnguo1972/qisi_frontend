@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Q
+from uuid import UUID
 from apps.parser.models import ExamQuestion
 from apps.knowledge.models import KnowledgePoint
 from .serializers import QuestionListSerializer, QuestionDetailSerializer
@@ -14,6 +15,9 @@ def question_list(request):
     """Q-05: Question search/list with filters."""
     subject = request.GET.get('subject')
     difficulty = request.GET.get('difficulty')
+    question_type = request.GET.get('question_type')
+    tag = request.GET.get('tag', '').strip()
+    question_uuid = request.GET.get('uuid', '').strip()
     knowledge = request.GET.get('knowledge')
     question_no = request.GET.get('question_no')
     review_status = request.GET.get('review_status')
@@ -32,6 +36,15 @@ def question_list(request):
             qs = qs.filter(difficulty=diff_val)
         except (ValueError, TypeError):
             pass
+    if question_type:
+        qs = qs.filter(question_type=question_type)
+    if tag:
+        qs = qs.filter(tags__contains=[tag])
+    if question_uuid:
+        try:
+            qs = qs.filter(id=UUID(question_uuid))
+        except (ValueError, TypeError):
+            qs = qs.none()
     if question_no:
         qs = qs.filter(
             Q(question_no__icontains=question_no) |
@@ -81,6 +94,41 @@ def question_list(request):
     })
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def similar_questions(request, question_id):
+    """Return questions with the same main knowledge point and similar difficulty."""
+    try:
+        question = ExamQuestion.objects.get(pk=question_id)
+    except ExamQuestion.DoesNotExist:
+        return Response({'code': 404, 'message': '题目不存在', 'data': None}, status=404)
+
+    raw_points = question.knowledge_points or []
+    if isinstance(raw_points, dict):
+        raw_points = raw_points.get('points', [])
+    main_point = next((item for item in raw_points if isinstance(item, dict) and (item.get('module') or item.get('id'))), None)
+    modules = [main_point.get('module')] if main_point and main_point.get('module') else []
+    ids = [main_point.get('id')] if main_point and main_point.get('id') else []
+    query = Q()
+    for module in modules:
+        query |= Q(knowledge_points__contains=[{'module': module}])
+    for point_id in ids:
+        query |= Q(knowledge_points__contains=[{'id': point_id}])
+
+    candidates = ExamQuestion.objects.exclude(pk=question.pk).filter(subject=question.subject)
+    if not modules and not ids:
+        return Response({'code': 0, 'data': []})
+    candidates = candidates.filter(query)
+    if question.difficulty is not None:
+        candidates = candidates.filter(
+            difficulty__gte=max(0, float(question.difficulty) - 1),
+            difficulty__lte=float(question.difficulty) + 1,
+        )
+
+    items = candidates.order_by('difficulty', 'sort_order')[:20]
+    return Response({'code': 0, 'data': QuestionListSerializer(items, many=True).data})
+
+
 @api_view(['GET', 'PUT'])
 @permission_classes([IsAuthenticated])
 def question_detail(request, question_id):
@@ -104,7 +152,7 @@ def question_detail(request, question_id):
     editable = ['ai_answer_a', 'ai_answer_b', 'ai_answer_c',
                 'difficulty', 'subject', 'review_status',
                 'stem', 'stem_html', 'answer', 'analysis', 'solution',
-                'knowledge_points', 'need_review', 'formula_need_review']
+                'knowledge_points', 'tags', 'need_review', 'formula_need_review']
     for field in editable:
         if field in request.data:
             setattr(q, field, request.data[field])

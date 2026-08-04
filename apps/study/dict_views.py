@@ -41,7 +41,7 @@ def subjects(request):
 def _count_questions_for_kp(kp_id: int) -> int:
     """Count questions that have the given knowledge point ID in their knowledge_points JSON."""
     return ExamQuestion.objects.filter(
-        knowledge_points__contains=[{'id': kp_id}]
+        knowledge_points__contains=[{'id': str(kp_id)}]
     ).count()
 
 

@@ -99,10 +99,23 @@
             <text class="col col-kp">{{ f.knowledge_points_count }}</text>
             <view class="col col-action row-actions">
               <button size="mini" class="btn-action btn-edit" @click="editQuestion(f.question_id)">编辑</button>
+              <button size="mini" class="btn-action btn-tag" @click="editQuestion(f.question_id)">标签管理</button>
+              <button size="mini" class="btn-action btn-mission" @click="openAssignment(f)">加入作业</button>
               <button size="mini" class="btn-action btn-del" @click="removeFavorite(f)">移除</button>
             </view>
           </view>
         </view>
+      </view>
+    </view>
+    <view v-if="assignmentVisible" class="modal-overlay" @click.self="assignmentVisible = false">
+      <view class="assignment-modal">
+        <text class="modal-title">加入已有作业</text>
+        <view v-if="assignmentLoading" class="loading">加载中...</view>
+        <view v-for="mission in missions" :key="mission.id" class="mission-option" @click="addToMission(mission.id)">
+          <text>{{ mission.mission_name }}</text><text>{{ mission.status }}</text>
+        </view>
+        <text v-if="!missions.length && !assignmentLoading" class="empty-hint">暂无作业，请先新增作业</text>
+        <button size="mini" @click="goCreateMission">新增作业</button>
       </view>
     </view>
   </view>
@@ -113,6 +126,7 @@ import { ref, onMounted } from 'vue'
 import { favoriteApi, type Favorite } from '@/api/favorites.ts'
 import { knowledgeApi } from '@/api/knowledge'
 import { useUserStore } from '@/store/index.ts'
+import { missionApi } from '@/api/missions'
 
 const userStore = useUserStore()
 
@@ -138,6 +152,10 @@ interface ChapterNode { name: string; expanded?: boolean; question_count?: numbe
 interface KPNode { id: number; name: string; question_count: number }
 
 const tree = ref<TreeNode[]>([])
+const assignmentVisible = ref(false)
+const assignmentLoading = ref(false)
+const missions = ref<any[]>([])
+const assignmentQuestionId = ref<string | number>('')
 
 // Filter state
 const searchQuery = ref('')
@@ -232,6 +250,32 @@ async function removeFavorite(f: Favorite) {
   })
 }
 
+async function openAssignment(f: Favorite) {
+  assignmentQuestionId.value = f.question_id
+  assignmentVisible.value = true
+  assignmentLoading.value = true
+  try {
+    const res: any = await missionApi.list()
+    missions.value = res.data || []
+  } finally {
+    assignmentLoading.value = false
+  }
+}
+
+async function addToMission(id: string | number) {
+  try {
+    await missionApi.addFavorites(id, [assignmentQuestionId.value])
+    uni.showToast({ title: '已加入作业', icon: 'success' })
+    assignmentVisible.value = false
+  } catch (e) {
+    uni.showToast({ title: '加入作业失败', icon: 'none' })
+  }
+}
+
+function goCreateMission() {
+  uni.navigateTo({ url: `/pages/teacher/mission-create?favoriteQuestionIds=${assignmentQuestionId.value}` })
+}
+
 // Navigation helpers
 function navigateTo(url: string) {
   uni.navigateTo({ url })
@@ -251,6 +295,11 @@ function difficultyText(d: number | null): string {
 
 <style scoped>
 .favorites { display: flex; min-height: 100vh; background: #f5f7fa; }
+.modal-overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.35); }
+.assignment-modal { width: 520px; max-width: calc(100vw - 40px); padding: 20px; background: #fff; border-radius: 8px; }
+.mission-option { display: flex; justify-content: space-between; padding: 12px; margin: 8px 0; border: 1px solid #ebeef5; border-radius: 4px; }
+.mission-option:active { border-color: #409eff; background: #ecf5ff; }
+.empty-hint { display: block; padding: 16px 0; color: #909399; }
 .main { margin-left: 0; flex: 1; display: flex; gap: 16px; padding: 16px; overflow: hidden; }
 
 /* Knowledge tree */

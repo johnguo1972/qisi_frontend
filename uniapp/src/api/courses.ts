@@ -33,17 +33,17 @@ export const courseApi = {
   list: () => courseFetch<any[]>('/courses/'),
   create: (data: { name: string; subject: string; grade_level: string; description?: string }) =>
     courseFetch<any>('/courses/', { method: 'POST', body: JSON.stringify(data) }),
-  detail: (id: number) => courseFetch<any>(`/courses/${id}/`),
-  update: (id: number, data: any) => courseFetch<any>(`/courses/${id}/`, { method: 'PUT', body: JSON.stringify(data) }),
-  remove: (id: number) => courseFetch<any>(`/courses/${id}/`, { method: 'DELETE' }),
+  detail: (id: string | number) => courseFetch<any>(`/courses/${id}/`),
+  update: (id: string | number, data: any) => courseFetch<any>(`/courses/${id}/`, { method: 'PUT', body: JSON.stringify(data) }),
+  remove: (id: string | number) => courseFetch<any>(`/courses/${id}/`, { method: 'DELETE' }),
 }
 
 // ============================================================
 // 课程资料
 // ============================================================
 export const materialApi = {
-  list: (courseId: number) => courseFetch<any[]>(`/courses/${courseId}/materials/`),
-  upload: (courseId: number, file: File) => {
+  list: (courseId: string | number) => courseFetch<any[]>(`/courses/${courseId}/materials/`),
+  upload: (courseId: string | number, file: File) => {
     return new Promise<any>(async (resolve, reject) => {
       const token = uni.getStorageSync('accessToken')
       const formData = new FormData()
@@ -69,17 +69,17 @@ export const materialApi = {
     })
   },
   // 返回下载链接 URL（非请求）
-  download: (courseId: number, materialId: number) =>
+  download: (courseId: string | number, materialId: number) =>
     `${COURSE_BASE}/courses/${courseId}/materials/${materialId}/download/`,
-  preview: (courseId: number, materialId: number) =>
+  preview: (courseId: string | number, materialId: number) =>
     courseFetch<any>(`/courses/${courseId}/materials/${materialId}/preview/`),
-  remove: (courseId: number, materialId: number) =>
+  remove: (courseId: string | number, materialId: number) =>
     courseFetch<any>(`/courses/${courseId}/materials/${materialId}/`, { method: 'DELETE' }),
   // 获取文档页面图片列表
-  pages: (courseId: number, materialId: number) =>
+  pages: (courseId: string | number, materialId: number) =>
     courseFetch<any>(`/courses/${courseId}/materials/${materialId}/pages/`),
   // AI 识别框选区域
-  aiRecognize: (courseId: number, materialId: number, data: { image_url: string; page?: number }) =>
+  aiRecognize: (courseId: string | number, materialId: number, data: { image_url: string; page?: number }) =>
     courseFetch<any>(`/courses/${courseId}/materials/${materialId}/ai-recognize/`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -91,7 +91,7 @@ export const materialApi = {
 // ============================================================
 export const importApi = {
   // 保存从课程资料导入的题目
-  saveQuestion: (courseId: number, data: { question: any; tree_node_id?: number }) =>
+  saveQuestion: (courseId: string | number, data: { question: any; tree_node_id?: number }) =>
     courseFetch<any>(`/courses/${courseId}/import-question/`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -102,14 +102,14 @@ export const importApi = {
 // 目录树
 // ============================================================
 export const treeApi = {
-  list: (courseId: number) => courseFetch<any[]>(`/courses/${courseId}/tree/`),
-  create: (courseId: number, data: { name: string; parent?: number }) =>
+  list: (courseId: string | number) => courseFetch<any[]>(`/courses/${courseId}/tree/`),
+  create: (courseId: string | number, data: { name: string; parent?: number }) =>
     courseFetch<any>(`/courses/${courseId}/tree/`, { method: 'POST', body: JSON.stringify(data) }),
-  update: (courseId: number, nodeId: number, data: any) =>
+  update: (courseId: string | number, nodeId: number, data: any) =>
     courseFetch<any>(`/courses/${courseId}/tree/${nodeId}/`, { method: 'PUT', body: JSON.stringify(data) }),
-  remove: (courseId: number, nodeId: number) =>
+  remove: (courseId: string | number, nodeId: number) =>
     courseFetch<any>(`/courses/${courseId}/tree/${nodeId}/`, { method: 'DELETE' }),
-  move: (courseId: number, nodeId: number, data: { parent?: number; sort_order?: number }) =>
+  move: (courseId: string | number, nodeId: number, data: { parent?: number; sort_order?: number }) =>
     courseFetch<any>(`/courses/${courseId}/tree/${nodeId}/move/`, { method: 'PUT', body: JSON.stringify(data) }),
 }
 
@@ -117,11 +117,11 @@ export const treeApi = {
 // 课程习题
 // ============================================================
 export const courseQuestionApi = {
-  list: (courseId: number, params?: { tree_node_id?: number }) => {
+  list: (courseId: string | number, params?: { tree_node_id?: number }) => {
     const qs = params?.tree_node_id ? `?tree_node_id=${params.tree_node_id}` : ''
     return courseFetch<any[]>(`/courses/${courseId}/questions/${qs}`)
   },
-  import: (courseId: number, data: { question_ids: number[]; tree_node_id?: number }) =>
+  import: (courseId: string | number, data: { question_ids: number[]; tree_node_id?: number }) =>
     courseFetch<any>(`/courses/${courseId}/questions/import/`, { method: 'POST', body: JSON.stringify({ question_ids: data.question_ids, tree_node_id: data.tree_node_id }) }),
   batchDelete: (courseId: number, questionIds: number[]) =>
     courseFetch<any>(`/courses/${courseId}/questions/batch-delete/`, { method: 'POST', body: JSON.stringify({ question_ids: questionIds }) }),

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# 齐思 · A自习室 后端一键部署脚本（v3.0）
+# 齐思 · 优途AI辅学系统 后端一键部署脚本（v3.0）
 # 在服务器上执行：bash deploy_backend.sh
 # 前置条件: 后端代码已上传到 /mnt/datadisk0/qisi/backend
 # 注意:
@@ -17,7 +17,7 @@ LOGS_DIR="$PROJECT_DIR/logs"
 VENV_DIR="$BACKEND_DIR/venv"
 
 echo "============================================================"
-echo "  齐思 · A自习室 后端一键部署脚本 v3.0"
+echo "  齐思 · 优途AI辅学系统 后端一键部署脚本 v3.0"
 echo "  后端端口: 8001（绑定 0.0.0.0）"
 echo "  数据库: localhost:5432 (qisi-postgres)"
 echo "  Redis: localhost:6379 (qisi-redis)"

@@ -93,12 +93,12 @@ interface VariantItem {
   knowledge_points?: string[]
 }
 
-const wrongId = ref(0)
+const wrongId = ref<string>('')
 const variants = ref<VariantItem[]>([])
 const loading = ref(true)
 
 onLoad((options: any) => {
-  wrongId.value = parseInt(options?.id || '0')
+  wrongId.value = String(options?.id || '')
 })
 
 onMounted(async () => {

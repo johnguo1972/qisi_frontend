@@ -166,7 +166,7 @@ import { studentApi } from '@/api/student.ts'
 import { chooseImage, uploadImage, checkCameraSupport } from '@/utils/image-upload'
 import { renderWithKatex } from '@/utils/katex-renderer'
 
-const levelId = ref(0)
+const levelId = ref<string>('')
 const questions = ref<any[]>([])
 const currentIndex = ref(0)
 const selectedOptions = ref<string[]>([])
@@ -266,7 +266,7 @@ function renderOptionHtml(content: string): string {
 }
 
 onLoad((options: any) => {
-  levelId.value = parseInt(options?.levelId || '0')
+  levelId.value = String(options?.levelId || '')
 })
 
 onMounted(async () => {

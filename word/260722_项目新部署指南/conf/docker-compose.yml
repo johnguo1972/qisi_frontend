@@ -1,5 +1,5 @@
 # ============================================================
-# 齐思 · A自习室 服务器 Docker Compose 配置
+# 齐思 · 优途AI辅学系统 服务器 Docker Compose 配置
 # 部署路径: /mnt/datadisk0/qisi/docker-compose.yml
 # PostgreSQL 18.4 + Redis 7.2
 #

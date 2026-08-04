@@ -4,7 +4,7 @@
     <!-- 右侧内容区 -->
     <view class="main">
       <view class="page-header">
-        <text class="page-title">我的班级</text>
+      <text class="page-title">学生管理</text>
         <button class="btn-create" @click="goCreate">+ 创建班级</button>
       </view>
       <view v-if="loading" class="loading">
@@ -31,6 +31,9 @@
             </view>
           </view>
           <view class="card-actions">
+            <button class="action-btn btn-students" @click.stop="goStudents(cls.id)">学生管理</button>
+            <button class="action-btn btn-missions" @click.stop="goMissions(cls.id)">作业列表</button>
+            <button class="action-btn btn-stats" @click.stop="goStats(cls.id)">学情统计</button>
             <button class="action-btn btn-edit" @click.stop="goEdit(cls.id)">编辑</button>
             <button class="action-btn btn-delete" @click.stop="confirmDelete(cls)">删除</button>
           </view>
@@ -78,6 +81,9 @@ async function loadClasses() {
 
 function goCreate() { uni.navigateTo({ url: '/pages/teacher/class-create' }) }
 function goDetail(id: number) { uni.navigateTo({ url: `/pages/teacher/class-detail?classId=${id}` }) }
+function goStudents(id: number) { uni.navigateTo({ url: `/pages/teacher/class-detail?classId=${id}&view=students` }) }
+function goMissions(id: number) { uni.navigateTo({ url: `/pages/teacher/mission-list?classId=${id}` }) }
+function goStats(id: number) { uni.navigateTo({ url: `/pages/teacher/learning-stats?classId=${id}` }) }
 function goEdit(id: number) { uni.navigateTo({ url: `/pages/teacher/class-edit?id=${id}` }) }
 
 async function confirmDelete(cls: ClassItem) {
@@ -174,6 +180,9 @@ async function confirmDelete(cls: ClassItem) {
   background: #ecf5ff;
   color: #409eff;
 }
+.btn-students { background: #f0f9eb; color: #67c23a; }
+.btn-missions { background: #ecf5ff; color: #409eff; }
+.btn-stats { background: #f4f0ff; color: #9254de; }
 .btn-delete {
   background: #fff0f0;
   color: #e74c3c;

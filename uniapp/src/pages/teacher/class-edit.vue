@@ -69,7 +69,7 @@ import { classApi } from '@/api/index.ts'
 const statusOptions = ['open', 'closed', 'archived']
 const statusTextMap: Record<string, string> = { open: '开放', closed: '已关闭', archived: '已归档' }
 
-const classId = ref(0)
+const classId = ref<string>('')
 const inviteCode = ref('')
 const regenerating = ref(false)
 const form = ref({
@@ -83,7 +83,7 @@ const submitting = ref(false)
 
 // Use onLoad to get route parameters (works in H5 mode)
 onLoad((options: any) => {
-  classId.value = parseInt(options?.id || '0')
+  classId.value = String(options?.id || '')
 
   if (!classId.value) {
     uni.showToast({ title: '缺少班级ID', icon: 'none' })
