@@ -83,12 +83,7 @@ CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
 CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', 'True').lower() == 'true'
 
-CELERY_BEAT_SCHEDULE = {
-    'stale-task-check': {
-        'task': 'apps.parser.tasks.periodic_stale_task_check',
-        'schedule': 300.0,  # 5 minutes
-    },
-}
+CELERY_BEAT_SCHEDULE = {}
 
 CACHES = {
     'default': {
