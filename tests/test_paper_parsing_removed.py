@@ -68,8 +68,32 @@ def test_removed_tasks_and_beat_are_absent_from_production_sources():
     assert "periodic_stale_task_check" not in settings_source
 
 
-def test_teacher_import_ui_and_api_are_removed():
+def test_teacher_import_page_is_removed():
     assert not (ROOT / "uniapp/src/pages/teacher/import.vue").exists()
+
+
+def test_teacher_parsing_api_helpers_are_removed():
     api_source = (ROOT / "uniapp/src/api/questions.ts").read_text(encoding="utf-8")
-    for name in ("importFile", "importBatches", "importBatchDetail", "stopParse", "reparsePaper", "getParseProgress"):
+    for name in (
+        "importFile",
+        "importBatches",
+        "importBatchDetail",
+        "stopParse",
+        "reparsePaper",
+        "getParseProgress",
+        "deletePaper",
+    ):
         assert name not in api_source
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "uniapp/src/pages.json",
+        "uniapp/src/components/TeacherSidebar.vue",
+        "uniapp/src/components/AddMenuModal.vue",
+    ),
+)
+def test_teacher_navigation_has_no_paper_import_route(relative_path):
+    source = (ROOT / relative_path).read_text(encoding="utf-8")
+    assert "pages/teacher/import" not in source
