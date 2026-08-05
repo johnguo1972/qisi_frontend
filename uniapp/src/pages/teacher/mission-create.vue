@@ -36,14 +36,14 @@
         <view class="form-item">
           <text class="label">开始时间</text>
           <view class="date-picker" @click="openStartDatePicker">
-            <text class="date-value">{{ form.start_at || '请选择开始时间' }}</text>
+            <text class="date-value">{{ formatDateTime(form.start_at) || '请选择开始时间' }}</text>
             <text class="date-arrow">📅</text>
           </view>
         </view>
         <view class="form-item">
           <text class="label">截止时间 *</text>
           <view class="date-picker" @click="openDatePicker">
-            <text class="date-value">{{ form.end_at || '请选择截止时间' }}</text>
+            <text class="date-value">{{ formatDateTime(form.end_at) || '请选择截止时间' }}</text>
             <text class="date-arrow">📅</text>
           </view>
         </view>
@@ -67,6 +67,9 @@
         <!-- 左侧知识树 -->
         <view class="knowledge-tree">
           <text class="tree-title">知识树</text>
+          <picker class="subject-picker" :range="subjectOptions" range-key="label" @change="onSubjectChange">
+            <view class="subject-picker-value">学科：{{ subjectLabel }}</view>
+          </picker>
           <view v-if="treeLoading" class="tree-loading">加载中...</view>
           <view v-else class="tree-content">
             <view v-for="grade in treeData" :key="grade.name" class="tree-grade">
@@ -202,6 +205,7 @@
                 <text>{{ isAllSelected ? '☑ 取消全选' : '☐ 全选' }}</text>
               </view>
               <button class="batch-add-btn" @click="batchAddSelected">批量加入列表</button>
+              <button class="back-btn step2-back-btn" @click="prevStep">上一步：创建任务</button>
               <button v-if="selectedIds.length > 0" class="create-task-btn" @click="goToStep3">
                 下一步：编排序号并创建任务 ({{ selectedIds.length }}题)
               </button>
@@ -233,9 +237,9 @@
             </view>
             <scroll-view scroll-y class="table-body">
               <view v-for="(q, idx) in paginatedQuestions" :key="q.id"
-                    :class="['table-row', { 'row-selected': selectedIds.includes(q.id) }]">
+                    :class="['table-row', { 'row-selected': isSelected(q.id) }]">
                 <view class="col col-check" @click.stop="toggleSelect(q.id)">
-                  <text>{{ selectedIds.includes(q.id) ? '☑' : '☐' }}</text>
+                  <text>{{ isSelected(q.id) ? '☑' : '☐' }}</text>
                 </view>
                 <text class="col col-no">{{ (currentPage - 1) * pageSize + idx + 1 }}</text>
                 <text class="col col-stem" @click.stop="showQuestionDetail(q)">{{ q.stem_preview || '(无预览)' }}</text>
@@ -251,7 +255,7 @@
                 </text>
                 <view class="col col-actions">
                   <text class="action-link" @click.stop="showQuestionDetail(q)">查看</text>
-                  <text v-if="!selectedIds.includes(q.id)" class="action-link action-add" @click.stop="addToSelected(q)">加入</text>
+                  <text v-if="!isSelected(q.id)" class="action-link action-add" @click.stop="addToSelected(q)">加入</text>
                   <text v-else class="action-link action-added" @click.stop="removeFromSelected(q.id)">✓ 已加入</text>
                 </view>
               </view>
@@ -260,14 +264,17 @@
             <view class="pagination">
               <text class="page-info">第 {{ currentPage }}/{{ totalPages }} 页，共 {{ filteredQuestions.length }} 题</text>
               <view class="page-controls">
-                <button :disabled="currentPage <= 1" @click="currentPage--">‹ 上一页</button>
-                <button :disabled="currentPage >= totalPages" @click="currentPage++">下一页 ›</button>
-                <view class="page-size-selector">
-                  <text>每页</text>
-                  <picker :range="[10, 20, 50]" @change="pageSize = [10, 20, 50][$event.detail.value]; currentPage = 1">
-                    <view class="page-size-value">{{ pageSize }}条</view>
-                  </picker>
-                </view>
+                <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
+                <select v-model.number="currentPage" class="page-picker" @change="selectPage">
+                  <option v-for="page in pageNumbers" :key="page" :value="page">{{ pageOptionLabel(page) }}</option>
+                </select>
+                <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
+                <text class="page-size-label">每页</text>
+                <select v-model.number="pageSize" class="page-size-picker" @change="changePageSize">
+                  <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }} 条</option>
+                </select>
+                <input v-model.number="jumpPage" class="jump-page-input" type="number" min="1" :max="totalPages" placeholder="页码" @confirm="goToPage" />
+                <button size="mini" @click="goToPage">跳转</button>
               </view>
             </view>
           </view>
@@ -283,9 +290,10 @@
             <text class="section-hint">拖拽调整顺序，点击序号可编辑</text>
           </view>
           <scroll-view scroll-y class="ordered-question-list">
-            <view v-for="(q, idx) in orderedQuestions" :key="q.id" class="ordered-item">
+            <view v-for="(q, idx) in orderedQuestions" :key="q.id" class="ordered-item"
+                  draggable="true" @dragstart="onDragStart(idx)" @dragover.prevent @drop="onDrop(idx)">
               <view class="drag-handle">⠿</view>
-              <input v-model="q.sort_no" type="number" class="sort-input" placeholder="序号" />
+              <input :value="q.sort_no" @input="setSortNo(q.id, $event)" type="number" class="sort-input" placeholder="序号" />
               <text class="ordered-stem">{{ (q.stem_preview || '').substring(0, 50) }}{{ (q.stem_preview || '').length > 50 ? '...' : '' }}</text>
               <text class="ordered-diff">{{ '★'.repeat(getDifficultyInt(q)) }}</text>
               <text class="ordered-remove" @click="removeFromOrdered(q.id)">✕</text>
@@ -307,11 +315,11 @@
               </view>
               <input v-model="level.name" placeholder="关卡名称" />
               <view class="level-options">
-                <picker :range="levelTypes" @change="level.type = levelTypes[$event.detail.value]">
-                  <view class="picker-display">类型: {{ level.type || 'practice' }}</view>
+                <picker :range="levelTypes" range-key="label" @change="level.type = levelTypes[$event.detail.value].value">
+                  <view class="picker-display">类型: {{ levelTypeText(level.type || 'practice') }}</view>
                 </picker>
-                <picker :range="modePolicies" @change="level.mode = modePolicies[$event.detail.value]">
-                  <view class="picker-display">模式: {{ level.mode || 'block_a' }}</view>
+                <picker :range="modePolicies" range-key="label" @change="level.mode = modePolicies[$event.detail.value].value">
+                  <view class="picker-display">模式: {{ modePolicyText(level.mode || 'block_a') }}</view>
                 </picker>
               </view>
               <!-- 题目分配区 -->
@@ -521,7 +529,7 @@
         </scroll-view>
         <view class="detail-footer">
           <button class="detail-add-btn" @click="if (currentQuestion) addToSelected(currentQuestion); showDetailModal = false">
-            {{ selectedIds.includes(currentQuestion?.id) ? '✓ 已在列表中' : '加入列表' }}
+            {{ currentQuestion && isSelected(currentQuestion.id) ? '✓ 已在列表中' : '加入列表' }}
           </button>
         </view>
       </view>
@@ -547,7 +555,16 @@ const editMissionId = ref<string>('')
 const form = ref({ mission_name: '', goal_text: '', start_at: '', end_at: '', class_id: null as string | null })
 const courseId = ref<number | null>(null)
 const pendingFavoriteQuestionIds = ref<Array<string | number>>([])
-const levels = ref([{ name: '基础练习', type: 'practice', mode: 'block_a', questionIds: [] as number[] }])
+const levels = ref([{ name: '基础练习', type: 'practice', mode: 'block_a', questionIds: [] as string[] }])
+const subjectOptions = [
+  { value: 'physics', label: '物理' },
+  { value: 'math', label: '数学' },
+  { value: 'chemistry', label: '化学' },
+  { value: 'biology', label: '生物' },
+]
+const selectedSubject = ref(String(userStore.userInfo?.subject || 'physics'))
+const sortNos = ref<Record<string, number>>({})
+const draggingIndex = ref(-1)
 const searchQuery = ref('')
 const showDatePicker = ref(false)
 const tempDate = ref('')
@@ -569,7 +586,7 @@ const treeLoading = ref(false)
 const showKpDropdown = ref(false)
 const showStageDropdown = ref(false)
 const kpSearchText = ref('')
-const filterKpIds = ref<number[]>([])
+const filterKpIds = ref<Array<string | number>>([])
 const filterDifficulty = ref<number[]>([])
 const selectedStages = ref<string[]>([])
 const filterKpCountMin = ref<number | null>(null)
@@ -585,9 +602,11 @@ const filteredQuestions = ref<any[]>([])
 const loading = ref(false)
 const currentPage = ref(1)
 const pageSize = ref(10)
+const jumpPage = ref(1)
+const pageSizeOptions = [10, 20, 30, 50]
 
 // === Step 2: 已选列表 ===
-const selectedIds = ref<number[]>([])
+const selectedIds = ref<string[]>([])
 const showSelectedModal = ref(false)
 
 // === Step 2: 题目详情 ===
@@ -637,24 +656,25 @@ const filteredKpList = computed(() => {
 
 // 已选题目的详细信息
 const selectedQuestions = computed(() => {
-  return allQuestions.value.filter(q => selectedIds.value.includes(q.id))
+  return selectedIds.value.map(id => allQuestions.value.find(q => String(q.id) === String(id))).filter(Boolean)
 })
 
 // Step 3: 已选题目（带序号）
 const orderedQuestions = computed(() => {
   return selectedQuestions.value.map((q, idx) => ({
     ...q,
-    sort_no: q.sort_no || (idx + 1),
+    sort_no: sortNos.value[String(q.id)] || q.sort_no || (idx + 1),
   }))
 })
 
 // 全选状态
 const isAllSelected = computed(() => {
-  return paginatedQuestions.value.length > 0 && paginatedQuestions.value.every(q => selectedIds.value.includes(q.id))
+  return paginatedQuestions.value.length > 0 && paginatedQuestions.value.every(q => isSelected(q.id))
 })
 
 // 分页
 const totalPages = computed(() => Math.max(1, Math.ceil(filteredQuestions.value.length / pageSize.value)))
+const pageNumbers = computed(() => Array.from({ length: totalPages.value }, (_, index) => index + 1))
 const paginatedQuestions = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return filteredQuestions.value.slice(start, start + pageSize.value)
@@ -663,27 +683,40 @@ const paginatedQuestions = computed(() => {
 // 已选题目统计
 const avgDifficulty = computed(() => {
   if (selectedQuestions.value.length === 0) return '-'
-  const sum = selectedQuestions.value.reduce((acc, q) => acc + (q.difficulty || 1), 0)
-  return (sum / selectedQuestions.value.length).toFixed(1)
+  const values = selectedQuestions.value.map(q => Number(q.difficulty)).filter(Number.isFinite)
+  return values.length ? (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1) : '-'
 })
 
 const uniqueKpCount = computed(() => {
-  const ids = new Set<number>()
-  for (const q of selectedQuestions.value) {
-    // Try different field names the backend might use
-    const kpIds = q.knowledge_point_ids || q.knowledge_ids || []
-    if (Array.isArray(kpIds)) {
-      for (const id of kpIds) ids.add(id)
-    }
-    // Also try knowledge_points as array of objects
-    if (q.knowledge_points && Array.isArray(q.knowledge_points)) {
-      for (const kp of q.knowledge_points) {
-        if (kp.id) ids.add(kp.id)
-      }
-    }
-  }
-  return ids.size
+  return new Set(selectedQuestions.value.flatMap(q => extractQuestionKnowledgePointIds(q))).size
 })
+
+function extractQuestionKnowledgePointIds(q: any): string[] {
+  const result: string[] = []
+  const add = (value: any) => {
+    if (value == null || value === '') return
+    if (Array.isArray(value)) return value.forEach(add)
+    if (typeof value === 'object') return add(value.id || value.code || value.name || value.module)
+    result.push(String(value))
+  }
+  for (const key of ['knowledge_point_ids', 'knowledge_ids', 'knowledge_points_display', 'knowledge_points']) {
+    let value = q?.[key]
+    if (typeof value === 'string') { try { value = JSON.parse(value) } catch { value = [] } }
+    add(value)
+  }
+  let enriched = q?.ai_knowledge_enrichment
+  if (typeof enriched === 'string') { try { enriched = JSON.parse(enriched) } catch { enriched = null } }
+  add(enriched?.points || enriched?.knowledge_points || (Array.isArray(enriched) ? enriched : []))
+  return result
+}
+
+const subjectLabel = computed(() => subjectOptions.find(item => item.value === selectedSubject.value)?.label || selectedSubject.value)
+function formatDateTime(value: string) {
+  if (!value) return ''
+  const normalized = String(value).replace('T', ' ')
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? `${normalized} 00:00:00` : normalized.length === 16 ? `${normalized}:00` : normalized
+}
+function isSelected(id: string | number) { return selectedIds.value.includes(String(id)) }
 
 // 日期选择
 function openDatePicker() {
@@ -708,7 +741,7 @@ function openStartDatePicker() {
 
 function confirmStartDate() {
   if (tempStartDate.value) {
-    form.value.start_at = `${tempStartDate.value}T00:00`
+    form.value.start_at = `${tempStartDate.value}T00:00:00`
   }
   showStartDatePicker.value = false
 }
@@ -723,7 +756,7 @@ function onStartDateChange(e: any) {
 
 function confirmDate() {
   if (tempDate.value) {
-    form.value.end_at = `${tempDate.value}T23:59`
+    form.value.end_at = `${tempDate.value}T23:59:59`
   }
   showDatePicker.value = false
 }
@@ -750,8 +783,7 @@ function goToStep3() {
 async function loadKnowledgeTree() {
   treeLoading.value = true
   try {
-    const subject = userStore.userInfo?.subject || ''
-    const res: any = await knowledgeApi.getTree({ subject })
+    const res: any = await knowledgeApi.getTree({ subject: selectedSubject.value })
     const grades = res.data?.grades || res.data || []
     treeData.value = grades.map((g: any) => ({
       ...g,
@@ -772,12 +804,27 @@ async function loadKnowledgeTree() {
   }
 }
 
+function onSubjectChange(e: any) {
+  selectedSubject.value = subjectOptions[Number(e.detail.value)]?.value || selectedSubject.value
+  filterKpIds.value = []
+  selectedStages.value = []
+  kpSearchText.value = ''
+  loadKnowledgeTree()
+  loadQuestions()
+}
+
 // 题目加载
 async function loadQuestions() {
   loading.value = true
   try {
-    const res = await questionApi.list({ page: 1, page_size: 200 })
-    allQuestions.value = res.data?.items || []
+    const first: any = await questionApi.list({ page: 1, page_size: 100, subject: selectedSubject.value })
+    const firstItems = first.data?.items || []
+    const total = Number(first.data?.total || firstItems.length)
+    const pages = Math.ceil(total / 100)
+    const rest = pages > 1
+      ? await Promise.all(Array.from({ length: pages - 1 }, (_, index) => questionApi.list({ page: index + 2, page_size: 100, subject: selectedSubject.value })))
+      : []
+    allQuestions.value = firstItems.concat(rest.flatMap((res: any) => res.data?.items || []))
     applyFilters()
   } catch (e) {
     console.error('加载题目失败:', e)
@@ -793,44 +840,9 @@ function applyFilters() {
   // 知识点筛选 (or关系：题目包含任一选中的知识点即可)
   if (filterKpIds.value.length > 0) {
     list = list.filter(q => {
-      let qKpIds: number[] = []
+      const qKpIds = extractQuestionKnowledgePointIds(q)
 
-      // 从 ai_knowledge_enrichment JSON 中提取知识点ID
-      if (q.ai_knowledge_enrichment) {
-        try {
-          const enriched = typeof q.ai_knowledge_enrichment === 'string'
-            ? JSON.parse(q.ai_knowledge_enrichment)
-            : q.ai_knowledge_enrichment
-          if (Array.isArray(enriched)) {
-            qKpIds = enriched.map((kp: any) => kp.id).filter(Boolean)
-          } else if (enriched.knowledge_points && Array.isArray(enriched.knowledge_points)) {
-            qKpIds = enriched.knowledge_points.map((kp: any) => kp.id).filter(Boolean)
-          }
-        } catch {}
-      }
-
-      // 从 knowledge_points JSON 中提取
-      if (qKpIds.length === 0 && q.knowledge_points) {
-        try {
-          const kps = typeof q.knowledge_points === 'string'
-            ? JSON.parse(q.knowledge_points)
-            : q.knowledge_points
-          if (Array.isArray(kps)) {
-            qKpIds = kps.map((kp: any) => kp.id).filter(Boolean)
-          }
-        } catch {}
-      }
-
-      // 从 knowledge_point_ids / knowledge_ids 中提取（兼容旧字段）
-      if (qKpIds.length === 0) {
-        if (q.knowledge_point_ids && Array.isArray(q.knowledge_point_ids)) {
-          qKpIds = q.knowledge_point_ids
-        } else if (q.knowledge_ids && Array.isArray(q.knowledge_ids)) {
-          qKpIds = q.knowledge_ids
-        }
-      }
-
-      return filterKpIds.value.some(id => qKpIds.includes(id))
+      return filterKpIds.value.some(id => qKpIds.includes(String(id)))
     })
   }
 
@@ -845,7 +857,7 @@ function applyFilters() {
   // 年级学期筛选
   if (selectedStages.value.length > 0) {
     list = list.filter(q => {
-      const qStage = q.stage || q.subject || ''
+      const qStage = [q.stage, q.grade, q.grade_name, q.semester, q.term, q.subject].filter(Boolean).join(' ')
       return selectedStages.value.some(s => qStage.includes(s))
     })
   }
@@ -860,7 +872,7 @@ function applyFilters() {
 
   // 错误率筛选
   list = list.filter(q => {
-    const rate = q.attempt_count > 0 ? (q.wrong_count || 0) / q.attempt_count * 100 : -1
+    const rate = q.attempt_count > 0 ? (q.wrong_count || 0) / q.attempt_count * 100 : 0
     if (filterErrorMin.value != null && rate < filterErrorMin.value!) return false
     if (filterErrorMax.value != null && rate > filterErrorMax.value!) return false
     return true
@@ -877,7 +889,15 @@ function applyFilters() {
 
   filteredQuestions.value = list
   currentPage.value = 1
+  jumpPage.value = 1
 }
+
+function prevPage() { if (currentPage.value > 1) { currentPage.value--; jumpPage.value = currentPage.value } }
+function nextPage() { if (currentPage.value < totalPages.value) { currentPage.value++; jumpPage.value = currentPage.value } }
+function selectPage() { currentPage.value = Math.max(1, Math.min(totalPages.value, Number(currentPage.value) || 1)); jumpPage.value = currentPage.value }
+function changePageSize() { currentPage.value = 1; jumpPage.value = 1 }
+function goToPage() { const target = Math.max(1, Math.min(totalPages.value, Number(jumpPage.value) || 1)); currentPage.value = target; jumpPage.value = target }
+function pageOptionLabel(page: number) { return page === currentPage.value ? `${page} / ${totalPages.value} 页` : `第 ${page} 页` }
 
 function resetFilters() {
   filterKpIds.value = []
@@ -900,7 +920,7 @@ function onKpInputBlur() {
 }
 
 function toggleFilterKp(kp: any) {
-  const idx = filterKpIds.value.indexOf(kp.id)
+  const idx = filterKpIds.value.findIndex(id => String(id) === String(kp.id))
   if (idx >= 0) filterKpIds.value.splice(idx, 1)
   else filterKpIds.value.push(kp.id)
 }
@@ -932,19 +952,23 @@ function toggleStage(s: string) {
 }
 
 // 题目选择
-function toggleSelect(id: number) {
-  const idx = selectedIds.value.indexOf(id)
+function toggleSelect(id: string | number) {
+  const normalized = String(id)
+  const idx = selectedIds.value.indexOf(normalized)
   if (idx >= 0) selectedIds.value.splice(idx, 1)
-  else selectedIds.value.push(id)
+  else selectedIds.value.push(normalized)
 }
 
 function addToSelected(q: any) {
-  if (!selectedIds.value.includes(q.id)) selectedIds.value.push(q.id)
+  if (!isSelected(q.id)) selectedIds.value.push(String(q.id))
 }
 
-function removeFromSelected(id: number) {
-  const idx = selectedIds.value.indexOf(id)
-  if (idx >= 0) selectedIds.value.splice(idx, 1)
+function removeFromSelected(id: string | number) {
+  const idx = selectedIds.value.indexOf(String(id))
+  if (idx >= 0) {
+    selectedIds.value.splice(idx, 1)
+    delete sortNos.value[String(id)]
+  }
 }
 
 function removeFromOrdered(id: number) {
@@ -955,13 +979,13 @@ function toggleSelectAll() {
   if (isAllSelected.value) {
     // 取消当前页全选
     for (const q of paginatedQuestions.value) {
-      const idx = selectedIds.value.indexOf(q.id)
+      const idx = selectedIds.value.indexOf(String(q.id))
       if (idx >= 0) selectedIds.value.splice(idx, 1)
     }
   } else {
     // 当前页全选
     for (const q of paginatedQuestions.value) {
-      if (!selectedIds.value.includes(q.id)) selectedIds.value.push(q.id)
+      if (!isSelected(q.id)) selectedIds.value.push(String(q.id))
     }
   }
 }
@@ -998,8 +1022,30 @@ function showQuestionDetail(q: any) {
   showDetailModal.value = true
 }
 
-const levelTypes = ['practice', 'review', 'retry', 'variant', 'check']
-const modePolicies = ['block_a', 'allow_a', 'require_guidance', 'free_practice']
+const levelTypes = [
+  { value: 'practice', label: '练习' }, { value: 'review', label: '复习' },
+  { value: 'retry', label: '重做' }, { value: 'variant', label: '变式' }, { value: 'check', label: '检查' },
+]
+const modePolicies = [
+  { value: 'block_a', label: 'A模式分块' }, { value: 'allow_a', label: '允许A模式' },
+  { value: 'require_guidance', label: '需要引导' }, { value: 'free_practice', label: '自由练习' },
+]
+function levelTypeText(value: string) { return levelTypes.find(item => item.value === value)?.label || value }
+function modePolicyText(value: string) { return modePolicies.find(item => item.value === value)?.label || value }
+
+function onDragStart(index: number) { draggingIndex.value = index }
+function onDrop(index: number) {
+  if (draggingIndex.value < 0 || draggingIndex.value === index) return
+  const next = [...selectedIds.value]
+  const [moved] = next.splice(draggingIndex.value, 1)
+  next.splice(index, 0, moved)
+  selectedIds.value = next
+  draggingIndex.value = -1
+}
+function setSortNo(id: string | number, event: any) {
+  const value = Number(event?.detail?.value ?? event?.target?.value)
+  if (Number.isFinite(value) && value > 0) sortNos.value[String(id)] = Math.floor(value)
+}
 
 function addLevel() { levels.value.push({ name: '', type: 'practice', mode: 'block_a', questionIds: [] }) }
 function removeLevel(i: number) { if (levels.value.length > 1) levels.value.splice(i, 1) }
@@ -1017,18 +1063,19 @@ function closeQuestionAssign() {
   showQuestionAssign.value = false
 }
 
-function isQuestionAssignedForLevel(qid: number): boolean {
+function isQuestionAssignedForLevel(qid: string | number): boolean {
   const level = levels.value[currentAssignLevel.value]
-  return level?.questionIds?.includes(qid) || false
+  return level?.questionIds?.some(id => String(id) === String(qid)) || false
 }
 
-function toggleQuestionForLevel(qid: number) {
+function toggleQuestionForLevel(qid: string | number) {
   const level = levels.value[currentAssignLevel.value]
   if (!level) return
   if (!level.questionIds) level.questionIds = []
-  const idx = level.questionIds.indexOf(qid)
+  const normalized = String(qid)
+  const idx = level.questionIds.findIndex(id => String(id) === normalized)
   if (idx >= 0) level.questionIds.splice(idx, 1)
-  else level.questionIds.push(qid)
+  else level.questionIds.push(normalized)
 }
 
 function selectAllForLevel() {
@@ -1043,10 +1090,10 @@ function clearLevelQuestions() {
   level.questionIds = []
 }
 
-function removeQuestionFromLevel(qid: number, levelIndex: number) {
+function removeQuestionFromLevel(qid: string | number, levelIndex: number) {
   const level = levels.value[levelIndex]
   if (!level) return
-  const idx = level.questionIds?.indexOf(qid)
+  const idx = level.questionIds?.findIndex(id => String(id) === String(qid))
   if (idx !== undefined && idx >= 0) level.questionIds.splice(idx, 1)
 }
 
@@ -1062,13 +1109,13 @@ function moveQuestion(levelIndex: number, questionIndex: number, direction: numb
   level.questionIds[newIndex] = temp
 }
 
-function getQuestionSortNo(qid: number): number {
-  const q = orderedQuestions.value.find(q => q.id === qid)
+function getQuestionSortNo(qid: string | number): number {
+  const q = orderedQuestions.value.find(q => String(q.id) === String(qid))
   return q?.sort_no || 0
 }
 
-function getQuestionPreview(qid: number): string {
-  const q = orderedQuestions.value.find(q => q.id === qid)
+function getQuestionPreview(qid: string | number): string {
+  const q = orderedQuestions.value.find(q => String(q.id) === String(qid))
   const preview = q?.stem_preview || ''
   return preview.length > 40 ? preview.substring(0, 40) + '...' : preview
 }
@@ -1249,11 +1296,11 @@ async function loadMissionData(id: string) {
             const qRes: any = await missionApi.levelDetail(id, lv.id)
             const qData = qRes.data
             if (qData && qData.questions) {
-              levels.value[i].questionIds = qData.questions.map((q: any) => q.id)
+              levels.value[i].questionIds = qData.questions.map((q: any) => String(q.id))
               // 同时将题目加入 selectedIds（避免重复）
               for (const q of qData.questions) {
-                if (!selectedIds.value.includes(q.id)) {
-                  selectedIds.value.push(q.id)
+                if (!isSelected(q.id)) {
+                  selectedIds.value.push(String(q.id))
                 }
               }
             }
@@ -1781,6 +1828,17 @@ input, .form-textarea {
   height: auto;
   line-height: normal;
 }
+.step2-back-btn {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 10rpx 24rpx;
+  background: #909399;
+  color: #fff;
+  border-radius: 6rpx;
+  font-size: 24rpx;
+  height: auto;
+  line-height: normal;
+}
 .list-btn {
   padding: 10rpx 20rpx;
   background: #fff;
@@ -1874,19 +1932,11 @@ input, .form-textarea {
   line-height: normal;
 }
 .page-controls button:disabled { opacity: 0.5; }
-.page-size-selector {
-  display: flex;
-  align-items: center;
-  gap: 6rpx;
-  font-size: 22rpx;
-  color: #666;
-}
-.page-size-value {
-  padding: 4rpx 12rpx;
-  background: #f5f5f5;
-  border-radius: 4rpx;
-  font-size: 22rpx;
-}
+.page-size-label { font-size: 22rpx; color: #666; }
+.page-picker, .page-size-picker, .jump-page-input { height: 48rpx; box-sizing: border-box; border: 1rpx solid #dcdfe6; border-radius: 6rpx; background: #fff; color: #303133; font-size: 22rpx; }
+.page-picker { width: 132rpx; padding: 0 8rpx; }
+.page-size-picker { width: 104rpx; padding: 0 8rpx; }
+.jump-page-input { width: 76rpx; padding: 0 8rpx; }
 
 .table-loading, .table-empty {
   text-align: center;
@@ -1938,6 +1988,7 @@ input, .form-textarea {
 }
 .selected-no { font-size: 22rpx; color: #999; width: 40rpx; flex-shrink: 0; }
 .selected-stem { flex: 1; font-size: 24rpx; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.selected-stem { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .selected-remove { font-size: 22rpx; color: #f44336; cursor: pointer; flex-shrink: 0; white-space: nowrap; }
 .selected-stats {
   display: flex;
@@ -2105,6 +2156,8 @@ input, .form-textarea {
   white-space: nowrap;
   min-width: 0;
 }
+.subject-picker { margin: 16rpx 0; }
+.subject-picker-value { padding: 12rpx 16rpx; border: 1rpx solid #dcdfe6; border-radius: 6rpx; color: #409eff; background: #fff; font-size: 24rpx; }
 .ordered-diff {
   width: 80rpx;
   text-align: center;

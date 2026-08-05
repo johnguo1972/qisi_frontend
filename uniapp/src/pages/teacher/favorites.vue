@@ -99,7 +99,7 @@
             <text class="col col-kp">{{ f.knowledge_points_count }}</text>
             <view class="col col-action row-actions">
               <button size="mini" class="btn-action btn-edit" @click="editQuestion(f.question_id)">编辑</button>
-              <button size="mini" class="btn-action btn-tag" @click="editQuestion(f.question_id)">标签管理</button>
+              <button size="mini" class="btn-action btn-tag" @click="openTagEditor(f)">标签管理</button>
               <button size="mini" class="btn-action btn-mission" @click="openAssignment(f)">加入作业</button>
               <button size="mini" class="btn-action btn-del" @click="removeFavorite(f)">移除</button>
             </view>
@@ -109,6 +109,7 @@
     </view>
     <view v-if="assignmentVisible" class="modal-overlay" @click.self="assignmentVisible = false">
       <view class="assignment-modal">
+        <button size="mini" class="modal-close" @click="closeAssignment">关闭</button>
         <text class="modal-title">加入已有作业</text>
         <view v-if="assignmentLoading" class="loading">加载中...</view>
         <view v-for="mission in missions" :key="mission.id" class="mission-option" @click="addToMission(mission.id)">
@@ -116,6 +117,17 @@
         </view>
         <text v-if="!missions.length && !assignmentLoading" class="empty-hint">暂无作业，请先新增作业</text>
         <button size="mini" @click="goCreateMission">新增作业</button>
+      </view>
+    </view>
+    <view v-if="tagVisible" class="modal-overlay" @click.self="tagVisible = false">
+      <view class="assignment-modal tag-modal">
+        <button size="mini" class="modal-close" @click="tagVisible = false">关闭</button>
+        <text class="modal-title">标签管理</text>
+        <view class="tag-editor">
+          <text v-for="tag in questionTags" :key="tag.id" class="tag-chip">{{ tag.name }} <text class="tag-remove" @click="removeTag(tag.id)">×</text></text>
+          <text v-if="!questionTags.length" class="empty-hint">暂无标签</text>
+        </view>
+        <view class="tag-add-row"><input v-model="newTag" placeholder="输入标签名称" @confirm="addTag" /><button size="mini" type="primary" @click="addTag">添加</button></view>
       </view>
     </view>
   </view>
@@ -127,6 +139,7 @@ import { favoriteApi, type Favorite } from '@/api/favorites.ts'
 import { knowledgeApi } from '@/api/knowledge'
 import { useUserStore } from '@/store/index.ts'
 import { missionApi } from '@/api/missions'
+import { getQuestionTags, addQuestionTag, removeQuestionTag } from '@/api/questions'
 
 const userStore = useUserStore()
 
@@ -156,6 +169,11 @@ const assignmentVisible = ref(false)
 const assignmentLoading = ref(false)
 const missions = ref<any[]>([])
 const assignmentQuestionId = ref<string | number>('')
+const tagVisible = ref(false)
+const tagLoading = ref(false)
+const editingFavorite = ref<Favorite | null>(null)
+const questionTags = ref<any[]>([])
+const newTag = ref('')
 
 // Filter state
 const searchQuery = ref('')
@@ -257,9 +275,17 @@ async function openAssignment(f: Favorite) {
   try {
     const res: any = await missionApi.list()
     missions.value = res.data || []
+  } catch (e) {
+    missions.value = []
+    uni.showToast({ title: '加载作业失败', icon: 'none' })
   } finally {
     assignmentLoading.value = false
   }
+}
+
+function closeAssignment() {
+  assignmentVisible.value = false
+  assignmentQuestionId.value = ''
 }
 
 async function addToMission(id: string | number) {
@@ -276,12 +302,62 @@ function goCreateMission() {
   uni.navigateTo({ url: `/pages/teacher/mission-create?favoriteQuestionIds=${assignmentQuestionId.value}` })
 }
 
+async function openTagEditor(f: Favorite) {
+  editingFavorite.value = f
+  newTag.value = ''
+  questionTags.value = []
+  tagVisible.value = true
+  tagLoading.value = true
+  try {
+    const res: any = await getQuestionTags(String(f.question_id))
+    questionTags.value = res.data || []
+  } catch (e) {
+    uni.showToast({ title: '加载标签失败', icon: 'none' })
+  } finally {
+    tagLoading.value = false
+  }
+}
+
+async function addTag() {
+  const name = newTag.value.trim()
+  const questionId = editingFavorite.value?.question_id
+  if (!name || questionId === undefined || questionId === null || tagLoading.value) return
+  tagLoading.value = true
+  try {
+    const res: any = await addQuestionTag(String(questionId), { tag_name: name })
+    if (res.data?.tag) questionTags.value.push(res.data.tag)
+    else {
+      const latest: any = await getQuestionTags(String(questionId))
+      questionTags.value = latest.data || questionTags.value
+    }
+    newTag.value = ''
+  } catch (e) {
+    uni.showToast({ title: '添加标签失败', icon: 'none' })
+  } finally {
+    tagLoading.value = false
+  }
+}
+
+async function removeTag(tagId: string | number) {
+  const questionId = editingFavorite.value?.question_id
+  if (questionId === undefined || questionId === null || tagLoading.value) return
+  tagLoading.value = true
+  try {
+    await removeQuestionTag(String(questionId), String(tagId))
+    questionTags.value = questionTags.value.filter(tag => String(tag.id) !== String(tagId))
+  } catch (e) {
+    uni.showToast({ title: '移除标签失败', icon: 'none' })
+  } finally {
+    tagLoading.value = false
+  }
+}
+
 // Navigation helpers
 function navigateTo(url: string) {
   uni.navigateTo({ url })
 }
 
-function editQuestion(questionId: number) {
+function editQuestion(questionId: string | number) {
   navigateTo(`/pages/teacher/question-edit?id=${questionId}`)
 }
 
@@ -297,6 +373,13 @@ function difficultyText(d: number | null): string {
 .favorites { display: flex; min-height: 100vh; background: #f5f7fa; }
 .modal-overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.35); }
 .assignment-modal { width: 520px; max-width: calc(100vw - 40px); padding: 20px; background: #fff; border-radius: 8px; }
+.modal-close { float: right; margin: -4px -4px 12px 12px; }
+.tag-modal { min-height: 180px; }
+.tag-editor { display: flex; flex-wrap: wrap; gap: 8px; min-height: 44px; padding: 10px; margin: 16px 0 12px; background: #f5f7fa; border-radius: 4px; }
+.tag-chip { padding: 4px 8px; border-radius: 12px; color: #409eff; background: #ecf5ff; }
+.tag-remove { margin-left: 4px; color: #f56c6c; cursor: pointer; }
+.tag-add-row { display: flex; gap: 8px; }
+.tag-add-row input { flex: 1; border: 1px solid #dcdfe6; border-radius: 4px; padding: 6px 10px; }
 .mission-option { display: flex; justify-content: space-between; padding: 12px; margin: 8px 0; border: 1px solid #ebeef5; border-radius: 4px; }
 .mission-option:active { border-color: #409eff; background: #ecf5ff; }
 .empty-hint { display: block; padding: 16px 0; color: #909399; }

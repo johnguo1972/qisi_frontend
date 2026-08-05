@@ -47,10 +47,11 @@
           <text class="stem-text">{{ truncate(item.stem || '', 120) }}</text>
           <!-- 有图片时显示 -->
           <image
-            v-if="item.stem_image"
-            :src="item.stem_image"
+            v-if="item.images?.length"
+            :src="questionImageUrl(item.images[0])"
             class="stem-image"
-            mode="aspectFit"
+            :style="questionImageStyle(item.images[0])"
+            mode="widthFix"
           />
         </view>
 
@@ -82,20 +83,31 @@
 import { ref, onMounted } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { wrongbookApi } from '@/api/student.ts'
+import { getMediaUrl } from '@/utils/media-url'
 
 interface VariantItem {
-  id: number
+  id: string
   question_no?: string
   question_type: string
   difficulty: number
   stem?: string
-  stem_image?: string
+  images?: Array<{ url?: string; file_path?: string; display_width?: number }>
   knowledge_points?: string[]
 }
 
 const wrongId = ref<string>('')
 const variants = ref<VariantItem[]>([])
 const loading = ref(true)
+
+function questionImageUrl(image: any): string {
+  return getMediaUrl(image?.url || image?.file_path || '')
+}
+
+function questionImageStyle(image: any) {
+  const savedWidth = Number(image?.display_width || 0)
+  const width = savedWidth > 0 ? Math.max(80, Math.min(1200, Math.round(savedWidth))) : 420
+  return { width: `${width}px`, maxWidth: '100%', height: 'auto' }
+}
 
 onLoad((options: any) => {
   wrongId.value = String(options?.id || '')

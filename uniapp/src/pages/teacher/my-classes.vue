@@ -44,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { classApi } from '@/api/index.ts'
 
 interface ClassItem {
@@ -63,7 +63,12 @@ const classes = ref<ClassItem[]>([])
 const loading = ref(false)
 
 onMounted(async () => {
+  uni.$on('teacher-class-updated', loadClasses)
   await loadClasses()
+})
+
+onUnmounted(() => {
+  uni.$off('teacher-class-updated', loadClasses)
 })
 
 async function loadClasses() {

@@ -45,8 +45,9 @@
           </view>
           <!-- 原题图片 -->
           <view v-if="currentQuestion.images && currentQuestion.images.length > 0" class="stem-images">
-            <image v-for="(img, idx) in currentQuestion.images" :key="idx"
-                   :src="img.url || img.file_path" mode="widthFix" class="stem-image" />
+            <image v-for="(img, idx) in currentQuestion.images" :key="img.id || idx"
+                   :src="questionImageUrl(img)" mode="widthFix" class="stem-image"
+                   :style="questionImageStyle(img)" />
           </view>
         </view>
       </view>
@@ -183,6 +184,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
 import { renderWithKatex } from '@/utils/katex-renderer'
+import { getMediaUrl } from '@/utils/media-url'
 
 // 页面核心状态
 const questionId = ref<string>('')
@@ -228,6 +230,16 @@ const scrollTop = ref(0)            // 用于 scroll-view 自动滚动
 
 // 原题信息
 const currentQuestion = ref<any>({})
+
+function questionImageUrl(image: any): string {
+  return getMediaUrl(image?.url || image?.file_path || '')
+}
+
+function questionImageStyle(image: any) {
+  const savedWidth = Number(image?.display_width || 0)
+  const width = savedWidth > 0 ? Math.max(80, Math.min(1200, Math.round(savedWidth))) : 420
+  return { width: `${width}px`, maxWidth: '100%', height: 'auto' }
+}
 
 // LaTeX 渲染后的内容
 const renderedStem = ref('')

@@ -1,3 +1,5 @@
+import { getMediaUrl } from './media-url'
+
 /**
  * Image placeholder utilities for question-edit page.
  *
@@ -63,9 +65,7 @@ export function renderImagePlaceholders(
     const img = imageMap.get(id)
     if (!img) return match // keep unknown placeholder as-is
 
-    const src = img.file_path.startsWith('http')
-      ? img.file_path
-      : `/media/${img.file_path}`
+    const src = getMediaUrl(img.file_path)
     const desc = img.description || `插图 ${id}`
 
     // Escape for safe HTML embedding (prevent XSS)

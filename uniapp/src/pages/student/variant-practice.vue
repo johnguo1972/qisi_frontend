@@ -7,8 +7,9 @@
       </view>
 
       <view class="stem" v-html="renderedStem"></view>
-      <image v-for="(img,i) in (currentQuestion.images||[])" :key="i"
-             :src="img.url" class="stem-img" mode="widthFix" />
+      <image v-for="(img,i) in (currentQuestion.images||[])" :key="img.id || i"
+             :src="questionImageUrl(img)" class="stem-img" mode="widthFix"
+             :style="questionImageStyle(img)" />
 
       <view v-if="isObjective" class="options-grid">
         <view v-for="opt in (currentQuestion.options||[])" :key="opt.label"
@@ -47,9 +48,10 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { wrongbookApi } from '@/api/student.ts'
 import { renderWithKatex } from '@/utils/katex-renderer'
+import { getMediaUrl } from '@/utils/media-url'
 
 interface Opt { label: string; content: string }
-interface Q { id: number; question_type: string; stem?: string; options?: Opt[]; images?: { url: string }[] }
+interface Q { id: string; question_type: string; stem?: string; options?: Opt[]; images?: Array<{ id?: string; url?: string; file_path?: string; display_width?: number }> }
 
 const itemId = ref(0)
 const questions = ref<Q[]>([])
@@ -65,6 +67,16 @@ const renderedStem = ref('')
 const renderedOptions = ref<Record<string, string>>({})
 
 const currentQuestion = computed(() => questions.value[currentIndex.value] || ({} as Q))
+
+function questionImageUrl(image: any): string {
+  return getMediaUrl(image?.url || image?.file_path || '')
+}
+
+function questionImageStyle(image: any) {
+  const savedWidth = Number(image?.display_width || 0)
+  const width = savedWidth > 0 ? Math.max(80, Math.min(1200, Math.round(savedWidth))) : 420
+  return { width: `${width}px`, maxWidth: '100%', height: 'auto' }
+}
 const isObjective = computed(() =>
   ['single_choice', 'multiple_choice'].includes(currentQuestion.value.question_type))
 const hasNext = computed(() => currentIndex.value < questions.value.length - 1)

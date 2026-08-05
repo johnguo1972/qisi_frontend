@@ -1,27 +1,28 @@
 import { get, post } from '@/utils/request'
+import type { UUID } from '@/types/uuid'
 
 export const studentApi = {
-  home: (params?: { class_id?: number; scope?: string }) => get('/student/home', params),
-  missionDetail: (id: number) => get(`/student/missions/${id}`),
-  levelDetail: (id: number) => get(`/student/levels/${id}`),
-  submitAnswer: (data: { question_id: number; answer_content: object; mission_id?: number; level_id?: number }) =>
+  home: (params?: { class_id?: UUID; scope?: string }) => get('/student/home', params),
+  missionDetail: (id: UUID) => get(`/student/missions/${id}`),
+  levelDetail: (id: UUID) => get(`/student/levels/${id}`),
+  submitAnswer: (data: { question_id: UUID; answer_content: object; mission_id?: UUID; level_id?: UUID }) =>
     post('/student/attempts', data),
-  retryAnswer: (attemptId: number, data: object) =>
+  retryAnswer: (attemptId: UUID, data: object) =>
     post(`/student/attempts/${attemptId}/retry`, data),
-  startGuidance: (data: { question_id: number; mode_type: string }) =>
+  startGuidance: (data: { question_id: UUID; mode_type: string }) =>
     post('/student/guidance/sessions', data),
-  guidanceReply: (sessionId: number, reply: string) =>
+  guidanceReply: (sessionId: UUID, reply: string) =>
     post(`/student/guidance/sessions/${sessionId}/reply`, { reply }),
-  getModeA: (questionId: number) => get(`/student/questions/${questionId}/mode-a`),
+  getModeA: (questionId: UUID) => get(`/student/questions/${questionId}/mode-a`),
   growth: () => get('/student/growth'),
   knowledgeMastery: () => get('/student/knowledge-mastery'),
 }
 
 export const wrongbookApi = {
   list: () => get('/student/wrong-book/'),
-  detail: (id: number) => get(`/student/wrong-book/${id}/`),
-  variants: (id: number) => get(`/student/wrong-book/${id}/variants/`),
-  variantSubmit: (itemId: number, data: { question_id: number; answer_content: object }) =>
+  detail: (id: UUID) => get(`/student/wrong-book/${id}/`),
+  variants: (id: UUID) => get(`/student/wrong-book/${id}/variants/`),
+  variantSubmit: (itemId: UUID, data: { question_id: UUID; answer_content: object }) =>
     post(`/student/wrong-book/${itemId}/variant-submit/`, data),
 }
 

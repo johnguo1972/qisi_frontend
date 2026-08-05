@@ -1,4 +1,5 @@
 import { post, get, put, patch, del } from '@/utils/request'
+import type { UUID } from '@/types/uuid'
 
 // #ifdef APP-PLUS
 const UPLOAD_BASE = 'https://qisi.chengxuelu.com/api/v1'
@@ -9,17 +10,17 @@ const UPLOAD_BASE = '/api/v1'
 
 export const questionApi = {
   // GET /api/v1/questions
-  list: (params?: { page?: number; page_size?: number; question_no?: string; status?: string; question_type?: string; difficulty?: string; knowledge_point_id?: string | number; tag?: string; uuid?: string }) =>
+  list: (params?: { page?: number; page_size?: number; question_no?: string; status?: string; question_type?: string; difficulty?: string; knowledge_point_id?: string | number; tag?: string; uuid?: string; subject?: string }) =>
     get<any>('/questions/', params),
 
   // GET /api/v1/questions/{id}
-  detail: (id: number) => get<any>(`/questions/${id}`),
+  detail: (id: UUID) => get<any>(`/questions/${id}`),
 
   // PUT /api/v1/questions/{id}
-  update: (id: number, data: any) => put<any>(`/questions/${id}`, data),
+  update: (id: UUID, data: any) => put<any>(`/questions/${id}`, data),
 
   // POST /api/v1/questions/{id}/publish
-  publish: (id: number) => post(`/questions/${id}/publish`),
+  publish: (id: UUID) => post(`/questions/${id}/publish`),
 
   // POST /api/v1/questions/import-batches (upload file via FormData)
   importFile: (filePath: string, fileName?: string) => {
@@ -63,7 +64,7 @@ export const questionApi = {
   importBatches: () => get<any[]>('/questions/import-batches'),
 
   // GET /api/v1/questions/import-batches/{batch_id}
-  importBatchDetail: (batchId: number) => get<any>(`/questions/import-batches/${batchId}`),
+  importBatchDetail: (batchId: UUID) => get<any>(`/questions/import-batches/${batchId}`),
 
   // Dictionaries
   dictSubjects: () => get<any[]>('/dicts/subjects'),
@@ -72,22 +73,24 @@ export const questionApi = {
   dictDifficultyLevels: () => get<any[]>('/dicts/difficulty-levels'),
 
   // DELETE /api/v1/questions/{id}
-  delete: (id: number) => post<any>(`/questions/${id}/delete`),
+  delete: (id: UUID) => post<any>(`/questions/${id}/delete`),
 
   // AI status & confirm (review API)
-  getAiStatus: (questionId: number) =>
+  getAiStatus: (questionId: UUID) =>
     get<any>(`/review/question/${questionId}/ai-status/`),
-  aiConfirm: (questionId: number, mode: string) =>
+  aiConfirm: (questionId: UUID, mode: string) =>
     post<any>(`/review/question/${questionId}/ai-confirm/${mode}/`),
+  aiUpdateAnswer: (questionId: UUID, mode: string, editedContent: Record<string, any>) =>
+    patch<any>(`/review/question/${questionId}/ai-answer/${mode}/`, { edited_content: editedContent }),
 
   // AI process (review API)
-  aiProcess: (questionId: string | number, data?: { model?: string }) =>
+  aiProcess: (questionId: UUID, data?: { model?: string }) =>
     post<any>(`/review/question/${questionId}/ai-process/`, data),
-  aiProcessMode: (questionId: string | number, mode: string) =>
+  aiProcessMode: (questionId: UUID, mode: string) =>
     post<any>(`/review/question/${questionId}/ai-process-mode/${mode}/`),
-  batchAi: (questionIds: string[], model?: string) =>
+  batchAi: (questionIds: UUID[], model?: string) =>
     post<any>('/review/batch-ai-process/', { question_ids: questionIds, model }),
-  similar: (questionId: string) => get<any>(`/questions/${questionId}/similar/`),
+  similar: (questionId: UUID) => get<any>(`/questions/${questionId}/similar/`),
 
   // AI task status polling
   getTaskStatus: (taskId: string) =>
@@ -200,11 +203,19 @@ export function cropQuestionImage(questionId: number, bbox: { x1: number; y1: nu
   return post<any>(`/review/questions/${questionId}/images/crop/`, { ...bbox, page_no: pageNo })
 }
 
-export function deleteQuestionImage(questionId: number, imageId: number) {
+export function deleteQuestionImage(questionId: string | number, imageId: string | number) {
   return del<any>(`/review/questions/${questionId}/images/${imageId}/`)
 }
 
-export function getQuestionAssets(questionId: number) {
+export function restoreQuestionImageOriginal(questionId: string | number, imageId: string | number) {
+  return post<any>(`/review/questions/${questionId}/images/${imageId}/restore-original/`)
+}
+
+export function updateQuestionImageLayout(questionId: string | number, imageId: string | number, data: { placement: 'stem' | 'options'; display_width: number; description?: string }) {
+  return patch<any>(`/review/questions/${questionId}/images/${imageId}/layout/`, data)
+}
+
+export function getQuestionAssets(questionId: string | number) {
   return get<any>(`/review/questions/${questionId}/assets/`)
 }
 
@@ -213,23 +224,40 @@ export function createQuestion(data: any) {
   return post<any>('/questions/create/', data)
 }
 
-export function uploadQuestionImage(questionId: number, imageFile: File) {
+export function uploadQuestionImage(questionId: string | number, imageFile: File | Blob | string, fileName = 'question-image.png', sourceImageId?: string | number) {
+  const token = uni.getStorageSync('accessToken')
+
+  // #ifdef H5
+  const formData = new FormData()
+  formData.append('image', imageFile instanceof Blob ? imageFile : String(imageFile), fileName)
+  formData.append('question_id', String(questionId))
+  if (sourceImageId) formData.append('source_image_id', String(sourceImageId))
+  return fetch(`${UPLOAD_BASE}/questions/upload-image/`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  }).then(async (res) => {
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.message || '图片上传失败')
+    return data
+  })
+  // #endif
+
+  // #ifndef H5
   return new Promise<any>((resolve, reject) => {
     uni.uploadFile({
       url: `${UPLOAD_BASE}/questions/upload-image/`,
-      filePath: imageFile as any,
+      filePath: imageFile as string,
       name: 'image',
-      formData: { question_id: String(questionId) },
-      header: {
-        'Authorization': `Bearer ${uni.getStorageSync('accessToken')}`,
-      },
+      formData: { question_id: String(questionId), ...(sourceImageId ? { source_image_id: String(sourceImageId) } : {}) },
+      header: { Authorization: `Bearer ${token}` },
       success: (res) => {
-        const data = JSON.parse(res.data)
-        resolve(data)
+        try { resolve(JSON.parse(res.data)) } catch { reject(new Error('上传响应无效')) }
       },
       fail: (err) => reject(err),
     })
   })
+  // #endif
 }
 
 export function photoListQuestions(params?: any) {

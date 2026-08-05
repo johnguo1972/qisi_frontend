@@ -127,6 +127,7 @@ async function handleSubmit() {
       allow_invite_join: form.allow_invite_join,
     })
     if (res.code === 0) {
+      uni.$emit('teacher-class-updated')
       uni.showToast({ title: '创建成功', icon: 'success' })
       const newClassId = res.data?.id
       if (newClassId) {

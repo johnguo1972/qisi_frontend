@@ -110,8 +110,9 @@
             <text class="filter-label">知识点</text>
             <select v-model="activeKnowledgePoint" class="filter-select"><option value="">全部知识点</option><option v-for="kp in knowledgeOptions" :key="kp.id" :value="kp.id">{{ kp.name }}</option></select>
             <input v-model="tagSearch" class="tag-search" placeholder="自定义标签" />
-            <input v-model="uuidSearch" class="uuid-search" placeholder="按UUID查询" />
+            <input v-model="uuidSearch" class="uuid-search" placeholder="按UUID模糊查询" />
             <button size="mini" type="primary" @click="applyFilters">查询</button>
+            <button size="mini" class="reset-filter-btn" @click="resetFilters">重置</button>
           </view>
         </view>
 
@@ -128,6 +129,7 @@
             @edit="goEdit"
             @related="handleRelated"
             @edit-tags="openTagEditor"
+            @ai-answer="(mode) => openAiAnswer(q, mode)"
             @toggle-answer="toggleAnswer(q.id)"
             @add-favorite="addFavorite(q.id)"
             @check="toggleQuestionSelection"
@@ -169,11 +171,21 @@
     <view v-if="tagVisible" class="modal-overlay" @click.self="tagVisible = false">
       <view class="data-modal"><view class="modal-title">标签编辑</view><view class="tag-editor"><text v-for="tag in questionTags" :key="tag.id" class="tag-chip">{{ tag.name }} <text @click="removeQuestionTagFromCurrent(tag.id)">×</text></text></view><input v-model="newTag" placeholder="输入标签后添加" @confirm="addQuestionTagToCurrent" /><view class="modal-actions"><button size="mini" @click="addQuestionTagToCurrent">添加</button><button size="mini" type="primary" @click="tagVisible = false">完成</button></view></view>
     </view>
+
+    <AiAnswerModal
+      :visible="answerVisible"
+      :question="answerQuestion"
+      :mode="answerMode"
+      @close="answerVisible = false"
+      @saved="refreshAnswerQuestion"
+      @reprocessed="refreshAnswerQuestion"
+    />
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import { questionApi, importJsonPackage, getQuestionTags, addQuestionTag, removeQuestionTag } from '@/api/questions'
 import { knowledgeApi } from '@/api/knowledge'
 import { favoriteApi } from '@/api/favorites'
@@ -182,6 +194,7 @@ import { useUserStore } from '@/store/index.ts'
 import QuestionDetailCard from '@/components/QuestionDetailCard.vue'
 import AddMenuModal from '@/components/AddMenuModal.vue'
 import RightActionPanel from '@/components/RightActionPanel.vue'
+import AiAnswerModal from '@/components/AiAnswerModal.vue'
 
 const userStore = useUserStore()
 
@@ -220,6 +233,9 @@ const tagVisible = ref(false)
 const editingQuestion = ref<any>(null)
 const questionTags = ref<any[]>([])
 const newTag = ref('')
+const answerVisible = ref(false)
+const answerQuestion = ref<any | null>(null)
+const answerMode = ref<'ALL' | 'A' | 'B' | 'C'>('ALL')
 
 const questionTypes = [
   { label: '选择题', value: 'single_choice' },
@@ -254,8 +270,9 @@ const knowledgeOptions = computed(() => {
   return result
 })
 
-// === 初始化 ===
-onMounted(() => {
+// Reload on every return from the edit page so saved changes are visible
+// without a manual refresh, while preserving the current filters and page.
+onShow(() => {
   loadKnowledgeTree()
   loadQuestions()
 })
@@ -333,6 +350,18 @@ function changePageSize() { currentPage.value = 1; jumpPage.value = 1; loadQuest
 
 // === 筛选 ===
 function applyFilters() { currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
+
+function resetFilters() {
+  selectedKP.value = null
+  activeType.value = ''
+  activeDifficulty.value = ''
+  activeKnowledgePoint.value = ''
+  tagSearch.value = ''
+  uuidSearch.value = ''
+  currentPage.value = 1
+  jumpPage.value = 1
+  loadQuestions()
+}
 
 // === 答案控制 ===
 function toggleAnswer(id: string) { showAnswerMap.value[id] = !showAnswerMap.value[id] }
@@ -422,6 +451,20 @@ async function handleAiModeA() {
   } catch { uni.showToast({ title: 'AI-A模式提交失败', icon: 'none' }) }
 }
 
+function openAiAnswer(question: any, mode: 'ALL' | 'A' | 'B' | 'C' = 'ALL') {
+  answerQuestion.value = question
+  answerMode.value = mode
+  answerVisible.value = true
+}
+
+async function refreshAnswerQuestion() {
+  const questionId = answerQuestion.value?.id
+  await loadQuestions()
+  if (questionId) {
+    answerQuestion.value = questions.value.find(item => String(item.id) === String(questionId)) || answerQuestion.value
+  }
+}
+
 async function openTagEditor(question: any) {
   editingQuestion.value = question
   tagVisible.value = true
@@ -488,7 +531,30 @@ async function removeQuestionTagFromCurrent(tagId: string) {
 .filter-label { font-size: 12px; color: #909399; }
 .filter-select, .tag-search { height: 28px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; color: #606266; font-size: 12px; }
 .tag-search { width: 130px; }
-.uuid-search { width: 220px; }
+.uuid-search {
+  width: 340px;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid #c0c4cc;
+  border-radius: 4px;
+  background: #fff;
+  color: #303133;
+  font-size: 12px;
+  outline: none;
+}
+.uuid-search:focus { border-color: #409eff; box-shadow: 0 0 0 1px rgba(64, 158, 255, .15); }
+.reset-filter-btn {
+  background: #fff;
+  color: #606266;
+  border: 1px solid #c0c4cc;
+  border-radius: 4px;
+  padding: 0 14px;
+  height: 28px;
+  line-height: 26px;
+  font-size: 12px;
+}
+.reset-filter-btn:active { background: #f5f7fa; }
 .filter-chip { padding: 3px 10px; border-radius: 10px; font-size: 11px; background: #f0f0f0; cursor: pointer; }
 .filter-chip.active { background: #409eff; color: #fff; }
 
