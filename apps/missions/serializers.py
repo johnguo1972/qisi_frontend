@@ -31,8 +31,8 @@ class MissionListSerializer(serializers.ModelSerializer):
 class MissionDetailSerializer(serializers.ModelSerializer):
     levels = serializers.SerializerMethodField()
     creator_name = serializers.CharField(source='creator_teacher.display_name', read_only=True)
-    creator_teacher = serializers.IntegerField(source='creator_teacher_id.id', read_only=True)
-    class_obj = serializers.IntegerField(source='class_obj_id', read_only=True, allow_null=True)
+    creator_teacher = serializers.UUIDField(source='creator_teacher_id.id', read_only=True)
+    class_obj = serializers.UUIDField(source='class_obj_id', read_only=True, allow_null=True)
 
     class Meta:
         model = LearningMission
@@ -51,9 +51,9 @@ class MissionDetailSerializer(serializers.ModelSerializer):
 
 
 class CreateMissionSerializer(serializers.ModelSerializer):
-    class_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    class_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
     target_student_ids = serializers.ListField(child=serializers.UUIDField(), required=False, default=list)
-    course_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    course_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
 
     class Meta:
         model = LearningMission
@@ -93,8 +93,8 @@ class CreateLevelSerializer(serializers.ModelSerializer):
 
 
 class AddQuestionsSerializer(serializers.Serializer):
-    level_id = serializers.IntegerField()
-    question_ids = serializers.ListField(child=serializers.IntegerField())
+    level_id = serializers.UUIDField()
+    question_ids = serializers.ListField(child=serializers.UUIDField())
     is_required = serializers.BooleanField(default=True)
 
 

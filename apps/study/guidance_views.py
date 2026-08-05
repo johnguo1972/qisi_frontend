@@ -14,6 +14,7 @@ from apps.common.ai.components import (
     QuestionInput,
 )
 from apps.common.ai.exceptions import AIConfigError
+from apps.common.media import media_url
 
 
 guidance_component_factory = GuidanceComponent
@@ -57,8 +58,16 @@ def _build_question_info(q) -> dict:
             for o in _QuestionOption.objects.filter(question=q).order_by('sort_order')
         ],
         'images': [
-            {'id': img.id, 'file_path': img.file_path}
-            for img in q.images.all()
+            {
+                'id': img.id,
+                'file_path': img.file_path,
+                'url': media_url(img.file_path),
+                'image_type': img.image_type,
+                'display_width': img.display_width,
+                'description': img.description or '',
+            }
+            for img in q.images.all().order_by('sort_order')
+            if img.file_path and img.image_type != 'formula'
         ],
     }
 

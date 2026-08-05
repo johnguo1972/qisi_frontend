@@ -286,6 +286,10 @@ class QuestionImage(models.Model):
 
     image_type = models.CharField(max_length=50, default='other', verbose_name='图片类型')
     file_path = models.CharField(max_length=500, verbose_name='文件路径')
+    original_file_path = models.CharField(
+        max_length=500, null=True, blank=True, verbose_name='原始图片路径',
+        help_text='用于在多次裁切、旋转或翻转后恢复未经编辑的原图',
+    )
     source_page_image_path = models.CharField(max_length=500, null=True, blank=True, verbose_name='源页面图路径')
 
     bbox = models.JSONField(null=True, blank=True, verbose_name='原始bbox')
@@ -295,10 +299,27 @@ class QuestionImage(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
 
+    placement = models.CharField(
+        max_length=20,
+        default='stem',
+        choices=[('stem', '题干下方'), ('options', '选项下方')],
+        verbose_name='插图位置',
+    )
+    display_width = models.PositiveIntegerField(
+        default=100,
+        verbose_name='图片显示宽度',
+        help_text='图片显示宽度（像素），范围 80-1200，前端通过画布滚轮调整',
+    )
+
     class Meta:
         db_table = 'tiku_question_image'
         verbose_name = '题目插图'
         verbose_name_plural = '题目插图'
+
+    def save(self, *args, **kwargs):
+        if not self.original_file_path and self.file_path:
+            self.original_file_path = self.file_path
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f'Image for Q{self.question.question_no} ({self.image_type})'

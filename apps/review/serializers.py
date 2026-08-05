@@ -11,15 +11,27 @@ class QuestionOptionSerializer(serializers.ModelSerializer):
 
 
 class QuestionImageListSerializer(serializers.ModelSerializer):
+    can_restore_original = serializers.SerializerMethodField()
+
+    def get_can_restore_original(self, obj):
+        return bool(obj.original_file_path and obj.original_file_path != obj.file_path)
+
     class Meta:
         model = QuestionImage
-        fields = ['id', 'image_type', 'file_path', 'bbox', 'expanded_bbox', 'description']
+        fields = [
+            'id', 'image_type', 'file_path', 'bbox', 'expanded_bbox', 'description',
+            'sort_order', 'placement', 'display_width', 'can_restore_original',
+        ]
 
 
 class QuestionDetailSerializer(serializers.ModelSerializer):
     options = QuestionOptionSerializer(many=True, read_only=True)
-    images = QuestionImageListSerializer(many=True, read_only=True)
+    images = serializers.SerializerMethodField()
     pdf_file_path = serializers.CharField(source='paper.pdf_file_path', read_only=True, default='')
+
+    def get_images(self, obj):
+        images = obj.images.filter(image_type='diagram').order_by('sort_order')
+        return QuestionImageListSerializer(images, many=True).data
 
     class Meta:
         model = ExamQuestion
@@ -45,7 +57,7 @@ class QuestionUpdateSerializer(serializers.ModelSerializer):
         fields = [
             'stem', 'stem_html', 'answer', 'analysis', 'solution',
             'comment', 'raw_explanation', 'knowledge_points', 'difficulty',
-            'question_type', 'review_status', 'page_start', 'page_end',
+            'question_type', 'review_status', 'page_start', 'page_end', 'tags',
         ]
 
 
@@ -92,7 +104,7 @@ class PaperReviewSerializer(serializers.ModelSerializer):
 
 class AIStatusSerializer(serializers.Serializer):
     """Serializer for AI processing status."""
-    question_id = serializers.IntegerField()
+    question_id = serializers.UUIDField()
     knowledge_points_count = serializers.IntegerField()
     knowledge_enrichment = serializers.JSONField(required=False, allow_null=True)
     answer_a_status = serializers.CharField()
@@ -110,7 +122,7 @@ class AIProcessRequestSerializer(serializers.Serializer):
 
 class AIProcessResultSerializer(serializers.Serializer):
     """Serializer for AI processing results."""
-    question_id = serializers.IntegerField()
+    question_id = serializers.UUIDField()
     ai_processing_status = serializers.CharField()
     ai_processed_at = serializers.DateTimeField(read_only=True)
     ai_probe_result = serializers.JSONField(read_only=True)

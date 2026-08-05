@@ -14,10 +14,20 @@ from apps.study.models import StudentMissionProgress, StudentLevelProgress, Answ
 from apps.parser.models import ExamQuestion
 from apps.parser.models import QuestionImage, QuestionOption
 from apps.common.batch_tasks import PROGRESS_KEY_PREFIX
+from apps.common.media import media_url
 
 
 def make_trace_id():
     return uuid.uuid4().hex[:16]
+
+
+def _visible_mission_rels(level_or_mission, student_id):
+    """Return relations visible to a student, including class-wide questions."""
+    if isinstance(level_or_mission, MissionLevel):
+        manager = MissionQuestionRel.objects.filter(level=level_or_mission)
+    else:
+        manager = MissionQuestionRel.objects.filter(mission=level_or_mission)
+    return [rel for rel in manager if not rel.target_student_ids or str(student_id) in {str(value) for value in rel.target_student_ids}]
 
 
 @api_view(['GET'])
@@ -73,8 +83,15 @@ def student_home(request):
     ).select_related('mission', 'mission__class_obj')
 
     class_id = request.query_params.get('class_id')
-    if class_id and int(class_id) > 0:
-        progresses = progresses.filter(mission__class_obj_id=class_id)
+    if class_id:
+        try:
+            class_uuid = uuid.UUID(str(class_id))
+        except (ValueError, TypeError, AttributeError):
+            return Response({
+                'code': 400, 'message': 'class_id must be a valid UUID',
+                'data': None, 'trace_id': make_trace_id(),
+            }, status=400)
+        progresses = progresses.filter(mission__class_obj_id=class_uuid)
 
     # Filter by scope (date range on end_at)
     scope = request.query_params.get('scope')
@@ -92,13 +109,13 @@ def student_home(request):
         mission = p.mission
         class_obj = mission.class_obj
         level_count = mission.levels.count()
-        question_count = MissionQuestionRel.objects.filter(mission=mission).count()
+        question_count = len(_visible_mission_rels(mission, request.user.id))
 
         # 实时计算各关卡进度，取平均值作为任务整体进度
         levels = mission.levels.all()
         total_progress = 0
         for lv in levels:
-            level_q_count = MissionQuestionRel.objects.filter(level=lv).count()
+            level_q_count = len(_visible_mission_rels(lv, request.user.id))
             correct_count = AnswerAttempt.objects.filter(
                 student_user_id=request.user,
                 level=lv,
@@ -156,7 +173,7 @@ def student_mission_detail(request, mission_id):
         lp = StudentLevelProgress.objects.filter(
             level=lv, student_user_id=request.user
         ).first()
-        level_q_count = MissionQuestionRel.objects.filter(level=lv).count()
+        level_q_count = len(_visible_mission_rels(lv, request.user.id))
 
         # 计算关卡进度：已答对的题目数 / 总题目数
         correct_count = AnswerAttempt.objects.filter(
@@ -218,7 +235,7 @@ def student_level_detail(request, level_id):
             mission_id=level.mission_id, student_user_id=request.user).exists():
         return Response({'code': 403, 'message': '无权访问该关卡', 'data': None, 'trace_id': make_trace_id()}, status=403)
 
-    rels = MissionQuestionRel.objects.filter(level=level)
+    rels = _visible_mission_rels(level, request.user.id)
     questions = []
     for rel in rels:
         try:
@@ -233,7 +250,18 @@ def student_level_detail(request, level_id):
                 'answer': q.answer or '',
                 'analysis': q.analysis or '',
                 'solution': q.solution or '',
-                'images': [{'id': img.id, 'file_path': img.file_path, 'url': img.file_path} for img in q.images.all()],
+                'images': [
+                    {
+                        'id': img.id,
+                        'file_path': img.file_path,
+                        'url': media_url(img.file_path),
+                        'image_type': img.image_type,
+                        'display_width': img.display_width,
+                        'description': img.description or '',
+                    }
+                    for img in q.images.all().order_by('sort_order')
+                    if img.file_path and img.image_type != 'formula'
+                ],
                 'options': [{'label': o.option_label, 'content': o.content}
                            for o in q.options.all()],
             })
@@ -506,8 +534,8 @@ def export_pdf(request):
             return Response({
                 'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': trace_id,
             }, status=404)
-        rels = MissionQuestionRel.objects.filter(mission=mission).values_list('question_id', flat=True)
-        qs = ExamQuestion.objects.filter(id__in=list(rels)).values(
+        rels = [rel.question_id for rel in _visible_mission_rels(mission, request.user.id)]
+        qs = ExamQuestion.objects.filter(id__in=rels).values(
             'id', 'question_no', 'question_type', 'stem', 'stem_html',
             'answer', 'analysis', 'knowledge_points',
         )

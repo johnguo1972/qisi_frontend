@@ -71,6 +71,7 @@ class MissionQuestionRel(models.Model):
     sort_no = models.IntegerField(default=0)
     is_required = models.BooleanField(default=True)
     source_type = models.CharField(max_length=20, default='manual_select')
+    target_student_ids = models.JSONField(default=list, blank=True)
 
     class Meta:
         db_table = 'mission_question_rel'

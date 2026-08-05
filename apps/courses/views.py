@@ -643,7 +643,10 @@ def question_ai_process(request, course_id):
     if not question_id:
         raise ValidationError('question_id 不能为空')
 
-    question_id = int(question_id)
+    try:
+        question_id = str(uuid.UUID(str(question_id)))
+    except (ValueError, TypeError, AttributeError):
+        raise ValidationError('question_id must be a valid UUID')
     if not CourseQuestionLink.objects.filter(
         course=course, question_id=question_id, is_deleted=False
     ).exists():

@@ -1,5 +1,6 @@
 """Wrong book services: variant question recommendation."""
 from apps.parser.models import ExamQuestion
+from apps.common.media import media_url
 
 
 def _question_brief(q):
@@ -12,7 +13,18 @@ def _question_brief(q):
         'difficulty': float(q.difficulty) if q.difficulty else None,
         'stem': q.stem,
         'stem_html': getattr(q, 'stem_html', None),
-        'images': [{'url': img.file_path} for img in q.images.all().order_by('sort_order')],
+        'images': [
+            {
+                'id': img.id,
+                'url': media_url(img.file_path),
+                'file_path': img.file_path,
+                'image_type': img.image_type,
+                'display_width': img.display_width,
+                'description': img.description or '',
+            }
+            for img in q.images.all().order_by('sort_order')
+            if img.file_path and img.image_type != 'formula'
+        ],
         'options': [{'label': o.option_label, 'content': o.content}
                     for o in q.options.all().order_by('sort_order')],
     }

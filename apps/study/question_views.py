@@ -2,8 +2,8 @@
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from django.db.models import Q
-from uuid import UUID
+from django.db.models import Q, CharField
+from django.db.models.functions import Cast
 from apps.parser.models import ExamQuestion
 from apps.knowledge.models import KnowledgePoint
 from .serializers import QuestionListSerializer, QuestionDetailSerializer
@@ -41,10 +41,11 @@ def question_list(request):
     if tag:
         qs = qs.filter(tags__contains=[tag])
     if question_uuid:
-        try:
-            qs = qs.filter(id=UUID(question_uuid))
-        except (ValueError, TypeError):
-            qs = qs.none()
+        # UUID 字段不能直接使用字符串 icontains；转换为文本后支持输入完整 UUID
+        # 或任意片段的模糊查询，例如前 8 位、后 6 位等。
+        qs = qs.annotate(uuid_text=Cast('id', output_field=CharField())).filter(
+            uuid_text__icontains=question_uuid
+        )
     if question_no:
         qs = qs.filter(
             Q(question_no__icontains=question_no) |
@@ -59,14 +60,19 @@ def question_list(request):
     if knowledge:
         qs = qs.filter(ai_knowledge_enrichment__contains=[{'code': knowledge}])
 
-    # Filter by knowledge point ID (JSONField containment)
+    # Filter by the manually associated knowledge point first.  The older
+    # AI-enrichment fallback is retained for questions that only have AI data.
     if knowledge_point_id:
         if knowledge_point_id == '-1':
             qs = qs.filter(Q(knowledge_points__isnull=True) | Q(knowledge_points=[]))
         else:
             try:
                 kp_id = int(knowledge_point_id)
-                qs = qs.filter(ai_knowledge_enrichment__contains=[{'id': kp_id}])
+                qs = qs.filter(
+                    Q(knowledge_points__contains=[{'id': kp_id}]) |
+                    Q(knowledge_points__contains=[{'id': str(kp_id)}]) |
+                    Q(ai_knowledge_enrichment__contains=[{'id': kp_id}])
+                )
             except (ValueError, TypeError):
                 try:
                     kp = KnowledgePoint.objects.get(pk=knowledge_point_id)

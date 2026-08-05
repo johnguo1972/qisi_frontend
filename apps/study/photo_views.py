@@ -275,17 +275,22 @@ def photo_list_questions(request):
     if search:
         qs = qs.filter(stem__icontains=search)
     if knowledge_point_id:
-        try:
-            kp_id = int(knowledge_point_id)
-            if kp_id == -1:
-                # "未分类": questions with empty or null knowledge_points
-                qs = qs.filter(
-                    Q(knowledge_points__isnull=True) | Q(knowledge_points=[])
-                )
-            else:
-                qs = qs.filter(knowledge_points__contains=[{'id': kp_id}])
-        except (ValueError, TypeError):
-            pass
+        if knowledge_point_id == '-1':
+            # "未分类": questions with empty or null knowledge_points
+            qs = qs.filter(
+                Q(knowledge_points__isnull=True) | Q(knowledge_points=[])
+            )
+        else:
+            from apps.knowledge.models import KnowledgePoint
+            try:
+                kp_uuid = uuid.UUID(str(knowledge_point_id))
+                kp = KnowledgePoint.objects.get(pk=kp_uuid)
+            except (KnowledgePoint.DoesNotExist, ValueError, TypeError):
+                return Response({'code': 400, 'message': 'Invalid knowledge_point_id'}, status=400)
+            qs = qs.filter(
+                Q(knowledge_points__contains=[{'id': str(kp.id)}]) |
+                Q(knowledge_points__contains=[{'module': kp.module}])
+            )
 
     qs = qs.order_by('-created_at')
 

@@ -89,7 +89,7 @@ class VariantTaskSerializer(serializers.ModelSerializer):
 
 class CourseQuestionLinkSerializer(serializers.ModelSerializer):
     """课程习题关联序列化器，包含题目详情"""
-    question_id = serializers.IntegerField(source='question.id', read_only=True)
+    question_id = serializers.UUIDField(source='question.id', read_only=True)
     system_id = serializers.CharField(source='question.system_id', read_only=True)
     question_no = serializers.CharField(source='question.question_no', read_only=True)
     question_type = serializers.CharField(source='question.question_type', read_only=True)
@@ -101,7 +101,7 @@ class CourseQuestionLinkSerializer(serializers.ModelSerializer):
     ai_answer_b = serializers.JSONField(source='question.ai_answer_b', read_only=True)
     ai_answer_c = serializers.JSONField(source='question.ai_answer_c', read_only=True)
     source = serializers.CharField(read_only=True)
-    tree_node_id = serializers.IntegerField(read_only=True)
+    tree_node_id = serializers.UUIDField(read_only=True, allow_null=True)
 
     class Meta:
         model = CourseQuestionLink

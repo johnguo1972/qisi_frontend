@@ -97,6 +97,7 @@ def create_question(request):
 def upload_question_image(request):
     """Upload an image for a question."""
     from apps.common.oss_service import upload_crop_image_safe
+    from apps.parser.models import ExamQuestion, QuestionImage
 
     image_file = request.FILES.get('image')
     question_id = request.data.get('question_id')
@@ -109,6 +110,19 @@ def upload_question_image(request):
     if not question_id:
         return Response({
             'code': 400, 'message': '缺少题目ID', 'data': None, 'trace_id': make_trace_id()
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        question = ExamQuestion.objects.select_related('paper').get(id=question_id)
+    except ExamQuestion.DoesNotExist:
+        return Response({
+            'code': 404, 'message': '题目不存在', 'data': None, 'trace_id': make_trace_id()
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    placement = request.data.get('placement', 'stem')
+    if placement not in {'stem', 'options'}:
+        return Response({
+            'code': 400, 'message': '图片位置只能是题干下方或选项下方', 'data': None, 'trace_id': make_trace_id()
         }, status=status.HTTP_400_BAD_REQUEST)
 
     # Save uploaded file temporarily
@@ -126,9 +140,38 @@ def upload_question_image(request):
             return Response({
                 'code': 500, 'message': 'OSS上传失败：服务未配置', 'data': None, 'trace_id': make_trace_id()
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        source_image_id = request.data.get('source_image_id')
+        original_file_path = url
+        if source_image_id:
+            try:
+                source_image = QuestionImage.objects.get(id=source_image_id, question=question)
+                original_file_path = source_image.original_file_path or source_image.file_path
+            except QuestionImage.DoesNotExist:
+                return Response({
+                    'code': 404, 'message': 'Original image not found', 'data': None, 'trace_id': make_trace_id()
+                }, status=status.HTTP_404_NOT_FOUND)
+
+        image = QuestionImage.objects.create(
+            paper=question.paper,
+            question=question,
+            image_type='diagram',
+            file_path=url,
+            original_file_path=original_file_path,
+            description=(request.data.get('description') or '导入图片').strip(),
+            sort_order=question.images.count(),
+            placement=placement,
+            display_width=420,
+        )
         return Response({
             'code': 0, 'message': '上传成功',
-            'data': {'url': url},
+            'data': {'url': url, 'image': {
+                'id': image.id,
+                'file_path': image.file_path,
+                'description': image.description,
+                'sort_order': image.sort_order,
+                'placement': image.placement,
+                'display_width': image.display_width,
+            }},
             'trace_id': make_trace_id(),
         })
     except Exception as e:
