@@ -165,7 +165,7 @@ function levelTypeText(type: string): string {
 
 function modeText(mode: string): string {
   const map: Record<string, string> = {
-    block_a: 'Block A', allow_a: 'Allow A', require_guidance: '需引导', free_practice: '自由练习'
+    block_a: 'A模式分块', allow_a: '允许A模式', require_guidance: '需引导', free_practice: '自由练习'
   }
   return map[mode] || mode
 }

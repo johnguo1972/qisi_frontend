@@ -311,13 +311,15 @@ function confirmDelete(m: MissionExtended) {
   background: #fff;
   border-radius: 12rpx;
   box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.05);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* 表头 */
 .table-header {
   display: flex;
   align-items: center;
+  min-width: 1180px;
   padding: 16rpx 20rpx;
   background: #f5f7fa;
   border-bottom: 1rpx solid #eee;
@@ -328,11 +330,13 @@ function confirmDelete(m: MissionExtended) {
 
 /* 表格内容 */
 .table-body {
+  min-width: 1180px;
   max-height: 70vh;
 }
 .table-row {
   display: flex;
   align-items: center;
+  min-width: 1180px;
   padding: 16rpx 20rpx;
   border-bottom: 1rpx solid #f0f0f0;
   font-size: 24rpx;
@@ -346,16 +350,16 @@ function confirmDelete(m: MissionExtended) {
 }
 
 /* 列宽 */
-.col { padding: 0 8rpx; }
-.col-name { flex: 2; color: #333; font-weight: 500; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.col { flex: 0 0 auto; box-sizing: border-box; padding: 0 8rpx; }
+.col-name { flex: 1 1 260px; min-width: 260px; color: #333; font-weight: 500; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-name:hover { color: #409eff; }
-.col-class { flex: 1; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.col-questions { width: 80rpx; text-align: center; color: #666; }
-.col-levels { width: 80rpx; text-align: center; color: #666; }
-.col-start { width: 140rpx; text-align: center; color: #666; font-size: 22rpx; }
-.col-end { width: 140rpx; text-align: center; color: #666; font-size: 22rpx; }
-.col-status { width: 100rpx; text-align: center; }
-.col-actions { width: 120rpx; display: flex; gap: 8rpx; justify-content: center; }
+.col-class { flex: 1 1 180px; min-width: 180px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-questions { flex-basis: 90px; width: 90px; text-align: center; color: #666; }
+.col-levels { flex-basis: 90px; width: 90px; text-align: center; color: #666; }
+.col-start { flex-basis: 150px; width: 150px; text-align: center; color: #666; font-size: 22rpx; }
+.col-end { flex-basis: 150px; width: 150px; text-align: center; color: #666; font-size: 22rpx; }
+.col-status { flex-basis: 110px; width: 110px; text-align: center; }
+.col-actions { flex: 0 0 150px; width: 150px; min-width: 150px; display: flex; gap: 8rpx; justify-content: center; white-space: nowrap; }
 
 /* 状态标签 */
 .status-badge {
@@ -374,6 +378,7 @@ function confirmDelete(m: MissionExtended) {
 .action-btn {
   font-size: 22rpx;
   padding: 4rpx 8rpx;
+  white-space: nowrap;
   border-radius: 4rpx;
   cursor: pointer;
   transition: background 0.15s;
@@ -399,6 +404,5 @@ function confirmDelete(m: MissionExtended) {
   .filter-bar { flex-direction: column; align-items: stretch; }
   .filter-actions { margin-left: 0; }
   .table-header, .table-row { font-size: 20rpx; }
-  .col-start, .col-end { display: none; }
 }
 </style>

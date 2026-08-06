@@ -262,7 +262,7 @@
             </scroll-view>
             <!-- 分页 -->
             <view class="pagination">
-              <text class="page-info">第 {{ currentPage }}/{{ totalPages }} 页，共 {{ filteredQuestions.length }} 题</text>
+              <text class="page-total">共 {{ totalCount }} 题</text>
               <view class="page-controls">
                 <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
                 <select v-model.number="currentPage" class="page-picker" @change="selectPage">
@@ -270,11 +270,12 @@
                 </select>
                 <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
                 <text class="page-size-label">每页</text>
-                <select v-model.number="pageSize" class="page-size-picker" @change="changePageSize">
+                <select v-model.number="pageSize" class="page-size-select" @change="changePageSize">
                   <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }} 条</option>
                 </select>
                 <input v-model.number="jumpPage" class="jump-page-input" type="number" min="1" :max="totalPages" placeholder="页码" @confirm="goToPage" />
                 <button size="mini" @click="goToPage">跳转</button>
+                <text class="page-info">{{ currentPage }}/{{ totalPages }}页</text>
               </view>
             </view>
           </view>
@@ -599,6 +600,7 @@ const filterErrorMax = ref<number | null>(null)
 // === Step 2: 题目列表 ===
 const allQuestions = ref<any[]>([])
 const filteredQuestions = ref<any[]>([])
+const totalCount = ref(0)
 const loading = ref(false)
 const currentPage = ref(1)
 const pageSize = ref(10)
@@ -673,11 +675,10 @@ const isAllSelected = computed(() => {
 })
 
 // 分页
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredQuestions.value.length / pageSize.value)))
+const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / pageSize.value)))
 const pageNumbers = computed(() => Array.from({ length: totalPages.value }, (_, index) => index + 1))
 const paginatedQuestions = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return filteredQuestions.value.slice(start, start + pageSize.value)
+  return filteredQuestions.value
 })
 
 // 已选题目统计
@@ -817,15 +818,26 @@ function onSubjectChange(e: any) {
 async function loadQuestions() {
   loading.value = true
   try {
-    const first: any = await questionApi.list({ page: 1, page_size: 100, subject: selectedSubject.value })
-    const firstItems = first.data?.items || []
-    const total = Number(first.data?.total || firstItems.length)
-    const pages = Math.ceil(total / 100)
-    const rest = pages > 1
-      ? await Promise.all(Array.from({ length: pages - 1 }, (_, index) => questionApi.list({ page: index + 2, page_size: 100, subject: selectedSubject.value })))
-      : []
-    allQuestions.value = firstItems.concat(rest.flatMap((res: any) => res.data?.items || []))
-    applyFilters()
+    const params: any = {
+      page: currentPage.value,
+      page_size: pageSize.value,
+      subject: selectedSubject.value,
+    }
+    if (filterKpIds.value.length) params.knowledge_point_id = filterKpIds.value.join(',')
+    if (filterDifficulty.value.length) params.difficulty = filterDifficulty.value.join(',')
+    if (selectedStages.value.length) params.stages = selectedStages.value.join(',')
+    if (searchQuery.value.trim()) params.question_no = searchQuery.value.trim()
+
+    const res: any = await questionApi.list(params)
+    const data = res.data || {}
+    const items = data.items || []
+    filteredQuestions.value = items
+    totalCount.value = Number(data.total || items.length)
+
+    const loaded = new Map(allQuestions.value.map(q => [String(q.id), q]))
+    items.forEach((q: any) => loaded.set(String(q.id), q))
+    allQuestions.value = Array.from(loaded.values())
+    jumpPage.value = currentPage.value
   } catch (e) {
     console.error('加载题目失败:', e)
   } finally {
@@ -833,70 +845,17 @@ async function loadQuestions() {
   }
 }
 
-// 筛选应用
 function applyFilters() {
-  let list = [...allQuestions.value]
-
-  // 知识点筛选 (or关系：题目包含任一选中的知识点即可)
-  if (filterKpIds.value.length > 0) {
-    list = list.filter(q => {
-      const qKpIds = extractQuestionKnowledgePointIds(q)
-
-      return filterKpIds.value.some(id => qKpIds.includes(String(id)))
-    })
-  }
-
-  // 难度筛选：difficulty 是 Decimal（如 1.00, 3.00），需要转成整数比较
-  if (filterDifficulty.value.length > 0) {
-    list = list.filter(q => {
-      const diff = q.difficulty != null ? Math.round(Number(q.difficulty)) : 0
-      return filterDifficulty.value.includes(diff)
-    })
-  }
-
-  // 年级学期筛选
-  if (selectedStages.value.length > 0) {
-    list = list.filter(q => {
-      const qStage = [q.stage, q.grade, q.grade_name, q.semester, q.term, q.subject].filter(Boolean).join(' ')
-      return selectedStages.value.some(s => qStage.includes(s))
-    })
-  }
-
-  // 知识点数筛选
-  if (filterKpCountMin.value != null) list = list.filter(q => (q.knowledge_points_count || 0) >= filterKpCountMin.value!)
-  if (filterKpCountMax.value != null) list = list.filter(q => (q.knowledge_points_count || 0) <= filterKpCountMax.value!)
-
-  // 做题人数筛选
-  if (filterAttemptMin.value != null) list = list.filter(q => (q.attempt_count || 0) >= filterAttemptMin.value!)
-  if (filterAttemptMax.value != null) list = list.filter(q => (q.attempt_count || 0) <= filterAttemptMax.value!)
-
-  // 错误率筛选
-  list = list.filter(q => {
-    const rate = q.attempt_count > 0 ? (q.wrong_count || 0) / q.attempt_count * 100 : 0
-    if (filterErrorMin.value != null && rate < filterErrorMin.value!) return false
-    if (filterErrorMax.value != null && rate > filterErrorMax.value!) return false
-    return true
-  })
-
-  // 题号搜索
-  if (searchQuery.value.trim()) {
-    const q = searchQuery.value.trim().toLowerCase()
-    list = list.filter(item => {
-      const no = item.question_no || item.system_id || ''
-      return no.toLowerCase().includes(q)
-    })
-  }
-
-  filteredQuestions.value = list
   currentPage.value = 1
   jumpPage.value = 1
+  loadQuestions()
 }
 
-function prevPage() { if (currentPage.value > 1) { currentPage.value--; jumpPage.value = currentPage.value } }
-function nextPage() { if (currentPage.value < totalPages.value) { currentPage.value++; jumpPage.value = currentPage.value } }
-function selectPage() { currentPage.value = Math.max(1, Math.min(totalPages.value, Number(currentPage.value) || 1)); jumpPage.value = currentPage.value }
-function changePageSize() { currentPage.value = 1; jumpPage.value = 1 }
-function goToPage() { const target = Math.max(1, Math.min(totalPages.value, Number(jumpPage.value) || 1)); currentPage.value = target; jumpPage.value = target }
+function prevPage() { if (currentPage.value > 1) { currentPage.value--; loadQuestions() } }
+function nextPage() { if (currentPage.value < totalPages.value) { currentPage.value++; loadQuestions() } }
+function selectPage() { currentPage.value = Math.max(1, Math.min(totalPages.value, Number(currentPage.value) || 1)); loadQuestions() }
+function changePageSize() { currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
+function goToPage() { const target = Math.max(1, Math.min(totalPages.value, Number(jumpPage.value) || 1)); currentPage.value = target; jumpPage.value = target; loadQuestions() }
 function pageOptionLabel(page: number) { return page === currentPage.value ? `${page} / ${totalPages.value} 页` : `第 ${page} 页` }
 
 function resetFilters() {
@@ -1521,7 +1480,8 @@ input, .form-textarea {
 .step2-container {
   display: flex;
   gap: 20rpx;
-  min-height: 70vh;
+  height: calc(100vh - 120rpx);
+  min-height: 0;
 }
 
 /* 知识树 */
@@ -1580,7 +1540,9 @@ input, .form-textarea {
   border-radius: 12rpx;
   padding: 24rpx;
   box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.05);
-  min-height: 75vh;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 /* 筛选区 */
@@ -1863,7 +1825,7 @@ input, .form-textarea {
 }
 
 /* 题目表格 */
-.question-table { flex: 1; display: flex; flex-direction: column; }
+.question-table { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .table-header {
   display: flex;
   align-items: center;
@@ -1873,9 +1835,13 @@ input, .form-textarea {
   font-size: 22rpx;
   font-weight: bold;
   color: #666;
+  flex-shrink: 0;
 }
 .table-body {
   flex: 1;
+  min-height: 0;
+  height: 0;
+  overflow-y: auto;
 }
 .table-row {
   display: flex;
@@ -1883,29 +1849,30 @@ input, .form-textarea {
   padding: 12rpx 8rpx;
   border-bottom: 1rpx solid #f0f0f0;
   font-size: 22rpx;
+  min-height: 68rpx;
 }
 .table-row:hover { background: #f9f9f9; }
 .table-row.row-selected { background: #e8f5e9; }
-.col { padding: 0 6rpx; }
-.col-check { width: 40rpx; text-align: center; cursor: pointer; font-size: 24rpx; }
-.col-no { width: 40rpx; text-align: center; color: #999; font-size: 22rpx; }
-.col-stem { flex: 2; color: #333; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col { padding: 0 8rpx; box-sizing: border-box; flex-shrink: 0; }
+.col-check { width: 52rpx; text-align: center; cursor: pointer; font-size: 24rpx; }
+.col-no { width: 72rpx; text-align: center; color: #999; font-size: 22rpx; }
+.col-stem { flex: 1 1 auto; min-width: 0; color: #333; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-stem:hover { color: #409eff; }
-.col-diff { width: 90rpx; text-align: center; }
+.col-diff { width: 124rpx; text-align: center; }
 .diff-1 { color: #4caf50; }
 .diff-2 { color: #8bc34a; }
 .diff-3 { color: #ff9800; }
 .diff-4 { color: #f44336; }
 .diff-5 { color: #9c27b0; }
 .diff-score { font-size: 18rpx; color: #999; margin-left: 4rpx; }
-.col-kp { width: 50rpx; text-align: center; color: #666; font-size: 22rpx; }
-.col-attempts { width: 60rpx; text-align: center; color: #666; font-size: 22rpx; }
-.col-errors { width: 60rpx; text-align: center; color: #666; font-size: 22rpx; }
-.col-error-rate { width: 70rpx; text-align: center; font-weight: bold; font-size: 22rpx; }
+.col-kp { width: 92rpx; text-align: center; color: #666; font-size: 22rpx; }
+.col-attempts { width: 104rpx; text-align: center; color: #666; font-size: 22rpx; }
+.col-errors { width: 104rpx; text-align: center; color: #666; font-size: 22rpx; }
+.col-error-rate { width: 116rpx; text-align: center; font-weight: bold; font-size: 22rpx; }
 .error-rate-high { color: #f44336; }
 .error-rate-mid { color: #ff9800; }
 .error-rate-low { color: #4caf50; }
-.col-actions { width: 110rpx; display: flex; gap: 6rpx; justify-content: center; }
+.col-actions { width: 150rpx; display: flex; gap: 8rpx; justify-content: center; }
 .action-link { color: #409eff; cursor: pointer; font-size: 22rpx; padding: 4rpx 6rpx; border-radius: 4rpx; }
 .action-link:hover { background: #ecf5ff; }
 .action-add { color: #4caf50; }
@@ -1916,27 +1883,40 @@ input, .form-textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16rpx 0;
-  margin-top: 8rpx;
+  gap: 20rpx;
+  padding: 18rpx 0;
+  margin-top: 12rpx;
   border-top: 1rpx solid #eee;
 }
-.page-info { font-size: 22rpx; color: #666; }
-.page-controls { display: flex; gap: 8rpx; align-items: center; }
+.page-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-left: auto;
+}
 .page-controls button {
-  padding: 8rpx 16rpx;
+  min-width: 76rpx;
+  height: 48rpx;
+  padding: 0 14rpx;
   font-size: 22rpx;
   background: #fff;
-  border: 1rpx solid #ddd;
-  border-radius: 4rpx;
-  height: auto;
-  line-height: normal;
+  border: 1rpx solid #dcdfe6;
+  border-radius: 6rpx;
+  line-height: 46rpx;
 }
 .page-controls button:disabled { opacity: 0.5; }
-.page-size-label { font-size: 22rpx; color: #666; }
-.page-picker, .page-size-picker, .jump-page-input { height: 48rpx; box-sizing: border-box; border: 1rpx solid #dcdfe6; border-radius: 6rpx; background: #fff; color: #303133; font-size: 22rpx; }
-.page-picker { width: 132rpx; padding: 0 8rpx; }
-.page-size-picker { width: 104rpx; padding: 0 8rpx; }
-.jump-page-input { width: 76rpx; padding: 0 8rpx; }
+.page-info, .page-total, .page-size-label { font-size: 22rpx; color: #606266; white-space: nowrap; }
+.page-picker, .page-size-select, .jump-page-input { height: 48rpx; box-sizing: border-box; border: 1rpx solid #dcdfe6; border-radius: 6rpx; background: #fff; color: #303133; font-size: 22rpx; }
+.page-picker { width: 190rpx; padding: 0 10rpx; }
+.page-size-select { width: 124rpx; padding: 0 10rpx; }
+.jump-page-input { width: 88rpx; padding: 0 10rpx; line-height: 46rpx; text-align: center; margin: 0; }
+
+@media screen and (max-width: 900px) {
+  .pagination { align-items: flex-start; flex-direction: column; }
+  .page-controls { width: 100%; justify-content: flex-start; margin-left: 0; }
+}
 
 .table-loading, .table-empty {
   text-align: center;

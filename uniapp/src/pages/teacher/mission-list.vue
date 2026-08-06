@@ -40,7 +40,10 @@ const missions = ref<Mission[]>([])
 const loading = ref(false)
 const classId = ref<string | undefined>()
 
-onLoad((options: any) => { classId.value = options?.classId || undefined })
+onLoad((options: any) => {
+  const queryClassId = String(options?.classId || '').trim()
+  classId.value = queryClassId || undefined
+})
 
 onMounted(() => {
   loadMissions()

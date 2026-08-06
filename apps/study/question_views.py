@@ -23,6 +23,7 @@ def question_list(request):
     review_status = request.GET.get('review_status')
     paper_id = request.GET.get('paper_id')
     knowledge_point_id = request.GET.get('knowledge_point_id', '')
+    stages = request.GET.get('stages', '')
 
     qs = ExamQuestion.objects.select_related('paper').all()
 
@@ -31,9 +32,13 @@ def question_list(request):
     if subject:
         qs = qs.filter(subject=subject)
     if difficulty:
+        diff_values = [value.strip() for value in difficulty.split(',') if value.strip()]
         try:
-            diff_val = float(difficulty)
-            qs = qs.filter(difficulty=diff_val)
+            diff_values = [float(value) for value in diff_values]
+            if len(diff_values) == 1:
+                qs = qs.filter(difficulty=diff_values[0])
+            elif diff_values:
+                qs = qs.filter(difficulty__in=diff_values)
         except (ValueError, TypeError):
             pass
     if question_type:
@@ -60,25 +65,41 @@ def question_list(request):
     if knowledge:
         qs = qs.filter(ai_knowledge_enrichment__contains=[{'code': knowledge}])
 
+    if stages:
+        stage_query = Q()
+        for value in stages.split(','):
+            # The teacher page displays a combined grade/term label while
+            # imported papers store grade/stage separately.
+            for part in value.strip().split():
+                if part:
+                    stage_query |= Q(paper__grade__icontains=part) | Q(paper__stage__icontains=part)
+        if stage_query:
+            qs = qs.filter(stage_query)
+
     # Filter by the manually associated knowledge point first.  The older
     # AI-enrichment fallback is retained for questions that only have AI data.
     if knowledge_point_id:
-        if knowledge_point_id == '-1':
+        kp_values = [value.strip() for value in knowledge_point_id.split(',') if value.strip()]
+        if '-1' in kp_values:
             qs = qs.filter(Q(knowledge_points__isnull=True) | Q(knowledge_points=[]))
         else:
-            try:
-                kp_id = int(knowledge_point_id)
-                qs = qs.filter(
-                    Q(knowledge_points__contains=[{'id': kp_id}]) |
-                    Q(knowledge_points__contains=[{'id': str(kp_id)}]) |
-                    Q(ai_knowledge_enrichment__contains=[{'id': kp_id}])
-                )
-            except (ValueError, TypeError):
+            kp_query = Q()
+            for value in kp_values:
                 try:
-                    kp = KnowledgePoint.objects.get(pk=knowledge_point_id)
-                    qs = qs.filter(knowledge_points__contains=[{'module': kp.module}])
-                except (KnowledgePoint.DoesNotExist, ValueError, TypeError):
-                    pass
+                    kp_id = int(value)
+                    kp_query |= (
+                        Q(knowledge_points__contains=[{'id': kp_id}]) |
+                        Q(knowledge_points__contains=[{'id': str(kp_id)}]) |
+                        Q(ai_knowledge_enrichment__contains=[{'id': kp_id}])
+                    )
+                except (ValueError, TypeError):
+                    try:
+                        kp = KnowledgePoint.objects.get(pk=value)
+                        kp_query |= Q(knowledge_points__contains=[{'module': kp.module}])
+                    except (KnowledgePoint.DoesNotExist, ValueError, TypeError):
+                        continue
+            if kp_query:
+                qs = qs.filter(kp_query)
 
     page = int(request.GET.get('page', 1))
     page_size = int(request.GET.get('page_size', 20))

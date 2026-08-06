@@ -317,18 +317,30 @@ input:focus {
 }
 .code-row {
   display: flex;
+  align-items: center;
   gap: 12rpx;
 }
 .code-row input {
   flex: 1;
+  min-width: 0;
+  margin: 0;
 }
 .code-btn {
+  flex: 0 0 112px;
+  height: 56px;
+  margin: 0;
   white-space: nowrap;
-  padding: 0 20rpx;
+  padding: 0;
   font-size: 22rpx;
+  line-height: 1;
   background: #409eff;
   color: #fff;
   border-radius: 8rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  box-sizing: border-box;
 }
 .code-btn[disabled] {
   background: #ccc;
