@@ -83,7 +83,8 @@ def student_home(request):
     ).select_related('mission', 'mission__class_obj')
 
     class_id = request.query_params.get('class_id')
-    if class_id:
+    # 前端“全部班级”使用 0 作为占位值，将其视为不筛选班级；真实班级 ID 仍必须是 UUID。
+    if class_id and str(class_id) != '0':
         try:
             class_uuid = uuid.UUID(str(class_id))
         except (ValueError, TypeError, AttributeError):

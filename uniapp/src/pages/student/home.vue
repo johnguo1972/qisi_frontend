@@ -84,9 +84,15 @@ const sortedMissions = computed(() => {
 // 加载任务数据
 async function loadMissions() {
   try {
+    // “全部班级”使用 0 作为前端占位值，接口只接受真实 UUID，因此不要把 0 发送到后端。
+    const params: { class_id?: string; scope: string } = {
+      scope: selectedScope.value,
+    }
+    if (selectedClassId.value) {
+      params.class_id = String(selectedClassId.value)
+    }
     const res = await studentApi.home({
-      class_id: selectedClassId.value,
-      scope: selectedScope.value
+      ...params,
     })
     missions.value = res.data?.missions || []
   } catch (e) {
