@@ -34,7 +34,7 @@
 
     <!-- Create course dialog -->
     <view v-if="showCreateDialog" class="modal-overlay" @click.self="closeCreateDialog">
-      <view class="modal">
+      <view class="modal" @click="subjectDropdownOpen = false; gradeDropdownOpen = false">
         <text class="modal-title">新建课程</text>
         <view class="form-group">
           <text class="form-label">课程名称 <text class="required">*</text></text>
@@ -48,17 +48,35 @@
         <view class="form-row">
           <view class="form-group half">
             <text class="form-label">学科 <text class="required">*</text></text>
-            <select v-model="createForm.subject" class="form-select">
-              <option value="" disabled>请选择学科</option>
-              <option v-for="s in subjectOptions" :key="s.value" :value="s.value">{{ s.label }}</option>
-            </select>
+            <view class="subject-picker-wrap">
+              <view class="form-select" @click.stop="toggleSubjectDropdown">{{ createForm.subject || '请选择学科' }}</view>
+              <view v-if="subjectDropdownOpen" class="subject-dropdown" @click.stop>
+                <view
+                  v-for="option in subjectOptions"
+                  :key="option.value"
+                  :class="['subject-option', { active: createForm.subject === option.value }]"
+                  @click="selectSubject(option.value)"
+                >
+                  {{ option.label }}
+                </view>
+              </view>
+            </view>
           </view>
           <view class="form-group half">
             <text class="form-label">年级 <text class="required">*</text></text>
-            <select v-model="createForm.grade_level" class="form-select">
-              <option value="" disabled>请选择年级</option>
-              <option v-for="g in gradeOptions" :key="g.value" :value="g.value">{{ g.label }}</option>
-            </select>
+            <view class="subject-picker-wrap">
+              <view class="form-select" @click.stop="toggleGradeDropdown">{{ createForm.grade_level || '请选择年级' }}</view>
+              <view v-if="gradeDropdownOpen" class="subject-dropdown" @click.stop>
+                <view
+                  v-for="option in gradeOptions"
+                  :key="option.value"
+                  :class="['subject-option', { active: createForm.grade_level === option.value }]"
+                  @click="selectGrade(option.value)"
+                >
+                  {{ option.label }}
+                </view>
+              </view>
+            </view>
           </view>
         </view>
         <view class="form-group">
@@ -96,7 +114,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import CourseCard from '@/components/CourseCard.vue'
 import { courseApi } from '@/api/courses'
 
@@ -161,18 +179,13 @@ function handlePractice(course: Course) {
 // ============================================================
 const showCreateDialog = ref(false)
 const creating = ref(false)
+const subjectDropdownOpen = ref(false)
+const gradeDropdownOpen = ref(false)
 const createForm = ref({ name: '', subject: '', grade_level: '', description: '' })
 
 const subjectOptions = [
   { value: '数学', label: '数学' },
-  { value: '语文', label: '语文' },
-  { value: '英语', label: '英语' },
   { value: '物理', label: '物理' },
-  { value: '化学', label: '化学' },
-  { value: '生物', label: '生物' },
-  { value: '历史', label: '历史' },
-  { value: '地理', label: '地理' },
-  { value: '政治', label: '政治' },
 ]
 
 const gradeOptions = [
@@ -190,8 +203,29 @@ const gradeOptions = [
   { value: '高三', label: '高三' },
 ]
 
+
+function toggleSubjectDropdown() {
+  subjectDropdownOpen.value = !subjectDropdownOpen.value
+}
+
+function selectSubject(value: string) {
+  createForm.value.subject = value
+  subjectDropdownOpen.value = false
+}
+
+function toggleGradeDropdown() {
+  gradeDropdownOpen.value = !gradeDropdownOpen.value
+}
+
+function selectGrade(value: string) {
+  createForm.value.grade_level = value
+  gradeDropdownOpen.value = false
+}
+
 function closeCreateDialog() {
   showCreateDialog.value = false
+  subjectDropdownOpen.value = false
+  gradeDropdownOpen.value = false
   createForm.value = { name: '', subject: '', grade_level: '', description: '' }
 }
 
@@ -281,6 +315,8 @@ onMounted(() => {
 .main {
   margin-left: 0;
   flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 48rpx;
   overflow: visible;
 }
@@ -321,6 +357,7 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 24rpx;
+  min-width: 0;
 }
 
 /* Modal overlay */
@@ -335,12 +372,22 @@ onMounted(() => {
 }
 
 .modal {
+  position: relative;
+  z-index: 1001;
+  width: 600rpx;
+  max-width: calc(100vw - 48rpx);
+  min-width: 0;
+  box-sizing: border-box;
   background: #fff;
   border-radius: 16rpx;
   padding: 40rpx;
-  width: 600rpx;
   max-height: 80vh;
-  overflow-y: auto;
+  overflow: visible;
+}
+
+.modal > * {
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .modal-title {
@@ -353,16 +400,21 @@ onMounted(() => {
 
 /* Form */
 .form-group {
+  width: 100%;
+  min-width: 0;
   margin-bottom: 20rpx;
 }
 
 .form-row {
   display: flex;
+  width: 100%;
   gap: 20rpx;
+  min-width: 0;
 }
 
 .half {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .form-label {
@@ -377,7 +429,10 @@ onMounted(() => {
 }
 
 .form-input {
+  display: block;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   height: 64rpx;
   padding: 0 20rpx;
   background: #f5f7fa;
@@ -385,6 +440,7 @@ onMounted(() => {
   font-size: 26rpx;
   color: #303133;
   border: 1rpx solid #e4e7ed;
+  box-sizing: border-box;
 }
 
 .form-input:focus {
@@ -393,7 +449,10 @@ onMounted(() => {
 }
 
 .form-textarea {
+  display: block;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   height: 120rpx;
   padding: 16rpx 20rpx;
   background: #f5f7fa;
@@ -410,13 +469,19 @@ onMounted(() => {
 }
 
 .form-select {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
+  min-width: 0;
   height: 64rpx;
   padding: 0 20rpx;
   background: #f5f7fa;
   border: 1px solid #e4e7ed;
   border-radius: 8rpx;
   font-size: 26rpx;
+  line-height: 1.2;
+  text-align: center;
   color: #303133;
   outline: none;
   box-sizing: border-box;
@@ -429,12 +494,53 @@ onMounted(() => {
 
 .form-picker {
   width: 100%;
+  min-width: 0;
+}
+
+.subject-picker-wrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  z-index: 1002;
+}
+
+.subject-dropdown {
+  position: absolute;
+  z-index: 1003;
+  top: calc(64rpx + 8rpx);
+  left: 0;
+  width: 100%;
+  max-height: 220rpx;
+  overflow-y: auto;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1rpx solid #dcdfe6;
+  border-radius: 8rpx;
+  box-shadow: 0 8rpx 24rpx rgba(0, 0, 0, 0.16);
+}
+
+.subject-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 64rpx;
+  color: #606266;
+  font-size: 26rpx;
+}
+
+.subject-option.active,
+.subject-option:active {
+  background: #ecf5ff;
+  color: #409eff;
 }
 
 .picker-value {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   height: 64rpx;
   padding: 0 20rpx;
   background: #f5f7fa;
@@ -443,6 +549,9 @@ onMounted(() => {
 }
 
 .picker-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 26rpx;
   color: #303133;
 }
@@ -452,6 +561,17 @@ onMounted(() => {
   color: #c0c4cc;
 }
 
+@media (max-width: 900px) {
+  .card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .main { padding: 24rpx; }
+  .card-grid { grid-template-columns: minmax(0, 1fr); }
+  .form-row { flex-direction: column; gap: 0; }
+  .modal { width: 100%; max-width: calc(100vw - 32rpx); padding: 28rpx; }
+}
+
 .picker-arrow {
   font-size: 16rpx;
   color: #909399;
@@ -459,6 +579,8 @@ onMounted(() => {
 
 .modal-footer {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 16rpx;
   justify-content: flex-end;
   margin-top: 32rpx;

@@ -2,7 +2,8 @@
 import os
 import uuid
 from django.conf import settings
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
+from django.utils.html import escape
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from .models import ExamPaper, ParseTask
@@ -39,6 +40,7 @@ def upload_paper(request):
         for chunk in file.chunks():
             dest.write(chunk)
 
+    authenticated_user = request.user if getattr(request.user, 'is_authenticated', False) else None
     paper = ExamPaper.objects.create(
         title=title,
         subject=subject,
@@ -49,7 +51,7 @@ def upload_paper(request):
         has_solution=has_solution,
         source_file_path=os.path.relpath(file_path, settings.MEDIA_ROOT),
         status=const.PAPER_UPLOADED,
-        uploaded_by=getattr(request, 'user', None),
+        uploaded_by=authenticated_user,
     )
 
     task = ParseTask.objects.create(
@@ -70,6 +72,10 @@ def upload_paper(request):
 def start_parse(request, paper_id):
     """Start parsing an exam paper."""
     try:
+        paper_id = uuid.UUID(str(paper_id))
+    except (ValueError, TypeError, AttributeError):
+        return JsonResponse({'error': 'Paper not found'}, status=404)
+    try:
         paper = ExamPaper.objects.get(id=paper_id, is_deleted=False)
     except ExamPaper.DoesNotExist:
         return JsonResponse({'error': 'Paper not found'}, status=404)
@@ -81,7 +87,43 @@ def start_parse(request, paper_id):
     )
 
     # Dispatch Celery task
-    parse_paper_task.delay(paper.id)
+    result = parse_paper_task.delay(paper.id)
+    task.celery_task_id = str(result.id)
+    task.save(update_fields=['celery_task_id'])
+
+    return JsonResponse({
+        'paper_id': str(paper.id),
+        'task_id': str(task.id),
+        'status': task.status,
+    }, status=200)
+
+
+def paper_list_page(request):
+    """Legacy HTMX-compatible paper list page kept alongside the SPA."""
+    papers = ExamPaper.objects.filter(is_deleted=False).order_by('-created_at')
+    rows = ''.join(
+        f'<li><a href="/papers/{paper.id}/">{escape(paper.title)}</a></li>'
+        for paper in papers
+    )
+    return HttpResponse(
+        '<!doctype html><html><head><title>启思AI</title></head>'
+        '<body><main><h1>启思AI</h1><ul>'
+        f'{rows}'
+        '</ul></main></body></html>'
+    )
+
+
+def paper_detail_page(request, paper_id):
+    """Legacy paper detail page used by existing HTMX smoke tests."""
+    try:
+        paper = ExamPaper.objects.get(id=paper_id, is_deleted=False)
+    except ExamPaper.DoesNotExist:
+        return HttpResponse('试卷不存在', status=404)
+    return HttpResponse(
+        '<!doctype html><html><head><title>启思AI</title></head><body>'
+        f'<main><h1>启思AI</h1><h2>{escape(paper.title)}</h2>'
+        f'<p>学科：{escape(paper.subject or "")}</p></main></body></html>'
+    )
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes

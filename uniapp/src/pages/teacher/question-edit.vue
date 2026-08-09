@@ -10,6 +10,7 @@
           <button size="mini" @click="handleBack">返回</button>
           <button size="mini" type="primary" :loading="saving" @click="handleSave">保存</button>
           <button size="mini" type="success" @click="handleConfirm">确认题目</button>
+          <button size="mini" @click="handleAiProcess">AI处理</button>
         </view>
       </view>
 
@@ -18,9 +19,9 @@
           <view class="section-card">
             <view class="section-heading"><text class="section-title">题目编辑</text><text class="section-hint">左侧编辑，右侧为最终题目效果预览</text></view>
             <view class="meta-grid">
-              <view class="field"><text class="field-label">题型</text><select v-model="form.question_type" class="control"><option value="single_choice">单选题</option><option value="multiple_choice">多选题</option><option value="fill_blank">填空题</option><option value="short_answer">简答题</option><option value="solution">解答题</option></select></view>
+              <view class="field"><text class="field-label">题型</text><picker mode="selector" :range="questionTypeRange" :value="questionTypeIndex" @change="onQuestionTypeChange"><view class="control picker-control">{{ questionTypeLabel }}</view></picker></view>
               <view class="field"><text class="field-label">题号</text><input v-model="form.question_no" class="control" /></view>
-              <view class="field"><text class="field-label">难度</text><select v-model.number="form.difficulty" class="control"><option v-for="level in 5" :key="level" :value="level">L{{ level }}</option></select></view>
+              <view class="field"><text class="field-label">难度</text><picker mode="selector" :range="difficultyRange" :value="difficultyIndex" @change="onDifficultyChange"><view class="control picker-control">L{{ form.difficulty }}</view></picker></view>
             </view>
 
             <view class="content-field stem-field"><text class="field-label">题干 <text class="question-uuid">UUID：{{ question.id }}</text></text><textarea v-model="form.stem" class="editor-textarea" rows="6" @input="scheduleRender" /></view>
@@ -113,6 +114,12 @@
       </view>
     </view>
     <view v-else-if="loading" class="state">加载中...</view><view v-else class="state">题目不存在</view>
+    <QuestionAIControls
+      :visible="showAiControls"
+      :question-id="selectedAiQuestionId"
+      @close="closeAiControls"
+      @completed="handleAiCompleted"
+    />
   </view>
 </template>
 
@@ -124,6 +131,7 @@ import { knowledgeApi } from '@/api/knowledge'
 import { renderWithKatex } from '@/utils/katex-renderer'
 import { getMediaUrl } from '@/utils/media-url'
 import { chooseImage } from '@/utils/image-upload'
+import QuestionAIControls from '@/components/QuestionAIControls.vue'
 
 type ImageItem = { id: string | number; file_path: string; description?: string; display_width?: number; can_restore_original?: boolean }
 type KpLeaf = { id: string | number; name: string }
@@ -133,8 +141,19 @@ type KpGrade = { id: string; name: string; semesters: KpSemester[] }
 
 const IMAGE_DEFAULT_WIDTH = 420
 const QUESTION_TYPE_LABELS: Record<string, string> = { single_choice: '单选题', multiple_choice: '多选题', fill_blank: '填空题', short_answer: '简答题', solution: '解答题', essay: '论述题', true_false: '判断题', computation: '计算题', proof: '证明题', experiment: '实验题' }
+const QUESTION_TYPE_OPTIONS = [
+  { value: 'single_choice', label: '单选题' },
+  { value: 'multiple_choice', label: '多选题' },
+  { value: 'fill_blank', label: '填空题' },
+  { value: 'short_answer', label: '简答题' },
+  { value: 'solution', label: '解答题' },
+]
+const questionTypeRange = QUESTION_TYPE_OPTIONS.map((item) => item.label)
+const difficultyRange = ['L1', 'L2', 'L3', 'L4', 'L5']
 const question = ref<any>(null)
 const questionId = ref('')
+const selectedAiQuestionId = ref<string | number | null>(null)
+const showAiControls = ref(false)
 const loading = ref(true)
 const saving = ref(false)
 const form = ref({ stem: '', answer: '', analysis: '', solution: '', difficulty: 1, question_type: 'short_answer', question_no: '', page_start: 1, page_end: 1, options: [{ label: 'A', content: '' }, { label: 'B', content: '' }, { label: 'C', content: '' }, { label: 'D', content: '' }] })
@@ -148,8 +167,37 @@ let renderTimer: ReturnType<typeof setTimeout> | null = null
 let lastWheelAt = 0
 
 const questionTypeLabel = computed(() => QUESTION_TYPE_LABELS[form.value.question_type] || form.value.question_type || '未知题型')
+const questionTypeIndex = computed(() => Math.max(0, QUESTION_TYPE_OPTIONS.findIndex((item) => item.value === form.value.question_type)))
+const difficultyIndex = computed(() => Math.max(0, Math.min(4, Number(form.value.difficulty || 1) - 1)))
 const isChoice = computed(() => ['single_choice', 'multiple_choice'].includes(form.value.question_type))
 const subjectLabel = computed(() => ({ physics: '物理', math: '数学', chemistry: '化学' } as Record<string, string>)[String(question.value?.subject || '')] || '当前科目')
+
+function onQuestionTypeChange(event: any) {
+  const index = Number(event?.detail?.value ?? 0)
+  form.value.question_type = QUESTION_TYPE_OPTIONS[index]?.value || QUESTION_TYPE_OPTIONS[0].value
+  scheduleRender()
+}
+
+function onDifficultyChange(event: any) {
+  form.value.difficulty = Math.max(1, Math.min(5, Number(event?.detail?.value ?? 0) + 1))
+}
+
+function handleAiProcess() {
+  selectedAiQuestionId.value = question.value.id
+  showAiControls.value = true
+}
+
+function closeAiControls() {
+  showAiControls.value = false
+  selectedAiQuestionId.value = null
+}
+
+async function handleAiCompleted({ action }: { action: string }) {
+  const questionId = String(selectedAiQuestionId.value || '')
+  closeAiControls()
+  if (questionId) await loadQuestion(questionId)
+  void action
+}
 
 const knowledgeSearch = ref('')
 const kpDropdownOpen = ref(false)
@@ -247,6 +295,9 @@ async function removeTag(tagId: string | number) { try { await removeQuestionTag
 async function handleSave() { if (saving.value || !question.value) return; saving.value = true; try { await updateQuestion(question.value.id, { ...form.value, knowledge_points: selectedKps.value.map((kp) => ({ id: kp.id, module: kp.module })), tags: questionTags.value.map((tag) => tag.name) }); uni.showToast({ title: '保存成功', icon: 'success' }) } catch (error: any) { uni.showToast({ title: error?.message || '保存失败', icon: 'none' }) } finally { saving.value = false } }
 async function handleConfirm() { await handleSave(); if (!question.value) return; try { await confirmQuestion(question.value.id); uni.showToast({ title: '已确认题目', icon: 'success' }) } catch { uni.showToast({ title: '确认失败', icon: 'none' }) } }
 function handleBack() { uni.navigateBack({ delta: 1 }) }
+function handleBackToList() { handleBack() }
+function handlePrevQuestion() { uni.showToast({ title: '已是当前题目', icon: 'none' }) }
+function handleNextQuestion() { uni.showToast({ title: '已是当前题目', icon: 'none' }) }
 
 async function reloadImages() { const previousId = selectedImage.value?.id; const response: any = await getQuestionAssets(questionId.value); images.value = (response.data?.images || []).map(normalizeImage); const next = images.value.find((image) => String(image.id) === String(previousId)) || images.value[0]; if (next) selectImage(next); else clearImageEditor() }
 async function importImage() { try { const selected = await chooseImage({ count: 1, sourceType: 'album' }); const item = selected[0]; if (!item) return; uni.showLoading({ title: '正在上传图片' }); const response: any = await uploadQuestionImage(questionId.value, item.file || item.path, 'question-image.png'); if (response.code !== 0) throw new Error(response.message || '图片上传失败'); await reloadImages(); const image = images.value.find((item) => String(item.id) === String(response.data?.image?.id)) || images.value.at(-1); if (image) selectImage(image); uni.showToast({ title: '图片已导入', icon: 'success' }) } catch (error: any) { if (error?.message) uni.showToast({ title: error.message, icon: 'none' }) } finally { uni.hideLoading() } }
@@ -325,7 +376,7 @@ onUnmounted(() => { if (typeof window !== 'undefined') window.removeEventListene
 .workspace { display: flex; flex: 1; min-height: 0; gap: 12px; padding: 12px; }.editor-pane { width: 52%; min-width: 0; padding-bottom: 56px; box-sizing: border-box; }.render-pane { width: 48%; min-width: 0; padding: 0 4px 48px; box-sizing: border-box; }
 .section-card, .render-card { margin-bottom: 12px; padding: 18px; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.04); }.section-heading, .render-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }.section-title { font-size: 15px; font-weight: 600; }.section-hint, .render-hint { color: #909399; font-size: 12px; }
 .meta-grid { display: grid; grid-template-columns: 1.3fr 1fr .7fr; gap: 10px; margin-bottom: 14px; }.field, .content-field { margin-bottom: 14px; }.field-label { display: block; margin-bottom: 6px; color: #606266; font-size: 13px; font-weight: 600; }
-.control, .editor-textarea, .image-name { box-sizing: border-box; width: 100%; border: 1px solid #dcdfe6; border-radius: 5px; background: #fff; color: #303133; font-size: 13px; }.control { height: 34px; padding: 0 9px; }.editor-textarea { display: block; min-height: 108px; padding: 10px; line-height: 1.7; resize: vertical; }.stem-field .editor-textarea { min-height: 132px; }.question-uuid { margin-left: 8px; color: #909399; font-size: 11px; font-weight: 400; user-select: all; }.option-editor { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }.option-label { min-width: 16px; padding-top: 10px; color: #409eff; font-weight: 600; }.option-textarea { min-height: 58px; height: 68px; max-height: 130px; }.answer-textarea { min-height: 46px; height: 52px; }.analysis-textarea { min-height: 150px; }
+.control, .editor-textarea, .image-name { box-sizing: border-box; width: 100%; border: 1px solid #dcdfe6; border-radius: 5px; background: #fff; color: #303133; font-size: 13px; }.control { height: 34px; padding: 0 9px; }.picker-control { display: flex; align-items: center; justify-content: center; min-width: 0; line-height: 1.2; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.editor-textarea { display: block; min-height: 108px; padding: 10px; line-height: 1.7; resize: vertical; }.stem-field .editor-textarea { min-height: 132px; }.question-uuid { margin-left: 8px; color: #909399; font-size: 11px; font-weight: 400; user-select: all; }.option-editor { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }.option-label { min-width: 16px; padding-top: 10px; color: #409eff; font-weight: 600; }.option-textarea { min-height: 58px; height: 68px; max-height: 130px; }.answer-textarea { min-height: 46px; height: 52px; }.analysis-textarea { min-height: 150px; }
 .kp-picker { position: relative; }.kp-dropdown-panel { position: relative; z-index: 3; margin-top: 6px; overflow: hidden; border: 1px solid #dcdfe6; border-radius: 6px; background: #fff; box-shadow: 0 3px 12px rgba(0,0,0,.1); }.knowledge-tree-scroll { height: 420px; padding: 6px 0; box-sizing: border-box; }.tree-row { display: flex; align-items: center; min-height: 30px; gap: 6px; padding-right: 8px; color: #303133; font-size: 12px; cursor: pointer; }.tree-row:hover { background: #f5f7fa; }.tree-arrow { width: 14px; text-align: center; color: #909399; }.tree-grade { padding-left: 8px; font-weight: 600; }.tree-semester { padding-left: 26px; }.tree-chapter { padding-left: 44px; }.tree-leaf { min-height: 32px; padding-left: 60px; cursor: pointer; }.tree-checkbox { display: flex; width: 16px; height: 16px; align-items: center; justify-content: center; flex: 0 0 16px; border: 1px solid #bfc7d3; border-radius: 3px; color: #fff; background: #fff; font-size: 12px; }.tree-checkbox.checked { border-color: #409eff; background: #409eff; }.kp-dropdown-actions { padding: 8px; border-top: 1px solid #ebeef5; text-align: right; }.selected-kp-list, .tag-list { display: flex; flex-wrap: wrap; gap: 6px; min-height: 34px; margin-top: 8px; padding: 8px; border-radius: 5px; background: #fafafa; }.kp-tag { padding: 4px 8px; border-radius: 12px; color: #409eff; background: #ecf5ff; font-size: 12px; }.tag-remove { margin-left: 5px; color: #f56c6c; cursor: pointer; }.tag-add-row .control { flex: 1; }.edit-tag { padding: 4px 9px; border-radius: 12px; color: #67c23a; background: #f0f9eb; font-size: 12px; }
 .image-list { display: flex; flex-direction: column; gap: 10px; }.image-item { display: flex; gap: 10px; padding: 10px; border: 1px solid #ebeef5; border-radius: 6px; }.image-item.active { border-color: #409eff; box-shadow: 0 0 0 2px rgba(64,158,255,.12); }.image-thumb { width: 104px; height: 82px; flex: 0 0 104px; border-radius: 4px; background: #f5f7fa; cursor: pointer; }.image-settings { display: flex; flex: 1; min-width: 0; flex-direction: column; justify-content: space-between; }.image-name { height: 32px; padding: 0 8px; }.image-actions { justify-content: flex-end; margin-top: 8px; }
 .empty-hint { color: #a0a5ad; font-size: 12px; }

@@ -499,6 +499,9 @@ async function nextQuestion() {
     saveQuestionState()
     currentIndex.value++
   } else {
+    // 返回关卡页前主动通知其刷新进度，同时通知首页更新任务完成度
+    uni.$emit('student-answer-completed', { levelId: levelId.value })
+    uni.$emit('student-layout-show')
     uni.navigateBack()
   }
 }
@@ -507,8 +510,11 @@ async function nextQuestion() {
 <style scoped>
 .answer-page {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   background: #f0f2f5;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 /* ====== 左侧题目区 ====== */
@@ -516,6 +522,9 @@ async function nextQuestion() {
   flex: 1;
   padding: 30rpx 40rpx;
   overflow-y: auto;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
 }
 
 .question-header {
@@ -624,6 +633,9 @@ async function nextQuestion() {
   gap: 16rpx;
 }
 .option-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
   border: 2rpx solid #ddd;
   border-radius: 12rpx;
   padding: 20rpx;
@@ -645,13 +657,16 @@ async function nextQuestion() {
   justify-content: center;
   font-size: 22rpx;
   font-weight: bold;
-  margin-bottom: 12rpx;
+  margin-bottom: 0;
+  flex-shrink: 0;
 }
 .option-card.selected .option-label {
   background: #409eff;
   color: #fff;
 }
 .option-content {
+  flex: 1;
+  min-width: 0;
   font-size: 26rpx;
   color: #333;
   line-height: 1.5;
@@ -892,6 +907,9 @@ async function nextQuestion() {
   border-left: 1rpx solid #e8e8e8;
   display: flex;
   align-items: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  overflow-y: auto;
 }
 .feedback-card {
   padding: 30rpx;
@@ -947,9 +965,14 @@ async function nextQuestion() {
 @media (max-width: 768px) {
   .answer-page {
     flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
   .question-panel {
     padding: 20rpx;
+    overflow: visible;
+    min-height: auto;
   }
   .feedback-panel {
     width: 100%;

@@ -2,6 +2,7 @@ import uuid
 import json
 import os
 from django.conf import settings
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -16,7 +17,7 @@ from apps.common.media import media_url
 from .serializers import (
     MissionListSerializer, MissionDetailSerializer,
     CreateMissionSerializer, CreateLevelSerializer, AddQuestionsSerializer,
-    BatchCreateLevelsSerializer,
+    BatchCreateLevelsSerializer, subject_filter_values,
 )
 
 
@@ -27,11 +28,19 @@ def make_trace_id():
 def _mission_student_ids(mission):
     """Return active students assigned to the mission, honoring targeted students."""
     from apps.institutions.models import ClassStudent
+    from apps.accounts.models import UserAccount
+
+    targets = {str(student_id) for student_id in (mission.target_student_ids or [])}
+    if not mission.class_obj_id:
+        if not targets:
+            return UserAccount.objects.none().values_list('id', flat=True)
+        return UserAccount.objects.filter(
+            id__in=targets, role_type='student',
+        ).values_list('id', flat=True)
 
     students = ClassStudent.objects.filter(
         class_obj_id=mission.class_obj_id, status='active',
     ).values_list('student_id', flat=True)
-    targets = {str(student_id) for student_id in (mission.target_student_ids or [])}
     if targets:
         students = students.filter(student_id__in=targets)
     return students
@@ -219,10 +228,22 @@ def mission_list(request):
     if request.method == 'GET':
         missions = LearningMission.objects.filter(
             creator_teacher_id=user
-        ).order_by('-created_at')
+        ).select_related('course', 'class_obj').order_by('-created_at')
         class_id = request.GET.get('class_id')
         if class_id:
             missions = missions.filter(class_obj_id=class_id)
+        subject = request.GET.get('subject', '').strip()
+        if subject:
+            subject_values = subject_filter_values(subject)
+            question_ids = ExamQuestion.objects.filter(
+                subject__in=subject_values,
+            ).values_list('id', flat=True)
+            mission_ids = MissionQuestionRel.objects.filter(
+                question_id__in=question_ids,
+            ).values_list('mission_id', flat=True)
+            missions = missions.filter(
+                Q(course__subject__in=subject_values) | Q(id__in=mission_ids),
+            ).distinct()
         return Response({
             'code': 0, 'message': 'success', 'trace_id': make_trace_id(),
             'data': MissionListSerializer(missions, many=True).data,
@@ -529,24 +550,20 @@ def mission_publish(request, mission_id):
     mission.status = 'published'
     mission.save()
 
-    # If mission is tied to a class, create progress records for all students in that class
+    # Create progress records for class members or explicitly targeted students.
     created_count = 0
-    if mission.class_obj_id:
-        from apps.institutions.models import ClassStudent
-        from apps.study.models import StudentMissionProgress
-
-        student_ids = _mission_student_ids(mission)
-
-        for student_id in student_ids:
-            StudentMissionProgress.objects.get_or_create(
-                mission=mission,
-                student_user_id_id=student_id,
-                defaults={
-                    'progress_status': 'not_started',
-                    'progress_percent': 0,
-                },
-            )
-            created_count += 1
+    from apps.study.models import StudentMissionProgress
+    student_ids = _mission_student_ids(mission)
+    for student_id in student_ids:
+        _, created = StudentMissionProgress.objects.get_or_create(
+            mission=mission,
+            student_user_id_id=student_id,
+            defaults={
+                'progress_status': 'not_started',
+                'progress_percent': 0,
+            },
+        )
+        created_count += int(created)
 
     return Response({
         'code': 0, 'message': '发布成功',

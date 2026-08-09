@@ -4,10 +4,7 @@
       <!-- 左侧：知识树 -->
       <view class="left-panel">
         <view class="subject-selector">
-          <select v-model="selectedSubject" @change="onSubjectChange" class="subject-select">
-            <option value="physics">初中物理</option>
-            <option value="math">数学</option>
-          </select>
+          <picker mode="selector" :range="subjectRange" :value="subjectIndex" @change="onSubjectChange"><view class="subject-select">{{ selectedSubject === 'physics' ? '物理' : '数学' }}</view></picker>
         </view>
 
         <view class="tree-header">
@@ -75,19 +72,13 @@
             <view class="pagination-new">
               <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
               <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
-              <select v-model.number="currentPage" class="page-picker" @change="selectPage">
-                <option v-for="page in pageNumbers" :key="page" :value="page">{{ pageOptionLabel(page) }}</option>
-              </select>
-              <select v-model.number="pageSize" class="page-size-picker" @change="changePageSize">
-                <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ pageSizeOptionLabel(size) }}</option>
-              </select>
+              <picker mode="selector" :range="pageRangeLabels" :value="currentPage - 1" @change="selectPage"><view class="page-picker">{{ pageOptionLabel(currentPage) }}</view></picker>
+              <picker mode="selector" :range="pageSizeRange" :value="pageSizeOptions.indexOf(pageSize)" @change="changePageSize"><view class="page-size-picker">{{ pageSizeOptionLabel(pageSize) }}</view></picker>
             </view>
             <view class="pagination">
               <text class="page-total">共 {{ totalCount }} 题</text>
               <text class="page-size-label">每页</text>
-              <select v-model.number="pageSize" class="page-size-select" @change="changePageSize">
-                <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }}</option>
-              </select>
+              <picker mode="selector" :range="pageSizeRange" :value="pageSizeOptions.indexOf(pageSize)" @change="changePageSize"><view class="page-size-select">{{ pageSize }} </view></picker>
               <input v-model.number="jumpPage" class="jump-page-input" type="number" min="1" :max="totalPages" placeholder="页码" />
               <button size="mini" @click="goToPage">跳转</button>
               <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
@@ -102,13 +93,13 @@
         <view class="quick-filters">
           <view class="filter-group">
             <text class="filter-label">题型</text>
-            <select v-model="activeType" class="filter-select"><option value="">全部题型</option><option v-for="t in questionTypes" :key="t.value" :value="t.value">{{ t.label }}</option></select>
+            <picker mode="selector" :range="questionTypeRange" :value="questionTypeIndex" @change="onQuestionTypeChange"><view class="filter-select">{{ questionTypeLabel }}</view></picker>
             <text class="filter-label">难度</text>
-            <select v-model="activeDifficulty" class="filter-select"><option value="">全部难度</option><option v-for="d in difficultyLevels" :key="d.value" :value="d.value">{{ d.stars }}</option></select>
+            <picker mode="selector" :range="difficultyRange" :value="difficultyIndex" @change="onDifficultyChange"><view class="filter-select">{{ difficultyLabel }}</view></picker>
           </view>
           <view class="filter-group">
             <text class="filter-label">知识点</text>
-            <select v-model="activeKnowledgePoint" class="filter-select"><option value="">全部知识点</option><option v-for="kp in knowledgeOptions" :key="kp.id" :value="kp.id">{{ kp.name }}</option></select>
+            <picker mode="selector" :range="knowledgeRange" :value="knowledgeIndex" @change="onKnowledgePointChange"><view class="filter-select">{{ knowledgeLabel }}</view></picker>
             <input v-model="tagSearch" class="tag-search" placeholder="自定义标签" />
             <input v-model="uuidSearch" class="uuid-search" placeholder="按UUID模糊查询" />
             <button size="mini" type="primary" @click="applyFilters">查询</button>
@@ -218,6 +209,10 @@ const totalCount = ref(0)
 const pageSize = ref(20)
 const pageSizeOptions = [10, 20, 30, 50]
 const pageNumbers = computed(() => Array.from({ length: totalPages.value }, (_, index) => index + 1))
+const subjectRange = ['物理', '数学']
+const subjectIndex = computed(() => selectedSubject.value === 'math' ? 1 : 0)
+const pageRangeLabels = computed(() => pageNumbers.value.map(pageOptionLabel))
+const pageSizeRange = pageSizeOptions.map((size) => `${size} 个 / 页`)
 
 const activeType = ref('')
 const activeDifficulty = ref('')
@@ -253,6 +248,8 @@ const difficultyLevels = [
 difficultyLevels.forEach((item, index) => {
   item.stars = '★'.repeat(index + 1) + '☆'.repeat(4 - index)
 })
+const questionTypeRange = ['全部题型', ...questionTypes.map((item) => item.label)]
+const difficultyRange = ['全部难度', ...difficultyLevels.map((item) => item.stars)]
 
 const allAnswersShown = computed(() => {
   return questions.value.length > 0 && questions.value.every(q => showAnswerMap.value[q.id])
@@ -269,6 +266,13 @@ const knowledgeOptions = computed(() => {
   })
   return result
 })
+const knowledgeRange = computed(() => ['全部知识点', ...knowledgeOptions.value.map((item) => item.name)])
+const questionTypeIndex = computed(() => Math.max(0, questionTypes.findIndex((item) => item.value === activeType.value) + 1))
+const difficultyIndex = computed(() => Math.max(0, difficultyLevels.findIndex((item) => item.value === activeDifficulty.value) + 1))
+const knowledgeIndex = computed(() => Math.max(0, knowledgeOptions.value.findIndex((item) => String(item.id) === String(activeKnowledgePoint.value)) + 1))
+const questionTypeLabel = computed(() => activeType.value ? questionTypes.find((item) => item.value === activeType.value)?.label || '全部题型' : '全部题型')
+const difficultyLabel = computed(() => activeDifficulty.value ? difficultyLevels.find((item) => item.value === activeDifficulty.value)?.stars || '全部难度' : '全部难度')
+const knowledgeLabel = computed(() => activeKnowledgePoint.value ? knowledgeOptions.value.find((item) => String(item.id) === String(activeKnowledgePoint.value))?.name || '全部知识点' : '全部知识点')
 
 // Reload on every return from the edit page so saved changes are visible
 // without a manual refresh, while preserving the current filters and page.
@@ -304,7 +308,11 @@ function toggleNode(node: any) { node.expanded = !node.expanded }
 function selectKP(kp: any) { selectedKP.value = kp.id; currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
 function onTreeSearch() { /* 过滤树节点 */ }
 function toggleSelectMode() { selectMode.value = !selectMode.value }
-function onSubjectChange() { loadKnowledgeTree(); loadQuestions() }
+function onSubjectChange(event?: any) {
+  selectedSubject.value = Number(event?.detail?.value ?? subjectIndex.value) === 1 ? 'math' : 'physics'
+  loadKnowledgeTree()
+  loadQuestions()
+}
 
 // === 题目加载 ===
 async function loadQuestions() {
@@ -339,14 +347,36 @@ function prevPage() { if (currentPage.value > 1) { currentPage.value--; loadQues
 function nextPage() { if (currentPage.value < totalPages.value) { currentPage.value++; loadQuestions() } }
 function pageOptionLabel(page: number) { return page === currentPage.value ? `${page} / ${totalPages.value}页` : `第 ${page} 页` }
 function pageSizeOptionLabel(size: number) { return size === pageSize.value ? `${size} / ${totalCount.value}` : `${size} 个 / 页` }
-function selectPage() { loadQuestions() }
+function selectPage(event?: any) {
+  currentPage.value = Math.max(1, Math.min(totalPages.value, Number(event?.detail?.value ?? currentPage.value - 1) + 1))
+  jumpPage.value = currentPage.value
+  loadQuestions()
+}
 function goToPage() {
   const target = Math.max(1, Math.min(totalPages.value, Number(jumpPage.value) || 1))
   currentPage.value = target
   jumpPage.value = target
   loadQuestions()
 }
-function changePageSize() { currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
+function changePageSize(event?: any) {
+  const index = Number(event?.detail?.value ?? pageSizeOptions.indexOf(pageSize.value))
+  pageSize.value = pageSizeOptions[index] || pageSizeOptions[0]
+  currentPage.value = 1
+  jumpPage.value = 1
+  loadQuestions()
+}
+
+function onQuestionTypeChange(event: any) {
+  activeType.value = questionTypes[Number(event?.detail?.value ?? 0) - 1]?.value || ''
+}
+
+function onDifficultyChange(event: any) {
+  activeDifficulty.value = difficultyLevels[Number(event?.detail?.value ?? 0) - 1]?.value || ''
+}
+
+function onKnowledgePointChange(event: any) {
+  activeKnowledgePoint.value = knowledgeOptions.value[Number(event?.detail?.value ?? 0) - 1]?.id || ''
+}
 
 // === 筛选 ===
 function applyFilters() { currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
@@ -485,25 +515,25 @@ async function removeQuestionTagFromCurrent(tagId: string) {
 </script>
 
 <style scoped>
-.question-bank { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: #f0f2f5; overflow: hidden; }
+.question-bank { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; box-sizing: border-box; background: #f0f2f5; overflow: hidden; }
 
 .pagination { display: none; }
-.pagination-new { display: flex; align-items: center; gap: 8px; }
+.pagination-new { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .page-info { font-size: 13px; color: #606266; }
 .page-total, .page-size-label { font-size: 12px; color: #606266; }
-.page-size-select, .jump-page-input { height: 26px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 12px; color: #606266; background: #fff; }
+.page-size-select, .jump-page-input { height: 26px; box-sizing: border-box; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 12px; color: #606266; background: #fff; }
 .page-size-select { width: 58px; }
 .jump-page-input { width: 54px; padding: 0 6px; }
-.page-picker, .page-size-picker { height: 28px; border: 1px solid #dcdfe6; border-radius: 6px; font-size: 12px; color: #303133; background: #fff; padding: 0 8px; }
+.page-picker, .page-size-picker { display: flex; align-items: center; justify-content: center; height: 28px; box-sizing: border-box; min-width: 0; border: 1px solid #dcdfe6; border-radius: 6px; font-size: 12px; line-height: 1.2; text-align: center; color: #303133; background: #fff; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .page-picker { width: 92px; }
 .page-size-picker { width: 112px; }
 
 .main-layout { display: flex; flex: 1 1 auto; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 
-.left-panel { width: 260px; background: #fff; border-right: 1px solid #e4e7ed; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+.left-panel { width: 260px; box-sizing: border-box; background: #fff; border-right: 1px solid #e4e7ed; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
 .left-panel .tree-content { overflow-y: auto; flex: 1; }
 .subject-selector { padding: 12px; border-bottom: 1px solid #f0f0f0; }
-.subject-select { width: 100%; padding: 6px 10px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 13px; background: #ecf5ff; color: #409eff; }
+.subject-select { display: flex; align-items: center; justify-content: center; width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 10px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 13px; line-height: 1.2; text-align: center; background: #ecf5ff; color: #409eff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-header { display: flex; justify-content: space-between; align-items: center; padding: 12px; }
 .tree-title { font-size: 14px; font-weight: 600; color: #303133; }
 .tree-search { width: 120px; padding: 4px 8px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 12px; }
@@ -518,21 +548,24 @@ async function removeQuestionTagFromCurrent(tagId: string) {
 .tree-children { padding-left: 12px; }
 
 .center-panel { flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; }
-.panel-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #fff; border-bottom: 1px solid #e4e7ed; }
+.panel-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-width: 0; padding: 12px 20px; background: #fff; border-bottom: 1px solid #e4e7ed; }
 .panel-title { font-size: 16px; font-weight: 600; color: #303133; }
 .total-count { font-size: 13px; color: #909399; margin-left: 8px; }
-.header-right { display: flex; align-items: center; gap: 8px; }
+.header-right { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .btn-import { background: #fff; color: #409eff; border: 1px solid #409eff; border-radius: 4px; padding: 6px 14px; font-size: 13px; }
 .btn-add { background: #409eff; color: #fff; border: none; border-radius: 4px; padding: 6px 14px; font-size: 13px; }
 
 .quick-filters { padding: 10px 20px; background: #fff; border-bottom: 1px solid #f0f0f0; }
-.quick-filters { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; overflow: visible; }
-.filter-group { display: flex; align-items: center; gap: 8px; margin-bottom: 0; flex-shrink: 0; }
+.quick-filters { display: flex; align-items: center; gap: 8px; min-width: 0; box-sizing: border-box; flex-wrap: wrap; overflow: visible; }
+.filter-group { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 0; flex: 0 1 auto; flex-wrap: wrap; }
 .filter-label { font-size: 12px; color: #909399; }
-.filter-select, .tag-search { height: 28px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; color: #606266; font-size: 12px; }
-.tag-search { width: 130px; }
+.filter-select { display: flex; align-items: center; justify-content: center; width: 88px; min-width: 0; box-sizing: border-box; height: 28px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; color: #606266; font-size: 12px; line-height: 1.2; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-search { width: 130px; max-width: 100%; box-sizing: border-box; height: 28px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; color: #606266; font-size: 12px; }
 .uuid-search {
   width: 340px;
+  max-width: 100%;
+  min-width: 180px;
+  flex: 1 1 220px;
   height: 28px;
   box-sizing: border-box;
   padding: 0 10px;
@@ -568,4 +601,25 @@ async function removeQuestionTagFromCurrent(tagId: string) {
 .tag-editor { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .tag-chip { padding: 4px 8px; border-radius: 12px; background: #ecf5ff; color: #409eff; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+@media (max-width: 1100px) {
+  .main-layout { overflow-y: auto; }
+  .left-panel { width: 220px; }
+  .panel-header { align-items: flex-start; flex-wrap: wrap; }
+  .header-right { width: 100%; justify-content: flex-start; }
+  .quick-filters { align-items: flex-start; }
+  .quick-filters > .filter-group:last-child { flex: 1 1 100%; }
+  .uuid-search { flex: 1 1 220px; }
+}
+
+@media (max-width: 768px) {
+  .main-layout { flex-direction: column; overflow-y: auto; }
+  .left-panel { width: 100%; max-height: 280px; border-right: 0; border-bottom: 1px solid #e4e7ed; }
+  .center-panel { min-height: 520px; overflow: visible; }
+  .panel-header { padding: 10px 12px; }
+  .quick-filters { padding: 10px 12px; }
+  .filter-group { width: 100%; }
+  .filter-select { flex: 1 1 100px; }
+  .tag-search, .uuid-search { flex: 1 1 150px; }
+}
 </style>

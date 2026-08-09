@@ -1,6 +1,5 @@
 """KnowledgePoint model mapping to existing knowledge_points table."""
 from django.db import models
-import uuid_utils.compat as uuid_compat
 
 
 class KnowledgePoint(models.Model):
@@ -25,11 +24,13 @@ class KnowledgePoint(models.Model):
 
     class Meta:
         db_table = 'knowledge_points'
-        managed = True
+        # This table is provisioned and maintained outside Django migrations.
+        managed = False
         verbose_name = '知识点'
         verbose_name_plural = '知识点'
 
-    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    # The existing knowledge_points table uses a database-generated BIGINT key.
+    id = models.BigAutoField(primary_key=True)
     subject = models.CharField(max_length=50, choices=SUBJECT_CHOICES)
     stage = models.CharField(max_length=20, choices=STAGE_CHOICES)
     grade_index = models.PositiveSmallIntegerField()

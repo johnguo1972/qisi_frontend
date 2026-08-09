@@ -6,15 +6,19 @@ export interface Mission {
   mission_no: string
   mission_name: string
   goal_text?: string
+  start_at?: string
   end_at?: string
   status: string
   level_count?: number
+  class_name?: string
+  question_count?: number
+  subject?: string
   creator_teacher_id?: UUID
 }
 
 export const missionApi = {
   // GET /api/v1/missions/
-  list: (params?: { class_id?: UUID }) => get<Mission[]>('/missions/', params),
+  list: (params?: { class_id?: UUID; subject?: string }) => get<Mission[]>('/missions/', params),
 
   // POST /api/v1/missions/
   create: (data: { mission_name: string; goal_text?: string; start_at?: string; end_at?: string; class_id?: UUID | null; course_id?: UUID | null; target_student_ids?: UUID[] }) =>

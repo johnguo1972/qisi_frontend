@@ -51,10 +51,7 @@
           </view>
           <view class="form-item">
             <text class="form-label">目前年级</text>
-            <select class="form-select" v-model="form.grade_level">
-              <option value="" disabled>请选择年级</option>
-              <option v-for="(g, i) in GRADE_OPTIONS" :key="i" :value="g">{{ g }}</option>
-            </select>
+            <picker mode="selector" :range="gradeRange" :value="gradeIndex" @change="onGradeChange"><view class="form-select">{{ form.grade_level || '请选择年级' }}</view></picker>
           </view>
         </view>
         <view class="dialog-footer">
@@ -90,6 +87,7 @@ const GRADE_OPTIONS = [
   '七年级', '八年级', '九年级',
   '高一', '高二', '高三'
 ]
+const gradeRange = ['请选择年级', ...GRADE_OPTIONS]
 
 const gradeLabel = computed(() => {
   // 弹窗打开时用 form 的值，关闭后用 userInfo 的值
@@ -101,6 +99,11 @@ const gradeLabel = computed(() => {
 // 表单数据
 const form = ref({ display_name: '', grade_level: '' as string | null })
 const dialogVisible = ref(false)
+const gradeIndex = computed(() => Math.max(0, GRADE_OPTIONS.indexOf(form.value.grade_level || '') + 1))
+
+function onGradeChange(event: any) {
+  form.value.grade_level = GRADE_OPTIONS[Number(event?.detail?.value ?? 0) - 1] || ''
+}
 
 onMounted(async () => {
   try {
@@ -347,12 +350,18 @@ async function handleSave() {
   border-color: #409eff;
 }
 .form-select {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
+  min-width: 0;
   height: 72rpx;
   padding: 0 20rpx;
   border: 1rpx solid #e0e0e0;
   border-radius: 8rpx;
   font-size: 28rpx;
+  line-height: 1.2;
+  text-align: center;
   color: #333;
   background: #fff;
   box-sizing: border-box;

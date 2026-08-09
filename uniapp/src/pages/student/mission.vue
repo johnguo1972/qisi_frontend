@@ -64,8 +64,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { onLoad, onShow } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
 
 const missionId = ref<string>('')
@@ -108,9 +108,10 @@ onLoad((options: any) => {
   missionId.value = String(options?.id || '')
 })
 
-onMounted(async () => {
+async function loadMission() {
+  if (!missionId.value) return
   try {
-    const res = await studentApi.missionDetail(missionId.value)
+    const res = await studentApi.missionDetail(missionId.value, Date.now())
     missionName.value = res.data?.mission_name || ''
     goalText.value = res.data?.goal_text || ''
     className.value = res.data?.class_name || ''
@@ -119,6 +120,23 @@ onMounted(async () => {
   } catch (e) {
     uni.showToast({ title: '加载失败', icon: 'none' })
   }
+}
+
+// 从答题页返回时，重新获取关卡进度和题目状态
+onShow(() => {
+  loadMission()
+})
+
+function handleAnswerCompleted() {
+  loadMission()
+}
+
+onMounted(() => {
+  uni.$on('student-answer-completed', handleAnswerCompleted)
+})
+
+onUnmounted(() => {
+  uni.$off('student-answer-completed', handleAnswerCompleted)
 })
 
 function goLevel(id: number) {

@@ -30,7 +30,19 @@
                 @click="goDetail(item)">
             <view class="wrong-header">
               <text class="q-no">{{ item.question_no || '题目' + item.question_id }}</text>
+              <view class="question-summary">
+                <view class="question-type">{{ typeLabel(item.question_type) }}</view>
+                <view class="question-stem" v-html="renderedStem(item)"></view>
+              </view>
               <view class="status-tag" :class="item.status">{{ statusText(item.status) }}</view>
+            </view>
+            <view class="wrong-question">
+              <image
+                v-if="item.images?.length"
+                :src="item.images[0].url || item.images[0].file_path"
+                class="question-image"
+                mode="widthFix"
+              />
             </view>
             <view class="wrong-footer">
               <text class="retry-count">重做 {{ item.retry_count }} 次</text>
@@ -49,13 +61,16 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { wrongbookApi } from '@/api/student.ts'
+import { renderWithKatex } from '@/utils/katex-renderer'
 
 const items = ref<any[]>([])
+const renderedStemMap = ref<Record<string, string>>({})
 
 onMounted(async () => {
   try {
     const res = await wrongbookApi.list()
     items.value = res.data || []
+    await renderStems()
     if (items.value.length === 0) {
       console.log('错题本为空，可能原因：1) 答错的题为主观题（不会自动进错题本） 2) 答对的题不会进入错题本 3) 数据还未落库')
     }
@@ -64,6 +79,34 @@ onMounted(async () => {
     uni.showToast({ title: '加载错题本失败', icon: 'none', duration: 3000 })
   }
 })
+
+async function renderStems() {
+  const rendered: Record<string, string> = {}
+  for (const item of items.value) {
+    rendered[item.id] = await renderWithKatex(item.stem_html || item.stem || '')
+  }
+  renderedStemMap.value = rendered
+}
+
+function renderedStem(item: any): string {
+  return renderedStemMap.value[item.id] || item.stem_html || item.stem || '\u6682\u65e0\u9898\u5e72\u5185\u5bb9'
+}
+
+function typeLabel(type: string): string {
+  const labels: Record<string, string> = {
+    single_choice: '\u5355\u9009\u9898',
+    multiple_choice: '\u591a\u9009\u9898',
+    fill_blank: '\u586b\u7a7a\u9898',
+    short_answer: '\u7b80\u7b54\u9898',
+    essay: '\u8bba\u8ff0\u9898',
+    true_false: '\u5224\u65ad\u9898',
+    computation: '\u8ba1\u7b97\u9898',
+    calculation: '\u8ba1\u7b97\u9898',
+    proof: '\u8bc1\u660e\u9898',
+    unknown: '\u672a\u8bc6\u522b',
+  }
+  return labels[String(type || '').trim().toLowerCase()] || '\u672a\u8bc6\u522b'
+}
 
 function statusText(status: string): string {
   const map: Record<string, string> = {
@@ -166,13 +209,58 @@ async function goVariants(id: number) {
 }
 .wrong-header {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   margin-bottom: 12rpx;
 }
 .q-no {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding-top: 5rpx;
   font-size: 26rpx;
   font-weight: bold;
   color: #333;
+}
+.wrong-question {
+  margin: 0 0 18rpx;
+}
+.question-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 10rpx;
+  flex: 1;
+  min-width: 0;
+  margin: 0 16rpx;
+}
+.question-type {
+  flex: 0 0 auto;
+  display: inline-block;
+  margin-bottom: 0;
+  padding: 3rpx 10rpx;
+  border-radius: 4rpx;
+  color: #409eff;
+  background: #ecf5ff;
+  font-size: 20rpx;
+}
+.question-stem {
+  color: #333;
+  font-size: 25rpx;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.question-stem :deep(.katex) {
+  font-size: 1em;
+}
+.question-stem :deep(.katex-display) {
+  margin: 8rpx 0;
+  overflow-x: auto;
+}
+.question-image {
+  display: block;
+  max-width: 100%;
+  max-height: 260rpx;
+  margin-top: 12rpx;
+  border-radius: 6rpx;
 }
 .status-tag {
   font-size: 22rpx;

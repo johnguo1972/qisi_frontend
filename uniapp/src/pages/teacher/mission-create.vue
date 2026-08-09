@@ -265,14 +265,10 @@
               <text class="page-total">共 {{ totalCount }} 题</text>
               <view class="page-controls">
                 <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
-                <select v-model.number="currentPage" class="page-picker" @change="selectPage">
-                  <option v-for="page in pageNumbers" :key="page" :value="page">{{ pageOptionLabel(page) }}</option>
-                </select>
+                <picker mode="selector" :range="pageRangeLabels" :value="currentPage - 1" @change="selectPage"><view class="page-picker">{{ pageOptionLabel(currentPage) }}</view></picker>
                 <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
                 <text class="page-size-label">每页</text>
-                <select v-model.number="pageSize" class="page-size-select" @change="changePageSize">
-                  <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }} 条</option>
-                </select>
+                <picker mode="selector" :range="pageSizeRange" :value="pageSizeOptions.indexOf(pageSize)" @change="changePageSize"><view class="page-size-select">{{ pageSize }} 条</view></picker>
                 <input v-model.number="jumpPage" class="jump-page-input" type="number" min="1" :max="totalPages" placeholder="页码" @confirm="goToPage" />
                 <button size="mini" @click="goToPage">跳转</button>
                 <text class="page-info">{{ currentPage }}/{{ totalPages }}页</text>
@@ -560,8 +556,6 @@ const levels = ref([{ name: '基础练习', type: 'practice', mode: 'block_a', q
 const subjectOptions = [
   { value: 'physics', label: '物理' },
   { value: 'math', label: '数学' },
-  { value: 'chemistry', label: '化学' },
-  { value: 'biology', label: '生物' },
 ]
 const selectedSubject = ref(String(userStore.userInfo?.subject || 'physics'))
 const sortNos = ref<Record<string, number>>({})
@@ -677,6 +671,8 @@ const isAllSelected = computed(() => {
 // 分页
 const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / pageSize.value)))
 const pageNumbers = computed(() => Array.from({ length: totalPages.value }, (_, index) => index + 1))
+const pageRangeLabels = computed(() => pageNumbers.value.map(pageOptionLabel))
+const pageSizeRange = pageSizeOptions.map((size) => `${size} 条`)
 const paginatedQuestions = computed(() => {
   return filteredQuestions.value
 })
@@ -853,8 +849,8 @@ function applyFilters() {
 
 function prevPage() { if (currentPage.value > 1) { currentPage.value--; loadQuestions() } }
 function nextPage() { if (currentPage.value < totalPages.value) { currentPage.value++; loadQuestions() } }
-function selectPage() { currentPage.value = Math.max(1, Math.min(totalPages.value, Number(currentPage.value) || 1)); loadQuestions() }
-function changePageSize() { currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
+function selectPage(event?: any) { currentPage.value = Math.max(1, Math.min(totalPages.value, Number(event?.detail?.value ?? currentPage.value - 1) + 1)); jumpPage.value = currentPage.value; loadQuestions() }
+function changePageSize(event?: any) { const index = Number(event?.detail?.value ?? pageSizeOptions.indexOf(pageSize.value)); pageSize.value = pageSizeOptions[index] || pageSizeOptions[0]; currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
 function goToPage() { const target = Math.max(1, Math.min(totalPages.value, Number(jumpPage.value) || 1)); currentPage.value = target; jumpPage.value = target; loadQuestions() }
 function pageOptionLabel(page: number) { return page === currentPage.value ? `${page} / ${totalPages.value} 页` : `第 ${page} 页` }
 
@@ -1318,6 +1314,8 @@ function toggleTargetStudent(studentId: string) {
 .main {
   margin-left: 0;
   flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 30rpx 40rpx;
 }
 .target-students { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
@@ -1480,13 +1478,16 @@ input, .form-textarea {
 .step2-container {
   display: flex;
   gap: 20rpx;
+  width: 100%;
   height: calc(100vh - 120rpx);
   min-height: 0;
+  min-width: 0;
 }
 
 /* 知识树 */
 .knowledge-tree {
   width: 240px;
+  box-sizing: border-box;
   background: #fff;
   border-radius: 12rpx;
   padding: 20rpx;
@@ -1534,6 +1535,8 @@ input, .form-textarea {
 /* 右侧面板 */
 .right-panel {
   flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   background: #fff;
@@ -1551,10 +1554,13 @@ input, .form-textarea {
   border-radius: 8rpx;
   padding: 16rpx;
   margin-bottom: 16rpx;
+  box-sizing: border-box;
+  max-width: 100%;
 }
 .filter-row {
   display: flex;
   gap: 16rpx;
+  min-width: 0;
   margin-bottom: 12rpx;
   align-items: flex-end;
   flex-wrap: wrap;
@@ -1564,6 +1570,8 @@ input, .form-textarea {
   display: flex;
   flex-direction: column;
   gap: 6rpx;
+  min-width: 0;
+  max-width: 100%;
   position: relative;
 }
 .filter-kp-item {
@@ -1580,17 +1588,22 @@ input, .form-textarea {
   display: flex;
   align-items: center;
   gap: 8rpx;
+  min-width: 0;
+  max-width: 100%;
 }
 .kp-search-input {
-  width: 200rpx;
+  width: 320rpx;
+  max-width: 100%;
+  box-sizing: border-box;
+  flex: 1 1 240rpx;
   height: 56rpx;
-  padding: 6rpx 12rpx;
+  min-height: 56rpx;
+  padding: 0 12rpx;
   border: 1rpx solid #ddd;
   border-radius: 4rpx;
   font-size: 22rpx;
   background: #fff;
-  min-height: auto;
-  line-height: normal;
+  line-height: 54rpx;
 }
 .kp-search-input:focus {
   border-color: #409eff;
@@ -1612,7 +1625,10 @@ input, .form-textarea {
   background: #fff;
   border: 1rpx solid #ddd;
   border-radius: 6rpx;
-  min-width: 200rpx;
+  width: 200rpx;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   cursor: pointer;
   font-size: 24rpx;
 }
@@ -1625,7 +1641,8 @@ input, .form-textarea {
   position: absolute;
   top: 100%;
   left: 0;
-  width: 240rpx;
+  width: 360rpx;
+  max-width: calc(100vw - 40rpx);
   max-height: 400rpx;
   background: #fff;
   border: 1rpx solid #ddd;
@@ -1715,27 +1732,31 @@ input, .form-textarea {
 }
 .range-input {
   width: 80rpx;
+  box-sizing: border-box;
   height: 56rpx;
-  padding: 6rpx 8rpx;
+  min-height: 56rpx;
+  padding: 0 8rpx;
   border: 1rpx solid #ddd;
   border-radius: 4rpx;
   font-size: 22rpx;
   text-align: center;
   background: #fff;
-  min-height: auto;
-  line-height: normal;
+  line-height: 54rpx;
 }
 .range-sep { color: #999; font-size: 22rpx; }
 .search-input {
   width: 160rpx;
+  max-width: 100%;
+  box-sizing: border-box;
+  flex: 1 1 160rpx;
   height: 56rpx;
-  padding: 6rpx 12rpx;
+  min-height: 56rpx;
+  padding: 0 12rpx;
   border: 1rpx solid #ddd;
   border-radius: 4rpx;
   font-size: 22rpx;
   background: #fff;
-  min-height: auto;
-  line-height: normal;
+  line-height: 54rpx;
 }
 
 /* 筛选按钮 */
@@ -1743,6 +1764,7 @@ input, .form-textarea {
   display: flex;
   gap: 8rpx;
   align-items: center;
+  flex-wrap: wrap;
 }
 .filter-btn, .reset-btn {
   padding: 10rpx 20rpx;
@@ -1909,6 +1931,7 @@ input, .form-textarea {
 .page-controls button:disabled { opacity: 0.5; }
 .page-info, .page-total, .page-size-label { font-size: 22rpx; color: #606266; white-space: nowrap; }
 .page-picker, .page-size-select, .jump-page-input { height: 48rpx; box-sizing: border-box; border: 1rpx solid #dcdfe6; border-radius: 6rpx; background: #fff; color: #303133; font-size: 22rpx; }
+.page-picker, .page-size-select { display: flex; align-items: center; justify-content: center; min-width: 0; line-height: 1.2; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .page-picker { width: 190rpx; padding: 0 10rpx; }
 .page-size-select { width: 124rpx; padding: 0 10rpx; }
 .jump-page-input { width: 88rpx; padding: 0 10rpx; line-height: 46rpx; text-align: center; margin: 0; }
@@ -2137,7 +2160,8 @@ input, .form-textarea {
   min-width: 0;
 }
 .subject-picker { margin: 16rpx 0; }
-.subject-picker-value { padding: 12rpx 16rpx; border: 1rpx solid #dcdfe6; border-radius: 6rpx; color: #409eff; background: #fff; font-size: 24rpx; }
+.subject-picker { display: block; width: 100%; max-width: 100%; }
+.subject-picker-value { display: flex; align-items: center; justify-content: center; width: 100%; min-width: 0; box-sizing: border-box; padding: 12rpx 16rpx; border: 1rpx solid #dcdfe6; border-radius: 6rpx; color: #409eff; background: #fff; font-size: 24rpx; line-height: 1.2; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ordered-diff {
   width: 80rpx;
   text-align: center;
@@ -2157,7 +2181,8 @@ input, .form-textarea {
 .level-title { font-weight: bold; font-size: 26rpx; }
 .remove-btn { color: #f44336; font-size: 24rpx; cursor: pointer; }
 .level-options { display: flex; gap: 16rpx; margin-top: 12rpx; }
-.picker-display { flex: 1; padding: 12rpx; background: #f8f8f8; border-radius: 4rpx; font-size: 24rpx; color: #666; }
+.level-options picker { flex: 1; min-width: 0; }
+.picker-display { display: flex; align-items: center; justify-content: center; width: 100%; min-width: 0; box-sizing: border-box; padding: 12rpx; background: #f8f8f8; border-radius: 4rpx; font-size: 24rpx; line-height: 1.2; text-align: center; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 关卡题目分配区 */
 .level-questions { margin-top: 16rpx; padding-top: 12rpx; border-top: 1rpx solid #eee; }

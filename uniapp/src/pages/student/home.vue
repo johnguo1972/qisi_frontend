@@ -59,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { studentApi } from '@/api/student.ts'
 import ClassSelector from '@/components/ClassSelector.vue'
 import TimeFilterBar from '@/components/TimeFilterBar.vue'
@@ -93,7 +93,7 @@ async function loadMissions() {
     }
     const res = await studentApi.home({
       ...params,
-    })
+    }, Date.now())
     missions.value = res.data?.missions || []
   } catch (e) {
     console.error('Failed to load missions:', e)
@@ -113,7 +113,17 @@ function onScopeChange(scope: string) {
 }
 
 onMounted(async () => {
+  uni.$on('student-layout-show', handleLayoutShow)
   await loadMissions()
+})
+
+function handleLayoutShow() {
+  // layout 页面从答题页返回显示时，首页组件不会重新挂载
+  loadMissions()
+}
+
+onUnmounted(() => {
+  uni.$off('student-layout-show', handleLayoutShow)
 })
 
 function goMission(id: number) {

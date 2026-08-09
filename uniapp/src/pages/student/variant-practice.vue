@@ -156,33 +156,33 @@ function typeLabel(t: string) {
 </script>
 
 <style scoped>
-.answer-page { display:flex; min-height:100vh; background:#f0f2f5; }
-.question-panel { flex:1; padding:30rpx 40rpx; }
+.answer-page { display:flex; height:100vh; min-height:0; overflow:hidden; background:#f0f2f5; }
+.question-panel { flex:1; min-width:0; min-height:0; overflow-y:auto; box-sizing:border-box; padding:30rpx 40rpx; }
 .question-header { display:flex; justify-content:space-between; margin-bottom:20rpx; }
 .q-no { font-size:24rpx; color:#999; }
 .q-type { font-size:28rpx; font-weight:bold; color:#333; }
 .stem { font-size:28rpx; color:#333; line-height:1.6; margin-bottom:16rpx; }
 .stem-img { width:100%; border-radius:8rpx; margin-bottom:16rpx; }
 .options-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:16rpx; margin-bottom:30rpx; }
-.option-card { border:2rpx solid #ddd; border-radius:12rpx; padding:24rpx; background:#fff; }
+.option-card { display:flex; align-items:flex-start; gap:12rpx; border:2rpx solid #ddd; border-radius:12rpx; padding:24rpx; background:#fff; }
 .option-card.selected { border-color:#409eff; background:#ecf5ff; }
 .option-label { width:40rpx;height:40rpx;border-radius:50%;background:#eee;
-  display:flex;align-items:center;justify-content:center;font-size:22rpx;font-weight:bold;margin-bottom:12rpx; }
+  display:flex;align-items:center;justify-content:center;font-size:22rpx;font-weight:bold;flex-shrink:0; }
 .option-card.selected .option-label { background:#409eff;color:#fff; }
-.option-content { font-size:26rpx;color:#333; }
+.option-content { flex:1; min-width:0; font-size:26rpx;color:#333; }
 .subjective-area { margin-bottom:30rpx; }
 .text-input { width:100%;min-height:300rpx;border:1rpx solid #ddd;border-radius:12rpx;
   padding:20rpx;box-sizing:border-box;background:#fff;font-size:26rpx; }
 .submit-btn { background:#409eff;color:#fff;font-size:28rpx;padding:20rpx 0;border-radius:8rpx; }
 .submit-btn[disabled]{background:#ccc;}
-.feedback-panel { width:340px;padding:30rpx 24rpx;background:#fff;border-left:1rpx solid #e8e8e8;display:flex;align-items:center; }
+.feedback-panel { width:340px;padding:30rpx 24rpx;background:#fff;border-left:1rpx solid #e8e8e8;display:flex;align-items:center;flex-shrink:0;box-sizing:border-box;overflow-y:auto; }
 .feedback-card { padding:30rpx;border-radius:12rpx;width:100%; }
 .feedback-card.correct{background:#e8f5e9;} .feedback-card.incorrect{background:#fff3e0;} .feedback-card.pending{background:#eef6ff;}
 .feedback-title{font-size:28rpx;font-weight:bold;display:block;margin-bottom:12rpx;}
 .feedback-text{font-size:24rpx;color:#333;display:block;margin-bottom:20rpx;line-height:1.6;}
 .btn-next{background:#4caf50;color:#fff;font-size:24rpx;}
 .feedback-placeholder{text-align:center;color:#ccc;font-size:26rpx;}
-@media (max-width:768px){ .answer-page{flex-direction:column;} .feedback-panel{width:100%;border-left:none;border-top:1rpx solid #e8e8e8;} .options-grid{grid-template-columns:1fr;} }
+@media (max-width:768px){ .answer-page{flex-direction:column;height:auto;min-height:100vh;overflow:visible;} .question-panel{overflow:visible;min-height:auto;} .feedback-panel{width:100%;border-left:none;border-top:1rpx solid #e8e8e8;} .options-grid{grid-template-columns:1fr;} }
 
 /* KaTeX 公式样式适配 */
 .katex { font-size: 1.05em; }

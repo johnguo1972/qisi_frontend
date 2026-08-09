@@ -2,8 +2,10 @@ import { get, post } from '@/utils/request'
 import type { UUID } from '@/types/uuid'
 
 export const studentApi = {
-  home: (params?: { class_id?: UUID; scope?: string }) => get('/student/home', params),
-  missionDetail: (id: UUID) => get(`/student/missions/${id}`),
+  home: (params?: { class_id?: UUID; scope?: string }, refreshKey?: number) =>
+    get('/student/home', refreshKey ? { ...params, _t: refreshKey } : params),
+  missionDetail: (id: UUID, refreshKey?: number) =>
+    get(`/student/missions/${id}`, refreshKey ? { _t: refreshKey } : undefined),
   levelDetail: (id: UUID) => get(`/student/levels/${id}`),
   submitAnswer: (data: { question_id: UUID; answer_content: object; mission_id?: UUID; level_id?: UUID }) =>
     post('/student/attempts', data),

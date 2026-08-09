@@ -1,4 +1,6 @@
 """Integration tests for question management endpoints."""
+import uuid
+
 import pytest
 from apps.parser.models import ExamQuestion
 
@@ -72,6 +74,32 @@ class TestQuestions:
         )
         resp = teacher_client.get('/api/v1/questions/', {'question_type': 'single_choice'})
         assert resp.status_code == 200
+
+    def test_question_list_handles_historical_uuid_knowledge_point_id(
+        self, teacher_client, sample_paper
+    ):
+        """Historical UUID knowledge-point JSON must not break list serialization."""
+        historical_id = str(uuid.uuid4())
+        ExamQuestion.objects.create(
+            paper=sample_paper,
+            question_no='uuid-kp-1',
+            question_type='single_choice',
+            subject='数学',
+            stem='包含历史 UUID 知识点的题目',
+            answer='A',
+            knowledge_points=[{
+                'id': historical_id,
+                'module': '历史知识点',
+            }],
+        )
+
+        resp = teacher_client.get('/api/v1/questions/', {'page': 1, 'page_size': 10})
+
+        assert resp.status_code == 200
+        item = next(item for item in resp.json()['data']['items'] if item['question_no'] == 'uuid-kp-1')
+        assert item['knowledge_points_display'] == [
+            {'id': historical_id, 'name': '历史知识点'}
+        ]
 
     def test_question_not_found(self, teacher_client):
         """Non-existent question should return 404."""

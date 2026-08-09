@@ -32,6 +32,10 @@ class TestStudentLearning:
             level_type='practice',
             mode_policy='block_a',
         )
+        StudentMissionProgress.objects.create(
+            mission=mission, student_user_id=student_user,
+            progress_status='not_started', progress_percent=0,
+        )
         resp = student_client.get(f'/api/v1/student/missions/{mission.id}')
         assert resp.status_code == 200
 
@@ -62,6 +66,10 @@ class TestStudentLearning:
             mission=mission,
             level=level,
             question_id=question.id,
+        )
+        StudentMissionProgress.objects.create(
+            mission=mission, student_user_id=student_user,
+            progress_status='not_started', progress_percent=0,
         )
 
         resp = student_client.get(f'/api/v1/student/levels/{level.id}')

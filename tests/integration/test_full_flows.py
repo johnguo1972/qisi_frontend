@@ -20,6 +20,7 @@ class TestFullFlows:
         resp = teacher_client.post('/api/v1/missions', {
             'mission_name': '完整流程测试任务',
             'goal_text': '测试完整流程',
+            'target_student_ids': [str(student_user.id)],
         })
         if resp.status_code not in [200, 201]:
             return  # Skip if mission creation not available
@@ -72,7 +73,7 @@ class TestFullFlows:
             'answer_content': {'selected_options': ['A']},
             'level_id': level_id,
             'submit_source': 'manual',
-        })
+        }, format='json')
         if resp.status_code == 200:
             data = resp.json()['data']
             assert 'is_correct' in data

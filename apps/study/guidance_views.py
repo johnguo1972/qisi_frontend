@@ -267,7 +267,11 @@ def guidance_reply(request, session_id):
         session = AIGuidanceSession.objects.get(pk=session_id, student_user_id=request.user)
     except AIGuidanceSession.DoesNotExist:
         return Response({'code': 404, 'message': '引导会话不存在', 'data': None, 'trace_id': make_trace_id()}, status=404)
-    if session.session_status != 'running':
+    # C 模式无法生成开放式引导时会降级为 B 模式。降级会话仍可继续完成
+    # 固定选项引导，不能因为状态标记为 downgraded 而被误判为已结束。
+    if session.session_status != 'running' and not (
+        session.session_status == 'downgraded' and session.mode_type == 'B'
+    ):
         return Response({'code': 4001, 'message': '引导已结束', 'data': None, 'trace_id': make_trace_id()}, status=400)
 
     user_reply = (request.data.get('reply') or '').strip()

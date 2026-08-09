@@ -71,8 +71,23 @@ class QuestionListSerializer(serializers.ModelSerializer):
         if not isinstance(raw, list):
             return []
         modules = [x.get('module') for x in raw if isinstance(x, dict) and x.get('module')]
-        ids = [str(x.get('id')) for x in raw if isinstance(x, dict) and x.get('id') is not None]
-        points = list(KnowledgePoint.objects.filter(id__in=ids)) if ids else []
+        ids = [x.get('id') for x in raw if isinstance(x, dict) and x.get('id') is not None]
+        # knowledge_points is historical JSON data.  Older imported questions
+        # may contain UUID knowledge-point IDs, while the current external
+        # knowledge_points table uses a BIGINT primary key.  Passing UUIDs
+        # directly to an integer PK lookup raises ValueError and turns the
+        # question-list endpoint into HTTP 500.  Only query IDs that can be
+        # represented by the current integer key; UUID records still retain
+        # their module/name fallback below.
+        numeric_ids = []
+        for point_id in ids:
+            if isinstance(point_id, bool):
+                continue
+            try:
+                numeric_ids.append(int(point_id))
+            except (TypeError, ValueError, OverflowError):
+                continue
+        points = list(KnowledgePoint.objects.filter(id__in=numeric_ids)) if numeric_ids else []
         by_id = {str(p.id): p for p in points}
         module_qs = KnowledgePoint.objects.filter(subject=obj.subject, module__in=modules)
         if not module_qs.exists():

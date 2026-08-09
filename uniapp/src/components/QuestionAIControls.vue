@@ -6,13 +6,11 @@
         <button class="question-ai-controls__close" @click="handleClose">关闭</button>
       </view>
       <view class="question-ai-controls__actions">
-        <button
-          v-for="action in availableActions"
-          :key="action"
-          :class="{ 'is-full-action': action === 'all' }"
-          :disabled="isRunningForSelectedQuestion"
-          @click="startAction(action)"
-        >{{ actionLabel(action) }}</button>
+        <button v-if="availableActions.includes('all')" class="is-full-action" :disabled="isRunningForSelectedQuestion" @click="startAction('all')">一键全部 AI 处理</button>
+        <button v-if="availableActions.includes('probe')" :disabled="isRunningForSelectedQuestion" @click="startAction('probe')">AI 探查</button>
+        <button v-if="availableActions.includes('A')" :disabled="isRunningForSelectedQuestion" @click="startAction('A')">A 模式</button>
+        <button v-if="availableActions.includes('B')" :disabled="isRunningForSelectedQuestion" @click="startAction('B')">B 模式</button>
+        <button v-if="availableActions.includes('C')" :disabled="isRunningForSelectedQuestion" @click="startAction('C')">C 模式</button>
       </view>
       <text class="question-ai-controls__scope">{{ scopeLabel }}</text>
       <text v-if="isRunningForSelectedQuestion" class="question-ai-controls__status">AI任务处理中，请稍候</text>

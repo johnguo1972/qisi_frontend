@@ -35,7 +35,7 @@
       <view v-for="item in variants" :key="item.id" class="variant-card">
         <view class="card-header">
           <view class="card-tags">
-            <view class="tag type-tag">{{ typeLabel(item.question_type) }}</view>
+            <view class="tag type-tag">{{ typeLabel(item.question_type, item.stem) }}</view>
             <view class="tag diff-tag" :class="diffClass(item.difficulty)">
               {{ diffLabel(item.difficulty) }}
             </view>
@@ -44,7 +44,7 @@
         </view>
 
         <view class="card-body">
-          <text class="stem-text">{{ truncate(item.stem || '', 120) }}</text>
+          <view class="stem-text" v-html="renderedStem(item)"></view>
           <!-- 有图片时显示 -->
           <image
             v-if="item.images?.length"
@@ -84,6 +84,7 @@ import { ref, onMounted } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { wrongbookApi } from '@/api/student.ts'
 import { getMediaUrl } from '@/utils/media-url'
+import { renderWithKatex } from '@/utils/katex-renderer'
 
 interface VariantItem {
   id: string
@@ -91,6 +92,7 @@ interface VariantItem {
   question_type: string
   difficulty: number
   stem?: string
+  stem_html?: string
   images?: Array<{ url?: string; file_path?: string; display_width?: number }>
   knowledge_points?: string[]
 }
@@ -128,12 +130,27 @@ async function loadVariants() {
   try {
     const res = await wrongbookApi.variants(wrongId.value)
     variants.value = res.data || []
+    await renderVariantStems()
   } catch (e: any) {
     console.error('获取同类题失败:', e)
     uni.showToast({ title: '加载失败，请重试', icon: 'none' })
   } finally {
     loading.value = false
   }
+}
+
+const renderedStemMap = ref<Record<string, string>>({})
+
+async function renderVariantStems() {
+  const rendered: Record<string, string> = {}
+  for (const item of variants.value) {
+    rendered[item.id] = await renderWithKatex(item.stem_html || item.stem || '')
+  }
+  renderedStemMap.value = rendered
+}
+
+function renderedStem(item: VariantItem): string {
+  return renderedStemMap.value[item.id] || item.stem_html || item.stem || ''
 }
 
 function startPractice() {
@@ -156,7 +173,7 @@ function goBack() {
   uni.navigateBack()
 }
 
-function typeLabel(type: string): string {
+function typeLabel(type: string, stem = ''): string {
   const map: Record<string, string> = {
     single_choice: '单选',
     multiple_choice: '多选',
@@ -167,19 +184,36 @@ function typeLabel(type: string): string {
     computation: '计算',
     proof: '证明',
   }
-  return map[type] || type
+  const normalized = String(type || '').trim().toLowerCase()
+  const aliases: Record<string, string> = {
+    calculation: '\u8ba1\u7b97\u9898',
+    solution: '\u89e3\u7b54\u9898',
+    experiment: '\u5b9e\u9a8c\u9898',
+    reading_comprehension: '\u9605\u8bfb\u7406\u89e3',
+    unknown: '\u672a\u8bc6\u522b',
+  }
+  if (normalized === 'unknown' || !normalized) {
+    // 历史题库中部分题目题型为 unknown，根据题干内容给出可读的中文类型。
+    if (/\u9009\u586b|\\underline|_{2,}/i.test(stem)) return '\u586b\u7a7a\u9898'
+    if (/\\mathrm\{[A-D]\}|(?:^|\n)\s*[A-D][.、]/i.test(stem)) return '\u5355\u9009\u9898'
+  }
+  return map[normalized] || aliases[normalized] || (normalized ? '\u672a\u8bc6\u522b' : '\u9898\u76ee')
 }
 
 function diffClass(difficulty: number): string {
-  if (difficulty <= 2) return 'diff-easy'
-  if (difficulty <= 4) return 'diff-medium'
+  const level = Number(difficulty)
+  if (!Number.isFinite(level)) return 'diff-medium'
+  if (level <= 2) return 'diff-easy'
+  if (level <= 4) return 'diff-medium'
   return 'diff-hard'
 }
 
 function diffLabel(difficulty: number): string {
-  if (difficulty <= 2) return '简单'
-  if (difficulty <= 4) return '中等'
-  return '困难'
+  const level = Number(difficulty)
+  if (!Number.isFinite(level)) return '\u4e2d\u7b49'
+  if (level <= 2) return '\u7b80\u5355'
+  if (level <= 4) return '\u4e2d\u7b49'
+  return '\u56f0\u96be'
 }
 
 function truncate(str: string, len: number): string {
@@ -341,6 +375,15 @@ function truncate(str: string, len: number): string {
   color: #333;
   line-height: 1.6;
   display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.stem-text :deep(.katex) {
+  font-size: 1em;
+}
+.stem-text :deep(.katex-display) {
+  margin: 8rpx 0;
+  overflow-x: auto;
 }
 .stem-image {
   width: 100%;

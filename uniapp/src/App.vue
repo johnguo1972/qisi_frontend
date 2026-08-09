@@ -88,13 +88,21 @@ html, body, #app, #app-container, page {
   height: 100%;
   margin: 0;
   padding: 0;
-  overflow: hidden;
+  /* 允许普通学生页面在内容超过视口时滚动；独立 scroll-view 页面仍可自行管理滚动 */
+  overflow-x: hidden;
+  overflow-y: auto;
   box-sizing: border-box;
 }
 
 page {
   background-color: #f5f5f5;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* H5 原生 picker 会脱离业务弹窗渲染，必须高于自定义 modal，避免选项被遮挡。 */
+.uni-picker-container,
+.uni-picker-container .uni-picker-custom {
+  z-index: 10000 !important;
 }
 
 /* 调试面板 */
