@@ -30,6 +30,16 @@
         </button>
         <button @click="cloneMission" class="action-btn clone">克隆任务</button>
         <button @click="exportPdf" class="action-btn export">导出PDF</button>
+        <button @click="showQrcode" class="action-btn qrcode">作业二维码</button>
+      </view>
+      <view v-if="qrcodeInfo" class="qrcode-panel">
+        <image v-if="qrcodeInfo.image_data" class="qrcode-image" :src="qrcodeInfo.image_data" mode="widthFix" />
+        <text>作业码：{{ qrcodeInfo.short_code }}</text>
+        <text class="qrcode-url">{{ qrcodeInfo.url }}</text>
+        <view class="qrcode-actions">
+          <button size="mini" @click="copyQrcodeUrl">复制二维码链接</button>
+          <button size="mini" class="save-qrcode-btn" @click="saveQrcodeImage">保存二维码图片</button>
+        </view>
       </view>
       <view v-if="isGrading" class="grading-panel">
         <view class="panel-header"><text class="panel-title">学生提交与批改</text></view>
@@ -93,6 +103,7 @@ const isGrading = ref(false)
 const gradingLoading = ref(false)
 const gradingAttempts = ref<any[]>([])
 const gradingStudents = ref<any[]>([])
+const qrcodeInfo = ref<any>(null)
 
 onLoad((options: any) => {
   const id = String(options?.id || '')
@@ -216,6 +227,57 @@ async function exportPdf() {
 function goPractice(levelId: number) {
   uni.navigateTo({ url: `/pages/teacher/level-practice?missionId=${missionId.value}&levelId=${levelId}` })
 }
+
+async function showQrcode() {
+  try {
+    const res: any = await missionApi.qrcodeInfo(missionId.value)
+    qrcodeInfo.value = res.data
+  } catch { uni.showToast({ title: '获取二维码失败', icon: 'none' }) }
+}
+
+function copyQrcodeUrl() {
+  if (!qrcodeInfo.value?.url) return
+  uni.setClipboardData({ data: qrcodeInfo.value.url, success: () => uni.showToast({ title: '链接已复制', icon: 'success' }) })
+}
+
+function saveQrcodeImage() {
+  const imageData = String(qrcodeInfo.value?.image_data || '')
+  if (!imageData.startsWith('data:image/')) {
+    uni.showToast({ title: '二维码图片未准备好', icon: 'none' })
+    return
+  }
+
+  // #ifdef H5
+  const link = document.createElement('a')
+  link.href = imageData
+  link.download = `作业二维码-${qrcodeInfo.value?.short_code || 'qrcode'}.png`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  uni.showToast({ title: '二维码已保存', icon: 'success' })
+  // #endif
+
+  // #ifdef MP-WEIXIN
+  const base64 = imageData.split(',')[1]
+  const filePath = `${(globalThis as any).wx?.env?.USER_DATA_PATH || ''}/qrcode-${Date.now()}.png`
+  const fileManager = (uni as any).getFileSystemManager?.()
+  if (!fileManager || !filePath.startsWith('wxfile://')) {
+    uni.showToast({ title: '当前环境不支持保存图片', icon: 'none' })
+    return
+  }
+  fileManager.writeFile({
+    filePath,
+    data: base64,
+    encoding: 'base64',
+    success: () => uni.saveImageToPhotosAlbum({
+      filePath,
+      success: () => uni.showToast({ title: '二维码已保存到相册', icon: 'success' }),
+      fail: () => uni.showToast({ title: '保存失败，请授权相册权限', icon: 'none' }),
+    }),
+    fail: () => uni.showToast({ title: '二维码文件生成失败', icon: 'none' }),
+  })
+  // #endif
+}
 </script>
 
 <style scoped>
@@ -274,6 +336,7 @@ function goPractice(levelId: number) {
   display: block;
   line-height: 1.6;
 }
+
 .grading-panel { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 20rpx; }
 .grading-item { padding: 20rpx 0; border-bottom: 1rpx solid #eee; }
 .grading-question { display: flex; gap: 14rpx; align-items: flex-start; flex-wrap: wrap; color: #555; }
@@ -330,6 +393,12 @@ function goPractice(levelId: number) {
   color: #fff;
 }
 .publish { background: #4caf50; }
+.qrcode { background: #8e44ad; }
+.qrcode-panel { display: flex; flex-direction: column; align-items: center; gap: 14rpx; background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 20rpx; }
+.qrcode-image { width: 360rpx; max-width: 100%; }
+.qrcode-url { color: #666; font-size: 22rpx; word-break: break-all; }
+.qrcode-actions { display: flex; align-items: center; justify-content: center; gap: 16rpx; flex-wrap: wrap; }
+.save-qrcode-btn { color: #67c23a; border-color: #b3e19d; background: #f0f9eb; }
 .start { background: #ff9800; }
 .clone { background: #409eff; }
 .export {

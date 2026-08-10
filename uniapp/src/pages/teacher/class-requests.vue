@@ -31,7 +31,7 @@
         <view v-for="req in filteredRequests" :key="req.id" class="request-card">
           <view class="card-info">
             <text class="req-name">{{ req.applicant_name || req.student_name }}</text>
-            <text class="req-phone">{{ maskPhone(req.phone || req.mobile) }}</text>
+            <text class="req-phone">{{ maskPhone(req.phone || req.mobile || req.applicant_phone) || '未设置手机号' }}</text>
             <text class="req-time">{{ formatTime(req.created_at) }}</text>
           </view>
           <view v-if="req.message" class="req-message">
@@ -61,6 +61,7 @@ interface JoinRequest {
   student_name?: string
   phone?: string
   mobile?: string
+  applicant_phone?: string
   message?: string
   status: 'pending' | 'approved' | 'rejected'
   created_at?: string
@@ -95,7 +96,19 @@ async function loadRequests() {
   loading.value = true
   try {
     const res = await classApi.joinRequests(classId)
-    allRequests.value = res.data || []
+    // 后端返回分页对象 { total, page, page_size, items }，兼容旧接口直接返回数组。
+    const payload: any = res.data
+    const items = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : Array.isArray(payload?.results)
+          ? payload.results
+          : []
+    allRequests.value = items.map((item: any) => ({
+      ...item,
+      phone: item.phone || item.mobile || item.applicant_phone || '',
+    }))
   } catch (e) {
     console.error('Failed to load join requests:', e)
     uni.showToast({ title: '加载申请列表失败', icon: 'none' })
@@ -105,10 +118,11 @@ async function loadRequests() {
 }
 
 const tabs = computed<TabDef[]>(() => {
+  const requests = Array.isArray(allRequests.value) ? allRequests.value : []
   const counts = {
-    pending: allRequests.value.filter(r => r.status === 'pending').length,
-    approved: allRequests.value.filter(r => r.status === 'approved').length,
-    rejected: allRequests.value.filter(r => r.status === 'rejected').length,
+    pending: requests.filter(r => r.status === 'pending').length,
+    approved: requests.filter(r => r.status === 'approved').length,
+    rejected: requests.filter(r => r.status === 'rejected').length,
   }
   return [
     { label: '待审批', value: 'pending', count: counts.pending },
@@ -119,8 +133,9 @@ const tabs = computed<TabDef[]>(() => {
 })
 
 const filteredRequests = computed(() => {
-  if (activeTab.value === 'all') return allRequests.value
-  return allRequests.value.filter(r => r.status === activeTab.value)
+  const requests = Array.isArray(allRequests.value) ? allRequests.value : []
+  if (activeTab.value === 'all') return requests
+  return requests.filter(r => r.status === activeTab.value)
 })
 
 function tabLabel(value: string): string {

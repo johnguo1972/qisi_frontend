@@ -549,6 +549,9 @@ def mission_publish(request, mission_id):
 
     mission.status = 'published'
     mission.save()
+    # 作业发布后立即建立幂等的作业短码，二维码端只读取该唯一来源。
+    from apps.qrcode.services import ensure_mission_short_code
+    short_code = ensure_mission_short_code(mission)
 
     # Create progress records for class members or explicitly targeted students.
     created_count = 0
@@ -567,7 +570,7 @@ def mission_publish(request, mission_id):
 
     return Response({
         'code': 0, 'message': '发布成功',
-        'data': {'students_notified': created_count},
+        'data': {'students_notified': created_count, 'short_code': short_code.short_code},
         'trace_id': make_trace_id(),
     })
 

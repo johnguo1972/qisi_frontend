@@ -1,0 +1,34 @@
+from django.urls import path
+
+from . import views
+
+urlpatterns = [
+    path('missions/<uuid:mission_id>/qrcode', views.mission_qrcode),
+    path('missions/<uuid:mission_id>/qrcode/info', views.mission_qrcode_info),
+    path('missions/<uuid:mission_id>/wxacode', views.mission_wxacode),
+    path('missions/<uuid:mission_id>/paper-pdf', views.mission_paper_pdf),
+    path('missions/<uuid:mission_id>/practice-sheet', views.mission_practice_sheet),
+    path('hw/<str:short_code>', views.short_code_info),
+    path('hw/<str:short_code>/url-link', views.short_code_url_link),
+    path('hw/<str:short_code>/enter', views.enter_mission),
+    path('paper/<str:student_code>/<str:mission_code>/p<int:page_no>', views.paper_entry),
+    path('practice-sheets', views.create_practice_sheet),
+    path('practice-sheets/<str:sheet_code>', views.practice_sheet_info),
+    path('practice-sheets/<str:sheet_code>/submit', views.submit_practice_sheet),
+    path('practice-sheets/<str:sheet_code>/qrcode', views.practice_sheet_qrcode),
+    path('attempts/<uuid:attempt_id>/images', views.upload_attempt_image),
+    path('student/attempts/<uuid:attempt_id>/upload-images', views.upload_attempt_images),
+    path('student/attempts/image-check', views.attempt_image_check),
+    path('practice-sheet/<str:sheet_code>', views.practice_sheet_info),
+    path('practice-sheet/<str:sheet_code>/submit', views.submit_practice_sheet),
+    path('practice-sheet/<str:sheet_code>/qrcode', views.practice_sheet_qrcode),
+    path('auth/wechat-login', views.wechat_login),
+    path('auth/wechat-bind', views.wechat_bind),
+    path('parent/children', views.parent_children),
+    path('parent/context', views.parent_context),
+    path('classes/<uuid:class_id>/student-codes', views.class_student_codes),
+    path('paper-scan/batches', views.create_scan_batch),
+    path('paper-scan/batches/<uuid:batch_id>/pages', views.upload_scan_page),
+    path('paper-scan/batches/<uuid:batch_id>/summary', views.scan_batch_summary),
+    path('paper-scan/batches/<uuid:batch_id>/complete', views.complete_scan_batch),
+]

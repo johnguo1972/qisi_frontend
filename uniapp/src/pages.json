@@ -38,6 +38,9 @@
     { "path": "pages/student/wrongbook-variants", "style": { "navigationBarTitleText": "同类题练习" } },
     { "path": "pages/student/variant-practice", "style": { "navigationBarTitleText": "同类题练习" } },
     { "path": "pages/student/export", "style": { "navigationBarTitleText": "导出 PDF" } }
+    ,{ "path": "pages/student/scan-entry", "style": { "navigationBarTitleText": "作业入口" } }
+    ,{ "path": "pages/student/practice-sheet", "style": { "navigationBarTitleText": "错题练习" } }
+    ,{ "path": "pages/student/paper-scan", "style": { "navigationBarTitleText": "纸质扫描" } }
   ],
   "globalStyle": {
     "navigationBarTextStyle": "black",

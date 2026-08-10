@@ -70,6 +70,9 @@ export const missionApi = {
   // POST /api/v1/missions/{id}/publish/
   publish: (id: UUID) => post(`/missions/${id}/publish/`),
 
+  qrcodeInfo: (id: UUID) => get<any>(`/missions/${id}/qrcode/info`),
+  qrcodeImageUrl: (id: UUID) => `/api/v1/missions/${id}/qrcode`,
+
   // POST /api/v1/missions/{id}/clone/
   clone: (id: UUID) => post<{ id: UUID }>(`/missions/${id}/clone/`),
 

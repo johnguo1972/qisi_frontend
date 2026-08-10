@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'apps.wrongbook',
     'apps.institutions',
     'apps.courses',
+    'apps.qrcode',
 ]
 
 MIDDLEWARE = [
@@ -156,6 +157,9 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+WECHAT_MP_APPID = os.environ.get('WECHAT_MP_APPID', '')
+WECHAT_MP_APPSECRET = os.environ.get('WECHAT_MP_APPSECRET', '')
+PUBLIC_WEB_URL = os.environ.get('PUBLIC_WEB_URL', 'https://qisi.chengxuelu.com')
 
 # Aliyun OSS Configuration
 ALIYUN_OSS_ACCESS_KEY_ID = os.environ.get('ALIYUN_OSS_ACCESS_KEY_ID', '')

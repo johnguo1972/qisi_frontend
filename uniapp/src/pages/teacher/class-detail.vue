@@ -39,6 +39,7 @@
               <text class="invite-code">{{ classInfo.invite_code }}</text>
             </view>
             <button class="btn-refresh" size="mini" @click="handleRefreshCode">刷新邀请码</button>
+            <button class="btn-copy" size="mini" @click="copyInviteCode">复制邀请码</button>
           </view>
         </view>
         <!-- 操作按钮 -->
@@ -61,12 +62,15 @@
               <text class="col-name">姓名</text>
               <text class="col-phone">手机号</text>
               <text class="col-join">加入方式</text>
+              <text class="col-action">操作</text>
             </view>
             <view v-for="s in students" :key="s.id" class="student-row">
               <text class="col-name">{{ s.display_name || s.student_name }}</text>
-              <text class="col-phone">{{ maskPhone(s.phone || s.mobile) }}</text>
+              <text class="col-phone">{{ maskPhone(s.phone || s.mobile || s.student_mobile) || '未设置' }}</text>
               <text class="col-join" :class="'badge-' + s.join_type">{{ joinTypeText(s.join_type) }}</text>
-              <button size="mini" class="remove-student" @click="removeStudent(s)">移除</button>
+              <view class="col-action">
+                <button size="mini" class="remove-student" @click="removeStudent(s)">移除</button>
+              </view>
             </view>
           </view>
         </view>
@@ -97,6 +101,7 @@ interface Student {
   student_name?: string
   phone?: string
   mobile?: string
+  student_mobile?: string
   join_type?: string
 }
 
@@ -154,11 +159,26 @@ function maskPhone(phone?: string): string {
 function joinTypeText(joinType?: string): string {
   const map: Record<string, string> = {
     direct: '直接加入',
-    by_code: '邀请码',
+    invite: '邀请码加入',
+    by_code: '邀请码加入',
+    manual: '手动加入',
+    import: '导入加入',
     approved: '审核通过',
     pending: '待审核',
   }
   return map[joinType || ''] || joinType || '未知'
+}
+
+function copyInviteCode() {
+  const code = String(classInfo.invite_code || '').trim()
+  if (!code) {
+    uni.showToast({ title: '暂无邀请码', icon: 'none' })
+    return
+  }
+  uni.setClipboardData({
+    data: code,
+    success: () => uni.showToast({ title: '邀请码已复制', icon: 'success' }),
+  })
 }
 
 async function handleRefreshCode() {
@@ -227,16 +247,20 @@ async function confirmDelete() {
   padding: 30rpx 40rpx;
 }
 .page-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(120rpx, 1fr) auto minmax(120rpx, 1fr);
   align-items: center;
-  gap: 20rpx;
-  padding: 10rpx 0 30rpx;
+  width: 100%;
+  min-height: 72rpx;
+  box-sizing: border-box;
+  padding: 8rpx 0 28rpx;
 }
 .page-actions {
-  margin-left: auto;
+  justify-self: end;
   display: flex;
   gap: 12rpx;
 }
+.btn-back { justify-self: start; }
 .btn-edit {
   background: #ecf5ff;
   color: #409eff;
@@ -266,6 +290,8 @@ async function confirmDelete() {
   font-size: 36rpx;
   font-weight: bold;
   color: #333;
+  text-align: center;
+  white-space: nowrap;
 }
 .info-card {
   background: #fff;
@@ -294,12 +320,16 @@ async function confirmDelete() {
   color: #333;
 }
 .invite-row {
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: 16rpx;
+  justify-content: initial;
 }
 .invite-section {
   display: flex;
   align-items: center;
   gap: 20rpx;
+  justify-self: start;
 }
 .invite-code {
   font-size: 28rpx;
@@ -311,6 +341,15 @@ async function confirmDelete() {
   background: #ecf5ff;
   color: #409eff;
   border: 1rpx solid #b3d8ff;
+  border-radius: 6rpx;
+  padding: 6rpx 16rpx;
+  font-size: 22rpx;
+  cursor: pointer;
+}
+.btn-copy {
+  background: #f0f9eb;
+  color: #67c23a;
+  border: 1rpx solid #b3e19d;
   border-radius: 6rpx;
   padding: 6rpx 16rpx;
   font-size: 22rpx;
@@ -362,6 +401,7 @@ async function confirmDelete() {
 }
 .student-table-header {
   display: flex;
+  align-items: center;
   padding: 12rpx 0;
   border-bottom: 2rpx solid #e0e0e0;
   font-weight: bold;
@@ -373,20 +413,47 @@ async function confirmDelete() {
   align-items: center;
 }
 .col-name {
-  flex: 1;
+  width: 32%;
+  flex: 0 0 32%;
   font-size: 26rpx;
   color: #333;
 }
 .col-phone {
-  flex: 1;
+  width: 28%;
+  flex: 0 0 28%;
   font-size: 24rpx;
   color: #666;
 }
 .col-join {
-  flex: 1;
+  width: 24%;
+  flex: 0 0 24%;
   font-size: 22rpx;
   padding: 4rpx 12rpx;
   border-radius: 6rpx;
+  text-align: center;
+}
+.col-action {
+  width: 150px;
+  flex: 0 0 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22rpx;
+  color: #606266;
+}
+.remove-student {
+  width: 72px !important;
+  min-width: 72px;
+  flex: 0 0 72px;
+  margin: 0;
+  padding: 0 12px;
+  box-sizing: border-box;
+  color: #f56c6c;
+  background: #fff5f5;
+  border: 1rpx solid #fbc4c4;
+  border-radius: 6rpx;
+  font-size: 22rpx;
+  line-height: 44rpx;
   text-align: center;
 }
 .badge-direct {
@@ -426,5 +493,18 @@ async function confirmDelete() {
   .student-table-header, .student-row {
     font-size: 20rpx;
   }
+  .page-header {
+    grid-template-columns: auto 1fr auto;
+    column-gap: 12rpx;
+  }
+  .page-title { font-size: 30rpx; }
+  .invite-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .invite-section { width: 100%; }
+  .student-section { padding: 20rpx; overflow-x: auto; }
+  .student-table { min-width: 760px; }
 }
 </style>

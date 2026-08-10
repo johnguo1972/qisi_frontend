@@ -16,6 +16,13 @@ setInterval(() => {
 onLaunch(() => {
   console.log('App launched')
 
+  // H5 直接打开扫码入口时，不能被登录态角色跳转覆盖。
+  // 例如二维码/短码链接会落到 pages/student/scan-entry。
+  const pages = getCurrentPages()
+  const currentRoute = pages[pages.length - 1]?.route || ''
+  const browserRoute = typeof window !== 'undefined' ? window.location.hash : ''
+  if (currentRoute.includes('student/scan-entry') || browserRoute.includes('/pages/student/scan-entry')) return
+
   // 检查保持登录状态
   const token = uni.getStorageSync('accessToken')
   const tokenExpiry = uni.getStorageSync('tokenExpiry')
