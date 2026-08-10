@@ -379,11 +379,14 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
-                                     Image as RLImage, PageTemplate, Frame)
+                                     Image as RLImage, PageTemplate, Frame,
+                                     Table, TableStyle)
+    from reportlab.lib.utils import ImageReader
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
     from reportlab.lib.units import mm
     from reportlab.lib import colors
+    from xml.sax.saxutils import escape
     import io
 
     pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
@@ -423,9 +426,25 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
     styles = getSampleStyleSheet()
     body = ParagraphStyle('ZhBody', parent=styles['Normal'],
                           fontName='STSong-Light', fontSize=11, leading=18)
+    question_number = ParagraphStyle('ZhQuestionNumber', parent=body,
+                                     fontSize=9, leading=14)
     h1 = ParagraphStyle('ZhH1', parent=styles['Title'],
                         fontName='STSong-Light', fontSize=18)
     story = []
+
+    def pdf_text(value):
+        """Escape user/imported text before passing it to ReportLab Paragraph."""
+        return escape(str(value or ''))
+
+    def option_text(option, index):
+        """Accept both API-shaped options and raw QuestionOption values."""
+        if not isinstance(option, dict):
+            return chr(65 + index), str(option or '')
+        label = option.get('label') or option.get('option_label') or chr(65 + index)
+        content = option.get('content')
+        if content is None:
+            content = option.get('text', '')
+        return str(label), str(content or '')
 
     type_label = '错题本' if export_type == 'wrongbook' else '任务题目'
     story.append(Paragraph(type_label, h1))
@@ -435,36 +454,59 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
 
     for i, q in enumerate(questions, 1):
         qtype = ExamQuestion.QUESTION_TYPE_LABELS.get(q['question_type'], q['question_type'])
-        story.append(Paragraph(f'第{i}题（{qtype}）', body))
+        header_label = f'第{i}题（{qtype}）'
+        header_width = max(
+            15 * mm,
+            pdfmetrics.stringWidth(header_label, 'STSong-Light', question_number.fontSize) + 6,
+        )
+        question_header = Table([
+            [
+                Paragraph(pdf_text(header_label), question_number),
+                Paragraph(pdf_text(q.get('stem')), body),
+            ]
+        ], colWidths=[header_width, doc.width - header_width])
+        question_header.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(question_header)
 
         # 知识点标签
         kps = q.get('knowledge_points') or []
         if kps:
             kp_text = "知识点：" + "、".join(
-                kp.get('module', '') if isinstance(kp, dict) else str(kp)
+                pdf_text(kp.get('module', '') if isinstance(kp, dict) else str(kp))
                 for kp in kps[:3]
             )
             story.append(Paragraph(f'<font color="#666666" size="9">{kp_text}</font>', body))
 
-        story.append(Paragraph(q['stem'] or '', body))
-        for opt in q.get('options_html', []):
-            story.append(Paragraph(f'{opt["label"]}. {opt["content"]}', body))
-
-        # 图片
+        # Formula images come from solutions/analysis; keep only question figures.
         for img_url in q.get('image_urls', []):
             img_path = str(settings.MEDIA_ROOT / img_url)
             if os.path.exists(img_path):
                 try:
-                    img = RLImage(img_path, width=400, height=200)
-                    story.append(img)
+                    image_width, image_height = ImageReader(img_path).getSize()
+                    max_width, max_height = doc.width, 100 * mm
+                    scale = min(max_width / image_width, max_height / image_height, 1)
+                    story.append(Spacer(1, 2 * mm))
+                    story.append(RLImage(img_path, width=image_width * scale,
+                                         height=image_height * scale))
+                    story.append(Spacer(1, 2 * mm))
                 except Exception:
                     pass
 
+        for option_index, opt in enumerate(q.get('options_html', [])):
+            label, content = option_text(opt, option_index)
+            story.append(Paragraph(f'{pdf_text(label)}. {pdf_text(content)}', body))
+
         if include_answers:
             if q.get('answer'):
-                story.append(Paragraph(f'<b>答案：</b>{q["answer"]}', body))
+                story.append(Paragraph(f'<b>答案：</b>{pdf_text(q["answer"])}', body))
             if q.get('analysis'):
-                story.append(Paragraph(f'<b>解析：</b>{q["analysis"]}', body))
+                story.append(Paragraph(f'<b>解析：</b>{pdf_text(q["analysis"])}', body))
         story.append(Spacer(1, 4*mm))
 
     doc.build(story)
@@ -518,9 +560,9 @@ def export_pdf(request):
             options = list(QuestionOption.objects.filter(question_id=q['id']).values(
                 'option_label', 'content'
             ).order_by('sort_order'))
-            images = list(QuestionImage.objects.filter(question_id=q['id']).values(
-                'file_path'
-            ).order_by('sort_order'))
+            images = list(QuestionImage.objects.filter(
+                question_id=q['id'],
+            ).exclude(image_type='formula').values('file_path').order_by('sort_order'))
             questions_data.append({
                 **q,
                 'options_html': [{'label': o['option_label'], 'content': o['content']} for o in options],
@@ -544,9 +586,9 @@ def export_pdf(request):
             options = list(QuestionOption.objects.filter(question_id=q['id']).values(
                 'option_label', 'content'
             ).order_by('sort_order'))
-            images = list(QuestionImage.objects.filter(question_id=q['id']).values(
-                'file_path'
-            ).order_by('sort_order'))
+            images = list(QuestionImage.objects.filter(
+                question_id=q['id'],
+            ).exclude(image_type='formula').values('file_path').order_by('sort_order'))
             questions_data.append({
                 **q,
                 'options_html': [{'label': o['option_label'], 'content': o['content']} for o in options],

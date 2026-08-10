@@ -94,12 +94,15 @@ def mission_export_pdf(request, mission_id):
         options = QuestionOption.objects.filter(question_id=question['id']).values(
             'option_label', 'content'
         ).order_by('sort_order')
-        images = QuestionImage.objects.filter(question_id=question['id']).values(
-            'file_path'
-        ).order_by('sort_order')
+        images = QuestionImage.objects.filter(
+            question_id=question['id'],
+        ).exclude(image_type='formula').values('file_path').order_by('sort_order')
         questions.append({
             **question,
-            'options_html': list(options),
+            'options_html': [
+                {'label': option['option_label'], 'content': option['content']}
+                for option in options
+            ],
             'image_urls': [item['file_path'] for item in images],
         })
     if not questions:
