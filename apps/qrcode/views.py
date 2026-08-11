@@ -39,7 +39,10 @@ def effective_student(request):
     child_id = cache.get(f'parent_context:{request.user.id}')
     if not child_id:
         return None
-    return UserAccount.objects.filter(pk=child_id, role_type='student').first()
+    relation = StudentParentBind.objects.filter(
+        parent_user_id=request.user, student_user_id=child_id, bind_status='active',
+    ).select_related('student_user_id').first()
+    return relation.student_user_id if relation else None
 
 
 def _expired(code):

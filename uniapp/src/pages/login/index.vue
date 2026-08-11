@@ -59,6 +59,9 @@
             <button class="login-btn" :disabled="loading" @click="handleLogin">
               {{ loading ? '登录中...' : '登 录' }}
             </button>
+            <!-- #ifdef MP-WEIXIN -->
+            <button class="wechat-btn" :disabled="loading" @click="handleWechatLogin">微信一键登录</button>
+            <!-- #endif -->
           </view>
         </view>
       </view>
@@ -70,6 +73,7 @@
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
+import { wxLogin } from '@/utils/wechat-auth'
 
 const tabs = [
   { role: 'student', label: '学生', icon: '🎓' },
@@ -147,6 +151,21 @@ async function handleLogin() {
   }
 }
 
+async function handleWechatLogin() {
+  if (loading.value) return
+  loading.value = true
+  try {
+    const result = await wxLogin()
+    if (result.needBindPhone) {
+      uni.navigateTo({ url: `/pages/student/parent-bind?bindToken=${encodeURIComponent(result.bindToken || '')}` })
+      return
+    }
+    userStore.setUserInfo(result.userInfo)
+    navigateByRole(result.userInfo?.role_type || 'student')
+  } catch (e: any) { uni.showToast({ title: e.message || '微信登录失败', icon: 'none' }) }
+  finally { loading.value = false }
+}
+
 function navigateByRole(role: string) {
   switch (role) {
     case 'teacher':
@@ -154,7 +173,12 @@ function navigateByRole(role: string) {
       break
     case 'student':
     case 'parent':
+      // #ifdef MP-WEIXIN
+      uni.reLaunch({ url: '/pages/student/mp-home' })
+      // #endif
+      // #ifndef MP-WEIXIN
       uni.reLaunch({ url: '/pages/student/layout' })
+      // #endif
       break
     case 'admin':
       uni.reLaunch({ url: '/pages/admin/home' })
@@ -320,6 +344,7 @@ input:focus {
   align-items: center;
   gap: 12rpx;
 }
+
 .code-row input {
   flex: 1;
   min-width: 0;
@@ -397,6 +422,28 @@ input:focus {
 .login-btn[disabled] {
   background: #ccc;
 }
+.wechat-btn { margin-top: 18rpx; background: #07c160; color: #fff; font-size: 28rpx; border-radius: 8rpx; }
+
+/* #ifdef MP-WEIXIN */
+.login-page input {
+  height: 88rpx;
+  line-height: 1.4;
+  padding: 0 24rpx;
+  border: 1rpx solid #ddd;
+  border-radius: 8rpx;
+  box-sizing: border-box;
+}
+.login-page input:focus {
+  border: 1rpx solid #409eff;
+}
+.login-page .code-row input {
+  height: 88rpx;
+  min-height: 0;
+}
+.login-page .code-btn {
+  height: 88rpx;
+}
+/* #endif */
 
 /* 横屏小屏适配 */
 @media (max-width: 900px) {

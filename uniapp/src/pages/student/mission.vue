@@ -368,4 +368,56 @@ function goExport() {
     border-bottom: 1rpx solid #e8e8e8;
   }
 }
+
+/* #ifdef MP-WEIXIN */
+.mission-page {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.mission-page .info-panel,
+.mission-page .levels-panel {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 20rpx;
+}
+.mission-page .info-panel {
+  border-right: 0;
+  border-bottom: 1rpx solid #e8e8e8;
+}
+.mission-page .page-header {
+  gap: 12rpx;
+}
+.mission-page .page-title {
+  min-width: 0;
+}
+.mission-page .export-btn {
+  flex-shrink: 0;
+  padding: 8rpx 12rpx;
+  font-size: 22rpx;
+  white-space: nowrap;
+}
+.mission-page .level-card {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.mission-page .level-left,
+.mission-page .level-info {
+  min-width: 0;
+}
+.mission-page .level-left {
+  flex: 1;
+}
+.mission-page .level-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mission-page .level-right {
+  flex-shrink: 0;
+}
+/* #endif */
 </style>

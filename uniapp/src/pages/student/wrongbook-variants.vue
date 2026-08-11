@@ -1,6 +1,7 @@
 <template>
   <view class="variants-page">
-    <!-- 导航栏 -->
+    <!-- H5/App 使用页面内导航；小程序使用微信原生导航栏。 -->
+    <!-- #ifndef MP-WEIXIN -->
     <view class="nav-bar">
       <view class="nav-left" @click="goBack">
         <text class="back-icon">&#8592;</text>
@@ -17,6 +18,7 @@
         </button>
       </view>
     </view>
+    <!-- #endif -->
 
     <!-- 加载中 -->
     <view v-if="loading" class="loading">

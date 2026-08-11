@@ -428,11 +428,11 @@ onMounted(renderContent)
   white-space: nowrap;
 }
 
-.opt-content :deep(*) {
-  display: inline;
-  margin: 0 !important;
-  white-space: nowrap;
-}
+/*
+ * Do not use :deep(*) here. uni-app compiles it to a universal selector
+ * (`.opt-content.data-v-xxxx *`), which WXSS rejects. The container styles
+ * above already provide the required compact option layout on all targets.
+ */
 
 .q-subquestions {
   margin-bottom: 16px;

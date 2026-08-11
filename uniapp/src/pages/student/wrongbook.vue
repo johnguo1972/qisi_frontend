@@ -28,6 +28,19 @@
         <view class="wrong-list">
           <view v-for="item in items" :key="item.id" class="wrong-card"
                 @click="goDetail(item)">
+            <!-- #ifdef MP-WEIXIN -->
+            <view class="wrong-header mp-wrong-header">
+              <view class="mp-wrong-meta">
+                <view class="mp-wrong-meta-left">
+                  <text class="q-no">{{ item.question_no || '题目' + item.question_id }}</text>
+                  <view class="question-type">{{ typeLabel(item.question_type) }}</view>
+                </view>
+                <view class="status-tag" :class="item.status">{{ displayStatus(item.status) }}</view>
+              </view>
+              <text class="question-stem">{{ plainStem(item) }}</text>
+            </view>
+            <!-- #endif -->
+            <!-- #ifndef MP-WEIXIN -->
             <view class="wrong-header">
               <text class="q-no">{{ item.question_no || '题目' + item.question_id }}</text>
               <view class="question-summary">
@@ -36,10 +49,11 @@
               </view>
               <view class="status-tag" :class="item.status">{{ statusText(item.status) }}</view>
             </view>
+            <!-- #endif -->
             <view class="wrong-question">
               <image
                 v-if="item.images?.length"
-                :src="item.images[0].url || item.images[0].file_path"
+                :src="questionImageUrl(item.images[0])"
                 class="question-image"
                 mode="widthFix"
               />
@@ -62,6 +76,7 @@
 import { ref, onMounted } from 'vue'
 import { wrongbookApi } from '@/api/student.ts'
 import { renderWithKatex } from '@/utils/katex-renderer'
+import { getMediaUrl } from '@/utils/media-url'
 
 const items = ref<any[]>([])
 const renderedStemMap = ref<Record<string, string>>({})
@@ -92,6 +107,24 @@ function renderedStem(item: any): string {
   return renderedStemMap.value[item.id] || item.stem_html || item.stem || '\u6682\u65e0\u9898\u5e72\u5185\u5bb9'
 }
 
+// MP-WEIXIN 使用原生 text 展示题干，避免 v-html/rich-text 在不同基础库中丢失节点。
+function plainStem(item: any): string {
+  const raw = String(item?.stem || item?.stem_html || '').trim()
+  if (!raw) return '暂无题干内容'
+  return raw
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .trim() || '暂无题干内容'
+}
+
+function questionImageUrl(image: any): string {
+  return getMediaUrl(image?.url || image?.file_path || '')
+}
+
 function typeLabel(type: string): string {
   const labels: Record<string, string> = {
     single_choice: '\u5355\u9009\u9898',
@@ -113,6 +146,17 @@ function statusText(status: string): string {
     not_reviewed: '未复盘', reviewing: '复习中', consolidating: '巩固中', mastered: '已掌握',
   }
   return map[status] || status
+}
+
+function displayStatus(status: unknown): string {
+  const value = String(status || '').trim().toLowerCase()
+  const labels: Record<string, string> = {
+    not_reviewed: '未复盘',
+    reviewing: '复习中',
+    consolidating: '巩固中',
+    mastered: '已掌握',
+  }
+  return labels[value] || '未复盘'
 }
 
 function statusCount(status: string): number {
@@ -317,4 +361,98 @@ async function goVariants(id: number) {
     min-width: calc(33% - 14rpx);
   }
 }
+
+/* #ifdef MP-WEIXIN */
+.wrongbook,
+.wrongbook .main {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.wrongbook .main {
+  padding: 20rpx;
+}
+.wrongbook .stats-row {
+  flex-wrap: wrap;
+  gap: 12rpx;
+}
+.wrongbook .stat-item {
+  flex: 0 0 calc((100% - 24rpx) / 3);
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 16rpx 4rpx;
+}
+.wrongbook .stat-value {
+  font-size: 34rpx;
+}
+.wrongbook .stat-label {
+  font-size: 19rpx;
+  white-space: nowrap;
+}
+.wrongbook .list-panel,
+.wrongbook .wrong-card {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.wrongbook .question-summary,
+.wrongbook .question-stem {
+  min-width: 0;
+  overflow: hidden;
+}
+.wrongbook .mp-wrong-header {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+}
+.wrongbook .mp-wrong-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  margin-bottom: 10rpx;
+}
+.wrongbook .mp-wrong-meta-left {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.wrongbook .mp-wrong-meta .q-no {
+  flex: 0 0 auto;
+  width: 36rpx;
+  padding-top: 0;
+  text-align: left;
+}
+.wrongbook .mp-wrong-meta .question-type {
+  flex: 0 0 auto;
+  padding: 3rpx 6rpx;
+  text-align: center;
+  white-space: nowrap;
+}
+.wrongbook .mp-wrong-header .question-stem {
+  display: block;
+  width: 100%;
+  margin: 0;
+  line-height: 1.65;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+.wrongbook .mp-wrong-meta .status-tag {
+  flex: 0 0 auto;
+  padding: 4rpx 8rpx;
+  white-space: nowrap;
+}
+.wrongbook .wrong-question .question-image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: 420rpx;
+  margin: 12rpx 0 0;
+  object-fit: contain;
+}
+/* #endif */
 </style>

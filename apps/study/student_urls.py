@@ -3,7 +3,7 @@ from .student_views import (
     student_home, student_mission_detail, student_level_detail, growth_summary, export_pdf, upload_attempt_image,
     task_progress_stream
 )
-from .answer_views import submit_answer, retry_answer, get_mode_a
+from .answer_views import submit_answer, retry_answer, get_mode_a, start_attempt, submit_attempt
 from .guidance_views import start_guidance, guidance_reply
 from .knowledge_views import knowledge_mastery
 
@@ -12,6 +12,8 @@ urlpatterns = [
     path('home', student_home, name='student-home'),
     path('missions/<uuid:mission_id>', student_mission_detail, name='student-mission'),
     path('levels/<uuid:level_id>', student_level_detail, name='student-level'),
+    path('attempts/start', start_attempt, name='start-attempt'),
+    path('attempts/<uuid:attempt_id>/submit', submit_attempt, name='submit-attempt'),
     path('attempts', submit_answer, name='submit-answer'),
     path('attempts/<uuid:attempt_id>/retry', retry_answer, name='retry-answer'),
     path('guidance/sessions', start_guidance, name='start-guidance'),

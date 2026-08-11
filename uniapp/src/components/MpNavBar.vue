@@ -1,0 +1,3 @@
+<template><view class="nav"><button class="icon" @click="$emit('menu')">☰</button><text class="title">{{ title }}</text><button class="icon" @click="$emit('scan')">⌕</button></view></template>
+<script setup lang="ts">withDefaults(defineProps<{ title?: string }>(), { title: '优途AI辅学' }); defineEmits<{ menu: []; scan: [] }>()</script>
+<style scoped>.nav{height:88rpx;display:flex;align-items:center;justify-content:space-between;background:#fff;padding:0 20rpx;box-sizing:border-box;position:sticky;top:0;z-index:10}.title{font-size:32rpx;font-weight:600;color:#333}.icon{margin:0;padding:0;width:64rpx;height:64rpx;line-height:64rpx;background:none;font-size:34rpx;color:#409eff}.icon:after{border:0}</style>

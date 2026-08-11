@@ -1057,4 +1057,40 @@ function scrollToBottom() {
     padding: 8rpx 12rpx max(10rpx, env(safe-area-inset-bottom));
   }
 }
+
+/* #ifdef MP-WEIXIN */
+/* 小程序优先完整展示原题、题干图片和原题选项，内容超出屏幕时由外层 scroll-view 滚动。 */
+.guidance-main {
+  padding-bottom: calc(45vh + 24rpx);
+}
+.stem-section {
+  max-height: none;
+  overflow: visible;
+}
+.stem-body {
+  display: flex;
+  flex-direction: column;
+}
+.stem-content {
+  order: 0;
+  flex-shrink: 0;
+}
+.stem-images {
+  order: 1;
+  width: 100%;
+  margin-top: 12rpx;
+}
+.stem-image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: none;
+  object-fit: contain;
+}
+.stem-options {
+  order: 2;
+  flex-shrink: 0;
+}
+/* #endif */
 </style>

@@ -121,6 +121,23 @@ export function pickFromAlbum(options?: { count?: number }): Promise<ChooseImage
   return chooseImage({ count: options?.count ?? 1, sourceType: 'album' })
 }
 
+export async function chooseAndUpload(options: { count?: number; sourceType?: Array<'camera' | 'album'>; attemptId: string }): Promise<string[]> {
+  // #ifdef MP-WEIXIN
+  const files = await new Promise<any[]>((resolve, reject) => wx.chooseMedia({ count: options.count || 9, mediaType: ['image'], sourceType: options.sourceType || ['camera', 'album'], success: (r: any) => resolve(r.tempFiles || []), fail: reject }))
+  const urls: string[] = []
+  for (const file of files) {
+    const result = await uploadImage({ filePath: file.tempFilePath, uploadUrl: `https://qisi.chengxuelu.com/api/v1/student/attempts/${options.attemptId}/upload-images`, fieldName: 'images' })
+    if (result.statusCode < 200 || result.statusCode >= 300 || result.data?.code !== 0) throw new Error(result.data?.message || '图片上传失败')
+    const uploaded = result.data?.data?.items || result.data?.data?.images || (result.data?.data?.url ? [result.data.data] : [])
+    urls.push(...uploaded.map((item: any) => typeof item === 'string' ? item : item.url).filter(Boolean))
+  }
+  return urls
+  // #endif
+  // #ifndef MP-WEIXIN
+  throw new Error('chooseAndUpload 仅支持微信小程序')
+  // #endif
+}
+
 // ---------------------------------------------------------------------------
 // uploadImage
 // ---------------------------------------------------------------------------

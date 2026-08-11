@@ -61,6 +61,17 @@
         <text v-if="currentQuestion.question_type === 'fill_blank'" class="fill-hint">多个空位请用中文分号（；）分隔每个答案，例如：2；-3</text>
 
         <!-- 拍照上传 -->
+        <!-- #ifdef MP-WEIXIN -->
+        <PhotoUploadEnhanced
+          :images="uploadedImages"
+          :attempt-id="attemptId"
+          :question-id="String(currentQuestion.id)"
+          :level-id="levelId"
+          @update:images="uploadedImages = $event"
+          @attempt-created="attemptId = $event"
+        />
+        <!-- #endif -->
+        <!-- #ifndef MP-WEIXIN -->
         <view class="photo-section">
           <view class="photo-header">
             <text class="photo-label">上传解题照片</text>
@@ -82,6 +93,7 @@
             </view>
           </view>
         </view>
+        <!-- #endif -->
       </view>
 
       <!-- 操作按钮区：上一题 + 提交/查看答案 + 下一题 -->
@@ -164,9 +176,10 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
-import { chooseImage, uploadImage, checkCameraSupport } from '@/utils/image-upload'
+import { chooseImage, uploadImage, checkCameraSupport, chooseAndUpload } from '@/utils/image-upload'
 import { renderWithKatex } from '@/utils/katex-renderer'
 import { getMediaUrl } from '@/utils/media-url'
+import PhotoUploadEnhanced from '@/components/PhotoUploadEnhanced.vue'
 
 const levelId = ref<string>('')
 const questions = ref<any[]>([])
@@ -192,6 +205,7 @@ const answersMap = ref<Record<number, any>>({})
 
 // 拍照上传相关
 const uploadedImages = ref<Array<{ previewUrl: string; serverUrl: string }>>([])
+const attemptId = ref<string>('')
 const uploadingPhoto = ref(false)
 const cameraSupported = ref(true)
 // #ifdef H5
@@ -305,6 +319,7 @@ function saveQuestionState() {
     selectedOptions: [...selectedOptions.value],
     textAnswer: textAnswer.value,
     uploadedImages: [...uploadedImages.value],
+    attemptId: attemptId.value,
     hasSubmitted: hasSubmitted.value,
     showAnswer: showAnswer.value,
     feedback: feedback.value,
@@ -322,6 +337,7 @@ function restoreQuestionState(questionId: number) {
     selectedOptions.value = saved.selectedOptions || []
     textAnswer.value = saved.textAnswer || ''
     uploadedImages.value = saved.uploadedImages || []
+    attemptId.value = saved.attemptId || ''
     hasSubmitted.value = saved.hasSubmitted || false
     showAnswer.value = saved.showAnswer || false
     feedback.value = saved.feedback || ''
@@ -340,6 +356,7 @@ function restoreQuestionState(questionId: number) {
     selectedOptions.value = []
     textAnswer.value = ''
     uploadedImages.value = []
+    attemptId.value = ''
   }
 }
 
@@ -378,6 +395,18 @@ async function handleTakePhoto() {
   // #endif
 
   try {
+    // #ifdef MP-WEIXIN
+    if (!attemptId.value) {
+      const started: any = await studentApi.startAttempt({ question_id: currentQuestion.value.id, level_id: levelId.value })
+      if (started.code !== 0 || !started.data?.attempt_id) throw new Error(started.message || '无法创建作答记录')
+      attemptId.value = started.data.attempt_id
+    }
+    const uploaded = await chooseAndUpload({ count: 1, sourceType: ['camera', 'album'], attemptId: attemptId.value })
+    for (const url of uploaded) uploadedImages.value.push({ previewUrl: url, serverUrl: url })
+    if (uploaded.length) uni.showToast({ title: '上传成功', icon: 'success' })
+    return
+    // #endif
+
     const results = await chooseImage({ count: 1, sourceType: ['camera', 'album'] })
     if (!results || results.length === 0) return
 
@@ -439,11 +468,18 @@ async function submitAnswer() {
     : { text: textAnswer.value, images: uploadedImages.value.map(img => img.serverUrl) }
 
   try {
-    const res = await studentApi.submitAnswer({
-      question_id: currentQuestion.value.id,
-      answer_content: content,
-      level_id: levelId.value,
-    })
+    let res: any
+    // #ifdef MP-WEIXIN
+    if (!attemptId.value) {
+      const started: any = await studentApi.startAttempt({ question_id: currentQuestion.value.id, level_id: levelId.value })
+      if (started.code !== 0 || !started.data?.attempt_id) throw new Error(started.message || '无法创建作答记录')
+      attemptId.value = started.data.attempt_id
+    }
+    res = await studentApi.submitDraftAttempt(attemptId.value, content)
+    // #endif
+    // #ifndef MP-WEIXIN
+    res = await studentApi.submitAnswer({ question_id: currentQuestion.value.id, answer_content: content, level_id: levelId.value })
+    // #endif
     isCorrect.value = res.data?.is_correct || false
     feedback.value = res.data?.feedback || ''
     feedbackType.value = res.data?.is_pending ? 'pending'
@@ -988,4 +1024,57 @@ async function nextQuestion() {
     flex-direction: column;
   }
 }
+
+/* #ifdef MP-WEIXIN */
+.answer-page {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.answer-page .question-panel {
+  width: 100%;
+  padding: 20rpx;
+  box-sizing: border-box;
+}
+.answer-page .question-header,
+.answer-page .header-left,
+.answer-page .header-right {
+  min-width: 0;
+}
+.answer-page .question-header {
+  align-items: flex-start;
+  gap: 8rpx;
+}
+.answer-page .header-right {
+  flex-shrink: 0;
+  gap: 6rpx;
+}
+.answer-page .btn-guide-mode {
+  min-width: 0;
+  padding: 6rpx 8rpx;
+  font-size: 20rpx;
+  white-space: nowrap;
+}
+.answer-page .action-bar {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: stretch;
+  gap: 12rpx;
+  width: 100%;
+  padding: 0 20rpx;
+  box-sizing: border-box;
+}
+.answer-page .action-bar button {
+  flex: 1 1 0 !important;
+  min-width: 0;
+  width: 0;
+  margin: 0;
+  padding: 14rpx 4rpx;
+  font-size: 23rpx;
+  line-height: 1.4;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+/* #endif */
 </style>

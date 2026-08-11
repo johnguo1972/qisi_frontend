@@ -1,6 +1,7 @@
 <template>
   <view class="export-page">
-    <!-- 顶部导航 -->
+    <!-- H5/App 使用页面内导航；小程序使用微信原生导航栏。 -->
+    <!-- #ifndef MP-WEIXIN -->
     <view class="nav-bar">
       <view class="nav-back" @click="goBack">
         <text class="back-icon">←</text>
@@ -9,6 +10,7 @@
       <text class="nav-title">导出 PDF</text>
       <view class="nav-placeholder"></view>
     </view>
+    <!-- #endif -->
 
     <!-- 加载中 -->
     <view v-if="loading" class="center">
@@ -64,11 +66,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { exportApi } from '@/api/student.ts'
+import { getPublicMediaUrl } from '@/utils/media-url'
 
 const loading = ref(true)
 const exporting = ref(false)
 const exportType = ref<'wrongbook' | 'mission'>('wrongbook')
-const itemIds = ref<number[]>([])
+const itemIds = ref<string[]>([])
 const includeAnswers = ref(false)
 const watermarkText = ref('')
 
@@ -78,7 +81,11 @@ const itemCount = computed(() => itemIds.value.length)
 onLoad((options: any) => {
   exportType.value = options?.type === 'mission' ? 'mission' : 'wrongbook'
   if (options?.ids) {
-    itemIds.value = options.ids.split(',').map((s: string) => parseInt(s.trim(), 10)).filter((n: number) => !isNaN(n))
+    // 题目和任务主键均可能是 UUID，不能使用 parseInt 截断或转换。
+    itemIds.value = String(options.ids)
+      .split(',')
+      .map((s: string) => s.trim())
+      .filter(Boolean)
   }
 })
 
@@ -112,7 +119,8 @@ async function handleExport() {
       watermark_text: watermarkText.value,
     })
 
-    const downloadUrl = res.data?.download_url || res.data?.url
+    const rawDownloadUrl = res.data?.download_url || res.data?.url
+    const downloadUrl = getPublicMediaUrl(rawDownloadUrl)
     if (downloadUrl) {
       uni.showToast({ title: '导出成功，正在下载...', icon: 'success' })
       // 优先使用浏览器下载，回退到 uni.openDocument

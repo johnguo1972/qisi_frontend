@@ -385,7 +385,11 @@ onMounted(() => {
   overflow: visible;
 }
 
-.modal > * {
+.modal > .modal-title,
+.modal > .form-group,
+.modal > .form-row,
+.modal > .modal-footer,
+.modal > .delete-warning {
   max-width: 100%;
   box-sizing: border-box;
 }

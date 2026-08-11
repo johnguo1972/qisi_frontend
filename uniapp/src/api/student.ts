@@ -9,6 +9,10 @@ export const studentApi = {
   levelDetail: (id: UUID) => get(`/student/levels/${id}`),
   submitAnswer: (data: { question_id: UUID; answer_content: object; mission_id?: UUID; level_id?: UUID }) =>
     post('/student/attempts', data),
+  startAttempt: (data: { question_id: UUID; mission_id?: UUID; level_id?: UUID }) =>
+    post<{ attempt_id: UUID }>('/student/attempts/start', data),
+  submitDraftAttempt: (attemptId: UUID, answer_content: object) =>
+    post(`/student/attempts/${attemptId}/submit`, { answer_content }),
   retryAnswer: (attemptId: UUID, data: object) =>
     post(`/student/attempts/${attemptId}/retry`, data),
   startGuidance: (data: { question_id: UUID; mode_type: string }) =>
@@ -31,7 +35,7 @@ export const wrongbookApi = {
 export const exportApi = {
   exportPdf: (data: {
     export_type: string
-    item_ids: number[]
+    item_ids: Array<string | number>
     include_answers: boolean
     watermark_text?: string
   }) =>

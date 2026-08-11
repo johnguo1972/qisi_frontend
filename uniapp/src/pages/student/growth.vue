@@ -184,4 +184,36 @@ onMounted(async () => {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* #ifdef MP-WEIXIN */
+.growth,
+.growth .main {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.growth .main {
+  padding: 20rpx;
+}
+.growth .stats-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12rpx;
+}
+.growth .stat-card,
+.growth .feedback-panel,
+.growth .feedback-card {
+  min-width: 0;
+  box-sizing: border-box;
+}
+.growth .stat-card {
+  padding: 20rpx 8rpx;
+}
+.growth .feedback-panel,
+.growth .feedback-card {
+  width: 100%;
+}
+.growth .feedback-text {
+  word-break: break-all;
+}
+/* #endif */
 </style>

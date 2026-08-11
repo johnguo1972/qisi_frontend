@@ -1,7 +1,7 @@
 import uuid
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from apps.study.permissions import IsStudent
+from apps.study.permissions import IsStudentOrParentContext
 from rest_framework.response import Response
 from apps.parser.models import ExamQuestion
 from apps.study.models import AnswerAttempt, StudentLevelProgress
@@ -132,7 +132,80 @@ def _handle_submit_answer(request, question_id, answer_content, mission_id, leve
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
+def start_attempt(request):
+    """Create a draft attempt so image answers have an owner before upload."""
+    question_id = request.data.get('question_id')
+    try:
+        question = ExamQuestion.objects.get(pk=question_id)
+    except ExamQuestion.DoesNotExist:
+        return Response({'code': 404, 'message': '题目不存在', 'data': None, 'trace_id': make_trace_id()}, status=404)
+
+    attempt_no = AnswerAttempt.objects.filter(
+        student_user_id=request.user, question_id=question.id,
+    ).count() + 1
+    attempt = AnswerAttempt.objects.create(
+        student_user_id=request.user,
+        mission_id=request.data.get('mission_id'),
+        level_id=request.data.get('level_id'),
+        question_id=question.id,
+        attempt_no=attempt_no,
+        answer_content={},
+        is_correct=False,
+        is_subjective_pending=True,
+        submit_source='draft',
+    )
+    return Response({'code': 0, 'message': 'success', 'data': {'attempt_id': attempt.id}, 'trace_id': make_trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
+def submit_attempt(request, attempt_id):
+    """Finalize a draft attempt after optional image uploads."""
+    try:
+        attempt = AnswerAttempt.objects.get(pk=attempt_id, student_user_id=request.user)
+    except AnswerAttempt.DoesNotExist:
+        return Response({'code': 404, 'message': '作答记录不存在', 'data': None, 'trace_id': make_trace_id()}, status=404)
+    if attempt.submit_source != 'draft':
+        return Response({'code': 409, 'message': '作答记录已经提交', 'data': None, 'trace_id': make_trace_id()}, status=409)
+    try:
+        question = ExamQuestion.objects.get(pk=attempt.question_id)
+    except ExamQuestion.DoesNotExist:
+        return Response({'code': 404, 'message': '题目不存在', 'data': None, 'trace_id': make_trace_id()}, status=404)
+
+    answer_content = request.data.get('answer_content', {})
+    result = _check_answer(question, answer_content)
+    is_pending = result is None
+    is_correct = False if is_pending else result
+    attempt.answer_content = answer_content
+    attempt.is_correct = is_correct
+    attempt.is_subjective_pending = is_pending
+    attempt.score = 100.00 if is_correct else 0.00
+    attempt.submit_source = request.data.get('source', 'manual')
+    attempt.save(update_fields=['answer_content', 'is_correct', 'is_subjective_pending', 'score', 'submit_source'])
+
+    if attempt.level_id:
+        lp = StudentLevelProgress.objects.filter(level_id=attempt.level_id, student_user_id=request.user).first()
+        if lp:
+            lp.attempt_count += 1
+            if is_correct:
+                lp.pass_score = max(lp.pass_score, 100.00)
+            lp.save(update_fields=['attempt_count', 'pass_score'])
+    if (not is_correct) and (not is_pending):
+        WrongBookItem.objects.get_or_create(
+            student_user_id=request.user, question_id=attempt.question_id,
+            defaults={'status': 'not_reviewed'},
+        )
+    feedback = '主观题已提交，等待老师批阅' if is_pending else generate_feedback(is_correct, question, attempt.attempt_no)
+    return Response({'code': 0, 'message': 'success', 'data': {
+        'is_correct': is_correct, 'is_pending': is_pending, 'score': float(attempt.score),
+        'feedback': feedback, 'attempt_id': attempt.id,
+        'suggest_guidance': (not is_correct) and (not is_pending),
+    }, 'trace_id': make_trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def submit_answer(request):
     """S-04: Submit answer."""
     return _handle_submit_answer(
@@ -146,7 +219,7 @@ def submit_answer(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def retry_answer(request, attempt_id):
     """S-05: Retry wrong answer."""
     try:
@@ -166,7 +239,7 @@ def retry_answer(request, attempt_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def get_mode_a(request, question_id):
     """S-08: Get structured answer A."""
     try:

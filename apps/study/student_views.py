@@ -7,7 +7,7 @@ from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from apps.study.permissions import IsStudent
+from apps.study.permissions import IsStudentOrParentContext
 from rest_framework.response import Response
 from apps.missions.models import LearningMission, MissionLevel, MissionQuestionRel
 from apps.study.models import StudentMissionProgress, StudentLevelProgress, AnswerAttempt
@@ -31,7 +31,7 @@ def _visible_mission_rels(level_or_mission, student_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def student_home(request):
     """S-01: Student home - task list.
 
@@ -48,9 +48,15 @@ def student_home(request):
         ).values_list('class_obj_id', flat=True)
     )
 
+    classes = list(
+        ClassStudent.objects.filter(student=request.user, status='active')
+        .select_related('class_obj')
+        .values('class_obj_id', 'class_obj__class_name')
+    )
+
     if not student_class_ids:
         return Response({
-            'code': 0, 'message': 'success', 'data': {'missions': []}, 'trace_id': make_trace_id(),
+            'code': 0, 'message': 'success', 'data': {'missions': [], 'classes': classes}, 'trace_id': make_trace_id(),
         })
 
     # 获取已发布的任务（属于学生所在班级的）
@@ -150,12 +156,12 @@ def student_home(request):
         })
 
     return Response({
-        'code': 0, 'message': 'success', 'data': {'missions': missions}, 'trace_id': make_trace_id(),
+        'code': 0, 'message': 'success', 'data': {'missions': missions, 'classes': classes}, 'trace_id': make_trace_id(),
     })
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def student_mission_detail(request, mission_id):
     """S-02: Student mission detail."""
     try:
@@ -223,7 +229,7 @@ def student_mission_detail(request, mission_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def student_level_detail(request, level_id):
     """S-03: Current level detail with questions."""
     try:
@@ -297,7 +303,7 @@ def student_level_detail(request, level_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def growth_summary(request):
     """S-12: Growth summary."""
     from apps.wrongbook.models import WrongBookItem, MasteryRecord
@@ -514,7 +520,7 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def export_pdf(request):
     """导出错题本或任务题目为 PDF（当前返回 HTML 占位，待 reportlab 可用后替换）。
 
@@ -621,7 +627,7 @@ def export_pdf(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def upload_attempt_image(request, attempt_id):
     """Upload a photo for a student's answer attempt.
 

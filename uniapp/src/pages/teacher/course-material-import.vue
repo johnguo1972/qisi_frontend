@@ -21,9 +21,10 @@
             </view>
             <view v-else class="doc-page" ref="docPageRef" @mousedown="onSelectionStart" @mousemove="onSelectionMove" @mouseup="onSelectionEnd">
               <view class="image-wrapper">
-                <img
+                <image
                   :src="pages[currentPage]?.url"
                   class="page-image"
+                  mode="widthFix"
                   @load="onImageLoad"
                   @error="onImageError"
                 />
