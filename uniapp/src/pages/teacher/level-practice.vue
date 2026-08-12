@@ -32,7 +32,7 @@
         <!-- 题号与类型 -->
         <view class="question-header">
           <text class="question-no">第 {{ currentIndex + 1 }} 题</text>
-          <text class="question-type">{{ currentQuestion?.question_type }}</text>
+          <text class="question-type">{{ questionTypeText(currentQuestion?.question_type) }}</text>
           <text class="question-diff">{{ '★'.repeat(Math.round(currentQuestion?.difficulty || 1)) }}</text>
           <!-- B/C模式引导按钮 -->
           <text class="guide-btn guide-b" @click="startGuidance('B')">B模式引导</text>
@@ -51,8 +51,9 @@
 
           <!-- 题目图片 -->
           <view v-if="currentQuestion.images && currentQuestion.images.length > 0" class="question-images">
-            <image v-for="(img, i) in currentQuestion.images" :key="i"
-                   :src="img.url" mode="widthFix" class="question-image" />
+            <image v-for="(img, i) in currentQuestion.images" :key="img.id || i"
+                   :src="questionImageUrl(img)" mode="widthFix" class="question-image"
+                   :style="questionImageStyle(img)" @error="handleQuestionImageError(img)" />
           </view>
         </view>
 
@@ -240,6 +241,7 @@ import { onLoad } from '@dcloudio/uni-app'
 import { missionApi } from '@/api/index.ts'
 import { chooseImage } from '@/utils/image-upload'
 import { renderWithKatex } from '@/utils/katex-renderer'
+import { getMediaUrl } from '@/utils/media-url'
 
 const missionId = ref<string>('')
 const levelId = ref<string>('')
@@ -379,6 +381,35 @@ function levelTypeText(type: string): string {
     practice: '练习', review: '复习', retry: '重做', variant: '变式', check: '检测'
   }
   return map[type] || type
+}
+
+function questionTypeText(type?: string): string {
+  const map: Record<string, string> = {
+    single_choice: '单选题',
+    multiple_choice: '多选题',
+    fill_blank: '填空题',
+    short_answer: '简答题',
+    essay: '论述题',
+    true_false: '判断题',
+    computation: '计算题',
+    proof: '证明题',
+  }
+  return map[type || ''] || type || '未知题型'
+}
+
+function questionImageUrl(image: any): string {
+  const value = typeof image === 'string' ? image : (image?.url || image?.file_path || '')
+  return getMediaUrl(value)
+}
+
+function questionImageStyle(image: any) {
+  const savedWidth = Number(image?.display_width || 0)
+  const width = savedWidth > 0 ? Math.max(80, Math.min(1200, Math.round(savedWidth))) : 360
+  return { width: `${width}px`, maxWidth: '100%', height: 'auto' }
+}
+
+function handleQuestionImageError(image: any) {
+  console.warn('Question image failed to load:', questionImageUrl(image))
 }
 
 // 题目导航
@@ -638,13 +669,17 @@ function goBack() {
 
 <style scoped>
 .practice-page {
-  display: flex;
+  height: 100vh;
+  box-sizing: border-box;
   min-height: 100vh;
   background: #f0f2f5;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .main {
   margin-left: 0;
-  flex: 1;
+  width: 100%;
+  box-sizing: border-box;
   padding: 20rpx 30rpx;
   max-width: 900px;
 }
@@ -749,12 +784,16 @@ function goBack() {
   margin-bottom: 24rpx;
 }
 .question-images {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16rpx;
+  display: block;
   margin-top: 16rpx;
 }
-.question-image { max-width: 100%; border-radius: 8rpx; }
+.question-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 0 16rpx;
+  border-radius: 8rpx;
+}
 
 /* 选项 */
 .options-area {
@@ -1110,6 +1149,6 @@ function goBack() {
 
 /* 小屏适配 */
 @media (max-width: 768px) {
-  .main { margin-left: 60px; padding: 16rpx; }
+  .main { margin-left: 0; padding: 16rpx; }
 }
 </style>

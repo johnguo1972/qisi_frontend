@@ -15,7 +15,7 @@ from apps.papers.models import ExamPaper
 from apps.common.batch_tasks import batch_ai_process_questions
 from .serializers import (
     QuestionDetailSerializer, QuestionUpdateSerializer,
-    QuestionListSerializer, PaperReviewSerializer
+    QuestionListSerializer, PaperReviewSerializer, QuestionImageListSerializer
 )
 from .services.question_edit_service import update_question
 
@@ -352,7 +352,7 @@ def get_question_assets(request, question_id):
         raise NotFound(f'Question {question_id} not found')
         
     pages = ExamPage.objects.filter(paper=question.paper).order_by('page_no')
-    images = QuestionImage.objects.filter(question=question).exclude(image_type='source').order_by('sort_order')
+    images = QuestionImage.objects.filter(question=question, image_type='diagram').order_by('sort_order')
     
     pages_data = [{'page_no': p.page_no, 'image_path': p.image_path, 'width': p.width, 'height': p.height} for p in pages]
     from .serializers import QuestionImageListSerializer
@@ -416,6 +416,54 @@ def delete_question_image_api(request, question_id, image_id):
         return Response({'code': 0, 'message': '删除成功'})
     except QuestionImage.DoesNotExist:
         return Response({'code': 404, 'message': '插图不存在'}, status=404)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def restore_question_image_original(request, question_id, image_id):
+    """Restore an edited image to its persistent, uncropped original file."""
+    from apps.parser.models import QuestionImage
+
+    try:
+        image = QuestionImage.objects.get(id=image_id, question_id=question_id)
+    except QuestionImage.DoesNotExist:
+        raise NotFound('Image not found')
+
+    if not image.original_file_path:
+        return Response({'code': 400, 'message': 'No original image is available'}, status=400)
+
+    image.file_path = image.original_file_path
+    image.save(update_fields=['file_path'])
+    return Response({'code': 0, 'data': QuestionImageListSerializer(image).data})
+
+
+@api_view(['PATCH', 'POST'])
+@permission_classes([IsAuthenticated])
+def update_question_image_layout(request, question_id, image_id):
+    """Update only the placement and display size of a question image."""
+    from apps.parser.models import QuestionImage
+
+    try:
+        image = QuestionImage.objects.get(id=image_id, question_id=question_id)
+    except QuestionImage.DoesNotExist:
+        raise NotFound('Image not found')
+
+    placement = request.data.get('placement', image.placement)
+    if placement not in {'stem', 'options'}:
+        return Response({'code': 400, 'message': '图片位置只能是题干下方或选项下方'}, status=400)
+    try:
+        display_width = int(request.data.get('display_width', image.display_width))
+    except (TypeError, ValueError):
+        return Response({'code': 400, 'message': '图片宽度无效'}, status=400)
+    if not 80 <= display_width <= 1200:
+        return Response({'code': 400, 'message': '图片显示宽度应在 80 到 1200 像素之间'}, status=400)
+
+    image.placement = placement
+    image.display_width = display_width
+    if 'description' in request.data:
+        image.description = str(request.data.get('description') or '').strip()
+    image.save(update_fields=['placement', 'display_width', 'description'])
+    return Response({'code': 0, 'data': QuestionImageListSerializer(image).data})
 
 
 @api_view(['GET'])

@@ -3,6 +3,7 @@ from rest_framework import serializers
 from apps.parser.models import ExamQuestion
 from apps.papers.models import ParseTask, ExamPaper
 from apps.knowledge.models import KnowledgePoint
+from apps.common.media import media_url
 
 
 class QuestionListSerializer(serializers.ModelSerializer):
@@ -48,21 +49,45 @@ class QuestionListSerializer(serializers.ModelSerializer):
         return (stem[:80] + '...') if len(stem) > 80 else stem
 
     def get_knowledge_points_count(self, obj):
-        if obj.ai_knowledge_enrichment:
-            return len(obj.ai_knowledge_enrichment.get('points', []))
-        if obj.knowledge_points:
-            return len(obj.knowledge_points) if isinstance(obj.knowledge_points, list) else 0
-        return 0
+        raw = obj.ai_knowledge_enrichment or obj.knowledge_points or []
+        if isinstance(raw, dict):
+            raw = raw.get('points') or raw.get('knowledge_points') or []
+        if not isinstance(raw, list):
+            return 0
+        keys = set()
+        for item in raw:
+            if isinstance(item, dict):
+                key = item.get('id') or item.get('code') or item.get('module') or item.get('name')
+            else:
+                key = item
+            if key is not None and str(key):
+                keys.add(str(key))
+        return len(keys)
 
     def get_knowledge_points_display(self, obj):
-        raw = obj.knowledge_points or []
+        raw = obj.knowledge_points or obj.ai_knowledge_enrichment or []
         if isinstance(raw, dict):
-            raw = raw.get('points', [])
+            raw = raw.get('points') or raw.get('knowledge_points') or []
         if not isinstance(raw, list):
             return []
         modules = [x.get('module') for x in raw if isinstance(x, dict) and x.get('module')]
-        ids = [str(x.get('id')) for x in raw if isinstance(x, dict) and x.get('id') is not None]
-        points = list(KnowledgePoint.objects.filter(id__in=ids)) if ids else []
+        ids = [x.get('id') for x in raw if isinstance(x, dict) and x.get('id') is not None]
+        # knowledge_points is historical JSON data.  Older imported questions
+        # may contain UUID knowledge-point IDs, while the current external
+        # knowledge_points table uses a BIGINT primary key.  Passing UUIDs
+        # directly to an integer PK lookup raises ValueError and turns the
+        # question-list endpoint into HTTP 500.  Only query IDs that can be
+        # represented by the current integer key; UUID records still retain
+        # their module/name fallback below.
+        numeric_ids = []
+        for point_id in ids:
+            if isinstance(point_id, bool):
+                continue
+            try:
+                numeric_ids.append(int(point_id))
+            except (TypeError, ValueError, OverflowError):
+                continue
+        points = list(KnowledgePoint.objects.filter(id__in=numeric_ids)) if numeric_ids else []
         by_id = {str(p.id): p for p in points}
         module_qs = KnowledgePoint.objects.filter(subject=obj.subject, module__in=modules)
         if not module_qs.exists():
@@ -116,10 +141,12 @@ class QuestionListSerializer(serializers.ModelSerializer):
             {
                 'id': str(img.id),
                 'file_path': img.file_path,
+                'url': media_url(img.file_path),
                 'description': img.description or '',
                 'image_type': img.image_type,
+                'display_width': img.display_width,
             }
-            for img in obj.images.all()[:5]  # 最多返回5张图片
+            for img in obj.images.filter(image_type='diagram').order_by('sort_order')[:5]  # 仅返回题目插图，排除公式裁剪图
         ]
 
     # 新增方法：获取选项列表

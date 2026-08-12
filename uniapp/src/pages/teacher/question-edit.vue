@@ -1,199 +1,119 @@
 <template>
   <view class="edit-page">
-
-    <!-- 右侧内容区 -->
-    <view class="main" v-if="question">
-      <view class="split-layout">
-        <!-- 左侧: 图片查看器 -->
-        <view class="image-panel">
-          <view v-if="photoImages.length > 0" class="photo-images-section">
-            <text class="section-label">试题原图 ({{ photoImages.length }})</text>
-            <view class="photo-images-scroll">
-              <view v-for="(img, idx) in photoImages" :key="idx" class="photo-image-item">
-                <image :src="img.url" mode="widthFix" class="photo-image" @click="previewPhotoImage(img.url)" />
-                <text class="photo-image-label">{{ img.description || "图" + (idx+1) }}</text>
-              </view>
-            </view>
-          </view>
-
-          <view class="page-nav-bar" v-if="totalPages > 1">
-            <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上页</button>
-            <text class="page-label">第 {{ currentPage }} / {{ totalPages }} 页</text>
-            <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下页</button>
-          </view>
-
-          <view class="zoom-controls">
-            <button size="mini" @click="zoomOut">-</button>
-            <text class="zoom-label">{{ Math.round(zoom * 100) }}%</text>
-            <button size="mini" @click="zoomIn">+</button>
-            <button size="mini" @click="startCalibration" :type="calibrating ? 'warn' : 'default'">{{ calibrating ? '校准中…点十字' : '校准坐标' }}</button>
-            <button size="mini" v-if="(cropOffset.x || cropOffset.y) && !calibrating" @click="resetCalibration">清除({{cropOffset.x}},{{cropOffset.y}})</button>
-            <text v-if="(cropOffset.x || cropOffset.y) && !calibrating" class="calib-nudge-label">选框微调</text>
-            <button size="mini" v-if="(cropOffset.x || cropOffset.y) && !calibrating" @click="nudgeCalib(0,-5)">↑</button>
-            <button size="mini" v-if="(cropOffset.x || cropOffset.y) && !calibrating" @click="nudgeCalib(-5,0)">←</button>
-            <button size="mini" v-if="(cropOffset.x || cropOffset.y) && !calibrating" @click="nudgeCalib(5,0)">→</button>
-            <button size="mini" v-if="(cropOffset.x || cropOffset.y) && !calibrating" @click="nudgeCalib(0,5)">↓</button>
-          </view>
-
-          <view class="image-container" ref="imageContainerRef" @mousedown="onCropStart" @mousemove="onCropMove" @mouseup="onCropEnd" :class="{ 'add-mode': addNewMode, 'calibrating': calibrating }">
-            <view class="image-wrap" :style="{ transform: 'scale(' + zoom + ')' }">
-              <image
-                :src="currentImageSrc"
-                mode="widthFix"
-                class="page-image"
-                @load="onImageLoad"
-              />
-              <view
-                v-if="cropRect"
-                class="crop-overlay"
-                :style="{ left: cropRect.x + 'px', top: cropRect.y + 'px', width: cropRect.w + 'px', height: cropRect.h + 'px' }"
-              >
-                <view class="crop-border" :class="{ 'add-border': addNewMode }"></view>
-              </view>
-            </view>
-          </view>
-          <view v-if="addNewMode" class="add-mode-actions">
-            <button size="mini" type="primary" :disabled="!cropRect" @click="doCropAndRecognize">框选并AI识别</button>
-            <button size="mini" @click="cancelAddMode">取消</button>
-          </view>
-          <view v-if="calibrating" class="calib-crosshair" :style="{ top: calibPos.y + 'px', left: calibPos.x + 'px' }"></view>
-          <view v-if="calibrating" class="calib-hint">把鼠标对准上方红色十字中心，点一下完成校准</view>
-
-          <view class="crop-actions">
-            <button size="mini" type="primary" :disabled="!cropRect" @click="doCrop">裁剪此区域</button>
-            <button size="mini" :disabled="!cropRect" @click="clearCrop">清除选框</button>
-          </view>
-
-          <view class="image-list-section">
-            <view class="image-list-header">
-              <text class="list-title">插图管理 ({{ images.length }})</text>
-              <text class="list-hint">划选原图以新增</text>
-            </view>
-            <view class="image-list-body">
-              <view v-for="(img, index) in images" :key="img.id" class="image-list-item">
-                <image :src="getImageUrl(img.file_path)" mode="aspectFill" class="thumb-img" />
-                <text class="thumb-desc">{{ img.description || '裁剪图' }}</text>
-                <view class="thumb-sort">
-                  <text class="sort-arrow" @click="moveImageUp(index)" :class="{ disabled: index === 0 }">▲</text>
-                  <text class="sort-arrow" @click="moveImageDown(index)" :class="{ disabled: index === images.length - 1 }">▼</text>
-                </view>
-                <button size="mini" class="thumb-insert" @click="handleInsertImage(img.id)">插入</button>
-                <button size="mini" type="warn" class="thumb-delete" @click="handleDeleteImage(img.id)">删除</button>
-              </view>
-              <view v-if="images.length === 0" class="empty-images">
-                <text>暂无插图</text>
-              </view>
-            </view>
-          </view>
+    <view v-if="question" class="editor-shell">
+      <view class="page-header">
+        <view>
+          <text class="page-title">编辑题目</text>
+          <text class="page-subtitle">{{ form.question_no || '-' }} · {{ questionTypeLabel }}</text>
         </view>
-
-        <!-- 右侧: 编辑表单 -->
-        <view class="edit-panel">
-          <view class="form-toolbar">
-            <view class="toolbar-left">
-              <select v-model="form.question_type" class="form-select-sm">
-                <option value="single_choice">单选题</option>
-                <option value="multiple_choice">多选题</option>
-                <option value="fill_blank">填空题</option>
-                <option value="solution">解答题</option>
-              </select>
-              <view class="info-group">
-                <text class="info-label">题号:</text>
-                <input v-model="form.question_no" class="form-input-sm info-input" placeholder="题号" />
-                <text class="info-label">页码:</text>
-                <input v-model.number="form.page_start" type="number" class="form-input-sm info-input-sm" placeholder="起" />
-                <text class="info-separator">-</text>
-                <input v-model.number="form.page_end" type="number" class="form-input-sm info-input-sm" placeholder="止" />
-              </view>
-            </view>
-            <view class="toolbar-right">
-              <view class="diff-badge" :class="'diff-l' + (form.difficulty || 0)">
-                难度第{{ ['','一','二','三','四','五'][form.difficulty] || '?' }}级
-              </view>
-            </view>
-          </view>
-
-          <view class="question-actions">
-            <button size="mini" @click="handleBackToList">⟵ 返回列表</button>
-            <button size="mini" type="info" @click="handlePrevQuestion" :disabled="!paperId">← 上一题</button>
-            <button size="mini" type="info" @click="handleNextQuestion" :disabled="!paperId">下一题 →</button>
-            <button size="mini" type="danger" @click="handleDeleteQuestion">删除本题</button>
-            <button size="mini" type="primary" @click="startAddNewQuestion">框选新增试题</button>
-          </view>
-
-          <view class="form-group">
-            <text class="form-label">题干</text>
-            <textarea id="textarea-stem" class="form-textarea form-textarea-auto" v-model="form.stem" placeholder="输入题干内容" rows="1" @input="onPreviewChange" @focus="activeTextarea = 'stem'" />
-            <view class="math-preview" v-html="stemPreview"></view>
-          </view>
-
-          <view class="form-group">
-            <text class="form-label">答案</text>
-            <textarea id="textarea-answer" class="form-textarea form-textarea-auto" v-model="form.answer" placeholder="输入答案" rows="1" @input="onPreviewChange" @focus="activeTextarea = 'answer'" />
-            <view class="math-preview" v-html="answerPreview"></view>
-          </view>
-
-          <view v-if="form.question_type === 'single_choice' || form.question_type === 'multiple_choice'" class="form-group">
-            <text class="form-label">选项</text>
-            <view class="options-list">
-              <view v-for="(opt, index) in form.options" :key="opt.label" class="option-row">
-                <text class="option-label">{{ opt.label }}.</text>
-                <view class="option-content-wrapper">
-                  <textarea :id="'textarea-option-' + index" v-model="opt.content" class="option-textarea option-textarea-auto" :placeholder="'选项 ' + opt.label + ' 的内容'" rows="1" @input="onPreviewChange" @focus="onOptionFocus(index)" />
-                  <view class="math-preview option-preview" v-html="optionPreviews[index] || ''"></view>
-                </view>
-              </view>
-            </view>
-          </view>
-
-          <view class="form-group">
-            <text class="form-label">知识点</text>
-            <view class="kp-selector">
-              <input v-model="knowledgeSearch" class="kp-search-input" placeholder="搜索知识点（输入关键词后从下拉列表选择）" />
-              <text class="kp-debug">已加载{{ allKpList.length }}条，匹配{{ filteredKpList.length }}条</text>
-              <view v-if="knowledgeSearch && filteredKpList.length > 0" class="kp-dropdown">
-                <view v-for="kp in filteredKpList.slice(0, 50)" :key="kp.id" class="kp-dropdown-item" @click="toggleKnowledgePoint(kp)">
-                  <view class="kp-checkbox"><text v-if="isKnowledgePointSelected(kp.id)">✓</text></view>
-                  <text class="kp-item-label">{{ kp.module || kp.label || '未知' }}</text>
-                </view>
-              </view>
-            </view>
-            <view v-if="selectedKps.length > 0" class="kp-tags">
-              <view v-for="kp in selectedKps" :key="kp.id" class="kp-tag">
-                <text>{{ kp.module || kp.label || '未知' }}</text>
-                <text class="kp-tag-remove" @click="removeKnowledgePoint(kp.id)">&times;</text>
-              </view>
-            </view>
-            <view v-else class="kp-empty"><text>暂无关联知识点，请在搜索框输入关键词选择</text></view>
-          </view>
-
-          <view class="form-group">
-            <text class="form-label">解析</text>
-            <textarea id="textarea-analysis" class="form-textarea form-textarea-auto" v-model="form.analysis" placeholder="输入解析" rows="1" @input="onPreviewChange" @focus="activeTextarea = 'analysis'" />
-            <view class="math-preview" v-html="analysisPreview"></view>
-          </view>
-
-          <view class="form-group">
-            <text class="form-label">解答</text>
-            <textarea id="textarea-solution" class="form-textarea form-textarea-auto" v-model="form.solution" placeholder="输入解答" rows="1" @input="onPreviewChange" @focus="activeTextarea = 'solution'" />
-            <view class="math-preview" v-html="solutionPreview"></view>
-          </view>
-
-          <view class="form-actions-bar">
-            <view class="actions-left"><text class="shortcut-hint">Ctrl+S: 保存 | Ctrl+Enter: 确认</text></view>
-            <view class="actions-right">
-              <button size="mini" type="warning" @click="handleAiProcess">AI处理</button>
-              <button size="mini" type="primary" @click="handleSave" :loading="saving" style="background: #1a237e">保存修改</button>
-              <button size="mini" type="success" @click="handleConfirm">确认正确</button>
-            </view>
-          </view>
+        <view class="header-actions">
+          <button size="mini" @click="handleBack">返回</button>
+          <button size="mini" type="primary" :loading="saving" @click="handleSave">保存</button>
+          <button size="mini" type="success" @click="handleConfirm">确认题目</button>
+          <button size="mini" @click="handleAiProcess">AI处理</button>
         </view>
       </view>
+
+      <view class="workspace">
+        <scroll-view scroll-y class="editor-pane">
+          <view class="section-card">
+            <view class="section-heading"><text class="section-title">题目编辑</text><text class="section-hint">左侧编辑，右侧为最终题目效果预览</text></view>
+            <view class="meta-grid">
+              <view class="field"><text class="field-label">题型</text><picker mode="selector" :range="questionTypeRange" :value="questionTypeIndex" @change="onQuestionTypeChange"><view class="control picker-control">{{ questionTypeLabel }}</view></picker></view>
+              <view class="field"><text class="field-label">题号</text><input v-model="form.question_no" class="control" /></view>
+              <view class="field"><text class="field-label">难度</text><picker mode="selector" :range="difficultyRange" :value="difficultyIndex" @change="onDifficultyChange"><view class="control picker-control">L{{ form.difficulty }}</view></picker></view>
+            </view>
+
+            <view class="content-field stem-field"><text class="field-label">题干 <text class="question-uuid">UUID：{{ question.id }}</text></text><textarea v-model="form.stem" class="editor-textarea" rows="6" @input="scheduleRender" /></view>
+
+            <view v-if="isChoice" class="content-field options-field">
+              <text class="field-label">选项</text>
+              <view v-for="option in form.options" :key="option.label" class="option-editor"><text class="option-label">{{ option.label }}.</text><textarea v-model="option.content" class="editor-textarea option-textarea" rows="2" maxlength="100" @input="scheduleRender" /></view>
+            </view>
+
+            <view class="content-field"><text class="field-label">答案</text><textarea v-model="form.answer" class="editor-textarea answer-textarea" rows="2" @input="scheduleRender" /></view>
+            <view class="content-field"><text class="field-label">解析</text><textarea v-model="form.analysis" class="editor-textarea analysis-textarea" rows="7" @input="scheduleRender" /></view>
+            <view class="content-field"><text class="field-label">解答</text><textarea v-model="form.solution" class="editor-textarea analysis-textarea" rows="7" @input="scheduleRender" /></view>
+          </view>
+
+          <view class="section-card image-manager">
+            <view class="section-heading"><view><text class="section-title">插图管理</text><text class="section-hint">插图默认显示在题干下方；说明文字显示在图片下方</text></view><button size="mini" type="primary" @click="importImage">导入图片</button></view>
+            <view v-if="images.length" class="image-list">
+              <view v-for="image in images" :key="image.id" class="image-item" :class="{ active: selectedImage?.id === image.id }">
+                <image :src="getImageUrl(image.file_path)" mode="aspectFill" class="image-thumb" @click="selectImage(image)" />
+                <view class="image-settings"><input v-model="image.description" class="image-name" placeholder="图片说明（显示在图片下方）" @blur="saveImage(image)" /><view class="image-actions"><button size="mini" :disabled="!image.can_restore_original" @click="restoreOriginalImage(image)">恢复原始图</button><button size="mini" type="warn" @click="deleteImage(image)">删除</button></view></view>
+              </view>
+            </view>
+            <text v-else class="empty-hint">暂无插图，可导入图片</text>
+            <view v-if="selectedImage" class="canvas-editor">
+              <view class="canvas-title"><text>图片画布编辑</text><text>滚轮或按钮缩放；左键拖动框选；拖动蓝框或右下角方块可调整</text></view>
+              <view class="canvas-tools"><button size="mini" @click="zoomOut">缩小</button><button size="mini" @click="zoomIn">放大</button><button size="mini" @click="rotateLeft">左旋 90°</button><button size="mini" @click="rotateRight">右旋 90°</button><button size="mini" @click="flipHorizontal">水平翻转</button><button size="mini" :disabled="!hasImageTransform" @click="saveImageTransform">保存变换</button></view>
+              <view class="canvas-stage" @wheel.prevent="handleCanvasWheel" @mousewheel.prevent="handleCanvasWheel" @mousedown="startSelection" @mousemove="moveSelection" @mouseup="endSelection" @mouseleave="endSelection">
+                <view ref="canvasSurface" class="canvas-surface" :style="canvasSurfaceStyle"><image :src="getImageUrl(selectedImage.file_path)" mode="widthFix" class="canvas-image" :style="canvasStyle" /></view>
+                <view v-if="selection" class="selection-box" :style="selectionStyle" @mousedown.stop="startSelectionMove"><view class="selection-resize" @mousedown.stop="startSelectionResize"></view></view>
+              </view>
+              <view class="canvas-footer"><text>当前显示宽度：{{ selectedImageWidth }}px</text><view><button size="mini" @click="resetImageScale">重置</button><button size="mini" @click="saveImage(selectedImage)">保存大小</button><button size="mini" type="primary" :disabled="!selection || cropping || hasImageTransform" @click="cropSelectedImage">保存裁切</button></view></view>
+            </view>
+          </view>
+
+          <view class="section-card">
+            <view class="section-heading"><text class="section-title">{{ subjectLabel }}知识点</text><text class="section-hint">可模糊搜索、展开树并多选</text></view>
+            <view class="kp-picker">
+              <input v-model="knowledgeSearch" class="control" placeholder="搜索当前科目知识点" @focus="kpDropdownOpen = true" />
+              <view v-if="kpDropdownOpen" class="kp-dropdown-panel">
+                <scroll-view scroll-y class="knowledge-tree-scroll">
+                  <view v-if="!filteredKnowledgeTree.length" class="empty-hint">暂无匹配的知识点</view>
+                  <view v-for="grade in filteredKnowledgeTree" :key="grade.id" class="tree-group">
+                    <view class="tree-row tree-grade" @click="toggleTree(grade.id)"><text class="tree-arrow">{{ expanded(grade.id) || searchingKnowledge ? '▾' : '▸' }}</text><text>{{ grade.name }}</text></view>
+                    <view v-if="expanded(grade.id) || searchingKnowledge">
+                      <view v-for="semester in grade.semesters" :key="semester.id">
+                        <view class="tree-row tree-semester" @click="toggleTree(semester.id)"><text class="tree-arrow">{{ expanded(semester.id) || searchingKnowledge ? '▾' : '▸' }}</text><text>{{ semester.name }}</text></view>
+                        <view v-if="expanded(semester.id) || searchingKnowledge">
+                          <view v-for="chapter in semester.chapters" :key="chapter.id">
+                            <view class="tree-row tree-chapter" @click="toggleTree(chapter.id)"><text class="tree-arrow">{{ expanded(chapter.id) || searchingKnowledge ? '▾' : '▸' }}</text><text>{{ chapter.name }}</text></view>
+                            <view v-if="expanded(chapter.id) || searchingKnowledge">
+                              <view v-for="kp in chapter.knowledge_points" :key="kp.id" class="tree-row tree-leaf" @click.stop="toggleKnowledgePoint(kp)"><view class="tree-checkbox" :class="{ checked: isKnowledgePointSelected(kp.id) }"><text v-if="isKnowledgePointSelected(kp.id)">✓</text></view><text>{{ kp.name }}</text></view>
+                            </view>
+                          </view>
+                        </view>
+                      </view>
+                    </view>
+                  </view>
+                </scroll-view>
+                <view class="kp-dropdown-actions"><button size="mini" @click="kpDropdownOpen = false">收起知识树</button></view>
+              </view>
+            </view>
+            <view class="selected-kp-list"><view v-for="kp in selectedKps" :key="kp.id" class="kp-tag"><text>{{ kp.name }}</text><text class="tag-remove" @click="removeKnowledgePoint(kp.id)">×</text></view><text v-if="!selectedKps.length" class="empty-hint">尚未选择知识点</text></view>
+          </view>
+
+          <view class="section-card">
+            <view class="section-heading"><text class="section-title">标签编辑</text><button size="mini" @click="loadQuestionTags">刷新标签</button></view>
+            <view class="tag-add-row"><input v-model="newTag" class="control" placeholder="输入标签名称" @confirm="addTag" /><button size="mini" type="primary" @click="addTag">添加标签</button></view>
+            <view class="tag-list"><view v-for="tag in questionTags" :key="tag.id" class="edit-tag"><text>{{ tag.name }}</text><text class="tag-remove" @click="removeTag(tag.id)">×</text></view><text v-if="!questionTags.length" class="empty-hint">暂无标签</text></view>
+          </view>
+          <view class="editor-bottom-space"></view>
+
+        </scroll-view>
+
+        <scroll-view scroll-y class="render-pane">
+          <view class="render-toolbar"><text class="section-title">渲染预览</text><text class="render-hint">图片显示尺寸与左侧画布保存的尺寸一致</text></view>
+            <view class="render-card">
+            <view class="render-stem"><text class="render-question-prefix">{{ form.question_no || question.question_no || '-' }}（{{ questionTypeLabel }}）.</text><view class="render-stem-content" v-html="stemHtml"></view></view>
+            <view class="render-question-meta">
+              <view class="render-meta-group"><text class="render-meta-label">难度</text><text class="render-meta-chip">L{{ form.difficulty || '-' }}</text></view>
+              <view v-if="selectedKps.length" class="render-meta-group"><text class="render-meta-label">知识点</text><text v-for="kp in selectedKps" :key="kp.id" class="render-meta-chip">{{ kp.name }}</text></view>
+              <view v-if="questionTags.length" class="render-meta-group"><text class="render-meta-label">标签</text><text v-for="tag in questionTags" :key="tag.id" class="render-meta-chip tag-chip">{{ tag.name }}</text></view>
+            </view>
+            <view v-if="images.length" class="render-images"><view v-for="image in images" :key="image.id" class="render-image-wrap"><image :src="getImageUrl(image.file_path)" mode="widthFix" class="render-image" :style="renderImageStyle(image)" @click="previewImage(image)" /><text v-if="image.description" class="render-image-caption">{{ image.description }}</text></view></view>
+            <view v-if="isChoice" class="render-options"><view v-for="option in renderedOptions" :key="option.label" class="render-option"><text class="render-option-label">{{ option.label }}.</text><view v-html="option.html"></view></view></view>
+            <view v-if="answerHtml" class="render-answer"><text class="render-label">答案</text><view v-html="answerHtml"></view></view>
+            <view v-if="analysisHtml" class="render-answer"><text class="render-label">解析</text><view v-html="analysisHtml"></view></view>
+            <view v-if="solutionHtml" class="render-answer"><text class="render-label">解答</text><view v-html="solutionHtml"></view></view>
+          </view>
+        </scroll-view>
+      </view>
     </view>
-
-    <view v-else-if="loading" class="loading"><text>加载中...</text></view>
-    <view v-else class="empty"><text>题目不存在</text></view>
-
+    <view v-else-if="loading" class="state">加载中...</view><view v-else class="state">题目不存在</view>
     <QuestionAIControls
       :visible="showAiControls"
       :question-id="selectedAiQuestionId"
@@ -204,399 +124,264 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import { getQuestionDetail, updateQuestion, confirmQuestion, cropQuestionImage, deleteQuestionImage, getQuestionAssets } from '@/api/questions'
+import { addQuestionTag, confirmQuestion, deleteQuestionImage, getQuestionAssets, getQuestionDetail, getQuestionTags, removeQuestionTag, restoreQuestionImageOriginal, updateQuestion, updateQuestionImageLayout, uploadQuestionImage } from '@/api/questions'
+import { knowledgeApi } from '@/api/knowledge'
 import { renderWithKatex } from '@/utils/katex-renderer'
-import { renderImagePlaceholders } from '@/utils/image-placeholder'
-import { filterKnowledgePoints, type KnowledgePoint } from '@/utils/knowledge-filter'
-import { get } from '@/utils/request'
+import { getMediaUrl } from '@/utils/media-url'
+import { chooseImage } from '@/utils/image-upload'
 import QuestionAIControls from '@/components/QuestionAIControls.vue'
 
+type ImageItem = { id: string | number; file_path: string; description?: string; display_width?: number; can_restore_original?: boolean }
+type KpLeaf = { id: string | number; name: string }
+type KpChapter = { id: string; name: string; knowledge_points: KpLeaf[] }
+type KpSemester = { id: string; name: string; chapters: KpChapter[] }
+type KpGrade = { id: string; name: string; semesters: KpSemester[] }
+
+const IMAGE_DEFAULT_WIDTH = 420
+const QUESTION_TYPE_LABELS: Record<string, string> = { single_choice: '单选题', multiple_choice: '多选题', fill_blank: '填空题', short_answer: '简答题', solution: '解答题', essay: '论述题', true_false: '判断题', computation: '计算题', proof: '证明题', experiment: '实验题' }
+const QUESTION_TYPE_OPTIONS = [
+  { value: 'single_choice', label: '单选题' },
+  { value: 'multiple_choice', label: '多选题' },
+  { value: 'fill_blank', label: '填空题' },
+  { value: 'short_answer', label: '简答题' },
+  { value: 'solution', label: '解答题' },
+]
+const questionTypeRange = QUESTION_TYPE_OPTIONS.map((item) => item.label)
+const difficultyRange = ['L1', 'L2', 'L3', 'L4', 'L5']
 const question = ref<any>(null)
-const loading = ref(true)
-const saving = ref(false)
+const questionId = ref('')
 const selectedAiQuestionId = ref<string | number | null>(null)
 const showAiControls = ref(false)
-const form = ref({ stem: '', answer: '', analysis: '', solution: '', difficulty: 1, question_type: '', question_no: '', page_start: 1, page_end: 1, options: [{ label: 'A', content: '' }, { label: 'B', content: '' }, { label: 'C', content: '' }, { label: 'D', content: '' }] })
-const pages = ref<any[]>([])
-const currentPage = ref(1)
-const totalPages = ref(1)
-const currentImageSrc = ref('')
-const zoom = ref(0.7)
-const cropRect = ref<{ x: number; y: number; w: number; h: number } | null>(null)
-const imgNaturalSize = ref<{ w: number; h: number }>({ w: 0, h: 0 })
-const isCropping = ref(false)
-const cropStart = ref<{ x: number; y: number } | null>(null)
-const addNewMode = ref(false)
-const imageContainerRef = ref<HTMLElement | null>(null)
-const cropOffset = ref<{ x: number; y: number }>((() => { try { const s = sessionStorage.getItem('cropOffset'); return s ? JSON.parse(s) : { x: 0, y: 0 } } catch { return { x: 0, y: 0 } } })())
-const calibrating = ref(false)
-const calibPos = ref<{ x: number; y: number }>({ x: 0, y: 0 })
-let questionId = ''
-const paperId = ref(0)
-const questionList = ref<any[]>([])
-const currentQuestionIndex = ref(-1)
-const images = ref<any[]>([])
-const photoImages = ref<any[]>([])
-const stemPreview = ref('')
-const answerPreview = ref('')
-const analysisPreview = ref('')
-const solutionPreview = ref('')
-const optionPreviews = ref<string[]>([])
-const activeTextarea = ref<'stem' | 'answer' | 'analysis' | 'solution' | 'option'>('stem')
-const activeOptionIndex = ref(-1)
-const knowledgeSearch = ref('')
-const allKpList = ref<KnowledgePoint[]>([])
-const selectedKps = ref<KnowledgePoint[]>([])
-const filteredKpList = computed(() => filterKnowledgePoints(allKpList.value, knowledgeSearch.value))
-let previewDebounceTimer: ReturnType<typeof setTimeout> | null = null
+const loading = ref(true)
+const saving = ref(false)
+const form = ref({ stem: '', answer: '', analysis: '', solution: '', difficulty: 1, question_type: 'short_answer', question_no: '', page_start: 1, page_end: 1, options: [{ label: 'A', content: '' }, { label: 'B', content: '' }, { label: 'C', content: '' }, { label: 'D', content: '' }] })
+const images = ref<ImageItem[]>([])
+const stemHtml = ref('')
+const answerHtml = ref('')
+const analysisHtml = ref('')
+const solutionHtml = ref('')
+const renderedOptions = ref<Array<{ label: string; html: string }>>([])
+let renderTimer: ReturnType<typeof setTimeout> | null = null
+let lastWheelAt = 0
 
-function isKnowledgePointSelected(id: number) { return selectedKps.value.some(kp => kp.id === id) }
-function toggleKnowledgePoint(kp: KnowledgePoint) { if (isKnowledgePointSelected(kp.id)) removeKnowledgePoint(kp.id); else addKnowledgePoint(kp); knowledgeSearch.value = '' }
-function addKnowledgePoint(kp: KnowledgePoint) { if (!selectedKps.value.some(s => s.id === kp.id)) selectedKps.value.push(kp); knowledgeSearch.value = '' }
-function removeKnowledgePoint(id: number) { selectedKps.value = selectedKps.value.filter(kp => kp.id !== id) }
-function schedulePreviewUpdate() { if (previewDebounceTimer) clearTimeout(previewDebounceTimer); previewDebounceTimer = setTimeout(() => updatePreviews(), 200) }
-async function updatePreviews() {
-  stemPreview.value = await renderImagePlaceholders(await renderWithKatex(form.value.stem), images.value)
-  answerPreview.value = await renderImagePlaceholders(await renderWithKatex(form.value.answer), images.value)
-  analysisPreview.value = await renderImagePlaceholders(await renderWithKatex(form.value.analysis), images.value)
-  solutionPreview.value = await renderImagePlaceholders(await renderWithKatex(form.value.solution), images.value)
-  // Update option previews
-  const newOptionPreviews: string[] = []
-  for (const opt of form.value.options) {
-    newOptionPreviews.push(await renderImagePlaceholders(await renderWithKatex(opt.content), images.value))
-  }
-  optionPreviews.value = newOptionPreviews
+const questionTypeLabel = computed(() => QUESTION_TYPE_LABELS[form.value.question_type] || form.value.question_type || '未知题型')
+const questionTypeIndex = computed(() => Math.max(0, QUESTION_TYPE_OPTIONS.findIndex((item) => item.value === form.value.question_type)))
+const difficultyIndex = computed(() => Math.max(0, Math.min(4, Number(form.value.difficulty || 1) - 1)))
+const isChoice = computed(() => ['single_choice', 'multiple_choice'].includes(form.value.question_type))
+const subjectLabel = computed(() => ({ physics: '物理', math: '数学', chemistry: '化学' } as Record<string, string>)[String(question.value?.subject || '')] || '当前科目')
+
+function onQuestionTypeChange(event: any) {
+  const index = Number(event?.detail?.value ?? 0)
+  form.value.question_type = QUESTION_TYPE_OPTIONS[index]?.value || QUESTION_TYPE_OPTIONS[0].value
+  scheduleRender()
 }
-function getImageUrl(path: string) { if (!path) return ''; if (path.startsWith('http')) return path; const fixed = path.replace(/\\/g, '/'); return 'https://qisi.chengxuelu.com/media/' + (fixed.startsWith('/') ? fixed.slice(1) : fixed) }
-function previewPhotoImage(url: string) { uni.previewImage({ urls: [url] }) }
-function startAddNewQuestion() { addNewMode.value = true; clearCrop(); uni.showToast({ title: '请在原图上框选试题区域', icon: 'none', duration: 2000 }) }
-function cancelAddMode() { addNewMode.value = false; clearCrop() }
-async function doCropAndRecognize() {
-  console.log('[doCrop] triggered, cropRect=', cropRect.value, 'qid=', question.value?.id);
-  if (!cropRect.value || !question.value) { uni.showToast({ title: '请先在原图上拖动框选区域', icon: 'none' }); return };
-  addNewMode.value = false;
-  uni.showLoading({ title: '正在AI识别...' });
-  try {
-    const _nat = cropToNatural();
-    if (!_nat) return;
-    const cropRes = await cropQuestionImage(question.value.id, _nat, currentPage.value);
-    if (cropRes.code !== 0) { uni.hideLoading(); uni.showToast({ title: '裁剪失败', icon: 'none' }); return }
-    const formData = new FormData();
-    formData.append('crop_file_path', cropRes.data.file_path);
-    formData.append('page_no', String(currentPage.value));
-    if (paperId.value) formData.append('paper_id', String(paperId.value));
-    const token = uni.getStorageSync('accessToken');
-    const aiRes = await fetch('/api/v1/questions/photo-create/', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
-      body: formData,
-    });
-    const aiData = await aiRes.json();
-    uni.hideLoading();
-    if (aiData.code === 0 && aiData.data?.question_id) {
-      uni.showModal({
-        title: 'AI识别成功',
-        content: `已识别新题目`,
-        showCancel: true,
-        cancelText: '继续编辑',
-        confirmText: '查看新题',
-        success: (res) => {
-          if (res.confirm) uni.navigateTo({ url: `/pages/teacher/question-edit?id=${aiData.data.question_id}` })
-        },
-      })
-    } else {
-      uni.showToast({ title: aiData.message || 'AI识别失败', icon: 'none' })
-    }
-  } catch (e: any) {
-    uni.hideLoading();
-    uni.showToast({ title: e?.message || 'AI识别失败', icon: 'none' })
-  }
-  clearCrop()
+
+function onDifficultyChange(event: any) {
+  form.value.difficulty = Math.max(1, Math.min(5, Number(event?.detail?.value ?? 0) + 1))
 }
-async function handleDeleteQuestion() {
-  if (!question.value) return;
-  uni.showModal({ title: '确认删除', content: `确定要删除题目 "${question.value.question_no}" 吗？`, success: async (res) => {
-    if (!res.confirm) return;
-    try {
-      const { del } = await import('@/utils/request');
-      await del(`/review/questions/${question.value.id}/delete/`);
-      uni.showToast({ title: '删除成功', icon: 'success' });
-      setTimeout(() => { uni.reLaunch({ url: paperId.value ? `/pages/teacher/review-list?paper_id=${paperId.value}` : '/pages/teacher/review-list' }) }, 400);
-    } catch (e: any) {
-      uni.showToast({ title: e?.message || '删除失败', icon: 'none' });
-    }
-  } });
-}
-function getActiveTextareaEl(): HTMLElement | null {
-  if (activeTextarea.value === 'option') return activeOptionIndex.value >= 0 ? document.getElementById('textarea-option-' + activeOptionIndex.value) : null
-  const m: Record<string, string> = { stem: 'textarea-stem', answer: 'textarea-answer', analysis: 'textarea-analysis', solution: 'textarea-solution' }
-  return document.getElementById(m[activeTextarea.value] || 'textarea-stem')
-}
-function onOptionFocus(index: number) { activeTextarea.value = 'option'; activeOptionIndex.value = index }
-function handleInsertImage(imageId: number) {
-  const placeholder = `{{image_${imageId}}}`
-  let pos: number | undefined
-  const el = getActiveTextareaEl()
-  if (el) { const native = el.tagName === 'TEXTAREA' ? (el as HTMLTextAreaElement) : (el.querySelector('textarea') as HTMLTextAreaElement | null); if (native) { try { pos = native.selectionStart } catch {} } }
-  if (activeTextarea.value === 'option') {
-    const opt = form.value.options[activeOptionIndex.value]
-    if (!opt) { uni.showToast({ title: '请先点击要插入的选项', icon: 'none' }); return }
-    const text = opt.content || ''; const p = pos ?? text.length
-    opt.content = text.slice(0, p) + placeholder + text.slice(p)
-  } else {
-    const field = activeTextarea.value as 'stem' | 'answer' | 'analysis' | 'solution'
-    const text = (form.value[field] as string) || ''; const p = pos ?? text.length
-    ;(form.value as any)[field] = text.slice(0, p) + placeholder + text.slice(p)
-  }
-  schedulePreviewUpdate()
-}
-function moveImageUp(index: number) { if (index <= 0) return; const temp = images.value[index]; images.value[index] = images.value[index - 1]; images.value[index - 1] = temp }
-function moveImageDown(index: number) { if (index >= images.value.length - 1) return; const temp = images.value[index]; images.value[index] = images.value[index + 1]; images.value[index + 1] = temp }
-async function loadQuestion(id: string) { loading.value = true; try { const res = await getQuestionDetail(id); const q = res.data || res; if (q && q.id) { question.value = q; paperId.value = q.paper || 0; if (paperId.value) { try { const { getPaperQuestions } = await import('@/api/questions'); const listRes = await getPaperQuestions(paperId.value); questionList.value = listRes.data?.data || listRes.data || []; currentQuestionIndex.value = questionList.value.findIndex((item: any) => item.id === id) } catch {} } form.value = { stem: q.stem || '', answer: q.answer || '', analysis: q.analysis || '', solution: q.solution || '', difficulty: q.difficulty || 1, question_type: q.question_type || '', question_no: q.question_no || '', page_start: q.page_start || 1, page_end: q.page_end || 1, options: q.options && q.options.length > 0 ? q.options.map((o: any) => ({ label: o.option_label || o.label || '', content: o.content || '' })) : [{ label: 'A', content: '' }, { label: 'B', content: '' }, { label: 'C', content: '' }, { label: 'D', content: '' }] }; images.value = q.images || [] } try { const assetsRes = await getQuestionAssets(id); if (assetsRes.code === 0 && assetsRes.data) { pages.value = assetsRes.data.pages || []; if (pages.value.length > 0) { totalPages.value = pages.value.length; currentPage.value = Math.min(question.value?.page_start || 1, totalPages.value) } if (assetsRes.data.images?.length > 0) images.value = assetsRes.data.images } } catch {} updateCurrentImage(); await updatePreviews() } catch (e: any) { console.error('加载失败:', e); uni.showToast({ title: '加载失败', icon: 'none' }) } finally { loading.value = false } }
-function updateCurrentImage() {
-  const page = pages.value[currentPage.value - 1]
-  if (page?.image_path) {
-    currentImageSrc.value = getImageUrl(page.image_path)
-  } else if (images.value.length > 0) {
-    // JSON导入的题目没有pages，显示第一张配图
-    currentImageSrc.value = getImageUrl(images.value[0].file_path)
-  } else {
-    currentImageSrc.value = ''
-  }
-  clearCrop()
-}
-function prevPage() { if (currentPage.value > 1) { currentPage.value--; updateCurrentImage() } }
-function nextPage() { if (currentPage.value < totalPages.value) { currentPage.value++; updateCurrentImage() } }
-function zoomIn() { zoom.value = Math.min(3.0, zoom.value + 0.1) }
-function zoomOut() { zoom.value = Math.max(0.1, zoom.value - 0.1) }
-function onImageLoad(e: any) { const d = e?.detail || {}; imgNaturalSize.value = { w: d.width || 0, h: d.height || 0 }; clearCrop() }
-async function loadKnowledgePoints() { try { const params: Record<string, string> = {}; const res = await get('/dicts/knowledge-points', params); allKpList.value = Array.isArray(res.data) ? res.data : []; if (question.value?.knowledge_points && Array.isArray(question.value.knowledge_points)) { selectedKps.value = question.value.knowledge_points.map((kp: any) => { const id = typeof kp === 'object' ? (kp.id || kp.knowledge_point_id) : kp; return allKpList.value.find(p => p.id === id) }).filter(Boolean) } } catch {} }
-function getEventPos(e: MouseEvent): { x: number; y: number } { try { const imgEl = document.querySelector('.page-image') as HTMLElement; if (imgEl) { const rect = imgEl.getBoundingClientRect(); return { x: e.clientX - rect.left + cropOffset.value.x, y: e.clientY - rect.top + cropOffset.value.y } } } catch {} return { x: (e.clientX || 0) + cropOffset.value.x, y: (e.clientY || 0) + cropOffset.value.y } }
-function cropToNatural(): { x1: number; y1: number; x2: number; y2: number } | null {
-  const c = cropRect.value; if (!c) return null;
-  const imgEl = document.querySelector('.page-image') as HTMLElement | null;
-  if (imgEl && imgNaturalSize.value.w > 0) {
-    const rect = imgEl.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      const sx = (imgNaturalSize.value.w / rect.width) * zoom.value;
-      const sy = (imgNaturalSize.value.h / rect.height) * zoom.value;
-      return { x1: Math.round(c.x * sx), y1: Math.round(c.y * sy), x2: Math.round((c.x + c.w) * sx), y2: Math.round((c.y + c.h) * sy) };
-    }
-  }
-  return { x1: Math.round(c.x), y1: Math.round(c.y), x2: Math.round(c.x + c.w), y2: Math.round(c.y + c.h) };
-}
-function onCropStart(e: MouseEvent) {
-  if (calibrating.value) { cropOffset.value = { x: Math.round(calibPos.value.x - e.clientX), y: Math.round(calibPos.value.y - e.clientY) }; try { sessionStorage.setItem('cropOffset', JSON.stringify(cropOffset.value)) } catch {} calibrating.value = false; uni.showToast({ title: `校准完成 (补偿 ${cropOffset.value.x}, ${cropOffset.value.y})`, icon: 'none', duration: 2000 }); return }
-  if ((e.target as HTMLElement)?.closest?.('.add-mode-actions')) return; console.log('[crop] MOUSEDOWN at', e.clientX, e.clientY); isCropping.value = true; const rawPos = getEventPos(e); const pos = { x: rawPos.x / zoom.value, y: rawPos.y / zoom.value }; cropStart.value = pos; cropRect.value = null
-}
-function onCropMove(e: MouseEvent) { if (!isCropping.value || !cropStart.value) return; const rawPos = getEventPos(e); const pos = { x: rawPos.x / zoom.value, y: rawPos.y / zoom.value }; const start = cropStart.value; const x = Math.min(start.x, pos.x); const y = Math.min(start.y, pos.y); const w = Math.abs(pos.x - start.x); const h = Math.abs(pos.y - start.y); if (w > 5 && h > 5) { cropRect.value = { x, y, w, h } } }
-function onCropEnd() { isCropping.value = false }
-function startCalibration() { clearCrop(); calibrating.value = true; const el = document.querySelector('.image-container') as HTMLElement | null; if (el) { const r = el.getBoundingClientRect(); calibPos.value = { x: r.left + r.width / 2, y: r.top + r.height / 2 } }; uni.showToast({ title: '请把鼠标对准红色十字中心，点击一次', icon: 'none', duration: 2500 }) }
-function resetCalibration() { cropOffset.value = { x: 0, y: 0 }; try { sessionStorage.removeItem('cropOffset') } catch {} uni.showToast({ title: '已清除校准', icon: 'none' }) }
-function nudgeCalib(dx: number, dy: number) { cropOffset.value = { x: cropOffset.value.x + dx, y: cropOffset.value.y + dy }; try { sessionStorage.setItem('cropOffset', JSON.stringify(cropOffset.value)) } catch {} }
-function clearCrop() { cropRect.value = null; cropStart.value = null }
-async function doCrop() {
-  if (!cropRect.value || !question.value) return
-  const _nat = cropToNatural()
-  if (!_nat) return
-  const { x1, y1, x2, y2 } = _nat
-  try {
-    await cropQuestionImage(question.value.id, { x1, y1, x2, y2 }, currentPage.value)
-    uni.showToast({ title: '裁剪成功', icon: 'success' })
-    const assetsRes = await getQuestionAssets(questionId)
-    if (assetsRes.data?.images) images.value = assetsRes.data.images
-  } catch (e) {
-    uni.showToast({ title: '裁剪失败', icon: 'none' })
-  }
-  clearCrop()
-}
-async function handleDeleteImage(imageId: number) {
-  if (!question.value || !imageId) return
-  uni.showModal({
-    title: '确认删除', content: '确定删除此插图？',
-    success: async (res) => {
-      if (res.confirm) {
-        try {
-          await deleteQuestionImage(questionId, imageId)
-          const assetsRes = await getQuestionAssets(questionId)
-          if (assetsRes.data?.images) images.value = assetsRes.data.images
-          uni.showToast({ title: '已删除', icon: 'success' })
-        } catch (e) {
-          uni.showToast({ title: '删除失败', icon: 'none' })
-        }
-      }
-    }
-  })
-}
-function onPreviewChange() { schedulePreviewUpdate() }
-async function handleSave() {
-  if (!question.value) return
-  saving.value = true
-  try {
-    await updateQuestion(question.value.id, {
-      ...form.value,
-      knowledge_points: selectedKps.value.map(kp => ({ id: kp.id, module: kp.module }))
-    })
-    uni.showToast({ title: '保存成功', icon: 'success' })
-  } catch (e: any) {
-    uni.showToast({ title: e?.message || '保存失败', icon: 'none' })
-  } finally {
-    saving.value = false
-  }
-}
-async function handleConfirm() {
-  if (!question.value) return
-  try {
-    await confirmQuestion(question.value.id)
-    uni.showToast({ title: '已确认', icon: 'success' })
-    handleNextQuestion()
-  } catch (e: any) {
-    uni.showToast({ title: e?.message || '确认失败', icon: 'none' })
-  }
-}
+
 function handleAiProcess() {
   selectedAiQuestionId.value = question.value.id
   showAiControls.value = true
 }
+
 function closeAiControls() {
   showAiControls.value = false
   selectedAiQuestionId.value = null
 }
-function handleAiCompleted() {
-  loadQuestion(questionId)
+
+async function handleAiCompleted({ action }: { action: string }) {
+  const questionId = String(selectedAiQuestionId.value || '')
   closeAiControls()
-}
-function handleBackToList() {
-  uni.reLaunch({ url: paperId.value ? `/pages/teacher/review-list?paper_id=${paperId.value}` : '/pages/teacher/review-list' })
-}
-function handlePrevQuestion() {
-  if (currentQuestionIndex.value > 0) {
-    uni.redirectTo({ url: `/pages/teacher/question-edit?id=${questionList.value[currentQuestionIndex.value - 1].id}` })
-  } else {
-    uni.showToast({ title: '已经是第一题了', icon: 'none' })
-  }
-}
-function handleNextQuestion() {
-  if (currentQuestionIndex.value >= 0 && currentQuestionIndex.value < questionList.value.length - 1) {
-    uni.redirectTo({ url: `/pages/teacher/question-edit?id=${questionList.value[currentQuestionIndex.value + 1].id}` })
-  } else {
-    uni.showToast({ title: '已经是最后一题了', icon: 'none' })
-  }
-}
-function onKeyDown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); handleSave() }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); handleConfirm() }
+  if (questionId) await loadQuestion(questionId)
+  void action
 }
 
-onLoad((options) => {
-  questionId = options?.id || ''
+const knowledgeSearch = ref('')
+const kpDropdownOpen = ref(false)
+const expandedNodes = ref<Record<string, boolean>>({})
+const knowledgeTree = ref<KpGrade[]>([])
+const selectedKps = ref<Array<KpLeaf & { module: string }>>([])
+const searchingKnowledge = computed(() => Boolean(knowledgeSearch.value.trim()))
+function treeContains(value: string, keyword: string) { return value.toLowerCase().includes(keyword) }
+const filteredKnowledgeTree = computed(() => {
+  const keyword = knowledgeSearch.value.trim().toLowerCase()
+  if (!keyword) return knowledgeTree.value
+  return knowledgeTree.value.map((grade) => ({ ...grade, semesters: grade.semesters.map((semester) => ({ ...semester, chapters: semester.chapters.map((chapter) => ({ ...chapter, knowledge_points: chapter.knowledge_points.filter((kp) => treeContains(kp.name, keyword)) })).filter((chapter) => chapter.knowledge_points.length || treeContains(chapter.name, keyword)) })).filter((semester) => semester.chapters.length || treeContains(semester.name, keyword)) })).filter((grade) => grade.semesters.length || treeContains(grade.name, keyword))
 })
+function expanded(id: string) { return Boolean(expandedNodes.value[id]) }
+function toggleTree(id: string) { expandedNodes.value[id] = !expandedNodes.value[id] }
+function isKnowledgePointSelected(id: string | number) { return selectedKps.value.some((kp) => String(kp.id) === String(id)) }
+function toggleKnowledgePoint(kp: KpLeaf) { if (isKnowledgePointSelected(kp.id)) removeKnowledgePoint(kp.id); else selectedKps.value.push({ ...kp, module: kp.name }) }
+function removeKnowledgePoint(id: string | number) { selectedKps.value = selectedKps.value.filter((kp) => String(kp.id) !== String(id)) }
 
-onMounted(async () => {
-  if (!questionId) {
-    uni.showToast({ title: '缺少题目ID', icon: 'none' })
-    return
-  }
-  await loadQuestion(questionId)
-  loadKnowledgePoints()
-  window.addEventListener('keydown', onKeyDown)
-})
-onUnmounted(() => {
-  window.removeEventListener('keydown', onKeyDown)
-  if (previewDebounceTimer) { clearTimeout(previewDebounceTimer); previewDebounceTimer = null }
-})
+const questionTags = ref<Array<{ id: string | number; name: string }>>([])
+const newTag = ref('')
+
+const selectedImage = ref<ImageItem | null>(null)
+const canvasSurface = ref<HTMLElement | null>(null)
+const sourceImage = ref<HTMLImageElement | null>(null)
+const imageRotation = ref(0)
+const imageFlipped = ref(false)
+const canvasWidth = ref(1)
+const canvasHeight = ref(1)
+const selection = ref<{ x: number; y: number; w: number; h: number } | null>(null)
+const selectionStart = ref<{ x: number; y: number } | null>(null)
+const selectionInitial = ref<{ x: number; y: number; w: number; h: number } | null>(null)
+const selectionMode = ref<'create' | 'move' | 'resize'>('create')
+const selecting = ref(false)
+const cropping = ref(false)
+const selectedImageWidth = computed(() => selectedImage.value ? displayWidth(selectedImage.value) : IMAGE_DEFAULT_WIDTH)
+const canvasStyle = computed(() => ({ width: `${canvasWidth.value}px`, height: `${canvasHeight.value}px` }))
+const canvasSurfaceStyle = computed(() => ({ ...canvasStyle.value, transform: `translate(-50%, -50%) rotate(${imageRotation.value}deg) scaleX(${imageFlipped.value ? -1 : 1})` }))
+const hasImageTransform = computed(() => imageRotation.value % 360 !== 0 || imageFlipped.value)
+const selectionStyle = computed(() => selection.value ? { left: `calc(50% + ${selection.value.x - canvasWidth.value / 2}px)`, top: `calc(50% + ${selection.value.y - canvasHeight.value / 2}px)`, width: `${selection.value.w}px`, height: `${selection.value.h}px` } : {})
+
+function displayWidth(image: ImageItem) {
+  const value = Number(image.display_width || 0)
+  return value ? Math.max(80, Math.min(1200, Math.round(value))) : IMAGE_DEFAULT_WIDTH
+}
+function normalizeImage(image: any): ImageItem {
+  const storedWidth = Number(image.display_width || 0)
+  const display_width = storedWidth > 0 && storedWidth <= 200 ? IMAGE_DEFAULT_WIDTH : Math.max(80, Math.min(1200, Math.round(storedWidth || IMAGE_DEFAULT_WIDTH)))
+  return { id: image.id, file_path: image.file_path || image.url || '', description: image.description || '', display_width, can_restore_original: Boolean(image.can_restore_original) }
+}
+function getImageUrl(path: string) { return getMediaUrl(path) }
+function renderImageStyle(image: ImageItem) { return { width: `${displayWidth(image)}px`, maxWidth: '100%' } }
+function stripPlaceholders(html: string) { return html.replace(/\{\{image_\d+\}\}/g, '') }
+async function renderText(value: string) { return stripPlaceholders(await renderWithKatex(value || '')) }
+async function renderPreview() { stemHtml.value = await renderText(form.value.stem); answerHtml.value = await renderText(form.value.answer); analysisHtml.value = await renderText(form.value.analysis); solutionHtml.value = await renderText(form.value.solution); renderedOptions.value = await Promise.all(form.value.options.map(async (option) => ({ label: option.label, html: await renderText(option.content) }))) }
+function scheduleRender() { if (renderTimer) clearTimeout(renderTimer); renderTimer = setTimeout(renderPreview, 150) }
+
+async function loadQuestion(id: string) {
+  loading.value = true
+  try {
+    const response: any = await getQuestionDetail(id); const data = response.data || response
+    if (!data?.id) return
+    question.value = data
+    form.value = { stem: data.stem || '', answer: data.answer || '', analysis: data.analysis || '', solution: data.solution || '', difficulty: Number(data.difficulty || 1), question_type: data.question_type || 'short_answer', question_no: data.question_no || '', page_start: data.page_start || 1, page_end: data.page_end || 1, options: data.options?.length ? data.options.map((option: any) => ({ label: option.option_label || option.label, content: option.content || '' })) : form.value.options }
+    const assets: any = await getQuestionAssets(id)
+    images.value = (assets.data?.images || data.images || []).map(normalizeImage)
+    if (images.value[0]) selectImage(images.value[0])
+    await Promise.all([renderPreview(), loadKnowledgeTree(), loadQuestionTags()])
+  } catch (error) { console.error(error); uni.showToast({ title: '题目加载失败', icon: 'none' }) } finally { loading.value = false }
+}
+
+function findLeaf(id: string | number) { for (const grade of knowledgeTree.value) for (const semester of grade.semesters) for (const chapter of semester.chapters) { const kp = chapter.knowledge_points.find((item) => String(item.id) === String(id)); if (kp) return kp } return null }
+async function loadKnowledgeTree() {
+  try {
+    const response: any = await knowledgeApi.getTree({ subject: String(question.value?.subject || '') })
+    knowledgeTree.value = (response.data?.grades || []).map((grade: any) => ({ id: `grade-${grade.name}`, name: grade.name, semesters: (grade.semesters || []).map((semester: any) => ({ id: `semester-${grade.name}-${semester.name}`, name: semester.name, chapters: (semester.chapters || []).map((chapter: any) => ({ id: `chapter-${grade.name}-${semester.name}-${chapter.name}`, name: chapter.name, knowledge_points: (chapter.knowledge_points || []).map((kp: any) => ({ id: kp.id, name: kp.name || '未命名知识点' })) })) })) }))
+    const expanded: Record<string, boolean> = {}
+    knowledgeTree.value.forEach((grade) => {
+      expanded[grade.id] = true
+      grade.semesters.forEach((semester) => {
+        expanded[semester.id] = true
+        semester.chapters.forEach((chapter) => { expanded[chapter.id] = true })
+      })
+    })
+    expandedNodes.value = expanded
+    const raw = Array.isArray(question.value?.knowledge_points) ? question.value.knowledge_points : []
+    selectedKps.value = raw.map((item: any) => findLeaf(typeof item === 'object' ? (item.id || item.knowledge_point_id) : item)).filter(Boolean).map((kp: any) => ({ ...kp, module: kp.name }))
+  } catch { knowledgeTree.value = []; selectedKps.value = [] }
+}
+
+async function loadQuestionTags() { if (!questionId.value) return; try { const response: any = await getQuestionTags(questionId.value); questionTags.value = response.data || [] } catch { questionTags.value = [] } }
+async function addTag() { const name = newTag.value.trim(); if (!name) return; try { await addQuestionTag(questionId.value, { tag_name: name }); newTag.value = ''; await loadQuestionTags() } catch { uni.showToast({ title: '添加标签失败', icon: 'none' }) } }
+async function removeTag(tagId: string | number) { try { await removeQuestionTag(questionId.value, String(tagId)); questionTags.value = questionTags.value.filter((tag) => String(tag.id) !== String(tagId)) } catch { uni.showToast({ title: '删除标签失败', icon: 'none' }) } }
+
+async function handleSave() { if (saving.value || !question.value) return; saving.value = true; try { await updateQuestion(question.value.id, { ...form.value, knowledge_points: selectedKps.value.map((kp) => ({ id: kp.id, module: kp.module })), tags: questionTags.value.map((tag) => tag.name) }); uni.showToast({ title: '保存成功', icon: 'success' }) } catch (error: any) { uni.showToast({ title: error?.message || '保存失败', icon: 'none' }) } finally { saving.value = false } }
+async function handleConfirm() { await handleSave(); if (!question.value) return; try { await confirmQuestion(question.value.id); uni.showToast({ title: '已确认题目', icon: 'success' }) } catch { uni.showToast({ title: '确认失败', icon: 'none' }) } }
+function handleBack() { uni.navigateBack({ delta: 1 }) }
+function handleBackToList() { handleBack() }
+function handlePrevQuestion() { uni.showToast({ title: '已是当前题目', icon: 'none' }) }
+function handleNextQuestion() { uni.showToast({ title: '已是当前题目', icon: 'none' }) }
+
+async function reloadImages() { const previousId = selectedImage.value?.id; const response: any = await getQuestionAssets(questionId.value); images.value = (response.data?.images || []).map(normalizeImage); const next = images.value.find((image) => String(image.id) === String(previousId)) || images.value[0]; if (next) selectImage(next); else clearImageEditor() }
+async function importImage() { try { const selected = await chooseImage({ count: 1, sourceType: 'album' }); const item = selected[0]; if (!item) return; uni.showLoading({ title: '正在上传图片' }); const response: any = await uploadQuestionImage(questionId.value, item.file || item.path, 'question-image.png'); if (response.code !== 0) throw new Error(response.message || '图片上传失败'); await reloadImages(); const image = images.value.find((item) => String(item.id) === String(response.data?.image?.id)) || images.value.at(-1); if (image) selectImage(image); uni.showToast({ title: '图片已导入', icon: 'success' }) } catch (error: any) { if (error?.message) uni.showToast({ title: error.message, icon: 'none' }) } finally { uni.hideLoading() } }
+async function saveImage(image: ImageItem) { try { image.display_width = displayWidth(image); const response: any = await updateQuestionImageLayout(questionId.value, image.id, { placement: 'stem', display_width: image.display_width, description: image.description || '' }); if (response.data) Object.assign(image, normalizeImage(response.data)); uni.showToast({ title: '图片设置已保存', icon: 'success', duration: 800 }) } catch { uni.showToast({ title: '图片设置保存失败', icon: 'none' }) } }
+async function deleteImage(image: ImageItem) { const result = await new Promise<any>((resolve) => uni.showModal({ title: '删除图片', content: '确定删除这张插图吗？', success: resolve })); if (!result.confirm) return; try { await deleteQuestionImage(questionId.value, image.id); if (selectedImage.value?.id === image.id) clearImageEditor(); await reloadImages(); uni.showToast({ title: '图片已删除', icon: 'success' }) } catch { uni.showToast({ title: '删除失败', icon: 'none' }) } }
+async function restoreOriginalImage(image: ImageItem) { const result = await new Promise<any>((resolve) => uni.showModal({ title: '恢复原始图', content: '将撤销该图片的所有裁切、旋转和翻转，恢复为原始图。是否继续？', success: resolve })); if (!result.confirm) return; try { const response: any = await restoreQuestionImageOriginal(questionId.value, image.id); if (response.data) Object.assign(image, normalizeImage(response.data)); if (selectedImage.value?.id === image.id) selectImage(image); await reloadImages(); uni.showToast({ title: '已恢复原始图', icon: 'success' }) } catch (error: any) { uni.showToast({ title: error?.message || '恢复原始图失败', icon: 'none' }) } }
+function previewImage(image: ImageItem) { uni.previewImage({ urls: [getImageUrl(image.file_path)] }) }
+
+function selectImage(image: ImageItem) { selectedImage.value = image; selection.value = null; imageRotation.value = 0; imageFlipped.value = false; nextTick(() => loadCanvasImage(image)) }
+function clearImageEditor() { selectedImage.value = null; sourceImage.value = null; selection.value = null; selectionStart.value = null; imageRotation.value = 0; imageFlipped.value = false }
+function loadCanvasImage(image: ImageItem) { canvasWidth.value = displayWidth(image); canvasHeight.value = 280; if (typeof Image === 'undefined') return; const source = new Image(); source.onload = () => { sourceImage.value = source; refreshCanvasSurface() }; source.onerror = () => uni.showToast({ title: '图片加载失败，无法编辑', icon: 'none' }); source.src = getImageUrl(image.file_path) }
+function refreshCanvasSurface() { const source = sourceImage.value; if (!source || !selectedImage.value) return; const width = displayWidth(selectedImage.value); const scale = width / source.naturalWidth; canvasWidth.value = width; canvasHeight.value = Math.max(1, Math.round(source.naturalHeight * scale)) }
+function changeImageScale(delta: number) { if (!selectedImage.value) return; selectedImage.value.display_width = Math.max(80, Math.min(1200, displayWidth(selectedImage.value) + delta)); selection.value = null; refreshCanvasSurface() }
+function zoomIn() { changeImageScale(24) }
+function zoomOut() { changeImageScale(-24) }
+function handleCanvasWheel(event: any) { const now = Date.now(); if (now - lastWheelAt < 36) return; lastWheelAt = now; const deltaY = Number(event?.deltaY ?? event?.detail?.deltaY ?? event?.detail?.delta ?? 0); const wheelDelta = Number(event?.wheelDelta ?? event?.detail?.wheelDelta ?? 0); const direction = deltaY ? (deltaY < 0 ? 1 : -1) : (wheelDelta ? (wheelDelta > 0 ? 1 : -1) : 0); if (direction) changeImageScale(direction * 24) }
+function resetImageScale() { if (!selectedImage.value) return; selectedImage.value.display_width = IMAGE_DEFAULT_WIDTH; selection.value = null; refreshCanvasSurface() }
+function rotateLeft() { imageRotation.value = (imageRotation.value + 270) % 360; selection.value = null }
+function rotateRight() { imageRotation.value = (imageRotation.value + 90) % 360; selection.value = null }
+function flipHorizontal() { imageFlipped.value = !imageFlipped.value; selection.value = null }
+async function saveImageTransform() {
+  if (!selectedImage.value || !sourceImage.value || !hasImageTransform.value || cropping.value) return
+  if (typeof document === 'undefined') { uni.showToast({ title: '当前环境不支持图片变换', icon: 'none' }); return }
+  cropping.value = true
+  try {
+    const source = sourceImage.value
+    const rotation = ((imageRotation.value % 360) + 360) % 360
+    const output = document.createElement('canvas')
+    const quarterTurn = rotation === 90 || rotation === 270
+    output.width = quarterTurn ? source.naturalHeight : source.naturalWidth
+    output.height = quarterTurn ? source.naturalWidth : source.naturalHeight
+    const context = output.getContext('2d')
+    if (!context) throw new Error('浏览器不支持图片变换')
+    context.translate(output.width / 2, output.height / 2)
+    context.rotate(rotation * Math.PI / 180)
+    context.scale(imageFlipped.value ? -1 : 1, 1)
+    context.drawImage(source, -source.naturalWidth / 2, -source.naturalHeight / 2)
+    const blob = await new Promise<Blob>((resolve, reject) => output.toBlob((value) => value ? resolve(value) : reject(new Error('图片变换失败')), 'image/png'))
+    const oldImage = selectedImage.value
+    const uploaded: any = await uploadQuestionImage(questionId.value, new File([blob], 'transformed-image.png', { type: 'image/png' }), 'transformed-image.png', oldImage.id)
+    if (uploaded.code !== 0) throw new Error(uploaded.message || '变换图片上传失败')
+    const newId = uploaded.data?.image?.id
+    if (!newId) throw new Error('变换图片保存失败')
+    await updateQuestionImageLayout(questionId.value, newId, { placement: 'stem', display_width: displayWidth(oldImage), description: oldImage.description || '' })
+    await deleteQuestionImage(questionId.value, oldImage.id)
+    imageRotation.value = 0
+    imageFlipped.value = false
+    selection.value = null
+    await reloadImages()
+    const replacement = images.value.find((item) => String(item.id) === String(newId))
+    if (replacement) selectImage(replacement)
+    uni.showToast({ title: '图片变换已保存', icon: 'success' })
+  } catch (error: any) { uni.showToast({ title: error?.message || '图片变换失败', icon: 'none' }) } finally { cropping.value = false }
+}
+function surfaceElement(): HTMLElement | null { const surface: any = canvasSurface.value; if (surface?.getBoundingClientRect) return surface as HTMLElement; if (surface?.$el?.getBoundingClientRect) return surface.$el as HTMLElement; if (typeof document !== 'undefined') return document.querySelector('.canvas-surface') as HTMLElement | null; return null }
+function canvasPoint(event: any) { const surface = surfaceElement(); if (!surface) return { x: 0, y: 0 }; const rect = surface.getBoundingClientRect(); const clientX = Number(event?.clientX ?? event?.detail?.x ?? 0); const clientY = Number(event?.clientY ?? event?.detail?.y ?? 0); return { x: Math.max(0, Math.min(canvasWidth.value, clientX - rect.left)), y: Math.max(0, Math.min(canvasHeight.value, clientY - rect.top)) } }
+function startSelection(event: any) { if ((event?.button !== undefined && event.button !== 0) || (event.target as HTMLElement)?.classList?.contains('selection-resize')) return; selecting.value = true; selectionMode.value = 'create'; selectionStart.value = canvasPoint(event); selection.value = null }
+function startSelectionMove(event: any) { if (!selection.value) return; selecting.value = true; selectionMode.value = 'move'; selectionStart.value = canvasPoint(event); selectionInitial.value = { ...selection.value } }
+function startSelectionResize(event: any) { if (!selection.value) return; selecting.value = true; selectionMode.value = 'resize'; selectionStart.value = canvasPoint(event); selectionInitial.value = { ...selection.value } }
+function moveSelection(event: any) { if (!selecting.value || !selectionStart.value) return; const point = canvasPoint(event); const start = selectionStart.value; if (selectionMode.value === 'create') selection.value = { x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), w: Math.abs(point.x - start.x), h: Math.abs(point.y - start.y) }; else if (selectionMode.value === 'move' && selectionInitial.value) { const initial = selectionInitial.value; selection.value = { ...initial, x: Math.max(0, Math.min(canvasWidth.value - initial.w, initial.x + point.x - start.x)), y: Math.max(0, Math.min(canvasHeight.value - initial.h, initial.y + point.y - start.y)) } } else if (selectionMode.value === 'resize' && selectionInitial.value) { const initial = selectionInitial.value; selection.value = { ...initial, w: Math.max(8, Math.min(canvasWidth.value - initial.x, initial.w + point.x - start.x)), h: Math.max(8, Math.min(canvasHeight.value - initial.y, initial.h + point.y - start.y)) } } }
+function endSelection() { selecting.value = false }
+async function cropSelectedImage() { if (!selectedImage.value || !sourceImage.value || !selection.value || selection.value.w < 8 || selection.value.h < 8 || cropping.value) return; if (typeof document === 'undefined') { uni.showToast({ title: '当前环境不支持画布裁切', icon: 'none' }); return }; cropping.value = true; try { const source = sourceImage.value; const scale = canvasWidth.value / source.naturalWidth; const rect = selection.value; const output = document.createElement('canvas'); output.width = Math.max(1, Math.round(rect.w / scale)); output.height = Math.max(1, Math.round(rect.h / scale)); const context = output.getContext('2d'); if (!context) throw new Error('浏览器不支持图片裁切'); context.drawImage(source, Math.round(rect.x / scale), Math.round(rect.y / scale), output.width, output.height, 0, 0, output.width, output.height); const blob = await new Promise<Blob>((resolve, reject) => output.toBlob((value) => value ? resolve(value) : reject(new Error('图片裁切失败')), 'image/png')); const oldImage = selectedImage.value; const uploaded: any = await uploadQuestionImage(questionId.value, new File([blob], 'cropped-image.png', { type: 'image/png' }), 'cropped-image.png', oldImage.id); if (uploaded.code !== 0) throw new Error(uploaded.message || '裁切图片上传失败'); const newId = uploaded.data?.image?.id; if (newId) await updateQuestionImageLayout(questionId.value, newId, { placement: 'stem', display_width: displayWidth(oldImage), description: oldImage.description || '' }); await deleteQuestionImage(questionId.value, oldImage.id); await reloadImages(); const replacement = images.value.find((item) => String(item.id) === String(newId)); if (replacement) selectImage(replacement); uni.showToast({ title: '裁切完成，可随时恢复原始图', icon: 'success' }) } catch (error: any) { uni.showToast({ title: error?.message || '裁切失败', icon: 'none' }) } finally { cropping.value = false } }
+
+function onKeyDown(event: KeyboardEvent) { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); handleSave() } }
+onLoad((options) => { questionId.value = String(options?.id || '') })
+onMounted(async () => { if (questionId.value) await loadQuestion(questionId.value); if (typeof window !== 'undefined') window.addEventListener('keydown', onKeyDown) })
+onUnmounted(() => { if (typeof window !== 'undefined') window.removeEventListener('keydown', onKeyDown); if (renderTimer) clearTimeout(renderTimer) })
 </script>
 
 <style scoped>
-.edit-page { display: flex; min-height: 100vh; background: #f0f2f5; }
-.main { margin-left: 0; flex: 1; padding: 0; min-height: 100vh; overflow: hidden; }
-.split-layout { display: flex; height: 100%; }
-.image-panel { width: 50%; min-width: 300px; background: #fff; display: flex; flex-direction: column; border-right: 1px solid #e4e7ed; overflow: hidden; }
-.photo-images-section { margin-bottom: 12px; padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }
-.section-label { font-size: 13px; font-weight: 600; color: #606266; margin-bottom: 8px; display: block; }
-.photo-images-scroll { display: flex; gap: 8px; overflow-x: auto; }
-.photo-image-item { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; }
-.photo-image { width: 80px; height: auto; border-radius: 4px; cursor: pointer; }
-.photo-image-label { font-size: 11px; color: #909399; margin-top: 4px; }
-.page-nav-bar { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px; background: #fafafa; border-bottom: 1px solid #eee; }
-.page-label { font-size: 13px; color: #606266; }
-.zoom-controls { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 4px 8px; background: #fafafa; border-bottom: 1px solid #eee; }
-.zoom-label { font-size: 12px; color: #606266; min-width: 40px; text-align: center; }
-.image-container { flex: 1; overflow: auto; position: relative; background: #eee; display: flex; align-items: flex-start; justify-content: center; }
-.image-container.add-mode { cursor: crosshair; }
-.image-wrap { position: relative; width: 100%; transform-origin: top center; }
-.page-image { width: 100%; height: auto; display: block; }
-.crop-overlay { position: absolute; pointer-events: none; z-index: 10; }
-.crop-border { width: 100%; height: 100%; border: 2px solid #409eff; box-sizing: border-box; }
-.image-container.calibrating { cursor: crosshair; }
-.calib-crosshair { position: fixed; width: 48px; height: 48px; z-index: 9999; pointer-events: none; }
-.calib-crosshair::before { content: ''; position: absolute; left: 50%; top: 0; width: 4px; height: 100%; background: #ff0000; transform: translateX(-50%); box-shadow: 0 0 3px #fff, 0 0 3px #fff; }
-.calib-crosshair::after { content: ''; position: absolute; top: 50%; left: 0; height: 4px; width: 100%; background: #ff0000; transform: translateY(-50%); box-shadow: 0 0 3px #fff, 0 0 3px #fff; }
-.calib-hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: #fff; padding: 8px 16px; border-radius: 4px; font-size: 13px; z-index: 9999; pointer-events: none; }
-.calib-nudge-label { font-size: 11px; color: #909399; margin: 0 2px; }
-.crop-border.add-border { border-color: #409eff; background: rgba(64, 158, 255, 0.1); }
-.add-mode-actions { display: flex; gap: 8px; padding: 8px 12px; background: #fafafa; border-top: 1px solid #eee; justify-content: center; }
-.crop-actions { display: flex; gap: 8px; padding: 8px 12px; background: #fafafa; border-top: 1px solid #eee; }
-.image-list-section { border-top: 1px solid #eee; padding: 8px 12px; max-height: 200px; overflow-y: auto; }
-.image-list-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
-.list-title { font-size: 13px; font-weight: 600; color: #606266; }
-.list-hint { font-size: 11px; color: #909399; }
-.image-list-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
-.thumb-img { width: 80px; height: 80px; border-radius: 4px; object-fit: cover; flex-shrink: 0; }
-.thumb-desc { flex: 1; font-size: 12px; color: #606266; min-width: 60px; }
-.thumb-sort { display: flex; flex-direction: column; gap: 2px; margin: 0 4px; }
-.sort-arrow { font-size: 12px; color: #409eff; cursor: pointer; line-height: 1; padding: 2px; }
-.sort-arrow.disabled { color: #ccc; cursor: not-allowed; }
-.thumb-insert, .thumb-delete { font-size: 11px; }
-.empty-images { text-align: center; padding: 12px; color: #909399; font-size: 12px; }
-.edit-panel { width: 50%; min-width: 300px; background: #fff; display: flex; flex-direction: column; overflow-y: auto; padding: 16px; }
-.form-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #ebeef5; }
-.toolbar-left { display: flex; align-items: center; gap: 8px; }
-.toolbar-right { display: flex; align-items: center; gap: 8px; }
-.form-select-sm { padding: 4px 8px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 13px; }
-.form-input-sm { padding: 4px 8px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 13px; box-sizing: border-box; }
-.info-group { display: flex; align-items: center; gap: 4px; }
-.info-label { font-size: 12px; color: #666; }
-.info-input { width: 60px; }
-.info-input-sm { width: 40px; }
-.info-separator { font-size: 12px; color: #999; }
-.diff-badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #fff; }
-.diff-l0 { background: #909399; } .diff-l1 { background: #67c23a; } .diff-l2 { background: #e6a23c; } .diff-l3 { background: #f56c6c; } .diff-l4 { background: #e63c3c; } .diff-l5 { background: #cc0000; }
-.question-actions { display: flex; gap: 8px; padding: 8px 0; border-top: 1px solid #ebeef5; border-bottom: 1px solid #ebeef5; margin-bottom: 12px; flex-wrap: wrap; }
-.question-actions button { flex: none; }
-.form-group { margin-bottom: 16px; }
-.form-label { font-size: 14px; font-weight: 600; color: #303133; margin-bottom: 8px; display: block; }
-.form-textarea { width: 100%; border: 1px solid #dcdfe6; border-radius: 4px; padding: 8px 12px; font-size: 13px; box-sizing: border-box; resize: vertical; min-height: 32px; line-height: 1.5; }
-.form-textarea-auto { height: auto; overflow-y: hidden; }
-.form-input { width: 100%; border: 1px solid #dcdfe6; border-radius: 4px; padding: 8px 12px; font-size: 13px; box-sizing: border-box; }
-.options-list { display: flex; flex-direction: column; gap: 8px; }
-.option-row { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 6px; }
-.option-label { font-weight: bold; font-size: 14px; min-width: 20px; color: #409eff; padding-top: 6px; }
-.option-content-wrapper { flex: 1; }
-.option-textarea { flex: 1; border: 1px solid #dcdfe6; border-radius: 4px; padding: 6px 10px; font-size: 13px; box-sizing: border-box; min-height: 32px; resize: vertical; line-height: 1.5; width: 100%; }
-.option-textarea-auto { height: auto; overflow-y: hidden; }
-.option-preview { margin-top: 4px; min-height: 18px; }
-.kp-selector { position: relative; margin-bottom: 6px; }
-.kp-search-input { width: 100%; padding: 8px 12px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 13px; box-sizing: border-box; min-height: 36px; height: auto; }
-.kp-debug { display: block; font-size: 11px; color: #999; margin-top: 4px; }
-.kp-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 100; background: #fff; border: 1px solid #dcdfe6; border-radius: 4px; max-height: 250px; overflow-y: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-top: 4px; }
-.kp-dropdown-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; border-bottom: 1px solid #f0f0f0; }
-.kp-dropdown-item:hover { background: #ecf5ff; }
-.kp-dropdown-item:last-child { border-bottom: none; }
-.kp-checkbox { width: 16px; height: 16px; border: 1px solid #dcdfe6; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #409eff; flex-shrink: 0; }
-.kp-item-label { flex: 1; font-size: 13px; color: #303133; }
-.kp-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; padding: 8px; min-height: 44px; background: #fafafa; border-radius: 4px; border: 1px dashed #ddd; }
-.kp-tag { display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px; background: #ecf5ff; border: 1px solid #b3d8ff; border-radius: 4px; font-size: 13px; color: #409eff; min-height: 32px; }
-.kp-tag-remove { cursor: pointer; color: #909399; font-size: 16px; line-height: 1; }
-.kp-tag-remove:hover { color: #409eff; }
-.kp-empty { margin-top: 8px; font-size: 12px; color: #909399; }
-.math-preview { display: none; }
-.form-actions-bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-top: 1px solid #ebeef5; margin-top: 16px; }
-.actions-left { font-size: 11px; color: #666; }
-.shortcut-hint { font-size: 11px; color: #999; }
-.actions-right { display: flex; gap: 8px; }
-.loading, .empty { text-align: center; padding: 80rpx; color: #999; }
-@media (max-width: 768px) { .main { margin-left: 60px; padding: 20rpx; } .split-layout { flex-direction: column; } .image-panel, .edit-panel { width: 100%; min-width: 0; } }
+.edit-page { min-height: 100vh; background: #f3f5f8; color: #303133; }
+.editor-shell { height: 100vh; display: flex; flex-direction: column; }
+.page-header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 14px 22px; background: #fff; border-bottom: 1px solid #e4e7ed; }
+.page-title { display: block; font-size: 18px; font-weight: 600; }.page-subtitle { display: block; margin-top: 4px; color: #909399; font-size: 12px; }
+.header-actions, .image-actions, .canvas-footer, .tag-add-row { display: flex; align-items: center; gap: 8px; }.header-actions button, .image-actions button, .canvas-footer button, .tag-add-row button { margin: 0; }
+.workspace { display: flex; flex: 1; min-height: 0; gap: 12px; padding: 12px; }.editor-pane { width: 52%; min-width: 0; padding-bottom: 56px; box-sizing: border-box; }.render-pane { width: 48%; min-width: 0; padding: 0 4px 48px; box-sizing: border-box; }
+.section-card, .render-card { margin-bottom: 12px; padding: 18px; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.04); }.section-heading, .render-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }.section-title { font-size: 15px; font-weight: 600; }.section-hint, .render-hint { color: #909399; font-size: 12px; }
+.meta-grid { display: grid; grid-template-columns: 1.3fr 1fr .7fr; gap: 10px; margin-bottom: 14px; }.field, .content-field { margin-bottom: 14px; }.field-label { display: block; margin-bottom: 6px; color: #606266; font-size: 13px; font-weight: 600; }
+.control, .editor-textarea, .image-name { box-sizing: border-box; width: 100%; border: 1px solid #dcdfe6; border-radius: 5px; background: #fff; color: #303133; font-size: 13px; }.control { height: 34px; padding: 0 9px; }.picker-control { display: flex; align-items: center; justify-content: center; min-width: 0; line-height: 1.2; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.editor-textarea { display: block; min-height: 108px; padding: 10px; line-height: 1.7; resize: vertical; }.stem-field .editor-textarea { min-height: 132px; }.question-uuid { margin-left: 8px; color: #909399; font-size: 11px; font-weight: 400; user-select: all; }.option-editor { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }.option-label { min-width: 16px; padding-top: 10px; color: #409eff; font-weight: 600; }.option-textarea { min-height: 58px; height: 68px; max-height: 130px; }.answer-textarea { min-height: 46px; height: 52px; }.analysis-textarea { min-height: 150px; }
+.kp-picker { position: relative; }.kp-dropdown-panel { position: relative; z-index: 3; margin-top: 6px; overflow: hidden; border: 1px solid #dcdfe6; border-radius: 6px; background: #fff; box-shadow: 0 3px 12px rgba(0,0,0,.1); }.knowledge-tree-scroll { height: 420px; padding: 6px 0; box-sizing: border-box; }.tree-row { display: flex; align-items: center; min-height: 30px; gap: 6px; padding-right: 8px; color: #303133; font-size: 12px; cursor: pointer; }.tree-row:hover { background: #f5f7fa; }.tree-arrow { width: 14px; text-align: center; color: #909399; }.tree-grade { padding-left: 8px; font-weight: 600; }.tree-semester { padding-left: 26px; }.tree-chapter { padding-left: 44px; }.tree-leaf { min-height: 32px; padding-left: 60px; cursor: pointer; }.tree-checkbox { display: flex; width: 16px; height: 16px; align-items: center; justify-content: center; flex: 0 0 16px; border: 1px solid #bfc7d3; border-radius: 3px; color: #fff; background: #fff; font-size: 12px; }.tree-checkbox.checked { border-color: #409eff; background: #409eff; }.kp-dropdown-actions { padding: 8px; border-top: 1px solid #ebeef5; text-align: right; }.selected-kp-list, .tag-list { display: flex; flex-wrap: wrap; gap: 6px; min-height: 34px; margin-top: 8px; padding: 8px; border-radius: 5px; background: #fafafa; }.kp-tag { padding: 4px 8px; border-radius: 12px; color: #409eff; background: #ecf5ff; font-size: 12px; }.tag-remove { margin-left: 5px; color: #f56c6c; cursor: pointer; }.tag-add-row .control { flex: 1; }.edit-tag { padding: 4px 9px; border-radius: 12px; color: #67c23a; background: #f0f9eb; font-size: 12px; }
+.image-list { display: flex; flex-direction: column; gap: 10px; }.image-item { display: flex; gap: 10px; padding: 10px; border: 1px solid #ebeef5; border-radius: 6px; }.image-item.active { border-color: #409eff; box-shadow: 0 0 0 2px rgba(64,158,255,.12); }.image-thumb { width: 104px; height: 82px; flex: 0 0 104px; border-radius: 4px; background: #f5f7fa; cursor: pointer; }.image-settings { display: flex; flex: 1; min-width: 0; flex-direction: column; justify-content: space-between; }.image-name { height: 32px; padding: 0 8px; }.image-actions { justify-content: flex-end; margin-top: 8px; }
+.empty-hint { color: #a0a5ad; font-size: 12px; }
+.editor-bottom-space { height: 64px; }
+.canvas-editor { margin-top: 14px; padding: 12px; border: 1px solid #bfdcff; border-radius: 8px; background: #f8fbff; }.canvas-title { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: #606266; font-size: 12px; }.canvas-title text:first-child { color: #303133; font-weight: 600; }.canvas-tools { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin: -2px 0 10px; }.canvas-tools button { margin: 0; }.canvas-stage { position: relative; height: 320px; overflow: hidden; overscroll-behavior: contain; touch-action: none; user-select: none; background: #e9eef5; cursor: crosshair; }.canvas-surface { position: absolute; z-index: 1; left: 50%; top: 50%; display: block; max-width: none; transform: translate(-50%, -50%); }.canvas-image { display: block; max-width: none; object-fit: fill; pointer-events: none; }.selection-box { position: absolute; z-index: 2; border: 2px solid #409eff; background: rgba(64,158,255,.16); cursor: move; }.selection-resize { position: absolute; right: -6px; bottom: -6px; width: 10px; height: 10px; border: 1px solid #fff; border-radius: 2px; background: #409eff; cursor: nwse-resize; }.canvas-footer { justify-content: space-between; margin-top: 10px; color: #606266; font-size: 12px; }
+.render-toolbar { padding: 4px 4px 10px; }.render-card { min-height: calc(100vh - 110px); font-size: 14px; line-height: 1.8; }.render-stem { display: flex; align-items: flex-start; gap: 4px; }.render-question-prefix { flex: 0 0 auto; color: #303133; font-weight: 700; }.render-stem-content { min-width: 0; flex: 1; }.render-stem-content :deep(p:first-child) { margin-top: 0; }.render-question-meta { display: flex; flex-wrap: wrap; gap: 7px 14px; margin: 10px 0 14px; padding: 8px 10px; border-radius: 5px; background: #f7f9fc; }.render-meta-group { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }.render-meta-label { color: #909399; font-size: 12px; }.render-meta-chip { padding: 1px 7px; border-radius: 10px; color: #409eff; background: #ecf5ff; font-size: 12px; line-height: 20px; }.tag-chip { color: #67c23a; background: #f0f9eb; }.render-options { margin-top: 14px; }.render-option { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 9px; }.render-option-label { min-width: 16px; color: #409eff; font-weight: 600; }.render-images { margin: 14px 0; }.render-image-wrap { display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 12px; overflow: hidden; }.render-image { display: block; border-radius: 4px; cursor: pointer; }.render-image-caption { margin-top: 4px; color: #606266; font-size: 12px; }.render-answer { margin-top: 16px; padding: 12px; border-left: 3px solid #409eff; border-radius: 4px; background: #f8fafc; }.render-label { display: block; margin-bottom: 5px; color: #409eff; font-weight: 600; }.state { padding: 100px 0; text-align: center; color: #909399; }
+@media (max-width: 900px) { .editor-shell { height: auto; min-height: 100vh; }.workspace { flex-direction: column; }.editor-pane, .render-pane { width: 100%; }.render-card { min-height: 300px; }.meta-grid { grid-template-columns: 1fr; }.canvas-title, .canvas-footer { align-items: flex-start; flex-direction: column; } }
 </style>

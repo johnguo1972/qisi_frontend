@@ -27,5 +27,7 @@ urlpatterns = [
     # JSON bbox crop & assets management REST APIs
     path('review/questions/<str:question_id>/assets/', views.get_question_assets, name='get-question-assets'),
     path('review/questions/<str:question_id>/images/crop/', views.crop_question_image_api, name='crop-question-image-api'),
+    path('review/questions/<str:question_id>/images/<str:image_id>/restore-original/', views.restore_question_image_original, name='restore-question-image-original'),
+    path('review/questions/<str:question_id>/images/<str:image_id>/layout/', views.update_question_image_layout, name='update-question-image-layout'),
     path('review/questions/<str:question_id>/images/<str:image_id>/', views.delete_question_image_api, name='delete-question-image-api'),
 ]

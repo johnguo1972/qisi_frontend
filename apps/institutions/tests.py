@@ -367,7 +367,7 @@ class JoinRequestAPITest(TestCase):
         self.assertEqual(response.status_code, 201)
         data = response.json()
         self.assertEqual(data['code'], 0)
-        self.assertEqual(data['data']['class_id'], self.class_obj.id)
+        self.assertEqual(data['data']['class_id'], str(self.class_obj.id))
         # Verify ClassStudent with join_type='invite'
         self.assertTrue(
             ClassStudent.objects.filter(

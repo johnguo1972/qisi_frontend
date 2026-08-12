@@ -1,6 +1,7 @@
 """Integration test: teacher creates mission -> student completes it."""
 import sys
 import os
+import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 import django
@@ -8,11 +9,13 @@ django.setup()
 
 from rest_framework.test import APIClient
 from apps.accounts.models import UserAccount
+from apps.papers.models import ExamPaper
 from apps.missions.models import LearningMission, MissionLevel
 from apps.parser.models import ExamQuestion
 from apps.study.models import StudentMissionProgress, StudentLevelProgress, AnswerAttempt
 
 
+@pytest.mark.django_db
 def test_full_mission_flow():
     """End-to-end test: teacher publishes mission, student answers."""
     teacher_client = APIClient()
@@ -25,6 +28,14 @@ def test_full_mission_flow():
     student = UserAccount.objects.create(
         role_type='student', mobile='13900000102', display_name='测试学生'
     )
+    paper = ExamPaper.objects.create(
+        title='完整流程测试试卷', subject='数学', stage='初中', grade='九年级',
+        source_file_path='integration/full-flow.docx', uploaded_by=teacher,
+    )
+    question = ExamQuestion.objects.create(
+        paper=paper, question_no='1', question_type='single_choice',
+        subject='数学', stem='完整流程题目', answer='A', difficulty=3,
+    )
 
     # Login
     teacher_client.force_authenticate(user=teacher)
@@ -34,6 +45,7 @@ def test_full_mission_flow():
     resp = teacher_client.post('/api/v1/missions', {
         'mission_name': '测试任务',
         'goal_text': '测试目标',
+        'target_student_ids': [str(student.id)],
     })
     assert resp.json()['code'] == 0, f"Create mission failed: {resp.json()}"
     mission_id = resp.json()['data']['id']
@@ -62,10 +74,10 @@ def test_full_mission_flow():
 
     # 5. Student submits answer
     resp = student_client.post('/api/v1/student/attempts', {
-        'question_id': 1,
+        'question_id': str(question.id),
         'answer_content': {'selected_options': ['A']},
         'level_id': level_id,
-    })
+    }, format='json')
     assert resp.json()['code'] == 0, f"Submit answer failed: {resp.json()}"
     data = resp.json()['data']
     assert 'is_correct' in data, "Missing is_correct in response"

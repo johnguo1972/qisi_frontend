@@ -9,6 +9,22 @@ from docx import Document
 UserAccount = get_user_model()
 
 
+@pytest.fixture(autouse=True)
+def ensure_unmanaged_knowledge_table(db):
+    """Create the externally managed table in the isolated pytest DB.
+
+    Production keeps this table outside Django migrations; tests still need a
+    real table so knowledge and AI integration cases are not silently skipped.
+    """
+    from django.db import connection
+    from apps.knowledge.models import KnowledgePoint
+
+    if KnowledgePoint._meta.db_table not in connection.introspection.table_names():
+        with connection.schema_editor() as schema_editor:
+            schema_editor.create_model(KnowledgePoint)
+    yield
+
+
 # ─── User fixtures ───────────────────────────────────────────────
 
 @pytest.fixture

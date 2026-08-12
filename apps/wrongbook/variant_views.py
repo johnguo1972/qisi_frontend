@@ -3,7 +3,7 @@ import uuid
 from django.db import transaction
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from apps.study.permissions import IsStudent
+from apps.study.permissions import IsStudentOrParentContext
 from rest_framework.response import Response
 from apps.parser.models import ExamQuestion
 from apps.study.models import AnswerAttempt
@@ -48,7 +48,7 @@ def _update_mastery(student, question_id: int, is_correct: bool):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def variant_submit(request, item_id):
     """POST /api/v1/student/wrong-book/<item_id>/variant-submit
     Body: { question_id, answer_content }

@@ -30,9 +30,38 @@
         </button>
         <button @click="cloneMission" class="action-btn clone">克隆任务</button>
         <button @click="exportPdf" class="action-btn export">导出PDF</button>
+        <button @click="showQrcode" class="action-btn qrcode">作业二维码</button>
+      </view>
+      <view v-if="qrcodeInfo" class="qrcode-panel">
+        <image v-if="qrcodeInfo.image_data" class="qrcode-image" :src="qrcodeInfo.image_data" mode="widthFix" />
+        <text>作业码：{{ qrcodeInfo.short_code }}</text>
+        <text class="qrcode-url">{{ qrcodeInfo.url }}</text>
+        <view class="qrcode-actions">
+          <button size="mini" @click="copyQrcodeUrl">复制二维码链接</button>
+          <button size="mini" class="save-qrcode-btn" @click="saveQrcodeImage">保存二维码图片</button>
+        </view>
+      </view>
+      <view v-if="isGrading" class="grading-panel">
+        <view class="panel-header"><text class="panel-title">学生提交与批改</text></view>
+        <view v-if="gradingLoading" class="empty">加载提交记录中...</view>
+        <view v-else-if="gradingAttempts.length === 0" class="empty">暂无学生提交</view>
+        <view v-for="attempt in gradingAttempts" :key="attempt.id" class="grading-item">
+          <view class="grading-question">
+            <text class="grading-student">{{ studentName(attempt.student_id) }}</text>
+            <text>{{ attempt.question_no || attempt.question_id }}</text>
+            <text class="grading-stem">{{ attempt.stem }}</text>
+          </view>
+          <text class="grading-answer">学生答案：{{ answerText(attempt.answer_content) }}</text>
+          <view class="grading-controls">
+            <input class="score-input" type="number" v-model.number="attempt.score" placeholder="分数" />
+            <input class="feedback-input" v-model="attempt.feedback" placeholder="批语（可选）" />
+            <button class="save-grade-btn" @click="saveGrade(attempt)">保存批改</button>
+            <button class="variant-btn" @click="generateVariant(attempt)">生成同类题</button>
+          </view>
+        </view>
       </view>
       <!-- 关卡列表 -->
-      <view class="levels-panel">
+      <view v-if="!isGrading" class="levels-panel">
         <view class="panel-header">
           <text class="panel-title">关卡列表</text>
         </view>
@@ -71,6 +100,10 @@ const mission = ref<Mission | null>(null)
 const levels = ref<any[]>([])
 const missionId = ref<string>('')
 const isGrading = ref(false)
+const gradingLoading = ref(false)
+const gradingAttempts = ref<any[]>([])
+const gradingStudents = ref<any[]>([])
+const qrcodeInfo = ref<any>(null)
 
 onLoad((options: any) => {
   const id = String(options?.id || '')
@@ -84,6 +117,7 @@ onLoad((options: any) => {
 
 onMounted(async () => {
   await loadMission()
+  if (isGrading.value) await loadGrading()
 })
 
 async function loadMission() {
@@ -94,6 +128,36 @@ async function loadMission() {
   } catch (e) {
     uni.showToast({ title: '加载失败', icon: 'none' })
   }
+}
+
+async function loadGrading() {
+  gradingLoading.value = true
+  try {
+    const res: any = await missionApi.grading(missionId.value)
+    gradingStudents.value = res.data?.students || []
+    gradingAttempts.value = (res.data?.attempts || []).map((item: any) => ({ ...item, feedback: item.answer_content?.teacher_feedback || '' }))
+  } catch (e) {
+    uni.showToast({ title: '加载批改记录失败', icon: 'none' })
+  } finally { gradingLoading.value = false }
+}
+function studentName(id: string) { return gradingStudents.value.find(item => String(item.id) === String(id))?.name || id }
+function answerText(value: any) { return typeof value === 'string' ? value : JSON.stringify(value || '') }
+async function saveGrade(attempt: any) {
+  try {
+    await missionApi.gradeAttempt(missionId.value, attempt.id, { score: Number(attempt.score), feedback: attempt.feedback })
+    uni.showToast({ title: '批改已保存', icon: 'success' })
+    await loadGrading()
+  } catch (e) { uni.showToast({ title: '保存批改失败', icon: 'none' }) }
+}
+async function generateVariant(attempt: any) {
+  if (!attempt.level_id) { uni.showToast({ title: '该提交缺少关卡信息', icon: 'none' }); return }
+  try {
+    await missionApi.generateVariant(missionId.value, {
+      question_id: attempt.question_id, level_id: attempt.level_id,
+      student_id: attempt.student_id, variant_mode: '情境变化',
+    })
+    uni.showToast({ title: '已提交同类题生成任务，将定向给该学生', icon: 'success' })
+  } catch (e) { uni.showToast({ title: '同类题生成失败', icon: 'none' }) }
 }
 
 function statusText(status: string): string {
@@ -112,7 +176,7 @@ function levelTypeText(type: string): string {
 
 function modeText(mode: string): string {
   const map: Record<string, string> = {
-    block_a: 'Block A', allow_a: 'Allow A', require_guidance: '需引导', free_practice: '自由练习'
+    block_a: 'A模式分块', allow_a: '允许A模式', require_guidance: '需引导', free_practice: '自由练习'
   }
   return map[mode] || mode
 }
@@ -162,6 +226,57 @@ async function exportPdf() {
 
 function goPractice(levelId: number) {
   uni.navigateTo({ url: `/pages/teacher/level-practice?missionId=${missionId.value}&levelId=${levelId}` })
+}
+
+async function showQrcode() {
+  try {
+    const res: any = await missionApi.qrcodeInfo(missionId.value)
+    qrcodeInfo.value = res.data
+  } catch { uni.showToast({ title: '获取二维码失败', icon: 'none' }) }
+}
+
+function copyQrcodeUrl() {
+  if (!qrcodeInfo.value?.url) return
+  uni.setClipboardData({ data: qrcodeInfo.value.url, success: () => uni.showToast({ title: '链接已复制', icon: 'success' }) })
+}
+
+function saveQrcodeImage() {
+  const imageData = String(qrcodeInfo.value?.image_data || '')
+  if (!imageData.startsWith('data:image/')) {
+    uni.showToast({ title: '二维码图片未准备好', icon: 'none' })
+    return
+  }
+
+  // #ifdef H5
+  const link = document.createElement('a')
+  link.href = imageData
+  link.download = `作业二维码-${qrcodeInfo.value?.short_code || 'qrcode'}.png`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  uni.showToast({ title: '二维码已保存', icon: 'success' })
+  // #endif
+
+  // #ifdef MP-WEIXIN
+  const base64 = imageData.split(',')[1]
+  const filePath = `${(globalThis as any).wx?.env?.USER_DATA_PATH || ''}/qrcode-${Date.now()}.png`
+  const fileManager = (uni as any).getFileSystemManager?.()
+  if (!fileManager || !filePath.startsWith('wxfile://')) {
+    uni.showToast({ title: '当前环境不支持保存图片', icon: 'none' })
+    return
+  }
+  fileManager.writeFile({
+    filePath,
+    data: base64,
+    encoding: 'base64',
+    success: () => uni.saveImageToPhotosAlbum({
+      filePath,
+      success: () => uni.showToast({ title: '二维码已保存到相册', icon: 'success' }),
+      fail: () => uni.showToast({ title: '保存失败，请授权相册权限', icon: 'none' }),
+    }),
+    fail: () => uni.showToast({ title: '二维码文件生成失败', icon: 'none' }),
+  })
+  // #endif
 }
 </script>
 
@@ -221,6 +336,18 @@ function goPractice(levelId: number) {
   display: block;
   line-height: 1.6;
 }
+
+.grading-panel { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 20rpx; }
+.grading-item { padding: 20rpx 0; border-bottom: 1rpx solid #eee; }
+.grading-question { display: flex; gap: 14rpx; align-items: flex-start; flex-wrap: wrap; color: #555; }
+.grading-student { color: #409eff; font-weight: bold; }
+.grading-stem { width: 100%; color: #333; white-space: normal; overflow-wrap: anywhere; }
+.grading-answer { display: block; margin: 14rpx 0; color: #666; white-space: normal; overflow-wrap: anywhere; }
+.grading-controls { display: flex; gap: 12rpx; align-items: center; }
+.score-input { width: 110rpx; border: 1rpx solid #ddd; padding: 10rpx; }
+.feedback-input { flex: 1; border: 1rpx solid #ddd; padding: 10rpx; }
+.save-grade-btn { background: #409eff; color: #fff; font-size: 22rpx; margin: 0; }
+.variant-btn { background: #67c23a; color: #fff; font-size: 22rpx; margin: 0; }
 .meta-grid {
   display: flex;
   gap: 16rpx;
@@ -245,18 +372,40 @@ function goPractice(levelId: number) {
 }
 .action-buttons {
   display: flex;
-  flex-direction: column;
-  gap: 12rpx;
+  flex-direction: row;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10rpx;
+  width: 100%;
+  margin: 0 0 20rpx;
 }
 .action-btn {
-  font-size: 26rpx;
-  padding: 16rpx;
+  width: auto;
+  min-width: 0;
+  height: 52rpx;
+  line-height: 52rpx;
+  margin: 0;
+  padding: 0 18rpx;
+  box-sizing: border-box;
+  white-space: nowrap;
+  font-size: 22rpx;
   border-radius: 8rpx;
   color: #fff;
 }
 .publish { background: #4caf50; }
+.qrcode { background: #8e44ad; }
+.qrcode-panel { display: flex; flex-direction: column; align-items: center; gap: 14rpx; background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 20rpx; }
+.qrcode-image { width: 360rpx; max-width: 100%; }
+.qrcode-url { color: #666; font-size: 22rpx; word-break: break-all; }
+.qrcode-actions { display: flex; align-items: center; justify-content: center; gap: 16rpx; flex-wrap: wrap; }
+.save-qrcode-btn { color: #67c23a; border-color: #b3e19d; background: #f0f9eb; }
 .start { background: #ff9800; }
 .clone { background: #409eff; }
+.export {
+  color: #606266;
+  background: #f5f7fa;
+  border: 1rpx solid #cfd3dc;
+}
 .levels-panel {
   background: #fff;
   border-radius: 12rpx;

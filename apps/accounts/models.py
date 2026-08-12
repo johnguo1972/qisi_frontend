@@ -54,3 +54,17 @@ class StudentParentBind(models.Model):
 
     def __str__(self):
         return f"{self.student_user_id} <-> {self.parent_user_id} ({self.relation_type})"
+
+
+class WechatIdentity(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    user = models.OneToOneField(UserAccount, on_delete=models.CASCADE, related_name='wechat_identity')
+    appid = models.CharField(max_length=64)
+    openid = models.CharField(max_length=128)
+    unionid = models.CharField(max_length=128, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'wechat_identity'
+        constraints = [models.UniqueConstraint(fields=['appid', 'openid'], name='uq_wechat_appid_openid')]

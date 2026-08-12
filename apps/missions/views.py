@@ -2,18 +2,22 @@ import uuid
 import json
 import os
 from django.conf import settings
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from .models import LearningMission, MissionLevel, MissionQuestionRel
+from apps.study.models import AnswerAttempt
+from apps.institutions.models import ClassStudent
 from apps.parser.models import ExamQuestion, QuestionImage, QuestionOption
 from apps.common.ai.components import GuidanceComponent, GuidanceContext
 from apps.common.ai.exceptions import AIConfigError, AIResponseError
+from apps.common.media import media_url
 from .serializers import (
     MissionListSerializer, MissionDetailSerializer,
     CreateMissionSerializer, CreateLevelSerializer, AddQuestionsSerializer,
-    BatchCreateLevelsSerializer,
+    BatchCreateLevelsSerializer, subject_filter_values,
 )
 
 
@@ -24,11 +28,19 @@ def make_trace_id():
 def _mission_student_ids(mission):
     """Return active students assigned to the mission, honoring targeted students."""
     from apps.institutions.models import ClassStudent
+    from apps.accounts.models import UserAccount
+
+    targets = {str(student_id) for student_id in (mission.target_student_ids or [])}
+    if not mission.class_obj_id:
+        if not targets:
+            return UserAccount.objects.none().values_list('id', flat=True)
+        return UserAccount.objects.filter(
+            id__in=targets, role_type='student',
+        ).values_list('id', flat=True)
 
     students = ClassStudent.objects.filter(
         class_obj_id=mission.class_obj_id, status='active',
     ).values_list('student_id', flat=True)
-    targets = {str(student_id) for student_id in (mission.target_student_ids or [])}
     if targets:
         students = students.filter(student_id__in=targets)
     return students
@@ -78,16 +90,19 @@ def mission_export_pdf(request, mission_id):
     questions = []
     for question in ExamQuestion.objects.filter(id__in=list(rel_ids)).values(
         'id', 'question_no', 'question_type', 'stem', 'stem_html', 'answer', 'analysis', 'knowledge_points'
-    )[:50]:
+    ):
         options = QuestionOption.objects.filter(question_id=question['id']).values(
             'option_label', 'content'
         ).order_by('sort_order')
-        images = QuestionImage.objects.filter(question_id=question['id']).values(
-            'file_path'
-        ).order_by('sort_order')
+        images = QuestionImage.objects.filter(
+            question_id=question['id'],
+        ).exclude(image_type='formula').values('file_path').order_by('sort_order')
         questions.append({
             **question,
-            'options_html': list(options),
+            'options_html': [
+                {'label': option['option_label'], 'content': option['content']}
+                for option in options
+            ],
             'image_urls': [item['file_path'] for item in images],
         })
     if not questions:
@@ -105,6 +120,108 @@ def mission_export_pdf(request, mission_id):
     return Response({'code': 0, 'data': {'download_url': f'{settings.MEDIA_URL}exports/{filename}'}})
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def mission_grading(request, mission_id):
+    """Return teacher-facing student submissions for a mission."""
+    try:
+        mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': 'mission not found'}, status=404)
+    students = ClassStudent.objects.filter(
+        class_obj_id=mission.class_obj_id, status='active',
+    ).select_related('student') if mission.class_obj_id else ClassStudent.objects.none()
+    target_ids = {str(value) for value in (mission.target_student_ids or [])}
+    if target_ids:
+        students = students.filter(student_id__in=target_ids)
+    student_ids = list(students.values_list('student_id', flat=True))
+    attempts = AnswerAttempt.objects.filter(mission=mission, student_user_id__in=student_ids).order_by('student_user_id', '-submitted_at')
+    question_ids = {str(attempt.question_id) for attempt in attempts}
+    question_map = {
+        str(question.id): question for question in ExamQuestion.objects.filter(id__in=question_ids)
+    }
+    attempt_rows = []
+    for attempt in attempts:
+        question = question_map.get(str(attempt.question_id))
+        attempt_rows.append({
+            'id': str(attempt.id),
+            'student_id': str(attempt.student_user_id_id),
+            'question_id': str(attempt.question_id),
+            'level_id': str(attempt.level_id) if attempt.level_id else '',
+            'question_no': getattr(question, 'question_no', ''),
+            'stem': getattr(question, 'stem', ''),
+            'answer_content': attempt.answer_content,
+            'is_correct': attempt.is_correct,
+            'is_subjective_pending': attempt.is_subjective_pending,
+            'score': float(attempt.score),
+            'submitted_at': attempt.submitted_at,
+        })
+    return Response({'code': 0, 'data': {
+        'students': [{
+            'id': str(row.student_id), 'name': row.student.display_name, 'mobile': row.student.mobile,
+        } for row in students],
+        'attempts': attempt_rows,
+    }})
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def mission_grade_attempt(request, mission_id, attempt_id):
+    """Save a teacher's score and feedback for one subjective submission."""
+    try:
+        attempt = AnswerAttempt.objects.select_related('mission').get(
+            pk=attempt_id, mission_id=mission_id, mission__creator_teacher_id=request.user,
+        )
+    except AnswerAttempt.DoesNotExist:
+        return Response({'code': 404, 'message': 'attempt not found'}, status=404)
+    try:
+        score = float(request.data.get('score'))
+    except (TypeError, ValueError):
+        return Response({'code': 400, 'message': 'score must be a number'}, status=400)
+    if not 0 <= score <= 100:
+        return Response({'code': 400, 'message': 'score must be between 0 and 100'}, status=400)
+    feedback = str(request.data.get('feedback') or '').strip()
+    content = attempt.answer_content if isinstance(attempt.answer_content, dict) else {'answer': attempt.answer_content}
+    if feedback:
+        content['teacher_feedback'] = feedback
+    attempt.answer_content = content
+    attempt.score = score
+    attempt.is_correct = score >= 60
+    attempt.is_subjective_pending = False
+    attempt.save(update_fields=['answer_content', 'score', 'is_correct', 'is_subjective_pending'])
+    return Response({'code': 0, 'data': {'id': str(attempt.id), 'score': score, 'is_correct': attempt.is_correct}})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mission_generate_variant(request, mission_id):
+    """Generate a variant from a submitted question for one student."""
+    try:
+        mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
+        question_id = request.data.get('question_id')
+        level_id = request.data.get('level_id')
+        student_id = str(request.data.get('student_id') or '')
+        variant_mode = str(request.data.get('variant_mode') or '情境变化')
+        level = MissionLevel.objects.get(pk=level_id, mission=mission)
+        if not question_id or not student_id:
+            raise ValueError('question_id and student_id are required')
+        allowed = ClassStudent.objects.filter(
+            class_obj_id=mission.class_obj_id, student_id=student_id, status='active',
+        ).exists()
+        if not allowed or (mission.target_student_ids and student_id not in {str(v) for v in mission.target_student_ids}):
+            return Response({'code': 400, 'message': 'student is not assigned to this mission'}, status=400)
+        from apps.courses.views import generate_variant_task_dispatch
+        task = generate_variant_task_dispatch(
+            question_id=question_id, variant_mode=variant_mode,
+            mission_id=str(mission.id), level_id=str(level.id), target_student_id=student_id,
+        )
+        return Response({'code': 0, 'data': {'task_id': task.id}})
+    except (LearningMission.DoesNotExist, MissionLevel.DoesNotExist):
+        return Response({'code': 404, 'message': 'mission or level not found'}, status=404)
+    except ValueError as exc:
+        return Response({'code': 400, 'message': str(exc)}, status=400)
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def mission_list(request):
@@ -114,10 +231,22 @@ def mission_list(request):
     if request.method == 'GET':
         missions = LearningMission.objects.filter(
             creator_teacher_id=user
-        ).order_by('-created_at')
+        ).select_related('course', 'class_obj').order_by('-created_at')
         class_id = request.GET.get('class_id')
         if class_id:
             missions = missions.filter(class_obj_id=class_id)
+        subject = request.GET.get('subject', '').strip()
+        if subject:
+            subject_values = subject_filter_values(subject)
+            question_ids = ExamQuestion.objects.filter(
+                subject__in=subject_values,
+            ).values_list('id', flat=True)
+            mission_ids = MissionQuestionRel.objects.filter(
+                question_id__in=question_ids,
+            ).values_list('mission_id', flat=True)
+            missions = missions.filter(
+                Q(course__subject__in=subject_values) | Q(id__in=mission_ids),
+            ).distinct()
         return Response({
             'code': 0, 'message': 'success', 'trace_id': make_trace_id(),
             'data': MissionListSerializer(missions, many=True).data,
@@ -366,6 +495,22 @@ def mission_level_detail(request, mission_id, level_id):
     for rel in rels:
         try:
             q = ExamQuestion.objects.get(pk=rel.question_id)
+            images = []
+            for image in q.images.all().order_by('sort_order'):
+                # Formula snippets are already represented in stem/options text.  Only
+                # send visual illustrations to the practice page; otherwise one question
+                # can render several irrelevant formula crops and leave a large blank area.
+                if not image.file_path or image.image_type == 'formula':
+                    continue
+                images.append({
+                    'id': image.id,
+                    # The client must receive a usable URL instead of a storage-relative path.
+                    'url': _question_image_url(image.file_path),
+                    'file_path': image.file_path,
+                    'sort_order': image.sort_order,
+                    'display_width': image.display_width,
+                    'description': image.description or '',
+                })
             questions.append({
                 'id': q.id,
                 'question_no': q.question_no,
@@ -375,8 +520,7 @@ def mission_level_detail(request, mission_id, level_id):
                 'stem_html': q.stem_html,
                 'answer': q.answer,
                 'analysis': q.analysis,
-                'images': [{'url': img.file_path, 'sort_order': img.sort_order}
-                          for img in q.images.all().order_by('sort_order')],
+                'images': images,
                 'options': [{'label': o.option_label, 'content': o.content, 'sort_order': o.sort_order}
                            for o in q.options.all().order_by('sort_order')],
             })
@@ -408,29 +552,28 @@ def mission_publish(request, mission_id):
 
     mission.status = 'published'
     mission.save()
+    # 作业发布后立即建立幂等的作业短码，二维码端只读取该唯一来源。
+    from apps.qrcode.services import ensure_mission_short_code
+    short_code = ensure_mission_short_code(mission)
 
-    # If mission is tied to a class, create progress records for all students in that class
+    # Create progress records for class members or explicitly targeted students.
     created_count = 0
-    if mission.class_obj_id:
-        from apps.institutions.models import ClassStudent
-        from apps.study.models import StudentMissionProgress
-
-        student_ids = _mission_student_ids(mission)
-
-        for student_id in student_ids:
-            StudentMissionProgress.objects.get_or_create(
-                mission=mission,
-                student_user_id_id=student_id,
-                defaults={
-                    'progress_status': 'not_started',
-                    'progress_percent': 0,
-                },
-            )
-            created_count += 1
+    from apps.study.models import StudentMissionProgress
+    student_ids = _mission_student_ids(mission)
+    for student_id in student_ids:
+        _, created = StudentMissionProgress.objects.get_or_create(
+            mission=mission,
+            student_user_id_id=student_id,
+            defaults={
+                'progress_status': 'not_started',
+                'progress_percent': 0,
+            },
+        )
+        created_count += int(created)
 
     return Response({
         'code': 0, 'message': '发布成功',
-        'data': {'students_notified': created_count},
+        'data': {'students_notified': created_count, 'short_code': short_code.short_code},
         'trace_id': make_trace_id(),
     })
 
@@ -544,29 +687,38 @@ _teacher_guidance_sessions: dict = {}
 guidance_component_factory = GuidanceComponent
 
 
+def _question_image_url(file_path):
+    """Return an API client-safe URL for a locally stored question image."""
+    return media_url(file_path)
+
+
 def _get_question_image_urls(question, max_images=3):
     """Get OSS URLs for question images."""
-    from django.conf import settings
     images = list(QuestionImage.objects.filter(question=question).order_by('sort_order')[:max_images])
     urls = []
     for img in images:
         if img.file_path:
-            # Try to get OSS URL or fall back to media URL
-            if img.oss_url:
-                urls.append(img.oss_url)
-            else:
-                urls.append(f'{settings.MEDIA_URL}{img.file_path}')
+            urls.append(_question_image_url(img.file_path))
     return urls
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def start_teacher_guidance(request, question_id):
+def start_teacher_guidance(request):
     """启动B/C模式引导。
 
-    POST /api/v1/teacher/guidance/start/
-    Body: { "question_id": 123, "mode": "B" }  // mode: "B" or "C"
+    POST /api/v1/missions/guidance/start/
+    Body: { "question_id": "<uuid>", "mode": "B" }  // mode: "B" or "C"
     """
+    question_id = request.data.get('question_id')
+    if not question_id:
+        return Response({'code': 400, 'message': 'question_id is required'}, status=400)
+
+    try:
+        question_id = uuid.UUID(str(question_id))
+    except (TypeError, ValueError, AttributeError):
+        return Response({'code': 400, 'message': 'question_id must be a valid UUID'}, status=400)
+
     mode = request.data.get('mode', 'B')
     if mode not in ('B', 'C'):
         return Response({'code': 400, 'message': 'mode 必须为 B 或 C'}, status=400)

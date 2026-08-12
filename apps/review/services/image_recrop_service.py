@@ -99,8 +99,14 @@ def delete_question_image(image):
     Args:
         image: QuestionImage instance
     """
-    # Delete file from disk
-    if image.file_path:
+    # Keep the file when an edited image still references it as its recoverable original.
+    from apps.parser.models import QuestionImage
+    original_is_referenced = QuestionImage.objects.filter(
+        original_file_path=image.file_path
+    ).exclude(id=image.id).exists()
+
+    # Delete the file only when no edited image needs it for recovery.
+    if image.file_path and not original_is_referenced:
         abs_path = str(settings.MEDIA_ROOT / image.file_path)
         try:
             if os.path.exists(abs_path):

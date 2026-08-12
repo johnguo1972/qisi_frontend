@@ -6,9 +6,7 @@
       <view class="knowledge-tree">
         <view class="subject-selector">
           <text class="subject-label">科目</text>
-          <select v-model="selectedSubject" class="subject-select" @change="onSubjectChange">
-            <option v-for="item in subjectOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
+          <picker mode="selector" :range="subjectRange" :value="subjectIndex" @change="onSubjectChange"><view class="subject-select">{{ subjectLabel }}</view></picker>
         </view>
         <text class="tree-title">知识树</text>
         <view v-if="treeLoading" class="loading">加载中...</view>
@@ -99,7 +97,7 @@
             <text class="col col-kp">{{ f.knowledge_points_count }}</text>
             <view class="col col-action row-actions">
               <button size="mini" class="btn-action btn-edit" @click="editQuestion(f.question_id)">编辑</button>
-              <button size="mini" class="btn-action btn-tag" @click="editQuestion(f.question_id)">标签管理</button>
+              <button size="mini" class="btn-action btn-tag" @click="openTagEditor(f)">标签管理</button>
               <button size="mini" class="btn-action btn-mission" @click="openAssignment(f)">加入作业</button>
               <button size="mini" class="btn-action btn-del" @click="removeFavorite(f)">移除</button>
             </view>
@@ -109,6 +107,7 @@
     </view>
     <view v-if="assignmentVisible" class="modal-overlay" @click.self="assignmentVisible = false">
       <view class="assignment-modal">
+        <button size="mini" class="modal-close" @click="closeAssignment">关闭</button>
         <text class="modal-title">加入已有作业</text>
         <view v-if="assignmentLoading" class="loading">加载中...</view>
         <view v-for="mission in missions" :key="mission.id" class="mission-option" @click="addToMission(mission.id)">
@@ -118,15 +117,27 @@
         <button size="mini" @click="goCreateMission">新增作业</button>
       </view>
     </view>
+    <view v-if="tagVisible" class="modal-overlay" @click.self="tagVisible = false">
+      <view class="assignment-modal tag-modal">
+        <button size="mini" class="modal-close" @click="tagVisible = false">关闭</button>
+        <text class="modal-title">标签管理</text>
+        <view class="tag-editor">
+          <text v-for="tag in questionTags" :key="tag.id" class="tag-chip">{{ tag.name }} <text class="tag-remove" @click="removeTag(tag.id)">×</text></text>
+          <text v-if="!questionTags.length" class="empty-hint">暂无标签</text>
+        </view>
+        <view class="tag-add-row"><input v-model="newTag" placeholder="输入标签名称" @confirm="addTag" /><button size="mini" type="primary" @click="addTag">添加</button></view>
+      </view>
+    </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { favoriteApi, type Favorite } from '@/api/favorites.ts'
 import { knowledgeApi } from '@/api/knowledge'
 import { useUserStore } from '@/store/index.ts'
 import { missionApi } from '@/api/missions'
+import { getQuestionTags, addQuestionTag, removeQuestionTag } from '@/api/questions'
 
 const userStore = useUserStore()
 
@@ -139,6 +150,9 @@ const subjectOptions = [
   { value: 'physics', label: '物理' },
   { value: 'math', label: '数学' },
 ]
+const subjectRange = subjectOptions.map((item) => item.label)
+const subjectIndex = computed(() => Math.max(0, subjectOptions.findIndex((item) => item.value === selectedSubject.value)))
+const subjectLabel = computed(() => subjectOptions.find((item) => item.value === selectedSubject.value)?.label || subjectOptions[0].label)
 
 // Tree
 interface TreeNode {
@@ -156,6 +170,11 @@ const assignmentVisible = ref(false)
 const assignmentLoading = ref(false)
 const missions = ref<any[]>([])
 const assignmentQuestionId = ref<string | number>('')
+const tagVisible = ref(false)
+const tagLoading = ref(false)
+const editingFavorite = ref<Favorite | null>(null)
+const questionTags = ref<any[]>([])
+const newTag = ref('')
 
 // Filter state
 const searchQuery = ref('')
@@ -174,7 +193,8 @@ const typeOptions = [
 
 function selectKP(id: string | number) { selectedKP.value = id; loadFavorites() }
 function clearKPFilter() { selectedKP.value = null; loadFavorites() }
-function onSubjectChange() {
+function onSubjectChange(event?: any) {
+  selectedSubject.value = subjectOptions[Number(event?.detail?.value ?? subjectIndex.value)]?.value || subjectOptions[0].value
   selectedKP.value = null
   loadKnowledgeTree()
   loadFavorites()
@@ -257,9 +277,17 @@ async function openAssignment(f: Favorite) {
   try {
     const res: any = await missionApi.list()
     missions.value = res.data || []
+  } catch (e) {
+    missions.value = []
+    uni.showToast({ title: '加载作业失败', icon: 'none' })
   } finally {
     assignmentLoading.value = false
   }
+}
+
+function closeAssignment() {
+  assignmentVisible.value = false
+  assignmentQuestionId.value = ''
 }
 
 async function addToMission(id: string | number) {
@@ -276,12 +304,62 @@ function goCreateMission() {
   uni.navigateTo({ url: `/pages/teacher/mission-create?favoriteQuestionIds=${assignmentQuestionId.value}` })
 }
 
+async function openTagEditor(f: Favorite) {
+  editingFavorite.value = f
+  newTag.value = ''
+  questionTags.value = []
+  tagVisible.value = true
+  tagLoading.value = true
+  try {
+    const res: any = await getQuestionTags(String(f.question_id))
+    questionTags.value = res.data || []
+  } catch (e) {
+    uni.showToast({ title: '加载标签失败', icon: 'none' })
+  } finally {
+    tagLoading.value = false
+  }
+}
+
+async function addTag() {
+  const name = newTag.value.trim()
+  const questionId = editingFavorite.value?.question_id
+  if (!name || questionId === undefined || questionId === null || tagLoading.value) return
+  tagLoading.value = true
+  try {
+    const res: any = await addQuestionTag(String(questionId), { tag_name: name })
+    if (res.data?.tag) questionTags.value.push(res.data.tag)
+    else {
+      const latest: any = await getQuestionTags(String(questionId))
+      questionTags.value = latest.data || questionTags.value
+    }
+    newTag.value = ''
+  } catch (e) {
+    uni.showToast({ title: '添加标签失败', icon: 'none' })
+  } finally {
+    tagLoading.value = false
+  }
+}
+
+async function removeTag(tagId: string | number) {
+  const questionId = editingFavorite.value?.question_id
+  if (questionId === undefined || questionId === null || tagLoading.value) return
+  tagLoading.value = true
+  try {
+    await removeQuestionTag(String(questionId), String(tagId))
+    questionTags.value = questionTags.value.filter(tag => String(tag.id) !== String(tagId))
+  } catch (e) {
+    uni.showToast({ title: '移除标签失败', icon: 'none' })
+  } finally {
+    tagLoading.value = false
+  }
+}
+
 // Navigation helpers
 function navigateTo(url: string) {
   uni.navigateTo({ url })
 }
 
-function editQuestion(questionId: number) {
+function editQuestion(questionId: string | number) {
   navigateTo(`/pages/teacher/question-edit?id=${questionId}`)
 }
 
@@ -297,16 +375,23 @@ function difficultyText(d: number | null): string {
 .favorites { display: flex; min-height: 100vh; background: #f5f7fa; }
 .modal-overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.35); }
 .assignment-modal { width: 520px; max-width: calc(100vw - 40px); padding: 20px; background: #fff; border-radius: 8px; }
+.modal-close { float: right; margin: -4px -4px 12px 12px; }
+.tag-modal { min-height: 180px; }
+.tag-editor { display: flex; flex-wrap: wrap; gap: 8px; min-height: 44px; padding: 10px; margin: 16px 0 12px; background: #f5f7fa; border-radius: 4px; }
+.tag-chip { padding: 4px 8px; border-radius: 12px; color: #409eff; background: #ecf5ff; }
+.tag-remove { margin-left: 4px; color: #f56c6c; cursor: pointer; }
+.tag-add-row { display: flex; gap: 8px; }
+.tag-add-row input { flex: 1; border: 1px solid #dcdfe6; border-radius: 4px; padding: 6px 10px; }
 .mission-option { display: flex; justify-content: space-between; padding: 12px; margin: 8px 0; border: 1px solid #ebeef5; border-radius: 4px; }
 .mission-option:active { border-color: #409eff; background: #ecf5ff; }
 .empty-hint { display: block; padding: 16px 0; color: #909399; }
-.main { margin-left: 0; flex: 1; display: flex; gap: 16px; padding: 16px; overflow: hidden; }
+.main { margin-left: 0; flex: 1; min-width: 0; box-sizing: border-box; display: flex; gap: 16px; padding: 16px; overflow: hidden; }
 
 /* Knowledge tree */
-.knowledge-tree { width: 240px; background: #fff; border-radius: 8px; padding: 16px; overflow-y: auto; flex-shrink: 0; }
+.knowledge-tree { width: 240px; box-sizing: border-box; background: #fff; border-radius: 8px; padding: 16px; overflow-y: auto; flex-shrink: 0; }
 .subject-selector { margin-bottom: 14px; }
 .subject-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: #303133; }
-.subject-select { width: 100%; height: 32px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; color: #409eff; background: #ecf5ff; font-size: 13px; }
+.subject-select { display: flex; align-items: center; justify-content: center; width: 100%; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; color: #409eff; background: #ecf5ff; font-size: 13px; line-height: 1.2; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-title { font-size: 14px; font-weight: 500; color: #303133; margin-bottom: 12px; display: block; }
 .tree-content .tree-node { padding: 4px 8px; cursor: pointer; font-size: 13px; color: #606266; display: flex; align-items: center; border-radius: 4px; }
 .tree-content .tree-node:hover { background: #f5f7fa; }
@@ -320,15 +405,15 @@ function difficultyText(d: number | null): string {
 .kp-count { font-size: 10px; color: #909399; margin-left: 4px; flex-shrink: 0; }
 
 /* Right panel */
-.panel { flex: 1; background: #fff; border-radius: 8px; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; min-width: 0; }
+.panel { flex: 1; min-width: 0; box-sizing: border-box; background: #fff; border-radius: 8px; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; }
 .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .panel-title { font-size: 16px; font-weight: 500; color: #303133; }
 .filter-hint { font-size: 12px; color: #909399; }
 .clear-link { color: #409eff; cursor: pointer; text-decoration: underline; }
 
 /* Search bar */
-.search-bar { display: flex; gap: 8px; margin-bottom: 12px; }
-.search-input { flex: 1; border: 1px solid #dcdfe6; border-radius: 4px; padding: 6px 12px; font-size: 13px; }
+.search-bar { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 12px; }
+.search-input { flex: 1; min-width: 0; width: 100%; height: 32px; min-height: 32px; box-sizing: border-box; border: 1px solid #dcdfe6; border-radius: 4px; padding: 0 12px; line-height: 30px; font-size: 13px; }
 
 /* Filter bar */
 .filter-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -360,7 +445,7 @@ function difficultyText(d: number | null): string {
 .btn-del { background: #fff1f0; color: #f5222d; border: 1px solid #ffa39e; }
 
 @media (max-width: 768px) {
-  .main { margin-left: 60px; flex-direction: column; }
+  .main { margin-left: 0; flex-direction: column; }
   .knowledge-tree { width: auto; max-height: 30vh; }
 }
 </style>

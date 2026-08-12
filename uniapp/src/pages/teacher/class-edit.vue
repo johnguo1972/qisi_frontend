@@ -10,13 +10,15 @@
         <view class="invite-section">
           <view class="invite-header">
             <text class="invite-label">班级邀请码</text>
-            <button size="mini" class="regen-btn" @click="handleRegenCode" :disabled="regenerating">
-              {{ regenerating ? '生成中...' : '重新生成' }}
-            </button>
+            <view class="invite-actions">
+              <button size="mini" class="regen-btn" @click="handleRegenCode" :disabled="regenerating">
+                {{ regenerating ? '生成中...' : '重新生成' }}
+              </button>
+              <button size="mini" class="copy-btn" @click="handleCopyCode" v-if="inviteCode">复制</button>
+            </view>
           </view>
           <view class="invite-body">
             <text class="invite-code">{{ inviteCode || '暂无' }}</text>
-            <button size="mini" class="copy-btn" @click="handleCopyCode" v-if="inviteCode">复制</button>
           </view>
           <text class="invite-hint">学生可通过此邀请码直接加入班级（需开启"允许邀请码加入"）</text>
         </view>
@@ -172,6 +174,7 @@ async function handleSubmit() {
       status: form.value.status,
     })
     if (res.code === 0) {
+      uni.$emit('teacher-class-updated')
       uni.showToast({ title: '保存成功', icon: 'success' })
       setTimeout(() => uni.navigateBack(), 1500)
     } else {
@@ -232,6 +235,11 @@ function handleCancel() {
   font-weight: bold;
   color: #409eff;
 }
+.invite-actions {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
 .regen-btn {
   background: #fff;
   color: #409eff;
@@ -239,6 +247,7 @@ function handleCancel() {
   font-size: 22rpx;
   padding: 4rpx 16rpx;
   border-radius: 6rpx;
+  margin: 0;
 }
 .regen-btn[disabled] {
   background: #f5f5f5;
@@ -265,6 +274,7 @@ function handleCancel() {
   font-size: 22rpx;
   padding: 4rpx 16rpx;
   border-radius: 6rpx;
+  margin: 0;
 }
 .invite-hint {
   font-size: 22rpx;

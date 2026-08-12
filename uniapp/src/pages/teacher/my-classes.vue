@@ -44,11 +44,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { classApi } from '@/api/index.ts'
+import type { UUID } from '@/types/uuid'
 
 interface ClassItem {
-  id: number
+  id: UUID
   class_name: string
   class_no: string
   description?: string
@@ -63,7 +64,12 @@ const classes = ref<ClassItem[]>([])
 const loading = ref(false)
 
 onMounted(async () => {
+  uni.$on('teacher-class-updated', loadClasses)
   await loadClasses()
+})
+
+onUnmounted(() => {
+  uni.$off('teacher-class-updated', loadClasses)
 })
 
 async function loadClasses() {
@@ -80,11 +86,12 @@ async function loadClasses() {
 }
 
 function goCreate() { uni.navigateTo({ url: '/pages/teacher/class-create' }) }
-function goDetail(id: number) { uni.navigateTo({ url: `/pages/teacher/class-detail?classId=${id}` }) }
-function goStudents(id: number) { uni.navigateTo({ url: `/pages/teacher/class-detail?classId=${id}&view=students` }) }
-function goMissions(id: number) { uni.navigateTo({ url: `/pages/teacher/mission-list?classId=${id}` }) }
-function goStats(id: number) { uni.navigateTo({ url: `/pages/teacher/learning-stats?classId=${id}` }) }
-function goEdit(id: number) { uni.navigateTo({ url: `/pages/teacher/class-edit?id=${id}` }) }
+function classQuery(id: UUID): string { return encodeURIComponent(String(id)) }
+function goDetail(id: UUID) { uni.navigateTo({ url: `/pages/teacher/class-detail?classId=${classQuery(id)}` }) }
+function goStudents(id: UUID) { uni.navigateTo({ url: `/pages/teacher/class-detail?classId=${classQuery(id)}&view=students` }) }
+function goMissions(id: UUID) { uni.navigateTo({ url: `/pages/teacher/mission-list?classId=${classQuery(id)}` }) }
+function goStats(id: UUID) { uni.navigateTo({ url: `/pages/teacher/learning-stats?classId=${classQuery(id)}` }) }
+function goEdit(id: UUID) { uni.navigateTo({ url: `/pages/teacher/class-edit?id=${classQuery(id)}` }) }
 
 async function confirmDelete(cls: ClassItem) {
   uni.showModal({

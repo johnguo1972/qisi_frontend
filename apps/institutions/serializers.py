@@ -255,7 +255,7 @@ class ClassJoinRequestSerializer(serializers.ModelSerializer):
 
 
 class CreateJoinRequestSerializer(serializers.Serializer):
-    class_id = serializers.IntegerField()
+    class_id = serializers.UUIDField()
     applicant_name = serializers.CharField(max_length=100)
     applicant_phone = serializers.CharField(
         max_length=20, required=False, allow_blank=True,

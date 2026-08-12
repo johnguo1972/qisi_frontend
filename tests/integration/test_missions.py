@@ -2,6 +2,7 @@
 import pytest
 from apps.missions.models import LearningMission, MissionLevel
 from apps.parser.models import ExamQuestion
+from apps.courses.models import Course
 
 
 @pytest.mark.django_db
@@ -15,6 +16,33 @@ class TestMissions:
             # Django APPEND_SLASH redirects, follow redirect
             resp = teacher_client.get('/api/v1/missions/')
         assert resp.status_code == 200
+
+    def test_mission_list_subject_display_and_filter(self, teacher_client, teacher_user, sample_mission):
+        """Mission list should expose the course subject and filter by Chinese or code."""
+        physics_course = Course.objects.create(
+            name='物理课程', subject='物理', grade_level='初中', teacher=teacher_user,
+        )
+        math_course = Course.objects.create(
+            name='数学课程', subject='math', grade_level='初中', teacher=teacher_user,
+        )
+        sample_mission.course = physics_course
+        sample_mission.save(update_fields=['course'])
+        math_mission = LearningMission.objects.create(
+            mission_name='数学任务', status='published', creator_teacher_id=teacher_user,
+            course=math_course,
+        )
+
+        response = teacher_client.get('/api/v1/missions/', {'subject': 'physics'})
+        assert response.status_code == 200
+        data = response.json()['data']
+        assert [item['id'] for item in data] == [str(sample_mission.id)]
+        assert data[0]['subject'] == '物理'
+
+        response = teacher_client.get('/api/v1/missions/', {'subject': '数学'})
+        assert response.status_code == 200
+        data = response.json()['data']
+        assert [item['id'] for item in data] == [str(math_mission.id)]
+        assert data[0]['subject'] == '数学'
 
     def test_mission_create(self, teacher_client):
         """Create a new mission."""

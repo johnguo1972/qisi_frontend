@@ -7,21 +7,31 @@ from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from apps.study.permissions import IsStudent
+from apps.study.permissions import IsStudentOrParentContext
 from rest_framework.response import Response
 from apps.missions.models import LearningMission, MissionLevel, MissionQuestionRel
 from apps.study.models import StudentMissionProgress, StudentLevelProgress, AnswerAttempt
 from apps.parser.models import ExamQuestion
 from apps.parser.models import QuestionImage, QuestionOption
 from apps.common.batch_tasks import PROGRESS_KEY_PREFIX
+from apps.common.media import media_url
 
 
 def make_trace_id():
     return uuid.uuid4().hex[:16]
 
 
+def _visible_mission_rels(level_or_mission, student_id):
+    """Return relations visible to a student, including class-wide questions."""
+    if isinstance(level_or_mission, MissionLevel):
+        manager = MissionQuestionRel.objects.filter(level=level_or_mission)
+    else:
+        manager = MissionQuestionRel.objects.filter(mission=level_or_mission)
+    return [rel for rel in manager if not rel.target_student_ids or str(student_id) in {str(value) for value in rel.target_student_ids}]
+
+
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def student_home(request):
     """S-01: Student home - task list.
 
@@ -38,9 +48,15 @@ def student_home(request):
         ).values_list('class_obj_id', flat=True)
     )
 
+    classes = list(
+        ClassStudent.objects.filter(student=request.user, status='active')
+        .select_related('class_obj')
+        .values('class_obj_id', 'class_obj__class_name')
+    )
+
     if not student_class_ids:
         return Response({
-            'code': 0, 'message': 'success', 'data': {'missions': []}, 'trace_id': make_trace_id(),
+            'code': 0, 'message': 'success', 'data': {'missions': [], 'classes': classes}, 'trace_id': make_trace_id(),
         })
 
     # 获取已发布的任务（属于学生所在班级的）
@@ -73,8 +89,16 @@ def student_home(request):
     ).select_related('mission', 'mission__class_obj')
 
     class_id = request.query_params.get('class_id')
-    if class_id and int(class_id) > 0:
-        progresses = progresses.filter(mission__class_obj_id=class_id)
+    # 前端“全部班级”使用 0 作为占位值，将其视为不筛选班级；真实班级 ID 仍必须是 UUID。
+    if class_id and str(class_id) != '0':
+        try:
+            class_uuid = uuid.UUID(str(class_id))
+        except (ValueError, TypeError, AttributeError):
+            return Response({
+                'code': 400, 'message': 'class_id must be a valid UUID',
+                'data': None, 'trace_id': make_trace_id(),
+            }, status=400)
+        progresses = progresses.filter(mission__class_obj_id=class_uuid)
 
     # Filter by scope (date range on end_at)
     scope = request.query_params.get('scope')
@@ -92,13 +116,13 @@ def student_home(request):
         mission = p.mission
         class_obj = mission.class_obj
         level_count = mission.levels.count()
-        question_count = MissionQuestionRel.objects.filter(mission=mission).count()
+        question_count = len(_visible_mission_rels(mission, request.user.id))
 
         # 实时计算各关卡进度，取平均值作为任务整体进度
         levels = mission.levels.all()
         total_progress = 0
         for lv in levels:
-            level_q_count = MissionQuestionRel.objects.filter(level=lv).count()
+            level_q_count = len(_visible_mission_rels(lv, request.user.id))
             correct_count = AnswerAttempt.objects.filter(
                 student_user_id=request.user,
                 level=lv,
@@ -132,12 +156,12 @@ def student_home(request):
         })
 
     return Response({
-        'code': 0, 'message': 'success', 'data': {'missions': missions}, 'trace_id': make_trace_id(),
+        'code': 0, 'message': 'success', 'data': {'missions': missions, 'classes': classes}, 'trace_id': make_trace_id(),
     })
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def student_mission_detail(request, mission_id):
     """S-02: Student mission detail."""
     try:
@@ -156,7 +180,7 @@ def student_mission_detail(request, mission_id):
         lp = StudentLevelProgress.objects.filter(
             level=lv, student_user_id=request.user
         ).first()
-        level_q_count = MissionQuestionRel.objects.filter(level=lv).count()
+        level_q_count = len(_visible_mission_rels(lv, request.user.id))
 
         # 计算关卡进度：已答对的题目数 / 总题目数
         correct_count = AnswerAttempt.objects.filter(
@@ -205,7 +229,7 @@ def student_mission_detail(request, mission_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def student_level_detail(request, level_id):
     """S-03: Current level detail with questions."""
     try:
@@ -218,7 +242,7 @@ def student_level_detail(request, level_id):
             mission_id=level.mission_id, student_user_id=request.user).exists():
         return Response({'code': 403, 'message': '无权访问该关卡', 'data': None, 'trace_id': make_trace_id()}, status=403)
 
-    rels = MissionQuestionRel.objects.filter(level=level)
+    rels = _visible_mission_rels(level, request.user.id)
     questions = []
     for rel in rels:
         try:
@@ -233,7 +257,18 @@ def student_level_detail(request, level_id):
                 'answer': q.answer or '',
                 'analysis': q.analysis or '',
                 'solution': q.solution or '',
-                'images': [{'id': img.id, 'file_path': img.file_path, 'url': img.file_path} for img in q.images.all()],
+                'images': [
+                    {
+                        'id': img.id,
+                        'file_path': img.file_path,
+                        'url': media_url(img.file_path),
+                        'image_type': img.image_type,
+                        'display_width': img.display_width,
+                        'description': img.description or '',
+                    }
+                    for img in q.images.all().order_by('sort_order')
+                    if img.file_path and img.image_type != 'formula'
+                ],
                 'options': [{'label': o.option_label, 'content': o.content}
                            for o in q.options.all()],
             })
@@ -268,7 +303,7 @@ def student_level_detail(request, level_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def growth_summary(request):
     """S-12: Growth summary."""
     from apps.wrongbook.models import WrongBookItem, MasteryRecord
@@ -350,11 +385,14 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
-                                     Image as RLImage, PageTemplate, Frame)
+                                     Image as RLImage, PageTemplate, Frame,
+                                     Table, TableStyle)
+    from reportlab.lib.utils import ImageReader
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
     from reportlab.lib.units import mm
     from reportlab.lib import colors
+    from xml.sax.saxutils import escape
     import io
 
     pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
@@ -394,9 +432,25 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
     styles = getSampleStyleSheet()
     body = ParagraphStyle('ZhBody', parent=styles['Normal'],
                           fontName='STSong-Light', fontSize=11, leading=18)
+    question_number = ParagraphStyle('ZhQuestionNumber', parent=body,
+                                     fontSize=9, leading=14)
     h1 = ParagraphStyle('ZhH1', parent=styles['Title'],
                         fontName='STSong-Light', fontSize=18)
     story = []
+
+    def pdf_text(value):
+        """Escape user/imported text before passing it to ReportLab Paragraph."""
+        return escape(str(value or ''))
+
+    def option_text(option, index):
+        """Accept both API-shaped options and raw QuestionOption values."""
+        if not isinstance(option, dict):
+            return chr(65 + index), str(option or '')
+        label = option.get('label') or option.get('option_label') or chr(65 + index)
+        content = option.get('content')
+        if content is None:
+            content = option.get('text', '')
+        return str(label), str(content or '')
 
     type_label = '错题本' if export_type == 'wrongbook' else '任务题目'
     story.append(Paragraph(type_label, h1))
@@ -406,36 +460,59 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
 
     for i, q in enumerate(questions, 1):
         qtype = ExamQuestion.QUESTION_TYPE_LABELS.get(q['question_type'], q['question_type'])
-        story.append(Paragraph(f'第{i}题（{qtype}）', body))
+        header_label = f'第{i}题（{qtype}）'
+        header_width = max(
+            15 * mm,
+            pdfmetrics.stringWidth(header_label, 'STSong-Light', question_number.fontSize) + 6,
+        )
+        question_header = Table([
+            [
+                Paragraph(pdf_text(header_label), question_number),
+                Paragraph(pdf_text(q.get('stem')), body),
+            ]
+        ], colWidths=[header_width, doc.width - header_width])
+        question_header.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(question_header)
 
         # 知识点标签
         kps = q.get('knowledge_points') or []
         if kps:
             kp_text = "知识点：" + "、".join(
-                kp.get('module', '') if isinstance(kp, dict) else str(kp)
+                pdf_text(kp.get('module', '') if isinstance(kp, dict) else str(kp))
                 for kp in kps[:3]
             )
             story.append(Paragraph(f'<font color="#666666" size="9">{kp_text}</font>', body))
 
-        story.append(Paragraph(q['stem'] or '', body))
-        for opt in q.get('options_html', []):
-            story.append(Paragraph(f'{opt["label"]}. {opt["content"]}', body))
-
-        # 图片
+        # Formula images come from solutions/analysis; keep only question figures.
         for img_url in q.get('image_urls', []):
             img_path = str(settings.MEDIA_ROOT / img_url)
             if os.path.exists(img_path):
                 try:
-                    img = RLImage(img_path, width=400, height=200)
-                    story.append(img)
+                    image_width, image_height = ImageReader(img_path).getSize()
+                    max_width, max_height = doc.width, 100 * mm
+                    scale = min(max_width / image_width, max_height / image_height, 1)
+                    story.append(Spacer(1, 2 * mm))
+                    story.append(RLImage(img_path, width=image_width * scale,
+                                         height=image_height * scale))
+                    story.append(Spacer(1, 2 * mm))
                 except Exception:
                     pass
 
+        for option_index, opt in enumerate(q.get('options_html', [])):
+            label, content = option_text(opt, option_index)
+            story.append(Paragraph(f'{pdf_text(label)}. {pdf_text(content)}', body))
+
         if include_answers:
             if q.get('answer'):
-                story.append(Paragraph(f'<b>答案：</b>{q["answer"]}', body))
+                story.append(Paragraph(f'<b>答案：</b>{pdf_text(q["answer"])}', body))
             if q.get('analysis'):
-                story.append(Paragraph(f'<b>解析：</b>{q["analysis"]}', body))
+                story.append(Paragraph(f'<b>解析：</b>{pdf_text(q["analysis"])}', body))
         story.append(Spacer(1, 4*mm))
 
     doc.build(story)
@@ -443,7 +520,7 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def export_pdf(request):
     """导出错题本或任务题目为 PDF（当前返回 HTML 占位，待 reportlab 可用后替换）。
 
@@ -489,9 +566,9 @@ def export_pdf(request):
             options = list(QuestionOption.objects.filter(question_id=q['id']).values(
                 'option_label', 'content'
             ).order_by('sort_order'))
-            images = list(QuestionImage.objects.filter(question_id=q['id']).values(
-                'file_path'
-            ).order_by('sort_order'))
+            images = list(QuestionImage.objects.filter(
+                question_id=q['id'],
+            ).exclude(image_type='formula').values('file_path').order_by('sort_order'))
             questions_data.append({
                 **q,
                 'options_html': [{'label': o['option_label'], 'content': o['content']} for o in options],
@@ -506,8 +583,8 @@ def export_pdf(request):
             return Response({
                 'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': trace_id,
             }, status=404)
-        rels = MissionQuestionRel.objects.filter(mission=mission).values_list('question_id', flat=True)
-        qs = ExamQuestion.objects.filter(id__in=list(rels)).values(
+        rels = [rel.question_id for rel in _visible_mission_rels(mission, request.user.id)]
+        qs = ExamQuestion.objects.filter(id__in=rels).values(
             'id', 'question_no', 'question_type', 'stem', 'stem_html',
             'answer', 'analysis', 'knowledge_points',
         )
@@ -515,9 +592,9 @@ def export_pdf(request):
             options = list(QuestionOption.objects.filter(question_id=q['id']).values(
                 'option_label', 'content'
             ).order_by('sort_order'))
-            images = list(QuestionImage.objects.filter(question_id=q['id']).values(
-                'file_path'
-            ).order_by('sort_order'))
+            images = list(QuestionImage.objects.filter(
+                question_id=q['id'],
+            ).exclude(image_type='formula').values('file_path').order_by('sort_order'))
             questions_data.append({
                 **q,
                 'options_html': [{'label': o['option_label'], 'content': o['content']} for o in options],
@@ -550,7 +627,7 @@ def export_pdf(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def upload_attempt_image(request, attempt_id):
     """Upload a photo for a student's answer attempt.
 

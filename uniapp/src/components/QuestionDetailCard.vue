@@ -30,7 +30,7 @@
     <view v-if="!compact && diagramImages.length > 0" class="q-images">
       <view class="image-row">
         <view v-for="(img, idx) in diagramImages" :key="idx" class="img-cell">
-          <image :src="img.url" mode="widthFix" class="q-img" @click="previewImg(img.url)" />
+          <image :src="img.url" mode="widthFix" class="q-img" :style="imageStyle(img)" @click="previewImg(img.url)" />
           <text v-if="img.caption" class="img-label">{{ img.caption }}</text>
         </view>
       </view>
@@ -79,6 +79,10 @@
           <text v-if="selected" class="check-mark">&#10003;</text>
         </view>
         <button size="mini" @click="$emit('toggle-answer')">答案</button>
+        <button size="mini" class="btn-ai-answer" @click="$emit('ai-answer', 'ALL')">AI答案</button>
+        <button size="mini" class="btn-ai-answer mode-a" @click="$emit('ai-answer', 'A')">A模式答案</button>
+        <button size="mini" class="btn-ai-answer mode-b" @click="$emit('ai-answer', 'B')">B模式答案</button>
+        <button size="mini" class="btn-ai-answer mode-c" @click="$emit('ai-answer', 'C')">C模式答案</button>
         <button size="mini" @click="$emit('edit', question.id)">编辑</button>
         <button size="mini" @click="$emit('related', question.id)">类似题</button>
         <button size="mini" @click="$emit('edit-tags', question)">标签编辑</button>
@@ -103,6 +107,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { renderWithKatex } from '@/utils/katex-renderer'
+import { getMediaUrl } from '@/utils/media-url'
 
 const props = defineProps<{
   question: any
@@ -117,7 +122,7 @@ const answerHtml = ref('')
 const analysisHtml = ref('')
 const optionHtmls = ref<Record<string, string>>({})
 const subquestionHtmls = ref<string[]>([])
-const emit = defineEmits(['edit', 'related', 'toggle-answer', 'add-favorite', 'edit-tags', 'check'])
+const emit = defineEmits(['edit', 'related', 'toggle-answer', 'add-favorite', 'edit-tags', 'check', 'ai-answer'])
 function toggleCheck() { emit('check', props.question.id) }
 
 const options = computed(() => {
@@ -187,16 +192,22 @@ const optColor = computed(() => '#409eff')
 const questionImages = computed(() => {
   const images = props.question.images || []
   return images.map((img: any) => ({
-    url: getImageUrl(img.file_path || img.url),
+    url: getMediaUrl(img.file_path || img.url),
     caption: img.description || '',
     type: img.image_type || 'other',
+    displayWidth: Number(img.display_width || 0),
   }))
 })
 
 // 题目配图（非公式类型）
 const diagramImages = computed(() => {
-  return questionImages.value.filter(img => img.type !== 'formula')
+  return questionImages.value.filter(img => img.type === 'diagram')
 })
+
+function imageStyle(image: { displayWidth?: number }) {
+  const width = image.displayWidth && image.displayWidth > 200 ? Math.min(1200, image.displayWidth) : 420
+  return { width: `${width}px`, maxWidth: '100%' }
+}
 
 function getImageUrl(path: string): string {
   if (!path) return ''
@@ -301,6 +312,8 @@ onMounted(renderContent)
 .compact-body .stem-content { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .compact-stem { font-size: 14px; line-height: 1.6; color: #303133; }
 .compact-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.btn-ai-answer { color: #c2410c; background: #fff7ed; border: 1px solid #fdba74; }
+.btn-ai-answer.mode-a, .btn-ai-answer.mode-b, .btn-ai-answer.mode-c { color: #1d4ed8; background: #eff6ff; border-color: #93c5fd; }
 
 .card-header {
   display: flex;
@@ -375,7 +388,6 @@ onMounted(renderContent)
 }
 
 .q-img {
-  max-width: 300px;
   border-radius: 4px;
   cursor: pointer;
 }
@@ -392,9 +404,11 @@ onMounted(renderContent)
 
 .opt-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  height: 26px;
+  margin-bottom: 4px;
+  overflow: hidden;
 }
 
 .opt-label {
@@ -406,8 +420,19 @@ onMounted(renderContent)
 .opt-content {
   flex: 1;
   font-size: 14px;
-  line-height: 1.6;
+  min-width: 0;
+  overflow: hidden;
+  color: #303133;
+  line-height: 26px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
+/*
+ * Do not use :deep(*) here. uni-app compiles it to a universal selector
+ * (`.opt-content.data-v-xxxx *`), which WXSS rejects. The container styles
+ * above already provide the required compact option layout on all targets.
+ */
 
 .q-subquestions {
   margin-bottom: 16px;

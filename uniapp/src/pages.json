@@ -1,5 +1,6 @@
 {
   "pages": [
+    { "path": "pages/index/index", "style": { "navigationBarTitleText": "登录" } },
     { "path": "pages/login/index", "style": { "navigationBarTitleText": "登录" } },
     { "path": "pages/admin/home", "style": { "navigationBarTitleText": "管理员首页" } },
     { "path": "pages/admin/institutions", "style": { "navigationBarTitleText": "机构列表" } },
@@ -15,7 +16,9 @@
     { "path": "pages/teacher/question-edit", "style": { "navigationBarTitleText": "题目编辑" } },
     { "path": "pages/teacher/photo-upload", "style": { "navigationBarTitleText": "拍照新增试题" } },
     { "path": "pages/teacher/mission-create", "style": { "navigationBarTitleText": "创建任务" } },
+    { "path": "pages/teacher/mission-list", "style": { "navigationBarTitleText": "作业列表" } },
     { "path": "pages/teacher/mission-detail", "style": { "navigationBarTitleText": "任务详情" } },
+    { "path": "pages/teacher/learning-stats", "style": { "navigationBarTitleText": "学情统计" } },
     { "path": "pages/teacher/level-practice", "style": { "navigationBarTitleText": "关卡练习" } },
     { "path": "pages/teacher/class-create", "style": { "navigationBarTitleText": "创建班级" } },
     { "path": "pages/teacher/class-edit", "style": { "navigationBarTitleText": "编辑班级" } },
@@ -35,8 +38,22 @@
     { "path": "pages/student/wrongbook", "style": { "navigationBarTitleText": "错题本" } },
     { "path": "pages/student/wrongbook-variants", "style": { "navigationBarTitleText": "同类题练习" } },
     { "path": "pages/student/variant-practice", "style": { "navigationBarTitleText": "同类题练习" } },
-    { "path": "pages/student/export", "style": { "navigationBarTitleText": "导出 PDF" } }
+    { "path": "pages/student/export", "style": { "navigationBarTitleText": "导出 PDF" } },
+    { "path": "pages/student/mp-home", "style": { "navigationBarTitleText": "今日任务" } }
+    ,{ "path": "pages/student/growth", "style": { "navigationBarTitleText": "成长" } }
+    ,{ "path": "pages/student/scan-entry", "style": { "navigationBarTitleText": "作业入口" } }
+    ,{ "path": "pages/student/practice-sheet", "style": { "navigationBarTitleText": "错题练习" } }
+    ,{ "path": "pages/student/paper-scan", "style": { "navigationBarTitleText": "纸质扫描" } }
+    ,{ "path": "pages/student/parent-bind", "style": { "navigationBarTitleText": "绑定手机号" } }
   ],
+  "tabBar": {
+    "color": "#999999", "selectedColor": "#409eff", "backgroundColor": "#ffffff", "borderStyle": "white",
+    "list": [
+      { "pagePath": "pages/student/mp-home", "text": "首页" },
+      { "pagePath": "pages/student/wrongbook", "text": "错题" },
+      { "pagePath": "pages/student/growth", "text": "成长" }
+    ]
+  },
   "globalStyle": {
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "优途AI辅学系统",

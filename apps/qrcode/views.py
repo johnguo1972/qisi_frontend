@@ -1,0 +1,553 @@
+import base64
+import json
+import os
+import uuid
+from pathlib import Path
+
+from django.conf import settings
+from django.core.cache import cache
+from django.db import transaction
+from django.http import HttpResponse
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+
+from apps.accounts.models import StudentParentBind, UserAccount, WechatIdentity
+from apps.accounts.serializers import ProfileSerializer
+from apps.accounts.services import generate_tokens, get_or_create_user, verify_code
+from apps.institutions.models import ClassStudent
+from apps.missions.models import LearningMission
+from apps.study.models import AnswerAttempt
+from apps.common.media import media_url
+
+from .models import AttemptImage, MissionShortCode, PaperScanBatch, PaperScanPage, StudentClassShortCode, WrongbookPracticeSheet
+from .services import (
+    analyze_image_blur, cache_wechat_pending, ensure_mission_short_code,
+    ensure_student_short_code, mission_qr_url, paper_qr_url, qr_png, wxacode_png, wechat_url_link,
+)
+
+
+def trace_id():
+    return uuid.uuid4().hex[:16]
+
+
+def effective_student(request):
+    if getattr(request.user, 'role_type', None) != 'parent':
+        return request.user
+    child_id = cache.get(f'parent_context:{request.user.id}')
+    if not child_id:
+        return None
+    relation = StudentParentBind.objects.filter(
+        parent_user_id=request.user, student_user_id=child_id, bind_status='active',
+    ).select_related('student_user_id').first()
+    return relation.student_user_id if relation else None
+
+
+def _expired(code):
+    if code.status != 'active':
+        return True
+    if code.expires_at and timezone.now() > code.expires_at:
+        if code.status != 'expired':
+            code.status = 'expired'
+            code.save(update_fields=['status', 'updated_at'])
+        return True
+    return False
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def mission_qrcode(request, mission_id):
+    try:
+        mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': trace_id()}, status=404)
+    code = ensure_mission_short_code(mission)
+    try:
+        size = max(180, min(800, int(request.query_params.get('size', 300))))
+    except (TypeError, ValueError):
+        size = 300
+    return HttpResponse(qr_png(mission_qr_url(code.short_code), size), content_type='image/png')
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def mission_qrcode_info(request, mission_id):
+    try:
+        mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': trace_id()}, status=404)
+    code = ensure_mission_short_code(mission)
+    image_data = base64.b64encode(qr_png(mission_qr_url(code.short_code), 300)).decode('ascii')
+    return Response({'code': 0, 'message': 'success', 'data': {
+        'short_code': code.short_code, 'url': mission_qr_url(code.short_code),
+        'status': code.status, 'expires_at': code.expires_at,
+        'image_data': f'data:image/png;base64,{image_data}',
+    }, 'trace_id': trace_id()})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def short_code_info(request, short_code):
+    code = MissionShortCode.objects.select_related('mission', 'class_obj').filter(short_code=short_code.upper()).first()
+    if not code:
+        return Response({'code': 404, 'message': '作业码不存在', 'data': None, 'trace_id': trace_id()}, status=404)
+    if _expired(code):
+        return Response({'code': 4101, 'message': '作业码已过期', 'data': None, 'trace_id': trace_id()}, status=410)
+    mission = code.mission
+    if mission.status != 'published':
+        return Response({'code': 4004, 'message': '作业尚未发布', 'data': None, 'trace_id': trace_id()}, status=400)
+    return Response({'code': 0, 'message': 'success', 'data': {
+        'mission_id': mission.id, 'mission_name': mission.mission_name,
+        'class_id': code.class_obj_id, 'class_name': getattr(code.class_obj, 'class_name', None),
+        'end_at': mission.end_at, 'short_code': code.short_code,
+    }, 'trace_id': trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def enter_mission(request, short_code):
+    code = MissionShortCode.objects.select_related('mission').filter(short_code=short_code.upper()).first()
+    if not code or _expired(code):
+        return Response({'code': 4101, 'message': '作业码无效或已过期', 'data': None, 'trace_id': trace_id()}, status=410)
+    mission = code.mission
+    if mission.status != 'published':
+        return Response({'code': 4004, 'message': '作业尚未发布', 'data': None, 'trace_id': trace_id()}, status=400)
+    effective_user = effective_student(request)
+    if not effective_user:
+        return Response({'code': 4002, 'message': '请先选择要代理的孩子', 'data': None, 'trace_id': trace_id()}, status=400)
+    student_id = effective_user.id
+    allowed = set(str(v) for v in (mission.target_student_ids or []))
+    if code.class_obj_id:
+        allowed_class = ClassStudent.objects.filter(class_obj_id=code.class_obj_id, student=effective_user, status='active').exists()
+        if not allowed_class and str(student_id) not in allowed:
+            return Response({'code': 403, 'message': '无权进入该作业', 'data': None, 'trace_id': trace_id()}, status=403)
+    elif allowed and str(student_id) not in allowed:
+        return Response({'code': 403, 'message': '无权进入该作业', 'data': None, 'trace_id': trace_id()}, status=403)
+    from apps.study.models import StudentMissionProgress
+    StudentMissionProgress.objects.get_or_create(mission=mission, student_user_id=effective_user)
+    MissionShortCode.objects.filter(pk=code.pk).update(scan_count=code.scan_count + 1)
+    return Response({'code': 0, 'message': 'success', 'data': {'mission_id': mission.id, 'redirect_url': f'/pages/student/mission?id={mission.id}'}, 'trace_id': trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def upload_attempt_image(request, attempt_id):
+    owner = effective_student(request)
+    if not owner:
+        return Response({'code': 4002, 'message': '请先选择要代理的孩子', 'data': None, 'trace_id': trace_id()}, status=400)
+    try:
+        attempt = AnswerAttempt.objects.get(pk=attempt_id, student_user_id=owner)
+    except AnswerAttempt.DoesNotExist:
+        return Response({'code': 404, 'message': '作答记录不存在', 'data': None, 'trace_id': trace_id()}, status=404)
+    image = request.FILES.get('image')
+    if not image:
+        return Response({'code': 400, 'message': '缺少图片', 'data': None, 'trace_id': trace_id()}, status=400)
+    page_no = int(request.data.get('page_no') or 1)
+    directory = Path(settings.MEDIA_ROOT) / 'attempts' / str(attempt.id)
+    directory.mkdir(parents=True, exist_ok=True)
+    filename = f'{page_no}_{uuid.uuid4().hex}{Path(image.name).suffix.lower() or ".jpg"}'
+    destination = directory / filename
+    with destination.open('wb') as target:
+        for chunk in image.chunks():
+            target.write(chunk)
+    relative = f'attempts/{attempt.id}/{filename}'
+    blur_score, is_blurry = analyze_image_blur(image)
+    item, _ = AttemptImage.objects.update_or_create(
+        attempt=attempt, page_no=page_no,
+        defaults={'student': owner, 'question_id': attempt.question_id, 'image_url': relative, 'file_size': image.size,
+                  'blur_score': blur_score, 'is_blurry': is_blurry, 'upload_status': 'completed'},
+    )
+    attempt.image_count = AttemptImage.objects.filter(attempt=attempt).count()
+    attempt.submit_source = 'photo'
+    attempt.save(update_fields=['image_count', 'submit_source'])
+    return Response({'code': 0, 'message': '上传成功', 'data': {'id': item.id, 'url': media_url(item.image_url), 'page_no': item.page_no, 'image_count': attempt.image_count}, 'trace_id': trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_login(request):
+    code = str(request.data.get('code') or '').strip()
+    if not code:
+        return Response({'code': 400, 'message': '缺少微信登录 code', 'data': None, 'trace_id': trace_id()}, status=400)
+    appid = getattr(settings, 'WECHAT_MP_APPID', '')
+    secret = getattr(settings, 'WECHAT_MP_APPSECRET', '')
+    if not appid or not secret:
+        return Response({'code': 503, 'message': '微信登录服务未配置', 'data': None, 'trace_id': trace_id()}, status=503)
+    import requests
+    try:
+        result = requests.get('https://api.weixin.qq.com/sns/jscode2session', params={'appid': appid, 'secret': secret, 'js_code': code, 'grant_type': 'authorization_code'}, timeout=8).json()
+    except requests.RequestException:
+        return Response({'code': 502, 'message': '微信服务暂不可用', 'data': None, 'trace_id': trace_id()}, status=502)
+    if result.get('errcode') or not result.get('openid'):
+        return Response({'code': 400, 'message': result.get('errmsg', '微信登录失败'), 'data': None, 'trace_id': trace_id()}, status=400)
+    identity = WechatIdentity.objects.select_related('user').filter(appid=appid, openid=result['openid']).first()
+    if identity:
+        return Response({'code': 0, 'message': '登录成功', 'data': {**generate_tokens(identity.user), 'user': ProfileSerializer(identity.user).data}, 'trace_id': trace_id()})
+    return Response({'code': 1001, 'message': '请先绑定手机号', 'data': {'bind_token': cache_wechat_pending(appid, result['openid'], result.get('unionid', ''))}, 'trace_id': trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_bind(request):
+    pending_key = f"wechat_pending:{request.data.get('bind_token', '')}"
+    pending = cache.get(pending_key)
+    mobile = str(request.data.get('mobile') or '')
+    verify = str(request.data.get('verify_code') or '')
+    if not pending or not mobile or not verify_code(mobile, verify):
+        return Response({'code': 4001, 'message': '绑定信息无效或验证码错误', 'data': None, 'trace_id': trace_id()}, status=400)
+    user = get_or_create_user(mobile, role_type=request.data.get('role_type', 'student'))
+    identity, _ = WechatIdentity.objects.update_or_create(user=user, defaults={'appid': pending['appid'], 'openid': pending['openid'], 'unionid': pending.get('unionid', '')})
+    cache.delete(pending_key)
+    return Response({'code': 0, 'message': '绑定成功', 'data': {**generate_tokens(user), 'user': ProfileSerializer(user).data}, 'trace_id': trace_id()})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def parent_children(request):
+    children = StudentParentBind.objects.filter(parent_user_id=request.user, bind_status='active').select_related('student_user_id')
+    return Response({'code': 0, 'message': 'success', 'data': [{'id': b.student_user_id_id, 'display_name': b.student_user_id.display_name, 'grade_level': b.student_user_id.grade_level} for b in children], 'trace_id': trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def parent_context(request):
+    child_id = request.data.get('student_id')
+    if request.user.role_type != 'parent' or not StudentParentBind.objects.filter(parent_user_id=request.user, student_user_id=child_id, bind_status='active').exists():
+        return Response({'code': 403, 'message': '孩子未绑定或无权切换', 'data': None, 'trace_id': trace_id()}, status=403)
+    cache.set(f'parent_context:{request.user.id}', str(child_id), timeout=1800)
+    return Response({'code': 0, 'message': '代理对象已切换', 'data': {'student_id': child_id}, 'trace_id': trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_scan_batch(request):
+    try:
+        mission = LearningMission.objects.get(pk=request.data.get('mission_id'))
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': trace_id()}, status=404)
+    batch = PaperScanBatch.objects.create(mission=mission, operator=request.user, expected_count=int(request.data.get('expected_count') or 0))
+    return Response({'code': 0, 'message': 'success', 'data': {'batch_id': batch.id}, 'trace_id': trace_id()})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def class_student_codes(request, class_id):
+    from apps.institutions.models import Class, ClassTeacher
+    try:
+        class_obj = Class.objects.get(pk=class_id)
+    except Class.DoesNotExist:
+        return Response({'code': 404, 'message': '班级不存在', 'data': None, 'trace_id': trace_id()}, status=404)
+    if request.user.role_type not in ('admin', 'teacher') or (request.user.role_type == 'teacher' and not ClassTeacher.objects.filter(class_obj=class_obj, teacher=request.user).exists()):
+        return Response({'code': 403, 'message': '无权查看班级学生码', 'data': None, 'trace_id': trace_id()}, status=403)
+    rows = []
+    for link in ClassStudent.objects.filter(class_obj=class_obj, status='active').select_related('student'):
+        code = ensure_student_short_code(link.student, class_obj)
+        rows.append({'student_id': link.student_id, 'student_name': link.student.display_name, 'student_code': code.short_code})
+    return Response({'code': 0, 'message': 'success', 'data': rows, 'trace_id': trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def upload_scan_page(request, batch_id):
+    from .models import StudentClassShortCode
+    try:
+        batch = PaperScanBatch.objects.select_related('mission').get(pk=batch_id, operator=request.user)
+    except PaperScanBatch.DoesNotExist:
+        return Response({'code': 404, 'message': '扫描批次不存在', 'data': None, 'trace_id': trace_id()}, status=404)
+    image = request.FILES.get('image')
+    student_code = str(request.data.get('student_code') or '').strip().upper()
+    mission_code = str(request.data.get('mission_code') or '').strip().upper()
+    page_no = int(request.data.get('page_no') or 1)
+    total_pages = int(request.data.get('total_pages') or 1)
+    short = StudentClassShortCode.objects.select_related('student').filter(short_code=student_code, status='active').first()
+    mission_short = MissionShortCode.objects.filter(mission=batch.mission, short_code=mission_code, status='active').first()
+    if not short or not mission_short or not image:
+        return Response({'code': 400, 'message': '二维码、任务或图片无效', 'data': None, 'trace_id': trace_id()}, status=400)
+    directory = Path(settings.MEDIA_ROOT) / 'paper-scan' / str(batch.id)
+    directory.mkdir(parents=True, exist_ok=True)
+    filename = f'{uuid.uuid4().hex}{Path(image.name).suffix.lower() or ".jpg"}'
+    destination = directory / filename
+    with destination.open('wb') as target:
+        for chunk in image.chunks(): target.write(chunk)
+    page, created = PaperScanPage.objects.get_or_create(
+        batch=batch, student=short.student, page_no=page_no,
+        defaults={'student_code': student_code, 'mission_code': mission_code, 'total_pages': total_pages, 'image_url': f'paper-scan/{batch.id}/{filename}'},
+    )
+    if not created:
+        page.status = 'duplicate'
+        page.save(update_fields=['status'])
+    return Response({'code': 0, 'message': '页面已上传', 'data': {'page_id': page.id, 'status': page.status, 'duplicate': not created}, 'trace_id': trace_id()})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def scan_batch_summary(request, batch_id):
+    try:
+        batch = PaperScanBatch.objects.get(pk=batch_id, operator=request.user)
+    except PaperScanBatch.DoesNotExist:
+        return Response({'code': 404, 'message': '扫描批次不存在', 'data': None, 'trace_id': trace_id()}, status=404)
+    pages = batch.pages.all()
+    students = {str(page.student_id) for page in pages}
+    duplicates = pages.filter(status='duplicate').count()
+    return Response({'code': 0, 'message': 'success', 'data': {'student_count': len(students), 'received_pages': pages.count(), 'duplicate_pages': duplicates, 'unknown_codes': 0, 'missing_pages': 0}, 'trace_id': trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def complete_scan_batch(request, batch_id):
+    try:
+        batch = PaperScanBatch.objects.get(pk=batch_id, operator=request.user)
+    except PaperScanBatch.DoesNotExist:
+        return Response({'code': 404, 'message': '扫描批次不存在', 'data': None, 'trace_id': trace_id()}, status=404)
+    if batch.pages.filter(status__in=['duplicate']).exists():
+        return Response({'code': 400, 'message': '存在重复页，不能归档', 'data': None, 'trace_id': trace_id()}, status=400)
+    batch.status = 'completed'
+    batch.completed_at = timezone.now()
+    batch.save(update_fields=['status', 'completed_at'])
+    batch.pages.filter(status='uploaded').update(status='archived')
+    return Response({'code': 0, 'message': '扫描批次已归档', 'data': {'status': batch.status}, 'trace_id': trace_id()})
+# QR follow-up endpoints are defined below.
+
+def _mission_students(mission, requested_id=None):
+    from apps.institutions.models import ClassStudent
+    if requested_id:
+        link = ClassStudent.objects.filter(class_obj=mission.class_obj, student_id=requested_id, status='active').select_related('student').first()
+        return [link.student] if link else []
+    if mission.class_obj_id:
+        return list(UserAccount.objects.filter(student_classes__class_obj=mission.class_obj, student_classes__status='active', role_type='student').distinct())
+    ids = [str(value) for value in (mission.target_student_ids or [])]
+    return list(UserAccount.objects.filter(id__in=ids, role_type='student'))
+
+
+def _paper_pdf(mission, students, mission_code):
+    import io
+    import textwrap
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+    from apps.missions.models import MissionQuestionRel
+    from apps.parser.models import ExamQuestion
+    output = io.BytesIO()
+    pdf = canvas.Canvas(output, pagesize=A4)
+    width, height = A4
+    count = MissionQuestionRel.objects.filter(mission=mission).count()
+    for student in students:
+        student_code = ensure_student_short_code(student, mission.class_obj).short_code
+        qr = ImageReader(io.BytesIO(qr_png(paper_qr_url(student_code, mission_code, 1), 240)))
+        pdf.setFont('Helvetica-Bold', 18)
+        pdf.drawCentredString(width / 2, height - 45, str(mission.mission_name))
+        pdf.setFont('Helvetica', 11)
+        pdf.drawString(45, height - 75, f'Student: {student.display_name or student.login_name}')
+        pdf.drawString(45, height - 95, f'Paper code: {student_code}-{mission_code}')
+        pdf.drawImage(qr, width - 160, height - 170, width=110, height=110, preserveAspectRatio=True, mask='auto')
+        pdf.drawString(45, height - 140, f'Questions: {count}')
+        pdf.line(45, height - 180, width - 45, height - 180)
+        pdf.drawString(45, height - 205, 'Scan the QR code after completing this paper to upload pages.')
+        y = height - 235
+        pdf.setFont('Helvetica', 10)
+        relations = MissionQuestionRel.objects.filter(mission=mission).order_by('sort_no')
+        questions = {str(q.id): q for q in ExamQuestion.objects.filter(id__in=relations.values_list('question_id', flat=True))}
+        for number, relation in enumerate(relations, 1):
+            question = questions.get(str(relation.question_id))
+            if not question:
+                continue
+            lines = textwrap.wrap(str(question.stem or ''), width=78) or ['']
+            for line_no, line in enumerate(lines):
+                if y < 55:
+                    pdf.showPage()
+                    pdf.setFont('Helvetica', 10)
+                    y = height - 50
+                pdf.drawString(45, y, f'{number}. ' + line if line_no == 0 else '    ' + line)
+                y -= 15
+            y -= 8
+        pdf.showPage()
+    pdf.save()
+    return output.getvalue()
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def mission_wxacode(request, mission_id):
+    try:
+        mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': 'mission not found', 'data': None, 'trace_id': trace_id()}, status=404)
+    code = ensure_mission_short_code(mission)
+    try:
+        content = wxacode_png(code.short_code)
+    except RuntimeError as exc:
+        return Response({'code': 503, 'message': str(exc), 'data': None, 'trace_id': trace_id()}, status=503)
+    return HttpResponse(content, content_type='image/png')
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def mission_paper_pdf(request, mission_id):
+    try:
+        mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': 'mission not found', 'data': None, 'trace_id': trace_id()}, status=404)
+    students = _mission_students(mission, request.query_params.get('student_id'))
+    if not students or not mission.class_obj_id:
+        return Response({'code': 400, 'message': 'mission has no printable class students', 'data': None, 'trace_id': trace_id()}, status=400)
+    code = ensure_mission_short_code(mission)
+    response = HttpResponse(_paper_pdf(mission, students, code.short_code), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="paper-{mission.mission_no}.pdf"'
+    return response
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def paper_entry(request, student_code, mission_code, page_no):
+    student_code = str(student_code).upper()
+    mission_code = str(mission_code).upper()
+    student_row = StudentClassShortCode.objects.select_related('student', 'class_obj').filter(short_code=student_code, status='active').first()
+    mission_row = MissionShortCode.objects.select_related('mission', 'class_obj').filter(short_code=mission_code).first()
+    if not student_row or not mission_row or _expired(mission_row):
+        return Response({'code': 404, 'message': 'paper code not found or expired', 'data': None, 'trace_id': trace_id()}, status=404)
+    if mission_row.class_obj_id and mission_row.class_obj_id != student_row.class_obj_id:
+        return Response({'code': 403, 'message': 'student is not in mission class', 'data': None, 'trace_id': trace_id()}, status=403)
+    if page_no < 1:
+        return Response({'code': 400, 'message': 'page number must be positive', 'data': None, 'trace_id': trace_id()}, status=400)
+    return Response({'code': 0, 'message': 'success', 'data': {'student_id': student_row.student_id, 'student_name': student_row.student.display_name, 'mission_id': mission_row.mission_id, 'mission_name': mission_row.mission.mission_name, 'student_code': student_code, 'mission_code': mission_code, 'page_no': page_no}, 'trace_id': trace_id()})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def practice_sheet_info(request, sheet_code):
+    sheet = WrongbookPracticeSheet.objects.select_related('student').filter(sheet_code=str(sheet_code).upper()).first()
+    if not sheet:
+        return Response({'code': 404, 'message': 'practice sheet not found', 'data': None, 'trace_id': trace_id()}, status=404)
+    return Response({'code': 0, 'message': 'success', 'data': {'sheet_id': sheet.id, 'sheet_code': sheet.sheet_code, 'student_id': sheet.student_id, 'student_name': sheet.student.display_name, 'mode': sheet.mode, 'status': sheet.status, 'original_question_id': sheet.original_question_id, 'variant_question_ids': sheet.variant_question_ids, 'wrong_reason_hint': sheet.wrong_reason_hint}, 'trace_id': trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_practice_sheet(request):
+    from apps.wrongbook.models import WrongBookItem
+    from apps.wrongbook.services import find_variant_questions
+    try:
+        item = WrongBookItem.objects.get(pk=request.data.get('wrong_item_id'))
+    except WrongBookItem.DoesNotExist:
+        return Response({'code': 404, 'message': 'wrong book item not found', 'data': None, 'trace_id': trace_id()}, status=404)
+    owner = effective_student(request)
+    if request.user.role_type not in ('teacher', 'admin') and (not owner or item.student_user_id_id != owner.id):
+        return Response({'code': 403, 'message': 'no permission', 'data': None, 'trace_id': trace_id()}, status=403)
+    code = uuid.uuid4().hex[:6].upper()
+    while WrongbookPracticeSheet.objects.filter(sheet_code=code).exists():
+        code = uuid.uuid4().hex[:6].upper()
+    variants = find_variant_questions(item.question_id, limit=3)
+    sheet = WrongbookPracticeSheet.objects.create(student_id=request.data.get('student_id') or item.student_user_id_id, wrong_item=item, original_question_id=item.question_id, variant_question_ids=[str(q['id']) for q in variants], wrong_reason_hint=item.wrong_reason_type or '', sheet_code=code, mode=str(request.data.get('mode') or 'online'))
+    return Response({'code': 0, 'message': 'success', 'data': {'sheet_code': sheet.sheet_code, 'sheet_id': sheet.id}}, status=201)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def submit_practice_sheet(request, sheet_code):
+    sheet = WrongbookPracticeSheet.objects.filter(sheet_code=str(sheet_code).upper()).first()
+    owner = effective_student(request)
+    if not sheet or not owner or sheet.student_id != owner.id:
+        return Response({'code': 403, 'message': 'no permission', 'data': None, 'trace_id': trace_id()}, status=403)
+    sheet.answers_json = request.data.get('answers') or {}
+    sheet.submit_source = str(request.data.get('submit_source') or 'online')
+    sheet.status = 'submitted'
+    sheet.submitted_at = timezone.now()
+    sheet.save(update_fields=['answers_json', 'submit_source', 'status', 'submitted_at', 'updated_at'])
+    return Response({'code': 0, 'message': 'success', 'data': {'status': sheet.status, 'submitted_at': sheet.submitted_at}, 'trace_id': trace_id()})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def practice_sheet_qrcode(request, sheet_code):
+    sheet = WrongbookPracticeSheet.objects.filter(sheet_code=str(sheet_code).upper()).first()
+    if not sheet:
+        return Response({'code': 404, 'message': 'practice sheet not found', 'data': None, 'trace_id': trace_id()}, status=404)
+    url = f"{getattr(settings, 'PUBLIC_WEB_URL', '').rstrip('/')}/practice/{sheet.sheet_code}"
+    return HttpResponse(qr_png(url), content_type='image/png')
+def _validate_image_file(image):
+    allowed = {'image/jpeg', 'image/png', 'image/webp'}
+    return image and image.content_type in allowed and image.size <= 5 * 1024 * 1024
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def upload_attempt_images(request, attempt_id):
+    owner = effective_student(request)
+    if not owner:
+        return Response({'code': 4002, 'message': 'select a child first', 'data': None, 'trace_id': trace_id()}, status=400)
+    try:
+        attempt = AnswerAttempt.objects.get(pk=attempt_id, student_user_id=owner)
+    except AnswerAttempt.DoesNotExist:
+        return Response({'code': 404, 'message': 'attempt not found', 'data': None, 'trace_id': trace_id()}, status=404)
+    images = request.FILES.getlist('images') or request.FILES.getlist('image')
+    if not images:
+        return Response({'code': 400, 'message': 'images are required', 'data': None, 'trace_id': trace_id()}, status=400)
+    start_page = int(request.data.get('page_no') or 1)
+    directory = Path(settings.MEDIA_ROOT) / 'attempts' / str(attempt.id)
+    directory.mkdir(parents=True, exist_ok=True)
+    result = []
+    for offset, image in enumerate(images):
+        if not _validate_image_file(image):
+            return Response({'code': 400, 'message': 'only jpeg/png/webp under 5MB is allowed', 'data': None, 'trace_id': trace_id()}, status=400)
+        page_no = start_page + offset
+        filename = f'{page_no}_{uuid.uuid4().hex}{Path(image.name).suffix.lower() or ".jpg"}'
+        destination = directory / filename
+        with destination.open('wb') as target:
+            for chunk in image.chunks():
+                target.write(chunk)
+        score, blurry = analyze_image_blur(image)
+        item, _ = AttemptImage.objects.update_or_create(
+            attempt=attempt, page_no=page_no,
+            defaults={'student': owner, 'question_id': attempt.question_id, 'image_url': f'attempts/{attempt.id}/{filename}', 'file_size': image.size, 'blur_score': score, 'is_blurry': blurry, 'upload_status': 'completed'},
+        )
+        result.append({'id': item.id, 'page_no': page_no, 'url': media_url(item.image_url), 'blur_score': item.blur_score, 'is_blurry': item.is_blurry})
+    attempt.image_count = AttemptImage.objects.filter(attempt=attempt).count()
+    attempt.submit_source = 'photo'
+    attempt.save(update_fields=['image_count', 'submit_source'])
+    return Response({'code': 0, 'message': 'success', 'data': {'items': result, 'image_count': attempt.image_count}, 'trace_id': trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def attempt_image_check(request):
+    image = request.FILES.get('image')
+    if not _validate_image_file(image):
+        return Response({'code': 400, 'message': 'only jpeg/png/webp under 5MB is allowed', 'data': None, 'trace_id': trace_id()}, status=400)
+    score, blurry = analyze_image_blur(image)
+    return Response({'code': 0, 'message': 'success', 'data': {'blur_score': score, 'is_blurry': blurry, 'threshold': 50}, 'trace_id': trace_id()})
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mission_practice_sheet(request, mission_id):
+    from apps.wrongbook.models import WrongBookItem
+    from apps.wrongbook.services import find_variant_questions
+    try:
+        mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': 'mission not found', 'data': None, 'trace_id': trace_id()}, status=404)
+    student_id = request.data.get('student_id')
+    item_ids = request.data.get('wrong_item_ids') or ([request.data.get('wrong_item_id')] if request.data.get('wrong_item_id') else [])
+    items = WrongBookItem.objects.filter(id__in=item_ids, student_user_id_id=student_id)[:20]
+    if not items:
+        return Response({'code': 400, 'message': 'wrong_item_ids are required for the selected student', 'data': None, 'trace_id': trace_id()}, status=400)
+    sheets = []
+    for item in items:
+        code = uuid.uuid4().hex[:6].upper()
+        while WrongbookPracticeSheet.objects.filter(sheet_code=code).exists():
+            code = uuid.uuid4().hex[:6].upper()
+        variants = find_variant_questions(item.question_id, limit=3)
+        sheet = WrongbookPracticeSheet.objects.create(student_id=student_id, class_obj=mission.class_obj, wrong_item=item, original_question_id=item.question_id, variant_question_ids=[str(q['id']) for q in variants], wrong_reason_hint=item.wrong_reason_type or '', sheet_code=code, mode=str(request.data.get('mode') or 'online'))
+        sheets.append({'sheet_id': sheet.id, 'sheet_code': sheet.sheet_code})
+    return Response({'code': 0, 'message': 'success', 'data': {'items': sheets}}, status=201)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def short_code_url_link(request, short_code):
+    code = MissionShortCode.objects.filter(short_code=str(short_code).upper()).first()
+    if not code or _expired(code):
+        return Response({'code': 404, 'message': 'mission code not found or expired', 'data': None, 'trace_id': trace_id()}, status=404)
+    try:
+        link = wechat_url_link(code.short_code)
+    except RuntimeError as exc:
+        return Response({'code': 503, 'message': str(exc), 'data': None, 'trace_id': trace_id()}, status=503)
+    return Response({'code': 0, 'message': 'success', 'data': {'url_link': link, 'short_code': code.short_code}, 'trace_id': trace_id()})

@@ -5,7 +5,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from apps.parser.models import ExamQuestion
-from apps.study.permissions import IsStudent
+from apps.study.permissions import IsStudentOrParentContext
 from .models import AnswerAttempt
 
 
@@ -14,7 +14,7 @@ def make_trace_id():
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def knowledge_mastery(request):
     """GET /api/v1/student/knowledge-mastery
     返回每个知识点的 attempt/correct/accuracy（排除主观题待批阅）。弱项在前。

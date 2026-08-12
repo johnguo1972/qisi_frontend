@@ -452,4 +452,51 @@ async function handleJoinByCode() {
 .code-submit-btn[disabled] {
   background: #b3e67a;
 }
+
+/* #ifdef MP-WEIXIN */
+.join-class-page,
+.join-class-page .main,
+.join-class-page .tab-content {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.join-class-page .tab-content {
+  padding: 20rpx;
+}
+.join-class-page .class-card {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 20rpx;
+  margin-bottom: 16rpx;
+  align-items: center;
+}
+.join-class-page .class-info {
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+}
+.join-class-page .class-name,
+.join-class-page .subject-text,
+.join-class-page .student-count {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.join-class-page .quit-btn,
+.join-class-page .join-btn {
+  flex: 0 0 auto;
+  margin: 0 0 0 20rpx;
+  padding: 14rpx 24rpx;
+  line-height: 1.4;
+  border: 0;
+  box-sizing: border-box;
+}
+.join-class-page .quit-btn::after,
+.join-class-page .join-btn::after {
+  border: 0;
+}
+/* #endif */
 </style>

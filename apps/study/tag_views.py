@@ -4,6 +4,17 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from apps.study.models import QuestionTag, QuestionTagRelation
+
+
+def _sync_question_tag_names(question_id):
+    """Keep the searchable question.tags JSON field in sync with tag relations."""
+    from apps.parser.models import ExamQuestion
+    names = list(
+        QuestionTagRelation.objects.filter(question_id=question_id)
+        .select_related('tag')
+        .values_list('tag__name', flat=True)
+    )
+    ExamQuestion.objects.filter(id=question_id).update(tags=names)
 from apps.parser.models import ExamQuestion
 
 
@@ -131,6 +142,7 @@ def question_add_tag(request, question_id):
         QuestionTag.objects.filter(pk=tag_id).update(
             question_count=QuestionTagRelation.objects.filter(tag_id=tag_id).count()
         )
+    _sync_question_tag_names(question_id)
 
     return Response({
         'code': 0,
@@ -148,4 +160,5 @@ def question_remove_tag(request, question_id, tag_id):
     QuestionTag.objects.filter(pk=tag_id).update(
         question_count=QuestionTagRelation.objects.filter(tag_id=tag_id).count()
     )
+    _sync_question_tag_names(question_id)
     return Response({'code': 0, 'message': '已移除', 'data': None, 'trace_id': make_trace_id()})

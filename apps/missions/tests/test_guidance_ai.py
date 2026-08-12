@@ -15,7 +15,7 @@ def _plain_view_handler(decorated_view):
 
 
 def _install_question(monkeypatch):
-    question = SimpleNamespace(stem="题目", answer="D", ai_answer_c={})
+    question = SimpleNamespace(stem="题目", answer="D", ai_answer_b={}, ai_answer_c={})
 
     class QuestionModel:
         class DoesNotExist(Exception):
@@ -42,6 +42,18 @@ def _install_session(monkeypatch, session_id="teacher-session"):
     }
     monkeypatch.setitem(views._teacher_guidance_sessions, session_id, session)
     return session
+
+
+def test_teacher_guidance_start_reads_question_id_from_request_body(monkeypatch):
+    """The public route has no path parameter, so question_id must come from JSON."""
+    _install_question(monkeypatch)
+    request = SimpleNamespace(data={"question_id": "019fd1bd-8d26-7a31-a0ca-94d48810dad7", "mode": "B"})
+
+    response = _plain_view_handler(views.start_teacher_guidance)(request)
+
+    assert response.status_code == 200
+    assert response.data["code"] == 0
+    assert response.data["data"]["mode"] == "B"
 
 
 def test_teacher_c_reply_uses_component_and_keeps_response_contract(monkeypatch):

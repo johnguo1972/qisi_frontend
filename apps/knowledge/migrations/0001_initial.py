@@ -65,7 +65,7 @@ class Migration(migrations.Migration):
                 "verbose_name": "知识点",
                 "verbose_name_plural": "知识点",
                 "db_table": "knowledge_points",
-                "managed": True,
+                "managed": False,
             },
         ),
     ]

@@ -1,8 +1,8 @@
 import { post, get, del } from '@/utils/request'
 
 export interface Favorite {
-  id: number
-  question_id: number
+  id: string | number
+  question_id: string | number
   question_no: string
   paper_title: string
   difficulty: number | null

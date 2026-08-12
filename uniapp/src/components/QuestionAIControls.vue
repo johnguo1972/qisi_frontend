@@ -6,13 +6,13 @@
         <button class="question-ai-controls__close" @click="handleClose">关闭</button>
       </view>
       <view class="question-ai-controls__actions">
-        <button :disabled="isRunningForSelectedQuestion" @click="startAction('all')">一键全部 AI 处理</button>
-        <button :disabled="isRunningForSelectedQuestion" @click="startAction('probe')">AI 探查</button>
-        <button :disabled="isRunningForSelectedQuestion" @click="startAction('A')">A 模式</button>
-        <button :disabled="isRunningForSelectedQuestion" @click="startAction('B')">B 模式</button>
-        <button :disabled="isRunningForSelectedQuestion" @click="startAction('C')">C 模式</button>
+        <button v-if="availableActions.includes('all')" class="is-full-action" :disabled="isRunningForSelectedQuestion" @click="startAction('all')">一键全部 AI 处理</button>
+        <button v-if="availableActions.includes('probe')" :disabled="isRunningForSelectedQuestion" @click="startAction('probe')">AI 探查</button>
+        <button v-if="availableActions.includes('A')" :disabled="isRunningForSelectedQuestion" @click="startAction('A')">A 模式</button>
+        <button v-if="availableActions.includes('B')" :disabled="isRunningForSelectedQuestion" @click="startAction('B')">B 模式</button>
+        <button v-if="availableActions.includes('C')" :disabled="isRunningForSelectedQuestion" @click="startAction('C')">C 模式</button>
       </view>
-      <text class="question-ai-controls__scope">一键全部将运行：题目探查、知识点分析、读图、A/B/C 模式答案、DeepSeek 校验</text>
+      <text class="question-ai-controls__scope">{{ scopeLabel }}</text>
       <text v-if="isRunningForSelectedQuestion" class="question-ai-controls__status">AI任务处理中，请稍候</text>
     </view>
   </view>
@@ -28,6 +28,7 @@ type TerminalStatus = 'complete' | 'partial' | 'failed' | 'skipped'
 const props = defineProps<{
   visible: boolean
   questionId: string | number | null
+  actions?: AIAction[]
 }>()
 
 const emit = defineEmits<{
@@ -44,9 +45,24 @@ let requestGeneration = 0
 let isUnmounted = false
 
 const terminalStatuses: TerminalStatus[] = ['complete', 'partial', 'failed', 'skipped']
+const availableActions = computed<AIAction[]>(() => props.actions?.length ? props.actions : ['all', 'probe', 'A', 'B', 'C'])
+const scopeLabel = computed(() => availableActions.value.length === 1
+  ? `重新生成${actionLabel(availableActions.value[0])}答案`
+  : '一键全部将运行：题目探查、知识点分析、读图、A/B/C 模式答案、DeepSeek 校验')
 const isRunningForSelectedQuestion = computed(() => (
   running.value && runningQuestionId.value === props.questionId
 ))
+
+function actionLabel(action: AIAction) {
+  const labels: Record<AIAction, string> = {
+    all: '一键全部 AI 处理',
+    probe: 'AI 探查',
+    A: 'A 模式',
+    B: 'B 模式',
+    C: 'C 模式',
+  }
+  return labels[action]
+}
 
 function invalidatePendingRequest() {
   requestGeneration += 1
@@ -216,7 +232,7 @@ onUnmounted(() => {
   gap: 16rpx;
 }
 
-.question-ai-controls__actions button:first-child {
+.question-ai-controls__actions button.is-full-action {
   grid-column: span 2;
 }
 

@@ -7,7 +7,8 @@
     </view>
 
     <!-- 主内容 -->
-    <view v-if="!loading" class="guidance-main">
+    <scroll-view v-if="!loading" class="guidance-scroll" scroll-y :scroll-top="scrollTop">
+      <view class="guidance-main">
 
       <!-- 顶部导航栏 -->
       <view class="top-bar">
@@ -45,14 +46,15 @@
           </view>
           <!-- 原题图片 -->
           <view v-if="currentQuestion.images && currentQuestion.images.length > 0" class="stem-images">
-            <image v-for="(img, idx) in currentQuestion.images" :key="idx"
-                   :src="img.url || img.file_path" mode="widthFix" class="stem-image" />
+            <image v-for="(img, idx) in currentQuestion.images" :key="img.id || idx"
+                   :src="questionImageUrl(img)" mode="widthFix" class="stem-image"
+                   :style="questionImageStyle(img)" />
           </view>
         </view>
       </view>
 
       <!-- 引导对话区（可滚动） -->
-      <scroll-view scroll-y class="chat-area" :scroll-top="scrollTop">
+      <view class="chat-area">
         <view v-for="(msg, i) in messages" :key="i" :class="['msg', msg.role]">
           <view class="msg-avatar">{{ msg.role === 'system' ? '🤖' : '👤' }}</view>
           <view class="msg-bubble" :class="msg.type || ''">
@@ -66,7 +68,7 @@
             <text class="thinking-text">思考中<text class="thinking-dots"><text>.</text><text>.</text><text>.</text></text></text>
           </view>
         </view>
-      </scroll-view>
+      </view>
 
       <!-- 操作区（固定在底部） -->
       <view class="action-panel">
@@ -174,7 +176,8 @@
 
         </view>
       </view>
-    </view>
+      </view>
+    </scroll-view>
   </view>
 </template>
 
@@ -183,6 +186,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
 import { renderWithKatex } from '@/utils/katex-renderer'
+import { getMediaUrl } from '@/utils/media-url'
 
 // 页面核心状态
 const questionId = ref<string>('')
@@ -228,6 +232,16 @@ const scrollTop = ref(0)            // 用于 scroll-view 自动滚动
 
 // 原题信息
 const currentQuestion = ref<any>({})
+
+function questionImageUrl(image: any): string {
+  return getMediaUrl(image?.url || image?.file_path || '')
+}
+
+function questionImageStyle(image: any) {
+  const savedWidth = Number(image?.display_width || 0)
+  const width = savedWidth > 0 ? Math.max(80, Math.min(1200, Math.round(savedWidth))) : 420
+  return { width: `${width}px`, maxWidth: '100%', height: 'auto' }
+}
 
 // LaTeX 渲染后的内容
 const renderedStem = ref('')
@@ -277,7 +291,8 @@ const hasNextQuestion = computed(() => currentIndex.value < questions.value.leng
 onLoad((options: any) => {
   questionId.value = String(options?.questionId || '')
   levelId.value = String(options?.levelId || '')
-  mode.value = options?.mode || ''
+  const routeMode = String(options?.mode || '').toUpperCase()
+  mode.value = routeMode === 'B' || routeMode === 'C' ? routeMode : ''
 })
 
 onMounted(async () => {
@@ -338,6 +353,13 @@ async function startGuidance() {
     if (data.hint) {
       const rendered = await renderWithKatex(data.hint)
       messages.value.push({ role: 'system', content: rendered })
+    }
+    if (data.downgraded) {
+      messages.value.push({
+        role: 'system',
+        content: `⚠️ ${data.downgrade_reason || '非固定选项引导暂不可用，已切换为固定选项引导'}`,
+        type: 'warning',
+      })
     }
     if (data.options) {
       options.value = data.options
@@ -612,8 +634,16 @@ function scrollToBottom() {
 .guidance-page {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
   background: #f0f2f5;
+}
+
+.guidance-scroll {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 /* ====== 全屏加载 ====== */
@@ -665,13 +695,13 @@ function scrollToBottom() {
 
 /* ====== 主内容 ====== */
 .guidance-main {
-  flex: 1;
   display: flex;
   flex-direction: column;
   position: relative;
-  height: 100vh;
-  height: 100dvh;
-  overflow: hidden;
+  min-height: 100%;
+  box-sizing: border-box;
+  /* 为固定在底部的操作盒子预留滚动空间，避免最后一条消息被遮住 */
+  padding-bottom: calc(45vh + 24rpx);
 }
 
 /* ====== 顶部导航栏 ====== */
@@ -745,10 +775,9 @@ function scrollToBottom() {
 
 /* ====== 对话区 ====== */
 .chat-area {
-  flex: 1;
   padding: 12rpx 16rpx;
-  overflow-y: auto;
-  min-height: 0;
+  min-height: 180rpx;
+  box-sizing: border-box;
 }
 .msg {
   display: flex;
@@ -775,12 +804,19 @@ function scrollToBottom() {
 
 /* ====== 操作区 ====== */
 .action-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  box-sizing: border-box;
   background: #fff;
   border-top: 1rpx solid #e8e8e8;
-  padding: 10rpx 16rpx 12rpx;
+  padding: 10rpx 16rpx max(12rpx, env(safe-area-inset-bottom));
   flex-shrink: 0;
   max-height: 45vh;
   overflow-y: auto;
+  box-shadow: 0 -4rpx 16rpx rgba(0, 0, 0, 0.06);
 }
 .section-title {
   font-size: 22rpx; font-weight: bold; color: #333;
@@ -1016,6 +1052,45 @@ function scrollToBottom() {
   .complete-actions { flex-direction: column; align-items: stretch; }
   .action-btn { width: 100%; }
   .stem-section { max-height: 25vh; }
-  .action-panel { max-height: 40vh; padding: 8rpx 12rpx 10rpx; }
+  .action-panel {
+    max-height: 45vh;
+    padding: 8rpx 12rpx max(10rpx, env(safe-area-inset-bottom));
+  }
 }
+
+/* #ifdef MP-WEIXIN */
+/* 小程序优先完整展示原题、题干图片和原题选项，内容超出屏幕时由外层 scroll-view 滚动。 */
+.guidance-main {
+  padding-bottom: calc(45vh + 24rpx);
+}
+.stem-section {
+  max-height: none;
+  overflow: visible;
+}
+.stem-body {
+  display: flex;
+  flex-direction: column;
+}
+.stem-content {
+  order: 0;
+  flex-shrink: 0;
+}
+.stem-images {
+  order: 1;
+  width: 100%;
+  margin-top: 12rpx;
+}
+.stem-image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: none;
+  object-fit: contain;
+}
+.stem-options {
+  order: 2;
+  flex-shrink: 0;
+}
+/* #endif */
 </style>

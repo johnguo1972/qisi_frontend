@@ -4,7 +4,7 @@ from datetime import timedelta
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from apps.study.permissions import IsStudent
+from apps.study.permissions import IsStudentOrParentContext
 from rest_framework.response import Response
 from apps.parser.models import ExamQuestion
 from apps.study.models import AIGuidanceSession
@@ -14,6 +14,7 @@ from apps.common.ai.components import (
     QuestionInput,
 )
 from apps.common.ai.exceptions import AIConfigError
+from apps.common.media import media_url
 
 
 guidance_component_factory = GuidanceComponent
@@ -57,8 +58,16 @@ def _build_question_info(q) -> dict:
             for o in _QuestionOption.objects.filter(question=q).order_by('sort_order')
         ],
         'images': [
-            {'id': img.id, 'file_path': img.file_path}
-            for img in q.images.all()
+            {
+                'id': img.id,
+                'file_path': img.file_path,
+                'url': media_url(img.file_path),
+                'image_type': img.image_type,
+                'display_width': img.display_width,
+                'description': img.description or '',
+            }
+            for img in q.images.all().order_by('sort_order')
+            if img.file_path and img.image_type != 'formula'
         ],
     }
 
@@ -136,7 +145,7 @@ def _extract_c_mode_step(ai_c: dict, step_index: int) -> dict:
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def start_guidance(request):
     """S-06: 启动引导。当 mode_type 为空时根据题型自动推荐。"""
     question_id = request.data.get('question_id')
@@ -251,14 +260,18 @@ def start_guidance(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudent])
+@permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def guidance_reply(request, session_id):
     """S-07: 推进引导（B 模式分步判断 + C 模式 LLM 评价 + 步进）。"""
     try:
         session = AIGuidanceSession.objects.get(pk=session_id, student_user_id=request.user)
     except AIGuidanceSession.DoesNotExist:
         return Response({'code': 404, 'message': '引导会话不存在', 'data': None, 'trace_id': make_trace_id()}, status=404)
-    if session.session_status != 'running':
+    # C 模式无法生成开放式引导时会降级为 B 模式。降级会话仍可继续完成
+    # 固定选项引导，不能因为状态标记为 downgraded 而被误判为已结束。
+    if session.session_status != 'running' and not (
+        session.session_status == 'downgraded' and session.mode_type == 'B'
+    ):
         return Response({'code': 4001, 'message': '引导已结束', 'data': None, 'trace_id': make_trace_id()}, status=400)
 
     user_reply = (request.data.get('reply') or '').strip()

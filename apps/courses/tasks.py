@@ -129,7 +129,8 @@ def _save_variant_as_question(variant_task: VariantTask, variant_data: dict) -> 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)
 def generate_variant_task(self, question_id: int, variant_mode: str,
-                           tree_node_id: int = None) -> dict:
+                           tree_node_id: int = None, mission_id: str = None,
+                           level_id: str = None, target_student_id: str = None) -> dict:
     """Celery 异步任务：基于原题生成变式题。
 
     流程：
@@ -259,6 +260,16 @@ def generate_variant_task(self, question_id: int, variant_mode: str,
         # 7. 保存为 ExamQuestion
         try:
             variant_q = _save_variant_as_question(variant_task, variant_data)
+            if mission_id and level_id:
+                from apps.missions.models import LearningMission, MissionLevel, MissionQuestionRel
+                mission = LearningMission.objects.get(pk=mission_id)
+                level = MissionLevel.objects.get(pk=level_id, mission=mission)
+                next_sort = MissionQuestionRel.objects.filter(level=level).count()
+                MissionQuestionRel.objects.create(
+                    mission=mission, level=level, question_id=variant_q.id,
+                    sort_no=next_sort, source_type='variant',
+                    target_student_ids=[str(target_student_id)] if target_student_id else [],
+                )
             logger.info(f"[VariantTask] Saved as ExamQuestion id={variant_q.id}")
             return {
                 'status': 'success',

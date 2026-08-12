@@ -2,9 +2,19 @@
 // App 环境（APK）：使用完整域名
 const BASE_URL = 'https://qisi.chengxuelu.com/api/v1'
 // #endif
-// #ifndef APP-PLUS
+// #ifdef MP-WEIXIN
+const BASE_URL = 'https://qisi.chengxuelu.com/api/v1'
+// #endif
+// #ifdef H5
 // H5 环境（浏览器）：使用相对路径，由 Nginx 代理
 const BASE_URL = '/api/v1'
+// #endif
+// #ifndef APP-PLUS
+// #ifndef MP-WEIXIN
+// #ifndef H5
+const BASE_URL = 'https://qisi.chengxuelu.com/api/v1'
+// #endif
+// #endif
 // #endif
 
 interface ApiResponse<T = any> {
