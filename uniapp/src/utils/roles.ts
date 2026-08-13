@@ -10,6 +10,19 @@ export function routeForRole(role: AppRole): string {
   return studentRoute
 }
 
+export function currentSessionRole(): AppRole | undefined {
+  const userInfo = uni.getStorageSync('userInfo')
+  return (userInfo?.active_role || userInfo?.role_type) as AppRole | undefined
+}
+
+export function ensurePageRole(expectedRole: AppRole): boolean {
+  const currentRole = currentSessionRole()
+  if (!currentRole) return false
+  if (currentRole === expectedRole) return true
+  uni.reLaunch({ url: routeForRole(currentRole) })
+  return false
+}
+
 export function persistSession(data: any): void {
   uni.setStorageSync('accessToken', data.access_token)
   uni.setStorageSync('refreshToken', data.refresh_token)

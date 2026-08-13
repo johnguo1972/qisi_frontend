@@ -58,6 +58,7 @@ import { ref, onMounted } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { institutionApi, authApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
+import { ensurePageRole } from '@/utils/roles'
 import RoleSwitcher from '@/components/RoleSwitcher.vue'
 
 const userInfo = ref({ display_name: '管理员' })
@@ -80,6 +81,7 @@ async function loadInstitutions() {
 
 onMounted(async () => {
   console.log('[admin] home onMounted')
+  if (!ensurePageRole('admin')) return
   try {
     const profile = await authApi.getProfile()
     if (profile.data) {
@@ -95,6 +97,7 @@ onMounted(async () => {
 
 let hasLoadedOnShow = false
 onShow(async () => {
+  if (!ensurePageRole('admin')) return
   if (hasLoadedOnShow) {
     await loadInstitutions()
   }

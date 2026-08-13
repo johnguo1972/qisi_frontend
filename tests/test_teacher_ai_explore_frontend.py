@@ -7,6 +7,119 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 QUESTION_BANK_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'teacher' / 'question-bank.vue'
+ROLES_PATH = ROOT / 'uniapp' / 'src' / 'utils' / 'roles.ts'
+ADMIN_HOME_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'admin' / 'home.vue'
+
+
+def run_role_helpers(user_info: dict | None, expected_role: str) -> dict:
+    source = ROLES_PATH.read_text(encoding='utf-8')
+    executable = re.sub(r'export type AppRole = [^\n]+\n', '', source)
+    executable = executable.replace('export function ', 'function ')
+    executable = re.sub(r': (?:AppRole(?: \| undefined)?|string|boolean|void|any)', '', executable)
+    executable = executable.replace(' as AppRole | undefined', '')
+    script = f"""
+      const storage = {{ userInfo: {json.dumps(user_info)} }};
+      const calls = [];
+      const uni = {{
+        getStorageSync: (key) => storage[key],
+        reLaunch: (options) => calls.push(options),
+        setStorageSync: () => {{}},
+      }};
+      {executable}
+      console.log(JSON.stringify({{
+        role: currentSessionRole(),
+        allowed: ensurePageRole({json.dumps(expected_role)}),
+        calls,
+      }}));
+    """
+    result = subprocess.run(
+        ['node', '--input-type=module', '--eval', script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        check=True,
+    )
+    return json.loads(result.stdout.splitlines()[-1])
+
+
+def test_role_helper_prefers_active_role_over_legacy_role_type():
+    result = run_role_helpers({'active_role': 'admin', 'role_type': 'teacher'}, 'admin')
+    assert result == {'role': 'admin', 'allowed': True, 'calls': []}
+
+
+def test_role_helper_falls_back_to_legacy_role_type():
+    result = run_role_helpers({'role_type': 'teacher'}, 'teacher')
+    assert result == {'role': 'teacher', 'allowed': True, 'calls': []}
+
+
+def test_role_helper_redirects_mismatched_teacher_to_teacher_home():
+    result = run_role_helpers({'active_role': 'teacher'}, 'admin')
+    assert result == {'role': 'teacher', 'allowed': False, 'calls': [{'url': '/pages/teacher/layout'}]}
+
+
+def test_role_helper_rejects_absent_role_without_navigation():
+    result = run_role_helpers(None, 'admin')
+    assert result == {'allowed': False, 'calls': []}
+
+
+def lifecycle_body(source: str, hook: str) -> str:
+    marker = f'{hook}(async () => {{'
+    start = source.index(marker) + len(marker)
+    depth = 1
+    index = start
+    while depth:
+        if source[index] == '{':
+            depth += 1
+        elif source[index] == '}':
+            depth -= 1
+        index += 1
+    return source[start:index - 1]
+
+
+def run_admin_lifecycles(allowed: bool) -> list[str]:
+    source = ADMIN_HOME_PATH.read_text(encoding='utf-8')
+    mounted = lifecycle_body(source, 'onMounted')
+    shown = lifecycle_body(source, 'onShow')
+    mounted = re.sub(r'catch \(e: any\)', 'catch (e)', mounted)
+    shown = re.sub(r'catch \(e: any\)', 'catch (e)', shown)
+    script = f"""
+      const calls = [];
+      let hasLoadedOnShow = false;
+      const ensurePageRole = () => {{ calls.push('guard'); return {json.dumps(allowed)}; }};
+      const authApi = {{ getProfile: async () => {{ calls.push('profile'); return {{}}; }} }};
+      const userInfo = {{ value: {{}} }};
+      const userStore = {{ setUserInfo: () => {{}} }};
+      const uni = {{ showToast: () => {{}} }};
+      const loadInstitutions = async () => calls.push('institutions');
+      const mounted = async () => {{{mounted}}};
+      const shown = async () => {{{shown}}};
+      await mounted();
+      await shown();
+      await shown();
+      console.log(JSON.stringify(calls));
+    """
+    result = subprocess.run(
+        ['node', '--input-type=module', '--eval', script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        check=True,
+    )
+    return json.loads(result.stdout.splitlines()[-1])
+
+
+def test_admin_lifecycle_guards_requests_and_keeps_one_initial_load():
+    source = ADMIN_HOME_PATH.read_text(encoding='utf-8')
+    assert "import { ensurePageRole } from '@/utils/roles'" in source
+
+    assert run_admin_lifecycles(True) == [
+        'guard', 'profile', 'institutions',
+        'guard',
+        'guard', 'institutions',
+    ]
+    assert run_admin_lifecycles(False) == ['guard', 'guard', 'guard']
 
 
 def function_body(source: str, name: str) -> str:
