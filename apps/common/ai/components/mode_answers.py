@@ -9,6 +9,7 @@ from apps.common.ai.schemas import (
     ModeAResponse,
     ModeBResponse,
     ModeCResponse,
+    has_visible_text,
 )
 
 from .base import QuestionAIComponent, QuestionInput, to_plain_data
@@ -57,6 +58,30 @@ class ModeAAnswerComponent(_ModeAnswerComponent):
 
     def normalize(self, result: dict) -> dict:
         normalized = super().normalize(result)
+        steps = normalized.get("steps")
+        if isinstance(steps, list):
+            normalized_steps = []
+            for item in steps:
+                if not isinstance(item, dict):
+                    normalized_steps.append(item)
+                    continue
+                step = dict(item)
+                content = step.get("content")
+                description = step.get("description")
+                if (
+                    (
+                        content is None
+                        or (
+                            isinstance(content, str)
+                            and not has_visible_text(content)
+                        )
+                    )
+                    and isinstance(description, str)
+                    and has_visible_text(description)
+                ):
+                    step["content"] = description
+                normalized_steps.append(step)
+            normalized["steps"] = normalized_steps
         missing = normalized.get("missing_conditions")
         if missing is None:
             normalized["missing_conditions"] = []

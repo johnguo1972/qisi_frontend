@@ -893,6 +893,84 @@ def test_question_components_reject_wrong_mode_missing_fields_and_bad_shapes(
 
 
 @pytest.mark.parametrize(
+    ("steps", "expected_contents"),
+    [
+        (
+            [
+                {"step": 1, "description": "set up the equation"},
+                {"step": 2, "description": "solve for x"},
+                {"step": 3, "description": "check the result"},
+            ],
+            ["set up the equation", "solve for x", "check the result"],
+        ),
+        (
+            [
+                {
+                    "step": 1,
+                    "content": "",
+                    "description": "set up the equation",
+                },
+                {
+                    "step": 2,
+                    "content": "",
+                    "description": "solve for x",
+                },
+                {
+                    "step": 3,
+                    "content": "",
+                    "description": "check the result",
+                },
+            ],
+            ["set up the equation", "solve for x", "check the result"],
+        ),
+        (
+            [
+                {
+                    "step": 1,
+                    "content": "canonical setup",
+                    "description": "legacy setup",
+                },
+                {
+                    "step": 2,
+                    "content": "canonical solution",
+                    "description": "legacy solution",
+                },
+                {
+                    "step": 3,
+                    "content": "canonical check",
+                    "description": "legacy check",
+                },
+            ],
+            ["canonical setup", "canonical solution", "canonical check"],
+        ),
+    ],
+)
+def test_mode_a_normalizes_legacy_step_descriptions_without_overriding_content(
+    steps, expected_contents
+):
+    """Legacy descriptions reach schema validation only when content is absent."""
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(
+                {
+                    "mode": "A",
+                    "steps": steps,
+                    "final_answer": "2",
+                    "summary": "completed",
+                }
+            )
+        }
+    )
+
+    result = components.ModeAAnswerComponent(client).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert [step["content"] for step in result["steps"]] == expected_contents
+
+
+@pytest.mark.parametrize(
     ("component_name", "task_key", "content", "expected"),
     [
         (
