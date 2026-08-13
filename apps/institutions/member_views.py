@@ -76,12 +76,20 @@ def _member_list_impl(request, institution_id):
     total = len(grouped_items)
     page_groups = grouped_items[start:end]
     items = [members[0] for members in page_groups]
+    page_user_ids = [member.user_id for member in items]
+    active_roles_by_user = {user_id: set() for user_id in page_user_ids}
+    for user_id, role in InstitutionMember.objects.filter(
+        institution=institution,
+        user_id__in=page_user_ids,
+        status='active',
+    ).values_list('user_id', 'role'):
+        active_roles_by_user[user_id].add(role)
     roles_by_user = {
-        members[0].user_id: [
+        user_id: [
             role for role in ('admin', 'teacher')
-            if any(member.role == role for member in members)
+            if role in active_roles_by_user[user_id]
         ]
-        for members in page_groups
+        for user_id in page_user_ids
     }
 
     return Response({
@@ -193,6 +201,21 @@ def update_member(request, institution_id, user_id):
         ).select_related('user'))
         user = members[0].user
 
+        new_mobile = request.data.get('mobile')
+        if new_mobile is not None:
+            new_mobile = new_mobile.strip()
+            if (
+                new_mobile
+                and new_mobile != user.mobile
+                and UserAccount.objects.filter(mobile=new_mobile).exclude(id=user.id).exists()
+            ):
+                return Response({
+                    'code': 4001,
+                    'message': '该手机号已被其他账号使用',
+                    'data': None,
+                    'trace_id': _trace(),
+                }, status=status.HTTP_400_BAD_REQUEST)
+
         requested_status = request.data.get('status')
         if requested_status == 'removed':
             InstitutionMember.objects.filter(
@@ -224,11 +247,6 @@ def update_member(request, institution_id, user_id):
     if 'mobile' in request.data:
         new_mobile = request.data['mobile'].strip()
         if new_mobile and new_mobile != user.mobile:
-            # Check uniqueness
-            if UserAccount.objects.filter(mobile=new_mobile).exclude(id=user.id).exists():
-                return Response({
-                    'code': 4001, 'message': '该手机号已被其他账号使用', 'data': None, 'trace_id': _trace(),
-                }, status=status.HTTP_400_BAD_REQUEST)
             user.mobile = new_mobile
             user.login_name = new_mobile
             user_changed = True
@@ -251,8 +269,12 @@ def update_member(request, institution_id, user_id):
     if user_changed:
         user.save()
     member = InstitutionMember.objects.filter(
-        institution=institution, user_id=user_id,
-    ).order_by('-status', 'role').first()
+        institution=institution, user_id=user_id, status='active',
+    ).order_by('role').first()
+    if member is None:
+        member = InstitutionMember.objects.filter(
+            institution=institution, user_id=user_id,
+        ).order_by('role').first()
 
     return Response({
         'code': 0,

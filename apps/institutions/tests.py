@@ -1,4 +1,4 @@
-from django.db import connection
+from django.db import IntegrityError, connection, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient
@@ -202,6 +202,140 @@ class InstitutionMemberMultiRoleAPITest(TestCase):
             status='removed',
         ).count(), 2)
 
+    def test_failed_profile_validation_does_not_commit_role_changes(self):
+        admin_member = InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='admin',
+            status='active',
+        )
+        teacher_member = InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='teacher',
+            status='removed',
+        )
+        conflicting_user = UserAccount.objects.create(
+            mobile='13800000103',
+            display_name='Conflicting User',
+            role_type='student',
+        )
+        original_profile = {
+            'mobile': self.member_user.mobile,
+            'login_name': self.member_user.login_name,
+            'display_name': self.member_user.display_name,
+            'subject': self.member_user.subject,
+            'stages': self.member_user.stages,
+        }
+
+        response = self.client.put(
+            f'{self.members_url}/{self.member_user.id}',
+            {
+                'roles': ['teacher'],
+                'mobile': conflicting_user.mobile,
+                'display_name': 'Changed Name',
+                'subject': 'math',
+                'stages': ['high_school'],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        admin_member.refresh_from_db()
+        teacher_member.refresh_from_db()
+        self.member_user.refresh_from_db()
+        self.assertEqual(admin_member.status, 'active')
+        self.assertEqual(teacher_member.status, 'removed')
+        self.assertEqual(
+            {
+                'mobile': self.member_user.mobile,
+                'login_name': self.member_user.login_name,
+                'display_name': self.member_user.display_name,
+                'subject': self.member_user.subject,
+                'stages': self.member_user.stages,
+            },
+            original_profile,
+        )
+
+    def test_role_filter_selects_users_but_returns_all_active_roles(self):
+        for role in ('admin', 'teacher'):
+            InstitutionMember.objects.create(
+                institution=self.institution,
+                user=self.member_user,
+                role=role,
+                status='active',
+            )
+
+        response = self.client.get(self.members_url, {'role': 'teacher'})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()['data']
+        self.assertEqual(payload['total'], 1)
+        self.assertEqual(payload['items'][0]['roles'], ['admin', 'teacher'])
+
+    def test_removed_filter_returns_only_currently_active_roles(self):
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='admin',
+            status='active',
+        )
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='teacher',
+            status='removed',
+        )
+        removed_only_user = UserAccount.objects.create(
+            mobile='13800000104',
+            display_name='Removed Only',
+            role_type='student',
+        )
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=removed_only_user,
+            role='teacher',
+            status='removed',
+        )
+
+        response = self.client.get(
+            self.members_url,
+            {'role': 'teacher', 'status': 'removed'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        items_by_user = {
+            item['user_id']: item for item in response.json()['data']['items']
+        }
+        self.assertEqual(items_by_user[str(self.member_user.id)]['roles'], ['admin'])
+        self.assertEqual(items_by_user[str(removed_only_user.id)]['roles'], [])
+
+    def test_update_response_uses_active_relationship_and_consistent_roles(self):
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='admin',
+            status='active',
+        )
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='teacher',
+            status='removed',
+        )
+
+        response = self.client.put(
+            f'{self.members_url}/{self.member_user.id}',
+            {'roles': ['teacher']},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        item = response.json()['data']
+        self.assertEqual(item['role'], 'teacher')
+        self.assertEqual(item['status'], 'active')
+        self.assertEqual(item['roles'], ['teacher'])
+
 
 class InstitutionMultiRoleMigrationTest(TransactionTestCase):
     migrate_from = [
@@ -241,6 +375,7 @@ class InstitutionMultiRoleMigrationTest(TransactionTestCase):
             mobile='13800000115', display_name='Inactive Student', role_type='parent',
         ).id
         institution = Institution.objects.create(institution_name='Migration School')
+        self.institution_id = institution.id
         InstitutionMember.objects.create(
             institution_id=institution.id,
             user_id=self.teacher_id,
@@ -310,6 +445,27 @@ class InstitutionMultiRoleMigrationTest(TransactionTestCase):
         self.assertFalse(UserRole.objects.filter(
             user_id=self.inactive_student_id, role='student', status='active',
         ).exists())
+
+    def test_reverse_restores_single_role_constraint_and_preserves_grants(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_from)
+        old_apps = executor.loader.project_state(self.migrate_from).apps
+        InstitutionMember = old_apps.get_model('institutions', 'InstitutionMember')
+        UserRole = old_apps.get_model('accounts', 'UserRole')
+
+        self.assertTrue(UserRole.objects.filter(
+            user_id=self.teacher_id, role='teacher', status='active',
+        ).exists())
+        self.assertTrue(UserRole.objects.filter(
+            user_id=self.student_id, role='student', status='active',
+        ).exists())
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            InstitutionMember.objects.create(
+                institution_id=self.institution_id,
+                user_id=self.teacher_id,
+                role='admin',
+                status='active',
+            )
 
 
 class InstitutionModelTest(TestCase):

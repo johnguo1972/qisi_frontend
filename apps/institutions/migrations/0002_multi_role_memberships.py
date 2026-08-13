@@ -27,6 +27,17 @@ def import_relationship_roles(apps, schema_editor):
         )
 
 
+def preserve_relationship_role_grants(apps, schema_editor):
+    """Intentionally preserve grants when reversing this migration.
+
+    A global teacher or student grant may also come from another institution,
+    class, or later business workflow. This migration stores no per-relationship
+    provenance, so deleting a grant during reversal could remove a still-valid
+    role. Schema reversal restores the old membership constraint; imported
+    global grants deliberately remain active.
+    """
+
+
 class Migration(migrations.Migration):
     dependencies = [
         ('accounts', '0003_userrole'),
@@ -45,5 +56,8 @@ class Migration(migrations.Migration):
                 name='uq_institution_member_role',
             ),
         ),
-        migrations.RunPython(import_relationship_roles, migrations.RunPython.noop),
+        migrations.RunPython(
+            import_relationship_roles,
+            preserve_relationship_role_grants,
+        ),
     ]
