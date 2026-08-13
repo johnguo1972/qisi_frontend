@@ -461,6 +461,11 @@ def mission_wxacode(request, mission_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def mission_paper_pdf(request, mission_id):
+    if (
+        get_request_role(request) != 'teacher'
+        or not has_user_role(request.user, 'teacher')
+    ):
+        return Response({'code': 403, 'message': 'teacher role required', 'data': None, 'trace_id': trace_id()}, status=403)
     try:
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
     except LearningMission.DoesNotExist:

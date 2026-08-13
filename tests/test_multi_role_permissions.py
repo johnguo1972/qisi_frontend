@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import patch
+from types import SimpleNamespace
 from rest_framework.test import APIClient
 
 from apps.accounts.models import StudentParentBind, UserAccount
@@ -13,6 +14,7 @@ from apps.institutions.models import (
     Institution,
     InstitutionMember,
 )
+from apps.institutions.serializers import JoinByCodeSerializer
 from apps.missions.models import LearningMission
 from apps.missions.views import _mission_student_ids
 from apps.qrcode.views import _mission_students
@@ -142,20 +144,20 @@ def test_direct_join_by_code_grants_student_role():
     class_obj = make_class(institution, teacher)
     student = make_user("13910000007", "parent")
     grant_user_role(student, "parent")
-    grant_user_role(student, "student")
-    client = client_for(student, "student")
-
-    response = client.post(
-        "/api/v1/student/classes/join-by-code",
-        {
+    serializer = JoinByCodeSerializer(
+        data={
             "invite_code": class_obj.invite_code,
             "applicant_name": student.display_name,
             "applicant_phone": student.mobile,
         },
-        format="json",
+        context={"request": SimpleNamespace(user=student)},
     )
+    serializer.is_valid(raise_exception=True)
 
-    assert response.status_code == 201
+    membership = serializer.save()
+
+    assert membership.status == "active"
+    assert membership.student == student
     assert has_user_role(student, "student")
     assert has_user_role(student, "parent")
 

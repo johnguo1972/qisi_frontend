@@ -56,10 +56,12 @@ institution/class/parent relationship check.
   through active `ClassStudent` plus `ClassTeacher`; requested `student_id`
   cannot override the wrong-item owner.
 - Restricted `parent_children` to an active parent session and grant.
-- Made active `ClassStudent` and `StudentParentBind` saves atomic with their
-  post-save derived grants. Failure injection proves the relationship and any
-  earlier grant roll back together. Join approval has an outer transaction so
-  approval state also rolls back if membership/grant fails.
+- Made ordinary `save()`/`create()`/`update_or_create()` operations for active
+  `ClassStudent` and `StudentParentBind` atomic with their post-save derived
+  grants. Failure injection proves the relationship and any earlier grant roll
+  back together. This does not cover `bulk_create()` or `QuerySet.update()`,
+  which do not emit model save signals. Join approval has an outer transaction
+  so approval state also rolls back if membership/grant fails.
 
 ### Fix-round evidence
 
@@ -69,4 +71,25 @@ institution/class/parent relationship check.
 - Institution plus Task 4 regression: 58 passed.
 - Final brief-selected suite: 100 passed, 1 deselected
   (`test_paper_entry_and_teacher_pdf`, approved missing-reportlab baseline).
+- Django system check: no issues.
+
+## Fix round 2/5
+
+- `mission_paper_pdf` now requires a teacher-authenticated session, active
+  teacher grant, and the existing mission-creator relationship. Platform admin
+  is intentionally not a bypass for the teacher-owned paper generation flow.
+- Replaced the QR PDF `force_authenticate` test with real JWTs and proved the
+  same multi-role account succeeds with a teacher token and is rejected with a
+  student token.
+- Split direct joining responsibilities in tests: the API matrix proves a
+  student JWT/grant is required at the endpoint; the real `JoinByCodeSerializer`
+  create path starts with no student grant and proves active `ClassStudent`
+  creation derives the grant through the signal.
+
+### Fix-round 2 evidence
+
+- Targeted RED: student token incorrectly returned 200 for creator PDF; direct
+  serializer join already passed without a pre-existing student grant.
+- Targeted GREEN: 2 passed.
+- QR plus Task 4 exact suite: 25 passed.
 - Django system check: no issues.
