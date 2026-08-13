@@ -272,7 +272,11 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
 
         # Save result
         answer['mode'] = mode
-        answer['model'] = service._get_model(model)
+        answer['model'] = (
+            service._get_model(model)
+            if model is not None
+            else service._task_route(f'mode_{mode.lower()}_answer')[1]
+        )
         processed_at = timezone.now()
         answer['generated_at'] = processed_at.strftime('%Y-%m-%dT%H:%M:%S')
         answer['confirmed'] = False

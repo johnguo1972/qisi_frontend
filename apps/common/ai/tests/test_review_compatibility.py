@@ -4,6 +4,7 @@ from io import StringIO
 import json
 import logging
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -452,6 +453,47 @@ def test_missing_question_manual_tasks_skip_before_creating_facade(
         },
         3600,
     )
+
+
+@pytest.mark.parametrize(
+    ("mode", "field", "task_key", "model"),
+    [
+        ("A", "ai_answer_a", "mode_a_answer", None),
+        ("B", "ai_answer_b", "mode_b_answer", None),
+        ("C", "ai_answer_c", "mode_c_answer", None),
+        ("A", "ai_answer_a", "mode_a_answer", "qwen3-vl-plus"),
+    ],
+)
+def test_single_mode_task_persists_its_route_model_unless_overridden(
+    mode, field, task_key, model
+):
+    """Each mode stores its configured route model without an override."""
+    from apps.review import tasks
+
+    question = SimpleNamespace(
+        stem="1 + 1 = ?",
+        ai_probe_result={},
+        ai_vision_extract={},
+        save=MagicMock(),
+    )
+    service = _real_facade_with_components()
+    expected_model = model or service._task_route(task_key)[1]
+
+    with (
+        patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(tasks, "create_ai_review_service", return_value=service),
+        patch.object(tasks.cache, "set"),
+    ):
+        result = tasks.single_mode_ai_process_question.run(
+            "mode-model-question", mode, model=model
+        )
+
+    assert result == {
+        "status": "complete",
+        "question_id": "mode-model-question",
+        "mode": mode,
+    }
+    assert getattr(question, field)["model"] == expected_model
 
 
 @pytest.mark.parametrize(
