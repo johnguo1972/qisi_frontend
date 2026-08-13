@@ -75,7 +75,7 @@ def test_user_role_helpers_delegate_to_role_service(user):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_0003_imports_only_valid_normalized_legacy_roles_and_active_bindings():
+def test_0003_runpython_cleanup_deletes_only_migration_sourced_grants():
     executor = MigrationExecutor(connection)
     executor.migrate([("accounts", "0002_wechatidentity")])
     legacy_apps = executor.loader.project_state(
@@ -154,6 +154,33 @@ def test_0003_imports_only_valid_normalized_legacy_roles_and_active_bindings():
         role="teacher",
         grant_source="business",
     ).exists()
+    assert not MigratedUserRole.objects.filter(grant_source="migration_0003").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_0003_full_schema_downgrade_removes_user_role_table():
+    executor = MigrationExecutor(connection)
+    executor.migrate([("accounts", "0002_wechatidentity")])
+    legacy_apps = executor.loader.project_state(
+        [("accounts", "0002_wechatidentity")]
+    ).apps
+    LegacyUser = legacy_apps.get_model("accounts", "UserAccount")
+    legacy_user = LegacyUser.objects.create(
+        role_type="teacher", mobile="13900009109", display_name="Downgrade User"
+    )
+
+    executor = MigrationExecutor(connection)
+    executor.migrate([("accounts", "0003_userrole")])
+    current_user = UserAccount.objects.get(pk=legacy_user.pk)
+    business_regrant = grant_user_role(current_user, "teacher")
+    assert business_regrant.grant_source == "business"
+
+    executor = MigrationExecutor(connection)
+    executor.migrate([("accounts", "0002_wechatidentity")])
+    assert "user_role" not in connection.introspection.table_names()
+
+    # Restore the test database's normal schema after proving the downgrade.
+    MigrationExecutor(connection).migrate([("accounts", "0003_userrole")])
 
 
 @pytest.mark.django_db(transaction=True)

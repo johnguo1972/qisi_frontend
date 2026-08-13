@@ -48,6 +48,8 @@ def import_existing_role_grants(apps, schema_editor):
 
 
 def remove_imported_role_grants(apps, schema_editor):
+    # RunPython reverse runs before CreateModel is reversed. It preserves business
+    # regrants; the following CreateModel reversal then drops user_role entirely.
     UserRole = apps.get_model("accounts", "UserRole")
     imported_grant_ids = [
         grant.id
