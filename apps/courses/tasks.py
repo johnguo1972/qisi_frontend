@@ -130,7 +130,8 @@ def _save_variant_as_question(variant_task: VariantTask, variant_data: dict) -> 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)
 def generate_variant_task(self, question_id: int, variant_mode: str,
                            tree_node_id: int = None, mission_id: str = None,
-                           level_id: str = None, target_student_id: str = None) -> dict:
+                           level_id: str = None, target_student_id: str = None,
+                           variant_task_id: str = None) -> dict:
     """Celery 异步任务：基于原题生成变式题。
 
     流程：
@@ -155,12 +156,26 @@ def generate_variant_task(self, question_id: int, variant_mode: str,
     except ExamQuestion.DoesNotExist:
         raise ValueError(f"Original question not found: {question_id}")
 
-    # 2. 创建 VariantTask
-    variant_task = VariantTask.objects.create(
-        original_question=original,
-        variant_mode=variant_mode,
-        status='running',
-    )
+    # 2. Reuse the pre-created database task when called by the API. Direct
+    # task invocations and legacy callers still create one here.
+    if variant_task_id:
+        try:
+            variant_task = VariantTask.objects.get(id=variant_task_id, original_question=original)
+        except VariantTask.DoesNotExist:
+            variant_task = VariantTask.objects.create(
+                id=variant_task_id,
+                original_question=original,
+                variant_mode=variant_mode,
+                status='pending',
+            )
+    else:
+        variant_task = VariantTask.objects.create(
+            original_question=original,
+            variant_mode=variant_mode,
+            status='pending',
+        )
+    variant_task.status = 'running'
+    variant_task.save(update_fields=['status'])
 
     try:
         # 3. 构建原题数据

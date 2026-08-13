@@ -82,7 +82,7 @@
           <view v-for="q in questions" :key="q.id" class="table-row">
             <text class="col col-no">{{ q.system_id || q.id }}</text>
             <text class="col col-stem" :title="q.stem || ''">{{ truncate(q.stem, 20) }}</text>
-            <text class="col col-diff">{{ q.difficulty ? 'L' + q.difficulty : '-' }}</text>
+            <text class="col col-diff">{{ q.difficulty_label || '未评定' }}</text>
             <text class="col col-kp">{{ getKpCount(q) }}</text>
             <text class="col col-content">{{ q.review_status === 'confirmed' ? '已确认' : '待确认' }}</text>
             <view class="col col-ai ai-status-cell">

@@ -45,6 +45,14 @@ class ExamPaper(models.Model):
         verbose_name='试卷编号', db_index=True,
         help_text='如：M90001, PA0002',
     )
+    source_package_id = models.CharField(
+        max_length=255, null=True, blank=True, unique=True, db_index=True,
+        verbose_name='来源数据包标识',
+    )
+    source_sha256 = models.CharField(
+        max_length=64, null=True, blank=True, db_index=True,
+        verbose_name='来源文件SHA256',
+    )
     region = models.CharField(
         max_length=100, null=True, blank=True,
         verbose_name='来源地区',

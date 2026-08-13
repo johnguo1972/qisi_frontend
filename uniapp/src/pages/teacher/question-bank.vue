@@ -100,7 +100,11 @@
           <view class="filter-group">
             <text class="filter-label">知识点</text>
             <picker mode="selector" :range="knowledgeRange" :value="knowledgeIndex" @change="onKnowledgePointChange"><view class="filter-select">{{ knowledgeLabel }}</view></picker>
-            <input v-model="tagSearch" class="tag-search" placeholder="自定义标签" />
+            <text class="filter-label">标签</text>
+            <picker mode="selector" :range="tagPickerRange" :value="tagPickerIndex" @change="onTagChange">
+              <view class="filter-select tag-filter-select">{{ tagFilterLabel }}</view>
+            </picker>
+            <button size="mini" class="tag-refresh-btn" :loading="tagLoading" @click="loadTags">刷新标签</button>
             <input v-model="uuidSearch" class="uuid-search" placeholder="按UUID模糊查询" />
             <button size="mini" type="primary" @click="applyFilters">查询</button>
             <button size="mini" class="reset-filter-btn" @click="resetFilters">重置</button>
@@ -177,7 +181,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { questionApi, aiProcessProbe, importJsonPackage, getQuestionTags, addQuestionTag, removeQuestionTag } from '@/api/questions'
+import { questionApi, aiProcessProbe, importJsonPackage, getQuestionTags, addQuestionTag, removeQuestionTag, getTagList } from '@/api/questions'
 import { knowledgeApi } from '@/api/knowledge'
 import { favoriteApi } from '@/api/favorites'
 import { useUserStore } from '@/store/index.ts'
@@ -194,6 +198,8 @@ const selectedSubject = ref('physics')
 const selectedKP = ref<number | null>(null)
 const activeKnowledgePoint = ref('')
 const tagSearch = ref('')
+const allTags = ref<any[]>([])
+const tagLoading = ref(false)
 const uuidSearch = ref('')
 const knowledgeTree = ref<any[]>([])
 const treeLoading = ref(false)
@@ -273,11 +279,22 @@ const knowledgeIndex = computed(() => Math.max(0, knowledgeOptions.value.findInd
 const questionTypeLabel = computed(() => activeType.value ? questionTypes.find((item) => item.value === activeType.value)?.label || '全部题型' : '全部题型')
 const difficultyLabel = computed(() => activeDifficulty.value ? difficultyLevels.find((item) => item.value === activeDifficulty.value)?.stars || '全部难度' : '全部难度')
 const knowledgeLabel = computed(() => activeKnowledgePoint.value ? knowledgeOptions.value.find((item) => String(item.id) === String(activeKnowledgePoint.value))?.name || '全部知识点' : '全部知识点')
+const tagPickerRange = computed(() => [
+  '全部标签',
+  ...allTags.value.map((tag: any) => `${tag.name}（${tag.question_count ?? 0}）`),
+])
+const tagPickerIndex = computed(() => {
+  if (!tagSearch.value) return 0
+  const index = allTags.value.findIndex((tag: any) => tag.name === tagSearch.value)
+  return index >= 0 ? index + 1 : 0
+})
+const tagFilterLabel = computed(() => tagSearch.value || '全部标签')
 
 // Reload on every return from the edit page so saved changes are visible
 // without a manual refresh, while preserving the current filters and page.
 onShow(() => {
   loadKnowledgeTree()
+  loadTags()
   loadQuestions()
 })
 
@@ -311,6 +328,32 @@ function toggleSelectMode() { selectMode.value = !selectMode.value }
 function onSubjectChange(event?: any) {
   selectedSubject.value = Number(event?.detail?.value ?? subjectIndex.value) === 1 ? 'math' : 'physics'
   loadKnowledgeTree()
+  loadQuestions()
+}
+
+async function loadTags() {
+  tagLoading.value = true
+  try {
+    // No search parameter: the backend returns all tags in the current database.
+    const res: any = await getTagList()
+    const data = Array.isArray(res.data) ? res.data : (res.data?.items || [])
+    allTags.value = data
+    if (tagSearch.value && !allTags.value.some((tag: any) => tag.name === tagSearch.value)) {
+      tagSearch.value = ''
+    }
+  } catch (e) {
+    console.error('加载标签列表失败:', e)
+    uni.showToast({ title: '加载标签失败，请检查网络', icon: 'none' })
+  } finally {
+    tagLoading.value = false
+  }
+}
+
+function onTagChange(event?: any) {
+  const index = Number(event?.detail?.value ?? 0)
+  tagSearch.value = index > 0 ? (allTags.value[index - 1]?.name || '') : ''
+  currentPage.value = 1
+  jumpPage.value = 1
   loadQuestions()
 }
 
@@ -566,6 +609,8 @@ async function removeQuestionTagFromCurrent(tagId: string) {
 .filter-group { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 0; flex: 0 1 auto; flex-wrap: wrap; }
 .filter-label { font-size: 12px; color: #909399; }
 .filter-select { display: flex; align-items: center; justify-content: center; width: 88px; min-width: 0; box-sizing: border-box; height: 28px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; color: #606266; font-size: 12px; line-height: 1.2; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-filter-select { width: 180px; }
+.tag-refresh-btn { margin: 0; color: #409eff; background: #fff; border: 1px solid #dcdfe6; }
 .tag-search { width: 130px; max-width: 100%; box-sizing: border-box; height: 28px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; color: #606266; font-size: 12px; }
 .uuid-search {
   width: 340px;

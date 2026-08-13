@@ -40,6 +40,36 @@ def batch_variant_task_dispatch(**kwargs):
     return batch_generate_variants_task.delay(**kwargs)
 
 
+def create_variant_task_and_dispatch(*, question, variant_mode, tree_node_id=None):
+    """Create the database task before dispatching Celery.
+
+    The status/confirm APIs address VariantTask UUIDs, while Celery returns a
+    different execution UUID. Creating the record first prevents a race and
+    ensures the ID returned to the frontend is queryable immediately.
+    """
+    task = VariantTask.objects.create(
+        original_question=question,
+        variant_mode=variant_mode,
+        status='pending',
+    )
+    try:
+        result = generate_variant_task_dispatch(
+            question_id=str(question.id),
+            variant_mode=variant_mode,
+            tree_node_id=tree_node_id,
+            variant_task_id=str(task.id),
+        )
+        task.generator_result = {'celery_task_id': str(result.id)}
+        task.save(update_fields=['generator_result'])
+    except Exception as exc:
+        task.status = 'failed'
+        task.error_message = f'任务提交失败: {exc}'
+        task.completed_at = timezone.now()
+        task.save(update_fields=['status', 'error_message', 'completed_at'])
+        raise
+    return task
+
+
 def material_vision_component_factory():
     """Construct the shared vision component for course material recognition."""
     from apps.common.ai.components.vision_parser import VisionParserComponent
@@ -701,6 +731,10 @@ def question_generate_variant(request, course_id, question_id):
     _check_course_owner(course, request.user)
 
     from apps.parser.models import ExamQuestion
+    if not CourseQuestionLink.objects.filter(
+        course=course, question_id=question_id, is_deleted=False
+    ).exists():
+        raise NotFound('题目不在课程中')
     try:
         question = ExamQuestion.objects.get(id=question_id)
     except ExamQuestion.DoesNotExist:
@@ -716,16 +750,15 @@ def question_generate_variant(request, course_id, question_id):
     if not variant_mode:
         raise ValidationError('variant_mode 不能为空')
 
-    # 调用 Celery 任务
-    task = generate_variant_task_dispatch(
-        question_id=question_id,
+    task = create_variant_task_and_dispatch(
+        question=question,
         variant_mode=variant_mode,
         tree_node_id=tree_node_id,
     )
 
     return Response({
         'success': True,
-        'data': {'task_id': task.id, 'status': 'pending', 'question_id': question_id},
+        'data': {'task_id': str(task.id), 'status': task.status, 'question_id': str(question_id)},
         'message': '变式题生成任务已提交',
     })
 
@@ -746,15 +779,33 @@ def question_batch_generate_variant(request, course_id):
     if not variant_mode:
         raise ValidationError('variant_mode 不能为空')
 
-    task = batch_variant_task_dispatch(
-        question_ids=question_ids,
+    course_question_ids = set(CourseQuestionLink.objects.filter(
+        course=course, question_id__in=question_ids, is_deleted=False
+    ).values_list('question_id', flat=True))
+    missing_course_questions = set(question_ids) - {str(question_id) for question_id in course_question_ids}
+    if missing_course_questions:
+        raise NotFound('存在不属于当前课程的题目')
+
+    from apps.parser.models import ExamQuestion
+    questions = list(ExamQuestion.objects.filter(id__in=question_ids))
+    if len(questions) != len(set(question_ids)):
+        raise NotFound('存在不存在的题目')
+    if any(question.review_status != 'confirmed' for question in questions):
+        raise ValidationError('所有题目必须先确认后才能生成变式题')
+
+    tasks = [create_variant_task_and_dispatch(
+        question=question,
         variant_mode=variant_mode,
         tree_node_id=tree_node_id,
-    )
+    ) for question in questions]
 
     return Response({
         'success': True,
-        'data': {'task_id': task.id, 'status': 'pending', 'question_count': len(question_ids)},
+        'data': {
+            'task_ids': [str(task.id) for task in tasks],
+            'status': 'pending',
+            'question_count': len(tasks),
+        },
         'message': f'已提交 {len(question_ids)} 道变式题生成任务',
     })
 

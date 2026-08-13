@@ -4,6 +4,7 @@ from apps.parser.models import ExamQuestion
 from apps.papers.models import ParseTask, ExamPaper
 from apps.knowledge.models import KnowledgePoint
 from apps.common.media import media_url
+from apps.common.question_display import difficulty_label, normalize_tables, preview_text
 
 
 class QuestionListSerializer(serializers.ModelSerializer):
@@ -30,6 +31,10 @@ class QuestionListSerializer(serializers.ModelSerializer):
     creator_name = serializers.CharField(required=False, default='')
     # 新增字段：收录日期
     collected_at = serializers.DateTimeField(required=False, read_only=True)
+    material = serializers.CharField(read_only=True)
+    subquestions = serializers.JSONField(read_only=True)
+    tables = serializers.SerializerMethodField()
+    difficulty_label = serializers.SerializerMethodField()
 
     class Meta:
         model = ExamQuestion
@@ -41,12 +46,18 @@ class QuestionListSerializer(serializers.ModelSerializer):
                   'paper_title',
                   # 新增字段
                   'images', 'options', 'tags', 'source_collection',
-                  'creator_name', 'collected_at',
+                  'creator_name', 'collected_at', 'material', 'subquestions', 'tables',
+                  'difficulty_label',
                   ]
 
     def get_stem_preview(self, obj):
-        stem = obj.stem or ''
-        return (stem[:80] + '...') if len(stem) > 80 else stem
+        return preview_text(obj.stem, obj.subquestions, obj.tables, limit=120)
+
+    def get_difficulty_label(self, obj):
+        return difficulty_label(obj.difficulty)
+
+    def get_tables(self, obj):
+        return normalize_tables(obj.tables)
 
     def get_knowledge_points_count(self, obj):
         raw = obj.ai_knowledge_enrichment or obj.knowledge_points or []
@@ -164,19 +175,58 @@ class QuestionDetailSerializer(serializers.ModelSerializer):
     ai_answer_a = serializers.JSONField(required=False)
     ai_answer_b = serializers.JSONField(required=False)
     ai_answer_c = serializers.JSONField(required=False)
+    options = serializers.SerializerMethodField()
+    images = serializers.SerializerMethodField()
+    tables = serializers.SerializerMethodField()
+    difficulty_label = serializers.SerializerMethodField()
+    display_stem = serializers.SerializerMethodField()
 
     class Meta:
         model = ExamQuestion
         fields = ['id', 'paper', 'question_no', 'system_id', 'paper_question_no',
                   'parent_question', 'section_title', 'question_type', 'subject',
-                  'stem', 'stem_html', 'answer', 'analysis', 'solution',
+                  'stem', 'display_stem', 'stem_html', 'answer', 'analysis', 'solution',
                   'comment', 'raw_explanation', 'raw_text',
+                  'source_external_id', 'source_question_type', 'material',
+                  'subquestions', 'tables', 'difficulty_label',
+                  'options', 'images',
                   'knowledge_points', 'difficulty', 'original_question',
                   'page_start', 'page_end', 'bbox', 'region_json',
                   'sort_order', 'confidence', 'formula_need_review',
                   'need_review', 'review_status', 'parse_status',
                   'ai_answer_a', 'ai_answer_b', 'ai_answer_c',
                   'ai_knowledge_enrichment', 'tags', 'created_at', 'updated_at']
+
+    def get_options(self, obj):
+        return [
+            {
+                'label': option.option_label,
+                'content': option.content,
+            }
+            for option in obj.options.order_by('sort_order', 'id')
+        ]
+
+    def get_tables(self, obj):
+        return normalize_tables(obj.tables)
+
+    def get_difficulty_label(self, obj):
+        return difficulty_label(obj.difficulty)
+
+    def get_display_stem(self, obj):
+        return preview_text(obj.stem, obj.subquestions, obj.tables, limit=100000)
+
+    def get_images(self, obj):
+        return [
+            {
+                'id': str(image.id),
+                'file_path': image.file_path,
+                'url': media_url(image.file_path),
+                'description': image.description or '',
+                'image_type': image.image_type,
+                'display_width': image.display_width,
+            }
+            for image in obj.images.order_by('image_type', 'sort_order', 'id')
+        ]
 
 
 class ImportBatchSerializer(serializers.ModelSerializer):

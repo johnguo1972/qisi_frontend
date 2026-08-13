@@ -30,7 +30,8 @@
             <button class="btn-action" size="mini" @click="showAddPanel">+ 新增习题</button>
             <button class="btn-action" size="mini" type="warning" @click="goAssignMission">布置作业</button>
             <button class="btn-action" size="mini" type="primary" @click="batchAiProcess" :disabled="selectedIds.length === 0">批量AI处理</button>
-            <button class="btn-action" size="mini" type="success" @click="batchGenerateVariant" :disabled="selectedIds.length === 0">批量生成变式题</button>
+            <button class="btn-action" size="mini" type="success" @click="batchGenerateVariant" :disabled="!canBatchGenerateVariant">批量生成变式题</button>
+            <button class="btn-action refresh-action" size="mini" @click="refreshQuestions" :loading="loading">刷新</button>
             <button class="btn-action" size="mini" type="warning" @click="showGenerateMission">生成任务</button>
           </view>
         </view>
@@ -51,6 +52,7 @@
             <view class="col col-check">
               <view class="check-all" @click="toggleSelectAll"><text>{{ isAllSelected ? '☑' : '☐' }}</text></view>
             </view>
+            <text class="col-index">序号</text>
             <text class="col-stem">题干</text>
             <text class="col-diff">难度</text>
             <text class="col-kp">知识点</text>
@@ -58,14 +60,25 @@
             <text class="col-ai">AI答案</text>
             <text class="col-actions">操作</text>
           </view>
-          <view v-for="q in questions" :key="q.id"
-                :class="['table-row', { 'row-selected': selectedIds.includes(q.id) }]"
-                @click="toggleSelect(q.id)">
-            <view class="col col-check" @click.stop="toggleSelect(q.id)">
-              <text>{{ selectedIds.includes(q.id) ? '☑' : '☐' }}</text>
+          <view v-for="(q, index) in questions" :key="q.question_id"
+                :class="['table-row', { 'row-selected': selectedIds.includes(q.question_id) }]"
+                @click="toggleSelect(q.question_id)">
+            <view class="col col-check" @click.stop="toggleSelect(q.question_id)">
+              <text>{{ selectedIds.includes(q.question_id) ? '☑' : '☐' }}</text>
             </view>
-            <text class="col-stem" @click.stop="goEdit(q.id)">{{ q.stem_preview }}</text>
-            <text :class="['col-diff', 'diff-' + q.difficulty]">L{{ q.difficulty }}</text>
+            <text class="col-index">{{ index + 1 }}</text>
+            <view class="col-stem" @click.stop="goEdit(q.question_id)">
+              <view class="stem-text">{{ q.stem_preview || '暂无题干' }}</view>
+              <view v-for="(table, tableIndex) in questionTables(q)" :key="table.table_id || tableIndex" class="question-table-preview">
+                <view class="table-caption">表格{{ questionTables(q).length > 1 ? ` ${tableIndex + 1}` : '' }}</view>
+                <view class="data-grid" :style="{ gridTemplateColumns: tableGridColumns(table) }">
+                  <view v-for="(cell, cellIndex) in flattenedTableCells(table)" :key="cellIndex" class="data-cell">
+                    {{ cell || ' ' }}
+                  </view>
+                </view>
+              </view>
+            </view>
+            <text :class="['col-diff', 'diff-' + q.difficulty]">{{ q.difficulty_label || '未评定' }}</text>
             <text class="col-kp">{{ q.knowledge_points_count || '-' }}</text>
             <text :class="['col-confirm', q.review_status === 'confirmed' ? 'confirmed' : 'pending']">
               {{ q.review_status === 'confirmed' ? '✓' : '待审核' }}
@@ -76,10 +89,14 @@
               <text :class="['badge', q.ai_answer_c_confirmed ? 'done' : q.ai_answer_c ? 'blank' : '']">C</text>
             </view>
             <view class="col-actions" @click.stop>
-              <button size="mini" @click="goEdit(q.id)">编辑</button>
-              <button size="mini" type="primary" @click="handleAiProcess(q.id)">AI处理</button>
-              <button size="mini" type="success" @click="handleGenerateVariant(q.id)">生成变式</button>
-              <button size="mini" type="warn" @click="handleRemove(q.id)">移除</button>
+              <button size="mini" @click="goEdit(q.question_id)">编辑</button>
+              <button size="mini" type="primary" @click="handleAiProcess(q.question_id)">AI处理</button>
+              <button size="mini" type="success" :disabled="q.review_status !== 'confirmed'"
+                      :title="q.review_status === 'confirmed' ? '生成变式题' : '请先编辑并确认题目后生成变式题'"
+                      @click="handleGenerateVariant(q)">
+                生成变式
+              </button>
+              <button size="mini" type="warn" @click="handleRemove(q.question_id)">移除</button>
             </view>
           </view>
         </view>
@@ -142,7 +159,7 @@
               </view>
               <view class="bank-info" @click="toggleBankSelect(q.id)">
                 <text class="bank-stem">{{ q.stem_preview }}</text>
-                <text class="bank-meta">难度 L{{ q.difficulty }} | 知识点 {{ q.knowledge_points_count || '-' }}</text>
+                <text class="bank-meta">难度 {{ q.difficulty_label || '未评定' }} | 知识点 {{ q.knowledge_points_count || '-' }}</text>
               </view>
             </view>
           </view>
@@ -247,6 +264,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import DirTree from '@/components/DirTree.vue'
 import { treeApi, courseQuestionApi, variantApi, materialApi } from '@/api/courses'
@@ -286,6 +304,12 @@ onMounted(() => {
   }
   loadTree()
   loadQuestions()
+})
+
+// Refresh the current directory after returning from question-edit so the
+// saved review status and variant action are immediately reflected.
+onShow(() => {
+  if (courseId.value) void loadQuestions()
 })
 
 // ============================================================
@@ -523,9 +547,12 @@ async function confirmNodeAction() {
 // Questions
 // ============================================================
 interface Question {
-  id: number
+  id: string
+  question_id: string
   stem_preview: string
-  difficulty: number
+  difficulty: number | null
+  difficulty_label?: string
+  tables?: Array<{ table_id?: string; rows?: string[][] }>
   knowledge_points_count?: number
   review_status: string
   ai_answer_a: boolean
@@ -538,7 +565,31 @@ interface Question {
 
 const questions = ref<Question[]>([])
 const loading = ref(false)
-const selectedIds = ref<number[]>([])
+const selectedIds = ref<string[]>([])
+
+function questionTables(q: Question): Array<{ table_id?: string; rows?: string[][] }> {
+  return Array.isArray(q.tables) ? q.tables : []
+}
+
+function tableRows(table: { rows?: string[][] }): string[][] {
+  return Array.isArray(table.rows) ? table.rows : []
+}
+
+function tableColumnCount(table: { rows?: string[][] }): number {
+  return Math.max(1, ...tableRows(table).map((row) => Array.isArray(row) ? row.length : 0))
+}
+
+function tableGridColumns(table: { rows?: string[][] }): string {
+  return `repeat(${tableColumnCount(table)}, minmax(72px, 1fr))`
+}
+
+function flattenedTableCells(table: { rows?: string[][] }): string[] {
+  const count = tableColumnCount(table)
+  return tableRows(table).flatMap((row) => {
+    const cells = Array.isArray(row) ? row.map((cell) => String(cell ?? '')) : []
+    return cells.concat(Array(Math.max(0, count - cells.length)).fill(''))
+  })
+}
 
 async function loadQuestions() {
   loading.value = true
@@ -557,12 +608,26 @@ async function loadQuestions() {
   }
 }
 
+async function refreshQuestions() {
+  if (loading.value) return
+  await loadQuestions()
+  uni.showToast({ title: '题目已刷新', icon: 'success', duration: 1000 })
+}
+
 // Selection
 const isAllSelected = computed(() =>
   questions.value.length > 0 && selectedIds.value.length === questions.value.length
 )
 
-function toggleSelect(id: number) {
+const selectedQuestions = computed(() =>
+  questions.value.filter((question) => selectedIds.value.includes(question.question_id))
+)
+
+const canBatchGenerateVariant = computed(() =>
+  selectedQuestions.value.length > 0 && selectedQuestions.value.every((question) => question.review_status === 'confirmed')
+)
+
+function toggleSelect(id: string) {
   const idx = selectedIds.value.indexOf(id)
   if (idx >= 0) selectedIds.value.splice(idx, 1)
   else selectedIds.value.push(id)
@@ -570,10 +635,10 @@ function toggleSelect(id: number) {
 
 function toggleSelectAll() {
   if (isAllSelected.value) selectedIds.value = []
-  else selectedIds.value = questions.value.map((q) => q.id)
+  else selectedIds.value = questions.value.map((q) => q.question_id)
 }
 
-function goEdit(id: number) {
+function goEdit(id: string) {
   uni.navigateTo({ url: `/pages/teacher/question-edit?id=${id}` })
 }
 
@@ -680,7 +745,7 @@ function importFromMaterial(material: any) {
 const bankQuestions = ref<any[]>([])
 const bankLoading = ref(false)
 const bankSearchText = ref('')
-const bankSelectedIds = ref<number[]>([])
+const bankSelectedIds = ref<string[]>([])
 
 async function loadBankQuestions() {
   bankLoading.value = true
@@ -714,7 +779,7 @@ function searchBank() {
   })
 }
 
-function toggleBankSelect(id: number) {
+function toggleBankSelect(id: string) {
   const idx = bankSelectedIds.value.indexOf(id)
   if (idx >= 0) bankSelectedIds.value.splice(idx, 1)
   else bankSelectedIds.value.push(id)
@@ -741,7 +806,7 @@ async function importFromBank() {
 // ============================================================
 const batchAiPollTimers: Array<{ taskId: string; timer: ReturnType<typeof setInterval> }> = []
 
-function handleAiProcess(questionId: number) {
+function handleAiProcess(questionId: string) {
   selectedAiQuestionId.value = questionId
   showAiControls.value = true
 }
@@ -756,7 +821,7 @@ function handleAiCompleted() {
   closeAiControls()
 }
 
-async function startBatchAiProcess(questionId: number) {
+async function startBatchAiProcess(questionId: string) {
   uni.showToast({ title: `已开始AI处理（题${questionId}），可继续其他操作`, icon: 'none', duration: 2000 })
   try {
     const res: any = await aiProcessQuestion(questionId)
@@ -809,37 +874,103 @@ async function batchAiProcess() {
 // ============================================================
 // Variant generation
 // ============================================================
-const variantPollTimers: Array<{ taskId: number; timer: ReturnType<typeof setInterval> }> = []
+type VariantPoll = {
+  taskId: string
+  questionId?: string
+  timer: ReturnType<typeof setTimeout>
+  inFlight: boolean
+  attempts: number
+}
+const variantPollTimers: VariantPoll[] = []
 
-async function handleGenerateVariant(questionId: number) {
-  try {
-    const res: any = await variantApi.generate(courseId.value, questionId)
-    const taskId = res.data?.task_id || res.data?.id
-    if (!taskId) {
-      uni.showToast({ title: '变式题生成成功', icon: 'success' })
-      loadQuestions()
+const variantModes = ['数值变化', '情境变化', '条件变化', '综合变式']
+
+async function chooseVariantMode(): Promise<string | null> {
+  return new Promise((resolve) => {
+    uni.showActionSheet({
+      itemList: variantModes,
+      success: (result) => resolve(variantModes[result.tapIndex] || null),
+      fail: () => resolve(null),
+    })
+  })
+}
+
+function removeVariantPoll(poll: VariantPoll) {
+  clearTimeout(poll.timer)
+  const index = variantPollTimers.indexOf(poll)
+  if (index >= 0) variantPollTimers.splice(index, 1)
+}
+
+function hasVariantPoll(questionId: string) {
+  return variantPollTimers.some((poll) => poll.questionId === questionId)
+}
+
+function startVariantPolling(taskId: string, questionId: string, questionNo: string) {
+  if (!taskId || hasVariantPoll(questionId)) return
+
+  const poll: VariantPoll = { taskId, questionId, timer: setTimeout(() => undefined, 0), inFlight: false, attempts: 0 }
+  const pollOnce = async () => {
+    if (!variantPollTimers.includes(poll) || poll.inFlight) return
+    poll.attempts += 1
+    if (poll.attempts > 120) {
+      removeVariantPoll(poll)
+      uni.showToast({ title: '变式任务等待超时，请检查后台任务后重试', icon: 'none' })
       return
     }
-    uni.showToast({ title: `变式题生成中（题${questionId}）`, icon: 'none', duration: 2000 })
-    const timer = setInterval(async () => {
-      try {
-        const statusRes: any = await variantApi.getStatus(courseId.value, taskId)
-        const status = statusRes.data?.status
-        if (status === 'complete' || status === 'success') {
-          clearInterval(timer)
-          const idx = variantPollTimers.findIndex(t => t.taskId === taskId)
-          if (idx >= 0) variantPollTimers.splice(idx, 1)
-          uni.showToast({ title: `变式题已生成（题${questionId}）`, icon: 'success' })
-          loadQuestions()
-        } else if (status === 'failed') {
-          clearInterval(timer)
-          const idx = variantPollTimers.findIndex(t => t.taskId === taskId)
-          if (idx >= 0) variantPollTimers.splice(idx, 1)
-          uni.showToast({ title: `变式题生成失败（题${questionId}）`, icon: 'none' })
-        }
-      } catch (e) { /* silent */ }
-    }, 3000)
-    variantPollTimers.push({ taskId, timer })
+    poll.inFlight = true
+    try {
+      const statusRes: any = await variantApi.getStatus(courseId.value, taskId)
+      const status = statusRes.data?.status
+      if (status === 'success' || status === 'complete') {
+        removeVariantPoll(poll)
+        uni.showToast({ title: `变式题已生成（题${questionNo}）`, icon: 'success' })
+        loadQuestions()
+      } else if (status === 'failed') {
+        removeVariantPoll(poll)
+        uni.showToast({ title: `变式题生成失败（题${questionNo}）`, icon: 'none' })
+      } else if (variantPollTimers.includes(poll)) {
+        poll.timer = setTimeout(pollOnce, 3000)
+      }
+    } catch (error: any) {
+      const statusCode = error?.status || error?.response?.status
+      const message = String(error?.message || '')
+      const isNotFound = statusCode === 404 || message.includes('404') || message.includes('不存在')
+      if (isNotFound) {
+        // A 404 means this is an obsolete/wrong task ID. Stop permanently;
+        // otherwise the old ID would be requested forever every 3 seconds.
+        removeVariantPoll(poll)
+        uni.showToast({ title: '变式任务已失效，请重新生成', icon: 'none' })
+      } else if (variantPollTimers.includes(poll)) {
+        poll.timer = setTimeout(pollOnce, 5000)
+      }
+    } finally {
+      poll.inFlight = false
+    }
+  }
+  variantPollTimers.push(poll)
+  poll.timer = setTimeout(pollOnce, 1000)
+}
+
+async function handleGenerateVariant(question: Question) {
+  if (question.review_status !== 'confirmed') {
+    uni.showToast({ title: '本题待审核，请先编辑并确认题目', icon: 'none' })
+    return
+  }
+  const mode = await chooseVariantMode()
+  if (!mode) return
+  if (hasVariantPoll(question.question_id)) {
+    uni.showToast({ title: '本题已有变式任务在处理中，请勿重复提交', icon: 'none' })
+    return
+  }
+  try {
+    const res: any = await variantApi.generate(courseId.value, question.question_id, mode)
+    const taskId = String(res.data?.task_id || '')
+    if (!taskId) {
+      uni.showToast({ title: '未获取到变式任务编号', icon: 'none' })
+      return
+    }
+    uni.showToast({ title: `变式题生成中（题${question.question_no}）`, icon: 'none', duration: 2000 })
+    startVariantPolling(taskId, question.question_id, String(question.question_no || ''))
   } catch (e: any) {
     uni.showToast({ title: e?.message || '生成失败', icon: 'none' })
   }
@@ -848,26 +979,22 @@ async function handleGenerateVariant(questionId: number) {
 async function batchGenerateVariant() {
   const ids = [...selectedIds.value]
   if (ids.length === 0) return
+  const selectedQuestionsForVariant = questions.value.filter((question) => ids.includes(question.question_id))
+  if (selectedQuestionsForVariant.some((question) => question.review_status !== 'confirmed')) {
+    uni.showToast({ title: '所选题目含待审核题，请先编辑并确认', icon: 'none' })
+    return
+  }
+  const mode = await chooseVariantMode()
+  if (!mode) return
   try {
-    const res: any = await variantApi.batchGenerate(courseId.value, ids)
-    const taskIds = res.data?.task_ids || []
+    const res: any = await variantApi.batchGenerate(courseId.value, ids, mode)
+    const taskIds = Array.from(new Set((res.data?.task_ids || []).map((id: any) => String(id)).filter(Boolean)))
     if (taskIds.length > 0) {
       uni.showToast({ title: `已启动 ${taskIds.length} 题变式生成`, icon: 'none' })
       // Poll each task
-      for (const tid of taskIds) {
-        const timer = setInterval(async () => {
-          try {
-            const statusRes: any = await variantApi.getStatus(courseId.value, tid)
-            const status = statusRes.data?.status
-            if (status === 'complete' || status === 'success' || status === 'failed') {
-              clearInterval(timer)
-              const idx = variantPollTimers.findIndex(t => t.taskId === tid)
-              if (idx >= 0) variantPollTimers.splice(idx, 1)
-              if (status !== 'failed') loadQuestions()
-            }
-          } catch (e) { /* silent */ }
-        }, 3000)
-        variantPollTimers.push({ taskId: tid, timer })
+      for (const [index, tid] of taskIds.entries()) {
+        const question = selectedQuestionsForVariant[index]
+        if (question) startVariantPolling(tid, question.question_id, String(question.question_no || ''))
       }
     } else {
       uni.showToast({ title: '批量变式生成已启动', icon: 'none' })
@@ -880,7 +1007,7 @@ async function batchGenerateVariant() {
 // ============================================================
 // Remove questions
 // ============================================================
-async function handleRemove(questionId: number) {
+async function handleRemove(questionId: string) {
   uni.showModal({
     title: '确认移除',
     content: '确定要从课程中移除此题目吗？',
@@ -1087,7 +1214,7 @@ async function confirmGenerateMission() {
 onUnmounted(() => {
   batchAiPollTimers.forEach(t => clearInterval(t.timer))
   batchAiPollTimers.length = 0
-  variantPollTimers.forEach(t => clearInterval(t.timer))
+  variantPollTimers.forEach(t => clearTimeout(t.timer))
   variantPollTimers.length = 0
 })
 </script>
@@ -1181,6 +1308,16 @@ onUnmounted(() => {
   border: none;
 }
 
+/* uni-app applies a low-contrast native disabled style to buttons. Keep the
+ * disabled action legible while making its unavailable state obvious. */
+.btn-action:disabled,
+.btn-action[disabled] {
+  color: #909399 !important;
+  background-color: #f4f4f5 !important;
+  border-color: #e9e9eb !important;
+  opacity: 1 !important;
+}
+
 /* Batch bar */
 .batch-bar {
   display: flex;
@@ -1201,12 +1338,14 @@ onUnmounted(() => {
 /* Question table */
 .question-table {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
+  min-width: 1180px;
 }
 
 .table-header {
   display: flex;
   align-items: center;
+  min-width: 1180px;
   padding: 8px 12px;
   background: #f5f7fa;
   font-size: 12px;
@@ -1216,7 +1355,8 @@ onUnmounted(() => {
 
 .table-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  min-width: 1180px;
   padding: 8px 12px;
   border-bottom: 1px solid #f0f0f0;
   font-size: 13px;
@@ -1238,28 +1378,88 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
+.col-index {
+  width: 48px;
+  flex-shrink: 0;
+  text-align: center;
+  line-height: 24px;
+  color: #606266;
+}
+
 .check-all {
   cursor: pointer;
 }
 
 .col-stem {
-  flex: 2;
-  min-width: 100px;
+  flex: 1 1 auto;
+  min-width: 420px;
+  max-width: none;
+  min-height: 24px;
+  line-height: 1.6;
+  color: #303133;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.stem-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.question-table-preview {
+  margin-top: 8px;
+  max-width: 100%;
+  overflow-x: auto;
+  background: #fff;
+}
+
+.table-caption {
+  margin-bottom: 4px;
+  color: #909399;
+  font-size: 11px;
+}
+
+.data-grid {
+  display: grid;
+  width: max-content;
+  min-width: 100%;
+  border-top: 1px solid #dcdfe6;
+  border-left: 1px solid #dcdfe6;
+}
+
+.data-cell {
+  min-width: 72px;
+  min-height: 26px;
+  padding: 4px 6px;
+  display: flex;
+  align-items: center;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-right: 1px solid #dcdfe6;
+  border-bottom: 1px solid #dcdfe6;
+  color: #606266;
+  background: #fff;
 }
 
 .col-diff {
   width: 50px;
   text-align: center;
+  flex-shrink: 0;
+  line-height: 24px;
 }
 
 .col-kp {
   width: 60px;
   text-align: center;
+  flex-shrink: 0;
+  line-height: 24px;
 }
 
 .col-confirm {
   width: 80px;
   text-align: center;
+  flex-shrink: 0;
+  line-height: 24px;
 }
 
 .col-ai {
@@ -1267,12 +1467,33 @@ onUnmounted(() => {
   display: flex;
   gap: 4px;
   justify-content: center;
+  flex-shrink: 0;
+  line-height: 24px;
 }
 
 .col-actions {
   display: flex;
   gap: 4px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  width: 360px;
+  min-width: 360px;
+  flex-shrink: 0;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.col-actions button {
+  flex: 0 0 auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.col-actions button:disabled,
+.col-actions button[disabled] {
+  color: #909399 !important;
+  background-color: #f4f4f5 !important;
+  border-color: #e9e9eb !important;
+  opacity: 1 !important;
 }
 
 .diff-1 { color: #67c23a; }
