@@ -74,6 +74,7 @@ import { ref, computed } from 'vue'
 import { authApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
 import { wxLogin } from '@/utils/wechat-auth'
+import { persistSession, routeForRole, type AppRole } from '@/utils/roles'
 
 const tabs = [
   { role: 'student', label: '学生', icon: '🎓' },
@@ -124,9 +125,7 @@ async function handleLogin() {
   try {
     const res = await authApi.login(mobile.value, code.value, activeTab.value)
     if (res.code === 0) {
-      uni.setStorageSync('accessToken', res.data.access_token)
-      uni.setStorageSync('refreshToken', res.data.refresh_token)
-      uni.setStorageSync('userInfo', res.data.user)
+      persistSession(res.data)
       userStore.setUserInfo(res.data.user)
 
       // 保持登录状态：写入7天后过期时间戳
@@ -137,14 +136,14 @@ async function handleLogin() {
         uni.removeStorageSync('tokenExpiry')
       }
 
-      const role = res.data.user.role_type
-      navigateByRole(role)
+      uni.reLaunch({ url: routeForRole(res.data.user.active_role as AppRole) })
     } else {
-      uni.showToast({ title: res.message || '登录失败', icon: 'none' })
+      const message = (res as any).code === 'ROLE_NOT_GRANTED' ? '该账号未开通此角色' : (res.message || '登录失败')
+      uni.showToast({ title: message, icon: 'none' })
     }
   } catch (e: any) {
     console.error('登录失败:', e)
-    const msg = e?.errMsg || e?.message || '网络异常，请重试'
+    const msg = e?.data?.code === 'ROLE_NOT_GRANTED' ? '该账号未开通此角色' : (e?.errMsg || e?.message || '网络异常，请重试')
     uni.showToast({ title: msg, icon: 'none' })
   } finally {
     loading.value = false
@@ -161,32 +160,11 @@ async function handleWechatLogin() {
       return
     }
     userStore.setUserInfo(result.userInfo)
-    navigateByRole(result.userInfo?.role_type || 'student')
+    uni.reLaunch({ url: routeForRole(result.userInfo.active_role as AppRole) })
   } catch (e: any) { uni.showToast({ title: e.message || '微信登录失败', icon: 'none' }) }
   finally { loading.value = false }
 }
 
-function navigateByRole(role: string) {
-  switch (role) {
-    case 'teacher':
-      uni.reLaunch({ url: '/pages/teacher/layout' })
-      break
-    case 'student':
-    case 'parent':
-      // #ifdef MP-WEIXIN
-      uni.reLaunch({ url: '/pages/student/mp-home' })
-      // #endif
-      // #ifndef MP-WEIXIN
-      uni.reLaunch({ url: '/pages/student/layout' })
-      // #endif
-      break
-    case 'admin':
-      uni.reLaunch({ url: '/pages/admin/home' })
-      break
-    default:
-      uni.reLaunch({ url: '/pages/student/layout' })
-  }
-}
 </script>
 
 <style scoped>
