@@ -455,6 +455,30 @@ class InstitutionMultiRoleMigrationTest(TransactionTestCase):
         ).exists())
 
     def test_reverse_restores_single_role_constraint_and_preserves_grants(self):
+        InstitutionMember = self.apps.get_model('institutions', 'InstitutionMember')
+        UserAccount = self.apps.get_model('accounts', 'UserAccount')
+        InstitutionMember.objects.create(
+            institution_id=self.institution_id,
+            user_id=self.teacher_id,
+            role='admin',
+            status='active',
+        )
+        active_teacher_id = UserAccount.objects.create(
+            mobile='13800000116', display_name='Active Teacher', role_type='student',
+        ).id
+        InstitutionMember.objects.create(
+            institution_id=self.institution_id,
+            user_id=active_teacher_id,
+            role='teacher',
+            status='active',
+        )
+        InstitutionMember.objects.create(
+            institution_id=self.institution_id,
+            user_id=active_teacher_id,
+            role='admin',
+            status='removed',
+        )
+
         executor = MigrationExecutor(connection)
         executor.migrate(self.migrate_from)
         old_apps = executor.loader.project_state(self.migrate_from).apps
@@ -467,6 +491,18 @@ class InstitutionMultiRoleMigrationTest(TransactionTestCase):
         self.assertTrue(UserRole.objects.filter(
             user_id=self.student_id, role='student', status='active',
         ).exists())
+        retained = InstitutionMember.objects.get(
+            institution_id=self.institution_id,
+            user_id=self.teacher_id,
+        )
+        self.assertEqual(retained.role, 'admin')
+        self.assertEqual(retained.status, 'active')
+        active_retained = InstitutionMember.objects.get(
+            institution_id=self.institution_id,
+            user_id=active_teacher_id,
+        )
+        self.assertEqual(active_retained.role, 'teacher')
+        self.assertEqual(active_retained.status, 'active')
         with self.assertRaises(IntegrityError), transaction.atomic():
             InstitutionMember.objects.create(
                 institution_id=self.institution_id,

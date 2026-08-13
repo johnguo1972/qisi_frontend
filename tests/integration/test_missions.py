@@ -112,15 +112,12 @@ class TestMissions:
     def test_unpublished_mission_not_visible_to_student(self, student_client, sample_mission):
         """Student should not see unpublished missions."""
         resp = student_client.get(f'/api/v1/student/missions/{sample_mission.id}')
-        assert resp.status_code in [404, 200]
+        assert resp.status_code == 403
 
-    def test_mission_isolation(self, teacher_client, student_user):
+    def test_mission_isolation(self, teacher_client, student_client):
         """One teacher's missions should not appear in another's list."""
         teacher_client.post('/api/v1/missions', {'mission_name': '老师A的任务'})
-        from rest_framework.test import APIClient
-        client = APIClient()
-        client.force_authenticate(user=student_user)
-        resp = client.get('/api/v1/missions')
+        resp = student_client.get('/api/v1/missions')
         if resp.status_code == 301:
-            resp = client.get('/api/v1/missions/')
-        assert resp.status_code == 200
+            resp = student_client.get('/api/v1/missions/')
+        assert resp.status_code == 403

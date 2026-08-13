@@ -30,18 +30,24 @@ def ensure_unmanaged_knowledge_table(db):
 @pytest.fixture
 def admin_user(db):
     """Create an admin user."""
-    return UserAccount.objects.create(
+    from apps.accounts.roles import grant_user_role
+
+    user = UserAccount.objects.create(
         role_type='admin',
         mobile='13900000001',
         display_name='管理员',
         password='pbkdf2_sha256$dummy',
     )
+    grant_user_role(user, 'admin')
+    return user
 
 
 @pytest.fixture
 def teacher_user(db):
     """Create a teacher user."""
-    return UserAccount.objects.create(
+    from apps.accounts.roles import grant_user_role
+
+    user = UserAccount.objects.create(
         role_type='teacher',
         mobile='13900000002',
         display_name='测试老师',
@@ -49,17 +55,23 @@ def teacher_user(db):
         stages=['初中', '高中'],
         password='pbkdf2_sha256$dummy',
     )
+    grant_user_role(user, 'teacher')
+    return user
 
 
 @pytest.fixture
 def student_user(db):
     """Create a student user."""
-    return UserAccount.objects.create(
+    from apps.accounts.roles import grant_user_role
+
+    user = UserAccount.objects.create(
         role_type='student',
         mobile='13900000003',
         display_name='测试学生',
         password='pbkdf2_sha256$dummy',
     )
+    grant_user_role(user, 'student')
+    return user
 
 
 # ─── API client fixtures ─────────────────────────────────────────
@@ -73,24 +85,33 @@ def api_client():
 @pytest.fixture
 def admin_client(db, admin_user):
     """APIClient authenticated as admin."""
+    from apps.accounts.services import generate_tokens
+
     client = APIClient()
-    client.force_authenticate(user=admin_user)
+    token = generate_tokens(admin_user, 'admin')['access_token']
+    client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
     return client
 
 
 @pytest.fixture
 def teacher_client(db, teacher_user):
     """APIClient authenticated as teacher."""
+    from apps.accounts.services import generate_tokens
+
     client = APIClient()
-    client.force_authenticate(user=teacher_user)
+    token = generate_tokens(teacher_user, 'teacher')['access_token']
+    client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
     return client
 
 
 @pytest.fixture
 def student_client(db, student_user):
     """APIClient authenticated as student."""
+    from apps.accounts.services import generate_tokens
+
     client = APIClient()
-    client.force_authenticate(user=student_user)
+    token = generate_tokens(student_user, 'student')['access_token']
+    client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
     return client
 
 

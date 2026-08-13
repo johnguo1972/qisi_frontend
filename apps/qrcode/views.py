@@ -16,6 +16,7 @@ from rest_framework.response import Response
 
 from apps.accounts.models import StudentParentBind, UserAccount, WechatIdentity
 from apps.accounts.auth import get_request_role
+from apps.accounts.permissions import IsTeacherSession
 from apps.accounts.roles import VALID_ROLES, has_user_role
 from apps.accounts.serializers import serialize_user_session
 from apps.accounts.services import generate_tokens, get_or_create_user, verify_code
@@ -90,7 +91,7 @@ def _expired(code):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_qrcode(request, mission_id):
     try:
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
@@ -105,7 +106,7 @@ def mission_qrcode(request, mission_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_qrcode_info(request, mission_id):
     try:
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
@@ -282,10 +283,13 @@ def parent_context(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def create_scan_batch(request):
     try:
-        mission = LearningMission.objects.get(pk=request.data.get('mission_id'))
+        mission = LearningMission.objects.get(
+            pk=request.data.get('mission_id'),
+            creator_teacher_id=request.user,
+        )
     except LearningMission.DoesNotExist:
         return Response({'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': trace_id()}, status=404)
     batch = PaperScanBatch.objects.create(mission=mission, operator=request.user, expected_count=int(request.data.get('expected_count') or 0))
@@ -293,21 +297,17 @@ def create_scan_batch(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def class_student_codes(request, class_id):
     from apps.institutions.models import Class, ClassTeacher
     try:
         class_obj = Class.objects.get(pk=class_id)
     except Class.DoesNotExist:
         return Response({'code': 404, 'message': '班级不存在', 'data': None, 'trace_id': trace_id()}, status=404)
-    active_role = get_request_role(request)
-    allowed = (
-        active_role == 'admin' and has_user_role(request.user, 'admin')
-    ) or (
-        active_role == 'teacher'
-        and has_user_role(request.user, 'teacher')
-        and ClassTeacher.objects.filter(class_obj=class_obj, teacher=request.user).exists()
-    )
+    allowed = ClassTeacher.objects.filter(
+        class_obj=class_obj,
+        teacher=request.user,
+    ).exists()
     if not allowed:
         return Response({'code': 403, 'message': '无权查看班级学生码', 'data': None, 'trace_id': trace_id()}, status=403)
     rows = []
@@ -318,7 +318,7 @@ def class_student_codes(request, class_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def upload_scan_page(request, batch_id):
     from .models import StudentClassShortCode
     try:
@@ -351,7 +351,7 @@ def upload_scan_page(request, batch_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def scan_batch_summary(request, batch_id):
     try:
         batch = PaperScanBatch.objects.get(pk=batch_id, operator=request.user)
@@ -364,7 +364,7 @@ def scan_batch_summary(request, batch_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def complete_scan_batch(request, batch_id):
     try:
         batch = PaperScanBatch.objects.get(pk=batch_id, operator=request.user)
@@ -444,7 +444,7 @@ def _paper_pdf(mission, students, mission_code):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_wxacode(request, mission_id):
     try:
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
@@ -459,7 +459,7 @@ def mission_wxacode(request, mission_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_paper_pdf(request, mission_id):
     if (
         get_request_role(request) != 'teacher'
@@ -603,7 +603,7 @@ def attempt_image_check(request):
     score, blurry = analyze_image_blur(image)
     return Response({'code': 0, 'message': 'success', 'data': {'blur_score': score, 'is_blurry': blurry, 'threshold': 50}, 'trace_id': trace_id()})
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_practice_sheet(request, mission_id):
     from apps.wrongbook.models import WrongBookItem
     from apps.wrongbook.services import find_variant_questions

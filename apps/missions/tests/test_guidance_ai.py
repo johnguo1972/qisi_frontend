@@ -202,6 +202,10 @@ def test_teacher_reply_endpoint_does_not_store_malformed_provider_content(
         mobile="13970000072",
         display_name="Task7教师",
     )
+    from apps.accounts.roles import grant_user_role
+    from apps.accounts.services import generate_tokens
+
+    grant_user_role(teacher, "teacher")
     paper = ExamPaper.objects.create(
         title="Task7教师试卷",
         subject="数学",
@@ -251,7 +255,8 @@ def test_teacher_reply_endpoint_does_not_store_malformed_provider_content(
     }
     monkeypatch.setitem(views._teacher_guidance_sessions, session_id, session)
     client = APIClient()
-    client.force_authenticate(user=teacher)
+    token = generate_tokens(teacher, "teacher")["access_token"]
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
 
     response = client.post(
         f"/api/v1/missions/guidance/reply/{session_id}/",
