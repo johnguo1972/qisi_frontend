@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 QUESTION_BANK_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'teacher' / 'question-bank.vue'
 ROLES_PATH = ROOT / 'uniapp' / 'src' / 'utils' / 'roles.ts'
 ADMIN_HOME_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'admin' / 'home.vue'
+REQUEST_PATH = ROOT / 'uniapp' / 'src' / 'utils' / 'request.ts'
 
 
 def run_role_helpers(user_info: dict | None, expected_role: str) -> dict:
@@ -252,6 +253,62 @@ def test_stale_institution_response_does_not_write_admin_items():
 def test_failed_profile_initialization_can_retry():
     result = run_stale_admin_response_scenario('retry')
     assert result['profileCalls'] == 2
+
+
+def test_request_silent_error_suppresses_only_global_error_ui_and_keeps_401_cleanup():
+    source = REQUEST_PATH.read_text(encoding='utf-8')
+    source = "const BASE_URL = '/api/v1'\n" + source[source.index('const requestLogs'):]
+    source = re.sub(r'interface ApiResponse[\s\S]*?\n}\n\ninterface RequestError[\s\S]*?\n}\n', '', source)
+    source = re.sub(r'<T>', '', source)
+    source = re.sub(r': Promise<ApiResponse>', '', source)
+    source = re.sub(r': \'GET\' \| \'POST\' \| \'PUT\' \| \'PATCH\' \| \'DELETE\'', '', source)
+    source = source.replace('method as any', 'method').replace('parsed as ApiResponse', 'parsed').replace('err as any', 'err')
+    source = source.replace('(globalThis as any)', 'globalThis')
+    source = source.replace(': RequestOptions', '')
+    source = source.replace('options?', 'options')
+    source = source.replace('url: string', 'url').replace('data?: object', 'data')
+    source = re.sub(r': Array<[^>]+>', '', source)
+    source = re.sub(r': string\[\]', '', source)
+    source = re.sub(r': RequestError', '', source)
+    source = re.sub(r'export const (get|post|put|patch|del) =', r'const \1 =', source)
+    source = source.replace('(url, data)', '(url, data, options)')
+    script = f"""
+      const events = [];
+      let response = {{ kind: 'status', statusCode: 403 }};
+      const uni = {{
+        getStorageSync: () => 'token', removeStorageSync: (key) => events.push(['remove', key]),
+        reLaunch: (arg) => events.push(['relaunch', arg.url]), showToast: () => events.push(['toast']),
+        showModal: () => events.push(['modal']),
+        request: (options) => {{
+          if (response.kind === 'fail') options.fail({{ errMsg: 'offline' }});
+          else options.success({{ statusCode: response.statusCode, data: {{}} }});
+        }},
+      }};
+      {source}
+      const run = async () => {{
+        response = {{ kind: 'status', statusCode: 403 }}; events.length = 0; await get('/x'); const default403 = [...events];
+        response = {{ kind: 'status', statusCode: 403 }}; events.length = 0; await get('/x', undefined, {{ silentError: true }}); const silent403 = [...events];
+        response = {{ kind: 'fail' }}; events.length = 0; try {{ await get('/x') }} catch {{}} const defaultFail = [...events];
+        response = {{ kind: 'fail' }}; events.length = 0; try {{ await get('/x', undefined, {{ silentError: true }}) }} catch {{}} const silentFail = [...events];
+        response = {{ kind: 'status', statusCode: 401 }}; events.length = 0; get('/x', undefined, {{ silentError: true }}); const silent401 = [...events];
+        console.log(JSON.stringify({{ default403, silent403, defaultFail, silentFail, silent401 }}));
+      }};
+      await run();
+    """
+    result = subprocess.run(['node', '--input-type=module', '--eval', script], cwd=ROOT, capture_output=True, text=True, encoding='utf-8', check=True)
+    calls = json.loads(result.stdout.splitlines()[-1])
+    assert calls['default403'] == [['toast']]
+    assert calls['silent403'] == []
+    assert calls['defaultFail'] == [['modal']]
+    assert calls['silentFail'] == []
+    assert calls['silent401'] == [
+        ['remove', 'accessToken'], ['remove', 'refreshToken'], ['remove', 'tokenExpiry'], ['relaunch', '/pages/login/index'],
+    ]
+
+
+def test_admin_lifecycle_institution_load_enables_silent_error():
+    source = ADMIN_HOME_PATH.read_text(encoding='utf-8')
+    assert "institutionApi.list(undefined, { silentError: true })" in source
 
 
 def test_stale_failed_institution_request_has_no_toast_or_loading_write():

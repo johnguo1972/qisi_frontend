@@ -30,6 +30,10 @@ interface RequestError {
   data?: any
 }
 
+export interface RequestOptions {
+  silentError?: boolean
+}
+
 // 保存最近的请求日志到全局数组，方便调试时查看
 const requestLogs: Array<{ url: string; method: string; status: string; detail: string }> = []
 ;(globalThis as any).__requestLogs = requestLogs
@@ -37,7 +41,8 @@ const requestLogs: Array<{ url: string; method: string; status: string; detail: 
 function request<T>(
   url: string,
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'GET',
-  data?: object
+  data?: object,
+  options: RequestOptions = {}
 ): Promise<ApiResponse<T>> {
   const token = uni.getStorageSync('accessToken')
   let fullUrl = `${BASE_URL}${url}`
@@ -82,7 +87,7 @@ function request<T>(
         if (res.statusCode < 200 || res.statusCode >= 300) {
           const msg = `接口 ${method} ${fullUrl} 返回异常状态码 ${res.statusCode}`
           console.error(msg, res.data)
-          uni.showToast({ title: `请求异常(${res.statusCode})`, icon: 'none', duration: 3000 })
+          if (!options.silentError) uni.showToast({ title: `请求异常(${res.statusCode})`, icon: 'none', duration: 3000 })
         }
         // 手动解析 JSON（兼容 APP 平台）
         let parsed = res.data
@@ -97,7 +102,7 @@ function request<T>(
         const msg = `接口失败: ${method} ${fullUrl}\n错误: ${nativeErr}`
         requestLogs.push({ url: fullUrl, method, status: 'FAIL', detail: nativeErr })
         // 使用更长的提示方式显示完整信息
-        uni.showModal({
+        if (!options.silentError) uni.showModal({
           title: '网络请求失败',
           content: msg.slice(0, 300),
           showCancel: false,
@@ -111,8 +116,8 @@ function request<T>(
   })
 }
 
-export const get = <T>(url: string, data?: object) => request<T>(url, 'GET', data)
-export const post = <T>(url: string, data?: object) => request<T>(url, 'POST', data)
-export const put = <T>(url: string, data?: object) => request<T>(url, 'PUT', data)
-export const patch = <T>(url: string, data?: object) => request<T>(url, 'PATCH', data)
-export const del = <T>(url: string, data?: object) => request<T>(url, 'DELETE', data)
+export const get = <T>(url: string, data?: object, options?: RequestOptions) => request<T>(url, 'GET', data, options)
+export const post = <T>(url: string, data?: object, options?: RequestOptions) => request<T>(url, 'POST', data, options)
+export const put = <T>(url: string, data?: object, options?: RequestOptions) => request<T>(url, 'PUT', data, options)
+export const patch = <T>(url: string, data?: object, options?: RequestOptions) => request<T>(url, 'PATCH', data, options)
+export const del = <T>(url: string, data?: object, options?: RequestOptions) => request<T>(url, 'DELETE', data, options)

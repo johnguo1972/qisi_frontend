@@ -1,4 +1,4 @@
-import { get, post, put, del } from '@/utils/request'
+import { get, post, put, del, type RequestOptions } from '@/utils/request'
 import type { UUID } from '@/types/uuid'
 
 export type InstitutionRole = 'admin' | 'teacher'
@@ -35,9 +35,9 @@ export interface AddInstitutionMemberRolesPayload {
 
 // === Institution (Admin) ===
 export const institutionApi = {
-  list: (params?: { name?: string; page?: number; page_size?: number }) => {
+  list: (params?: { name?: string; page?: number; page_size?: number }, options?: RequestOptions) => {
     const qs = params ? '?' + new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString() : ''
-    return get<{ items: any[]; total: number; page_no: number; page_size: number }>(`/admin/institutions${qs}`)
+    return get<{ items: any[]; total: number; page_no: number; page_size: number }>(`/admin/institutions${qs}`, undefined, options)
   },
   create: (data: { institution_name: string; contact_name: string; contact_phone: string; contact_email?: string; address?: string }) =>
     post('/admin/institutions', data),

@@ -85,7 +85,7 @@ async function loadInstitutions() {
   const snapshot = sessionSnapshot()
   try {
     if (!ensurePageRole('admin')) return
-    const res = await institutionApi.list()
+    const res = await institutionApi.list(undefined, { silentError: true })
     if (!sessionUnchanged(snapshot) || !ensurePageRole('admin')) return
     console.log('[admin] institutions loaded:', res)
     items.value = res.data?.items || []
