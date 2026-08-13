@@ -177,7 +177,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { questionApi, importJsonPackage, getQuestionTags, addQuestionTag, removeQuestionTag } from '@/api/questions'
+import { questionApi, aiProcessProbe, importJsonPackage, getQuestionTags, addQuestionTag, removeQuestionTag } from '@/api/questions'
 import { knowledgeApi } from '@/api/knowledge'
 import { favoriteApi } from '@/api/favorites'
 import { useUserStore } from '@/store/index.ts'
@@ -475,7 +475,7 @@ async function handleBatchAi(model?: string) {
 async function handleAiExplore() {
   if (!selectedQuestionIds.value.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
   try {
-    await Promise.all(selectedQuestionIds.value.map(id => questionApi.aiProcessProbe(id)))
+    await Promise.all(selectedQuestionIds.value.map(id => aiProcessProbe(id)))
     uni.showToast({ title: 'AI探索任务已提交', icon: 'success' })
   } catch { uni.showToast({ title: 'AI探索提交失败', icon: 'none' }) }
 }
