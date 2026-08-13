@@ -97,7 +97,7 @@ def refresh_token_view(request):
     try:
         token = RefreshToken(refresh_token)
         user = UserAccount.objects.get(pk=token['user_id'])
-        active_role = token.get('active_role') or user.role_type
+        active_role = token['active_role'] if 'active_role' in token else user.role_type
         if active_role not in VALID_ROLES or not has_user_role(user, active_role):
             return role_error(
                 'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN

@@ -27,9 +27,13 @@ class OptionalJWTAuthentication(JWTAuthentication):
             return None
 
         user, validated_token = result
-        active_role = validated_token.get('active_role') or user.role_type
+        active_role = (
+            validated_token['active_role']
+            if 'active_role' in validated_token
+            else user.role_type
+        )
         if active_role not in VALID_ROLES or not has_user_role(user, active_role):
-            raise AuthenticationFailed('Role is no longer granted', code='role_not_granted')
+            raise AuthenticationFailed('Role is no longer granted', code='ROLE_NOT_GRANTED')
 
         request.active_role = active_role
         # Compatibility for existing permission code. This is the request-loaded

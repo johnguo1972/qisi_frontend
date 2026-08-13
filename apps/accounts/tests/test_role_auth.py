@@ -250,6 +250,39 @@ def test_legacy_access_token_uses_legacy_role_only_while_grant_exists(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("malformed_role", [None, "", "owner"])
+def test_access_token_with_present_malformed_role_claim_never_uses_legacy_fallback(
+    api_client, teacher_user, malformed_role
+):
+    grant_user_role(teacher_user, "teacher")
+    access = RefreshToken.for_user(teacher_user).access_token
+    access["active_role"] = malformed_role
+    _authenticate(api_client, str(access))
+
+    response = api_client.get("/api/v1/auth/profile/me")
+
+    assert response.status_code == 401
+    assert response.data["detail"].code == "ROLE_NOT_GRANTED"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("malformed_role", [None, "", "owner"])
+def test_refresh_token_with_present_malformed_role_claim_never_uses_legacy_fallback(
+    api_client, teacher_user, malformed_role
+):
+    grant_user_role(teacher_user, "teacher")
+    refresh = RefreshToken.for_user(teacher_user)
+    refresh["active_role"] = malformed_role
+
+    response = api_client.post(
+        "/api/v1/auth/refresh", {"refresh_token": str(refresh)}
+    )
+
+    assert response.status_code == 403
+    assert response.data["code"] == "ROLE_NOT_GRANTED"
+
+
+@pytest.mark.django_db
 def test_profile_uses_each_tokens_active_role_without_persisting_it(
     api_client, admin_teacher
 ):
