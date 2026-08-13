@@ -1,4 +1,7 @@
 from pathlib import Path
+import json
+import re
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,7 +61,7 @@ def test_app_uses_shared_server_active_role_route():
     source = read("App.vue")
 
     assert "routeForRole" in source
-    assert "userInfo?.active_role" in source
+    assert "userInfo?.active_role || userInfo?.role_type" in source
     assert "function navigateByRole" not in source
 
 
@@ -75,3 +78,48 @@ def test_institution_member_ui_is_multi_role_and_teacher_fields_are_conditional(
     assert "roles: [...editForm.value.roles]" in source
     assert "roles.includes('teacher')" in source
     assert "移除成员" in source
+
+
+def test_member_normalizers_execute_legacy_and_missing_role_cases():
+    module_uri = (SRC / "utils" / "institution-members.ts").as_uri()
+    script = f"""
+      import {{ normalizeMember, normalizeRoles }} from {json.dumps(module_uri)};
+      const legacy = normalizeMember({{ user_id: 'u1', role: 'admin' }});
+      const missing = normalizeMember({{ user_id: 'u2' }});
+      const filtered = normalizeRoles(['teacher', 'invalid', 'teacher'], 'admin');
+      console.log(JSON.stringify({{ legacy, missing, filtered }}));
+    """
+    result = subprocess.run(
+        ["node", "--experimental-strip-types", "--input-type=module", "--eval", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    data = json.loads(result.stdout)
+
+    assert data["legacy"]["roles"] == ["admin"]
+    assert data["missing"]["roles"] == ["teacher"]
+    assert data["filtered"] == ["teacher"]
+
+
+def test_add_member_form_uses_roles_and_keeps_identity_fields_visible():
+    source = read("pages/admin/institution-detail.vue")
+    api = read("api/institutions.ts")
+
+    assert "memberForm.value.roles.length === 0" in source
+    assert "toggleMemberRole" in source
+    assert "memberForm.roles.includes('teacher')" in source
+    assert re.search(r"memberForm\.role(?!s)", source) is None
+    assert "addMemberRoles" in source
+    assert "addMemberRoles" in api
+    assert "部分角色添加失败" in source
+    assert '<view v-if="memberForm.roles.includes(\'teacher\')" class="form-row">' in source
+    assert '<input v-model="memberForm.mobile"' in source
+
+
+def test_member_load_path_normalizes_before_template_rendering():
+    source = read("pages/admin/institution-detail.vue")
+
+    assert "normalizeMember" in source
+    assert ".map(normalizeMember)" in source

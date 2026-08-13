@@ -37,7 +37,7 @@
       <!-- 添加成员表单 -->
       <view class="add-member-form">
         <view class="form-row">
-          <view v-if="memberForm.role === 'teacher'" class="form-item">
+          <view class="form-item">
             <text class="label">手机号 *</text>
             <input v-model="memberForm.mobile" type="number" placeholder="请输入手机号" />
           </view>
@@ -46,21 +46,24 @@
             <input v-model="memberForm.display_name" placeholder="请输入姓名" />
           </view>
         </view>
-        <view v-if="memberForm.role === 'teacher'" class="form-row">
+        <view class="form-row">
           <view class="form-item">
             <text class="label">角色 *</text>
-            <picker mode="selector" :range="roleLabelsAdd" :value="addRoleIndex" @change="memberForm.role = roleOptions[$event.detail.value].value">
-              <view class="picker-display">{{ selectedRoleLabel }}</view>
-            </picker>
+            <view class="checkbox-group">
+              <view v-for="opt in roleOptions" :key="opt.value" class="checkbox-item" @click="toggleMemberRole(opt.value)">
+                <text class="checkbox-icon" :class="{ checked: memberForm.roles.includes(opt.value) }">{{ memberForm.roles.includes(opt.value) ? '✓' : '○' }}</text>
+                <text class="checkbox-label">{{ opt.label }}</text>
+              </view>
+            </view>
           </view>
-          <view class="form-item">
+          <view v-if="memberForm.roles.includes('teacher')" class="form-item">
             <text class="label">科目</text>
             <picker mode="selector" :range="subjectLabelsAdd" :value="addSubjectIndex" @change="memberForm.subject = subjectOptions[$event.detail.value].value">
               <view class="picker-display">{{ selectedSubjectLabel }}</view>
             </picker>
           </view>
         </view>
-        <view class="form-row">
+        <view v-if="memberForm.roles.includes('teacher')" class="form-row">
           <view class="form-item full-width">
             <text class="label">学段（可多选）</text>
             <view class="checkbox-group">
@@ -159,6 +162,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
 import { institutionApi, type InstitutionRole } from '@/api/institutions.ts'
+import { normalizeMember } from '@/utils/institution-members'
 
 const institutionId = ref<string>('')
 const institution = ref<any>({})
@@ -188,25 +192,15 @@ const stageOptions = [
   { label: '高中', value: '高中' },
 ]
 
-const memberForm = ref({ mobile: '', display_name: '', role: 'teacher', subject: '', stages: [] as string[] })
+const memberForm = ref({ mobile: '', display_name: '', roles: ['teacher'] as InstitutionRole[], subject: '', stages: [] as string[] })
 
 // Edit modal state
 const showEditModal = ref(false)
 const editForm = ref({ user_id: '', display_name: '', mobile: '', roles: [] as InstitutionRole[], subject: '', stages: [] as string[] })
 
-const selectedRoleLabel = computed(() => {
-  const opt = roleOptions.find(o => o.value === memberForm.value.role)
-  return opt?.label || '教师'
-})
-
 const selectedSubjectLabel = computed(() => {
   const opt = subjectOptions.find(o => o.value === memberForm.value.subject)
   return opt?.label || '未设置'
-})
-
-const addRoleIndex = computed(() => {
-  const idx = roleOptions.findIndex(o => o.value === memberForm.value.role)
-  return idx >= 0 ? idx : 0
 })
 
 const addSubjectIndex = computed(() => {
@@ -215,7 +209,6 @@ const addSubjectIndex = computed(() => {
 })
 
 // Simple string arrays for picker range
-const roleLabelsAdd = computed(() => roleOptions.map(o => o.label))
 const subjectLabelsAdd = computed(() => subjectOptions.map(o => o.label))
 
 const editSubjectIndex = computed(() => {
@@ -260,7 +253,8 @@ async function loadData() {
     ])
     institution.value = instRes.data || {}
     const membersData = membersRes.data
-    members.value = Array.isArray(membersData) ? membersData : (membersData?.items || [])
+    const memberItems = Array.isArray(membersData) ? membersData : (membersData?.items || [])
+    members.value = memberItems.map(normalizeMember)
   } catch (e) {
     console.error('Failed to load institution data:', e)
     uni.showToast({ title: '加载失败', icon: 'none' })
@@ -280,6 +274,15 @@ function toggleStage(value: string) {
     memberForm.value.stages.splice(idx, 1)
   } else {
     memberForm.value.stages.push(value)
+  }
+}
+
+function toggleMemberRole(role: InstitutionRole) {
+  const index = memberForm.value.roles.indexOf(role)
+  if (index >= 0) {
+    memberForm.value.roles.splice(index, 1)
+  } else {
+    memberForm.value.roles.push(role)
   }
 }
 
@@ -329,24 +332,26 @@ async function handleAddMember() {
     uni.showToast({ title: '请输入姓名', icon: 'none' })
     return
   }
+  if (memberForm.value.roles.length === 0) {
+    uni.showToast({ title: '请至少选择一个角色', icon: 'none' })
+    return
+  }
 
   try {
-    const res: any = await institutionApi.addMember(institutionId.value, {
+    await institutionApi.addMemberRoles(institutionId.value, {
       mobile: memberForm.value.mobile.trim(),
       display_name: memberForm.value.display_name.trim(),
-      role: memberForm.value.role,
-      subject: memberForm.value.subject,
-      stages: memberForm.value.stages,
+      roles: [...memberForm.value.roles],
+      subject: memberForm.value.roles.includes('teacher') ? memberForm.value.subject : '',
+      stages: memberForm.value.roles.includes('teacher') ? memberForm.value.stages : [],
     })
-    if (res.code === 0) {
-      uni.showToast({ title: '添加成功', icon: 'success' })
-      memberForm.value = { mobile: '', display_name: '', role: 'teacher', subject: '', stages: [] }
-      await loadData()
-    } else {
-      uni.showToast({ title: res.message || '添加失败', icon: 'none' })
-    }
-  } catch (e) {
-    uni.showToast({ title: '添加失败', icon: 'none' })
+    uni.showToast({ title: '添加成功', icon: 'success' })
+    memberForm.value = { mobile: '', display_name: '', roles: ['teacher'], subject: '', stages: [] }
+    await loadData()
+  } catch (e: any) {
+    const message = e?.completedRoles?.length ? '部分角色添加失败，列表已刷新' : (e?.message || '添加失败')
+    uni.showToast({ title: message, icon: 'none' })
+    await loadData()
   }
 }
 
