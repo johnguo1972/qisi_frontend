@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 from rest_framework.test import APIClient
 
 from apps.accounts.models import StudentParentBind, UserAccount
@@ -15,6 +16,8 @@ from apps.institutions.models import (
 from apps.missions.models import LearningMission
 from apps.missions.views import _mission_student_ids
 from apps.qrcode.views import _mission_students
+from apps.qrcode.models import WrongbookPracticeSheet
+from apps.wrongbook.models import WrongBookItem
 
 
 pytestmark = pytest.mark.django_db
@@ -139,8 +142,8 @@ def test_direct_join_by_code_grants_student_role():
     class_obj = make_class(institution, teacher)
     student = make_user("13910000007", "parent")
     grant_user_role(student, "parent")
-    client = APIClient()
-    client.force_authenticate(user=student)
+    grant_user_role(student, "student")
+    client = client_for(student, "student")
 
     response = client.post(
         "/api/v1/student/classes/join-by-code",
@@ -229,3 +232,182 @@ def test_class_mission_pdf_query_includes_teacher_legacy_multi_role_student():
     )
 
     assert _mission_students(mission) == [student]
+
+
+def test_institution_admin_requires_teacher_session_and_grant():
+    user = make_user("13910000016", "parent")
+    grant_user_role(user, "parent")
+    grant_user_role(user, "teacher")
+    institution = make_institution()
+    InstitutionMember.objects.create(
+        institution=institution, user=user, role="admin", status="active"
+    )
+
+    assert client_for(user, "parent").get(
+        f"/api/v1/institutions/{institution.id}/members"
+    ).status_code == 403
+    assert client_for(user, "teacher").get(
+        f"/api/v1/institutions/{institution.id}/members"
+    ).status_code == 200
+
+
+@pytest.mark.parametrize("path,method,mobile", [
+    ("/api/v1/student/classes/search", "post", "13910000101"),
+    ("/api/v1/student/classes/join-by-code", "post", "13910000102"),
+    ("/api/v1/classes/join-request", "post", "13910000103"),
+    ("/api/v1/student/my-classes", "get", "13910000104"),
+    ("/api/v1/student/join-requests", "get", "13910000105"),
+])
+def test_student_apis_reject_teacher_session(path, method, mobile):
+    user = make_user(mobile, "teacher")
+    grant_user_role(user, "teacher")
+    grant_user_role(user, "student")
+
+    response = getattr(client_for(user, "teacher"), method)(path, {}, format="json")
+
+    assert response.status_code == 403
+
+
+def test_student_search_allows_student_session_without_class_membership():
+    user = make_user("13910000017", "teacher")
+    grant_user_role(user, "student")
+
+    response = client_for(user, "student").post(
+        "/api/v1/student/classes/search", {"teacher_mobile": "13900009999"}, format="json"
+    )
+
+    assert response.status_code == 200
+
+
+def make_wrong_item(student):
+    return WrongBookItem.objects.create(student_user_id=student, question_id=student.id)
+
+
+def test_unrelated_teacher_cannot_create_practice_sheet(monkeypatch):
+    student = make_user("13910000018", "student")
+    teacher = make_user("13910000019", "teacher")
+    grant_user_role(teacher, "teacher")
+    item = make_wrong_item(student)
+    monkeypatch.setattr("apps.wrongbook.services.find_variant_questions", lambda *a, **k: [])
+
+    response = client_for(teacher, "teacher").post(
+        "/api/v1/practice-sheets", {"wrong_item_id": str(item.id)}, format="json"
+    )
+
+    assert response.status_code == 403
+
+
+def test_related_teacher_can_create_practice_sheet_and_cannot_change_owner(monkeypatch):
+    student = make_user("13910000020", "student")
+    other = make_user("13910000021", "student")
+    teacher = make_user("13910000022", "teacher")
+    grant_user_role(teacher, "teacher")
+    institution = make_institution()
+    class_obj = make_class(institution, teacher)
+    ClassTeacher.objects.create(class_obj=class_obj, teacher=teacher, role="owner")
+    ClassStudent.objects.create(class_obj=class_obj, student=student, join_type="manual", status="active")
+    item = make_wrong_item(student)
+    monkeypatch.setattr("apps.wrongbook.services.find_variant_questions", lambda *a, **k: [])
+
+    allowed = client_for(teacher, "teacher").post(
+        "/api/v1/practice-sheets", {"wrong_item_id": str(item.id)}, format="json"
+    )
+    tampered = client_for(teacher, "teacher").post(
+        "/api/v1/practice-sheets",
+        {"wrong_item_id": str(item.id), "student_id": str(other.id)},
+        format="json",
+    )
+
+    assert allowed.status_code == 201
+    assert tampered.status_code == 400
+    assert WrongbookPracticeSheet.objects.filter(student=other).count() == 0
+
+
+def test_parent_children_requires_parent_session():
+    user = make_user("13910000023", "teacher")
+    grant_user_role(user, "teacher")
+    grant_user_role(user, "parent")
+
+    assert client_for(user, "teacher").get("/api/v1/parent/children").status_code == 403
+    assert client_for(user, "parent").get("/api/v1/parent/children").status_code == 200
+
+
+def test_practice_sheet_info_rejects_unrelated_user_and_allows_owner():
+    student = make_user("13910000024", "student")
+    stranger = make_user("13910000025", "student")
+    grant_user_role(student, "student")
+    grant_user_role(stranger, "student")
+    item = make_wrong_item(student)
+    sheet = WrongbookPracticeSheet.objects.create(
+        student=student, wrong_item=item, sheet_code="ABC123", original_question_id=item.question_id
+    )
+
+    assert client_for(stranger, "student").get(f"/api/v1/practice-sheets/{sheet.sheet_code}").status_code == 403
+    assert client_for(student, "student").get(f"/api/v1/practice-sheets/{sheet.sheet_code}").status_code == 200
+
+
+def test_practice_sheet_info_allows_current_parent_related_teacher_and_platform_admin():
+    from django.core.cache import cache
+
+    student = make_user("13910000030", "student")
+    parent = make_user("13910000031", "parent")
+    teacher = make_user("13910000032", "teacher")
+    admin = make_user("13910000033", "admin")
+    for user, role in ((student, "student"), (parent, "parent"), (teacher, "teacher"), (admin, "admin")):
+        grant_user_role(user, role)
+    institution = make_institution()
+    class_obj = make_class(institution, teacher)
+    ClassTeacher.objects.create(class_obj=class_obj, teacher=teacher, role="owner")
+    ClassStudent.objects.create(class_obj=class_obj, student=student, join_type="manual", status="active")
+    StudentParentBind.objects.create(
+        student_user_id=student, parent_user_id=parent, relation_type="guardian", bind_status="active"
+    )
+    cache.set(f"parent_context:{parent.id}", str(student.id), timeout=1800)
+    item = make_wrong_item(student)
+    sheet = WrongbookPracticeSheet.objects.create(
+        student=student, wrong_item=item, sheet_code="XYZ789", original_question_id=item.question_id
+    )
+
+    for user, role in ((parent, "parent"), (teacher, "teacher"), (admin, "admin")):
+        assert client_for(user, role).get(
+            f"/api/v1/practice-sheets/{sheet.sheet_code}"
+        ).status_code == 200
+
+
+def test_class_student_grant_failure_rolls_back_relationship():
+    teacher = make_user("13910000026", "teacher")
+    student = make_user("13910000027", "admin")
+    class_obj = make_class(make_institution(), teacher)
+
+    with patch("apps.institutions.signals.grant_user_role", side_effect=RuntimeError("grant failed")):
+        with pytest.raises(RuntimeError, match="grant failed"):
+            ClassStudent.objects.create(
+                class_obj=class_obj, student=student, join_type="manual", status="active"
+            )
+
+    assert not ClassStudent.objects.filter(class_obj=class_obj, student=student).exists()
+    assert not has_user_role(student, "student")
+
+
+def test_parent_bind_second_grant_failure_rolls_back_relation_and_first_grant():
+    student = make_user("13910000028", "admin")
+    parent = make_user("13910000029", "teacher")
+    from apps.accounts.roles import grant_user_role as real_grant
+
+    def fail_parent(user, role):
+        if role == "parent":
+            raise RuntimeError("parent grant failed")
+        return real_grant(user, role)
+
+    with patch("apps.accounts.signals.grant_user_role", side_effect=fail_parent):
+        with pytest.raises(RuntimeError, match="parent grant failed"):
+            StudentParentBind.objects.create(
+                student_user_id=student,
+                parent_user_id=parent,
+                relation_type="guardian",
+                bind_status="active",
+            )
+
+    assert not StudentParentBind.objects.filter(student_user_id=student, parent_user_id=parent).exists()
+    assert not has_user_role(student, "student")
+    assert not has_user_role(parent, "parent")

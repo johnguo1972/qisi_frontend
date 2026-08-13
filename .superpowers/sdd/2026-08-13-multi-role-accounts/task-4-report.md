@@ -43,3 +43,30 @@ institution/class/parent relationship check.
   they are not authorization or membership queries and are outside Task 4.
 - Existing `.env` and the pre-existing modified Task 3 report were preserved
   and are not part of this task's commit.
+
+## Fix round 1/5
+
+- Centralized institution member management authorization: platform admins
+  require an admin session and global admin grant; institution admins require
+  a teacher session, global teacher grant, and active institution-admin row.
+- Applied `IsStudentSession` to every institution student endpoint and changed
+  affected tests from `force_authenticate` to real role-bound JWTs.
+- Restricted practice sheet create/read to owner/current bound parent,
+  related class teacher, or platform admin. Teacher relationships are proven
+  through active `ClassStudent` plus `ClassTeacher`; requested `student_id`
+  cannot override the wrong-item owner.
+- Restricted `parent_children` to an active parent session and grant.
+- Made active `ClassStudent` and `StudentParentBind` saves atomic with their
+  post-save derived grants. Failure injection proves the relationship and any
+  earlier grant roll back together. Join approval has an outer transaction so
+  approval state also rolls back if membership/grant fails.
+
+### Fix-round evidence
+
+- RED review matrix: 12 expected failures, 1 passing student baseline.
+- New review matrix GREEN: 13 passed.
+- Expanded Task 4 exact suite: 23 passed.
+- Institution plus Task 4 regression: 58 passed.
+- Final brief-selected suite: 100 passed, 1 deselected
+  (`test_paper_entry_and_teacher_pdf`, approved missing-reportlab baseline).
+- Django system check: no issues.

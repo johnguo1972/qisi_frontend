@@ -1,5 +1,5 @@
 from django.contrib.auth.models import AbstractBaseUser
-from django.db import models
+from django.db import models, transaction
 import uuid_utils.compat as uuid_compat
 
 
@@ -82,6 +82,10 @@ class StudentParentBind(models.Model):
 
     class Meta:
         db_table = 'student_parent_bind'
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            return super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.student_user_id} <-> {self.parent_user_id} ({self.relation_type})"

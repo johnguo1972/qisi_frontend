@@ -7,7 +7,7 @@ from apps.institutions.models import ClassStudent
 
 
 class IsStudent(permissions.BasePermission):
-    """仅允许 role_type=='student'。"""
+    """Require a student session, active grant, and active class membership."""
     def has_permission(self, request, view):
         return (
             get_request_role(request) == 'student'

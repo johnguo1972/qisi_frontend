@@ -2,6 +2,7 @@
 
 import uuid
 
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -73,6 +74,7 @@ def join_request_list(request, class_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@transaction.atomic
 def approve_request(request, request_id):
     """POST /api/v1/classes/join-requests/<id>/approve - Approve a join request."""
     try:

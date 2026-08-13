@@ -59,3 +59,14 @@ class IsClassTeacher(permissions.BasePermission):
             class_obj_id=class_id,
             teacher=request.user,
         ).exists()
+
+
+class IsStudentSession(permissions.BasePermission):
+    """Require a student-authenticated session with an active student grant."""
+
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated
+            and get_request_role(request) == 'student'
+            and has_user_role(request.user, 'student')
+        )

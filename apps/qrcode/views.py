@@ -19,7 +19,7 @@ from apps.accounts.auth import get_request_role
 from apps.accounts.roles import VALID_ROLES, has_user_role
 from apps.accounts.serializers import serialize_user_session
 from apps.accounts.services import generate_tokens, get_or_create_user, verify_code
-from apps.institutions.models import ClassStudent
+from apps.institutions.models import ClassStudent, ClassTeacher
 from apps.missions.models import LearningMission
 from apps.study.models import AnswerAttempt
 from apps.common.media import media_url
@@ -48,6 +48,34 @@ def effective_student(request):
         parent_user_id=request.user, student_user_id=child_id, bind_status='active',
     ).select_related('student_user_id').first()
     return relation.student_user_id if relation else None
+
+
+def _is_platform_admin(request):
+    return (
+        get_request_role(request) == 'admin'
+        and has_user_role(request.user, 'admin')
+    )
+
+
+def _is_related_teacher(request, student):
+    return (
+        get_request_role(request) == 'teacher'
+        and has_user_role(request.user, 'teacher')
+        and ClassTeacher.objects.filter(
+            teacher=request.user,
+            class_obj__class_students__student=student,
+            class_obj__class_students__status='active',
+        ).exists()
+    )
+
+
+def _can_access_student(request, student):
+    owner = effective_student(request)
+    return (
+        (owner is not None and owner.id == student.id)
+        or _is_platform_admin(request)
+        or _is_related_teacher(request, student)
+    )
 
 
 def _expired(code):
@@ -226,6 +254,11 @@ def wechat_bind(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def parent_children(request):
+    if (
+        get_request_role(request) != 'parent'
+        or not has_user_role(request.user, 'parent')
+    ):
+        return Response({'code': 403, 'message': 'parent role required'}, status=403)
     children = StudentParentBind.objects.filter(parent_user_id=request.user, bind_status='active').select_related('student_user_id')
     return Response({'code': 0, 'message': 'success', 'data': [{'id': b.student_user_id_id, 'display_name': b.student_user_id.display_name, 'grade_level': b.student_user_id.grade_level} for b in children], 'trace_id': trace_id()})
 
@@ -463,6 +496,8 @@ def practice_sheet_info(request, sheet_code):
     sheet = WrongbookPracticeSheet.objects.select_related('student').filter(sheet_code=str(sheet_code).upper()).first()
     if not sheet:
         return Response({'code': 404, 'message': 'practice sheet not found', 'data': None, 'trace_id': trace_id()}, status=404)
+    if not _can_access_student(request, sheet.student):
+        return Response({'code': 403, 'message': 'no permission', 'data': None, 'trace_id': trace_id()}, status=403)
     return Response({'code': 0, 'message': 'success', 'data': {'sheet_id': sheet.id, 'sheet_code': sheet.sheet_code, 'student_id': sheet.student_id, 'student_name': sheet.student.display_name, 'mode': sheet.mode, 'status': sheet.status, 'original_question_id': sheet.original_question_id, 'variant_question_ids': sheet.variant_question_ids, 'wrong_reason_hint': sheet.wrong_reason_hint}, 'trace_id': trace_id()})
 
 
@@ -475,19 +510,16 @@ def create_practice_sheet(request):
         item = WrongBookItem.objects.get(pk=request.data.get('wrong_item_id'))
     except WrongBookItem.DoesNotExist:
         return Response({'code': 404, 'message': 'wrong book item not found', 'data': None, 'trace_id': trace_id()}, status=404)
-    owner = effective_student(request)
-    active_role = get_request_role(request)
-    is_staff_session = (
-        active_role in ('teacher', 'admin')
-        and has_user_role(request.user, active_role)
-    )
-    if not is_staff_session and (not owner or item.student_user_id_id != owner.id):
+    if not _can_access_student(request, item.student_user_id):
         return Response({'code': 403, 'message': 'no permission', 'data': None, 'trace_id': trace_id()}, status=403)
+    requested_student_id = request.data.get('student_id')
+    if requested_student_id and str(requested_student_id) != str(item.student_user_id_id):
+        return Response({'code': 400, 'message': 'student_id must match wrong item owner', 'data': None, 'trace_id': trace_id()}, status=400)
     code = uuid.uuid4().hex[:6].upper()
     while WrongbookPracticeSheet.objects.filter(sheet_code=code).exists():
         code = uuid.uuid4().hex[:6].upper()
     variants = find_variant_questions(item.question_id, limit=3)
-    sheet = WrongbookPracticeSheet.objects.create(student_id=request.data.get('student_id') or item.student_user_id_id, wrong_item=item, original_question_id=item.question_id, variant_question_ids=[str(q['id']) for q in variants], wrong_reason_hint=item.wrong_reason_type or '', sheet_code=code, mode=str(request.data.get('mode') or 'online'))
+    sheet = WrongbookPracticeSheet.objects.create(student_id=item.student_user_id_id, wrong_item=item, original_question_id=item.question_id, variant_question_ids=[str(q['id']) for q in variants], wrong_reason_hint=item.wrong_reason_type or '', sheet_code=code, mode=str(request.data.get('mode') or 'online'))
     return Response({'code': 0, 'message': 'success', 'data': {'sheet_code': sheet.sheet_code, 'sheet_id': sheet.id}}, status=201)
 
 

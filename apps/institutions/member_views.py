@@ -22,6 +22,22 @@ def _trace() -> str:
     return uuid.uuid4().hex[:16]
 
 
+def _can_manage_institution_members(request, institution_id):
+    active_role = get_request_role(request)
+    if active_role == 'admin' and has_user_role(request.user, 'admin'):
+        return True
+    return (
+        active_role == 'teacher'
+        and has_user_role(request.user, 'teacher')
+        and InstitutionMember.objects.filter(
+            institution_id=institution_id,
+            user=request.user,
+            role='admin',
+            status='active',
+        ).exists()
+    )
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def member_list_add(request, institution_id):
@@ -42,18 +58,7 @@ def _member_list_impl(request, institution_id):
             'code': 4004, 'message': '机构不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    # Allow platform admins OR institution admins to view members
-    is_platform_admin = (
-        get_request_role(request) == 'admin'
-        and has_user_role(request.user, 'admin')
-    )
-    is_inst_admin = InstitutionMember.objects.filter(
-        institution_id=institution_id,
-        user=request.user,
-        role='admin',
-        status='active',
-    ).exists()
-    if not is_platform_admin and not is_inst_admin:
+    if not _can_manage_institution_members(request, institution_id):
         return Response({
             'code': 4003, 'message': '无权限访问', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
@@ -120,18 +125,7 @@ def _add_member_impl(request, institution_id):
             'code': 4004, 'message': '机构不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    # Allow platform admins OR institution admins to add members
-    is_platform_admin = (
-        get_request_role(request) == 'admin'
-        and has_user_role(request.user, 'admin')
-    )
-    is_inst_admin = InstitutionMember.objects.filter(
-        institution_id=institution_id,
-        user=request.user,
-        role='admin',
-        status='active',
-    ).exists()
-    if not is_platform_admin and not is_inst_admin:
+    if not _can_manage_institution_members(request, institution_id):
         return Response({
             'code': 4003, 'message': '无权限操作', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
@@ -168,18 +162,7 @@ def update_member(request, institution_id, user_id):
             'code': 4004, 'message': '机构不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    # Allow platform admins OR institution admins to update members
-    is_platform_admin = (
-        get_request_role(request) == 'admin'
-        and has_user_role(request.user, 'admin')
-    )
-    is_inst_admin = InstitutionMember.objects.filter(
-        institution_id=institution_id,
-        user=request.user,
-        role='admin',
-        status='active',
-    ).exists()
-    if not is_platform_admin and not is_inst_admin:
+    if not _can_manage_institution_members(request, institution_id):
         return Response({
             'code': 4003, 'message': '无权限操作', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)

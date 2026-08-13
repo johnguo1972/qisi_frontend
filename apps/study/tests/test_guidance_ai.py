@@ -10,6 +10,41 @@ from apps.common.exceptions import AIRequestError
 from apps.study import ai_helper, guidance_views
 
 
+def _authenticated_student_client(student):
+    from rest_framework.test import APIClient
+
+    from apps.accounts.models import UserAccount
+    from apps.accounts.roles import grant_user_role
+    from apps.accounts.services import generate_tokens
+    from apps.institutions.models import Class, ClassStudent, Institution
+
+    grant_user_role(student, "student")
+    teacher = UserAccount.objects.create(
+        role_type="teacher",
+        mobile=f"t{student.mobile}",
+        display_name="Test teacher",
+    )
+    institution = Institution.objects.create(
+        institution_name="Guidance permission institution",
+        created_by=teacher,
+    )
+    class_obj = Class.objects.create(
+        institution=institution,
+        creator_teacher=teacher,
+        class_name="Guidance permission class",
+    )
+    ClassStudent.objects.create(
+        class_obj=class_obj,
+        student=student,
+        join_type="manual",
+        status="active",
+    )
+    client = APIClient()
+    token = generate_tokens(student, "student")["access_token"]
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+    return client
+
+
 def _plain_view_handler(decorated_view):
     return decorated_view.cls.post.__closure__[0].cell_contents
 
@@ -500,8 +535,7 @@ def test_student_start_endpoint_rejects_provider_extra_without_db_pollution(
         "guidance_component_factory",
         lambda: GuidanceComponent(Client()),
     )
-    client = APIClient()
-    client.force_authenticate(user=student)
+    client = _authenticated_student_client(student)
 
     response = client.post(
         "/api/v1/student/guidance/sessions",
@@ -595,8 +629,7 @@ def test_student_reply_endpoint_rejects_cf_hidden_unknown_fence_without_pollutio
         "guidance_component_factory",
         lambda: GuidanceComponent(Client()),
     )
-    client = APIClient()
-    client.force_authenticate(user=student)
+    client = _authenticated_student_client(student)
 
     response = client.post(
         "/api/v1/student/guidance/sessions/7/reply",
