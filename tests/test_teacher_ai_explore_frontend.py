@@ -85,7 +85,7 @@ def lifecycle_body(source: str, hook: str) -> str:
 
 def run_admin_lifecycle_scenario(scenario: str) -> dict:
     source = ADMIN_HOME_PATH.read_text(encoding='utf-8')
-    loader = function_body(source, 'loadInstitutions').replace('catch (e: any)', 'catch (e)')
+    loader = function_body(source, 'loadInstitutions').replace('catch (e: any)', 'catch (e)').replace('(res as any)', 'res')
     initializer = function_body(source, 'initializeAdminHome').replace('catch (e: any)', 'catch (e)')
     mounted = lifecycle_body(source, 'onMounted')
     shown = lifecycle_body(source, 'onShow')
@@ -98,6 +98,7 @@ def run_admin_lifecycle_scenario(scenario: str) -> dict:
       const userInfo = {{ value: {{}} }};
       let profileCalls = 0;
       let listCalls = 0;
+      const listArgs = [];
       const uni = {{
         getStorageSync: (key) => storage[key],
         showToast: () => {{}},
@@ -111,10 +112,11 @@ def run_admin_lifecycle_scenario(scenario: str) -> dict:
         await Promise.resolve();
         return {{ data: {{ active_role: 'admin' }} }};
       }} }};
-      const institutionApi = {{ list: async () => {{
+      const institutionApi = {{ list: async (...args) => {{
         listCalls += 1;
+        listArgs.push(args);
         await Promise.resolve();
-        return {{ data: {{ items: [] }} }};
+        return {{ code: 0, data: {{ items: [] }} }};
       }} }};
       const output = console.log;
       console.log = () => {{}};
@@ -124,7 +126,7 @@ def run_admin_lifecycle_scenario(scenario: str) -> dict:
       let hasLoadedOnShow = false;
       const sessionSnapshot = () => {{{snapshot}}};
       const sessionUnchanged = (snapshot) => {{{unchanged}}};
-      const loadInstitutions = async () => {{{loader}}};
+      const loadInstitutions = async (silentError = false) => {{{loader}}};
       const initializeAdminHome = async () => {{{initializer}}};
       const mounted = async () => {{{mounted}}};
       const shown = async () => {{{shown}}};
@@ -136,7 +138,7 @@ def run_admin_lifecycle_scenario(scenario: str) -> dict:
       }} else if ({json.dumps(scenario)} === 'concurrent') {{
         await Promise.all([shown(), shown(), shown()]);
       }}
-      output(JSON.stringify({{ initialListCalls, listCalls, profileCalls }}));
+      output(JSON.stringify({{ initialListCalls, listCalls, profileCalls, listArgs }}));
     """
     result = subprocess.run(
         ['node', '--input-type=module', '--eval', script],
@@ -169,7 +171,7 @@ def test_concurrent_admin_onshow_calls_share_one_additional_request():
 
 def run_stale_admin_response_scenario(scenario: str) -> dict:
     source = ADMIN_HOME_PATH.read_text(encoding='utf-8')
-    loader = function_body(source, 'loadInstitutions').replace('catch (e: any)', 'catch (e)')
+    loader = function_body(source, 'loadInstitutions').replace('catch (e: any)', 'catch (e)').replace('(res as any)', 'res')
     initializer = function_body(source, 'initializeAdminHome').replace('catch (e: any)', 'catch (e)')
     snapshot = function_body(source, 'sessionSnapshot')
     unchanged = function_body(source, 'sessionUnchanged')
@@ -196,8 +198,9 @@ def run_stale_admin_response_scenario(scenario: str) -> dict:
       }} }};
       const institutionApi = {{ list: () => {{
         listCalls += 1;
-        if ({json.dumps(scenario)} === 'profile') return Promise.resolve({{ data: {{ items: [] }} }});
-        if ({json.dumps(scenario)} === 'retry') return Promise.resolve({{ data: {{ items: [] }} }});
+        if ({json.dumps(scenario)} === 'profile') return Promise.resolve({{ code: 0, data: {{ items: [] }} }});
+        if ({json.dumps(scenario)} === 'retry') return Promise.resolve({{ code: 0, data: {{ items: [] }} }});
+        if ({json.dumps(scenario)} === 'envelope') return Promise.resolve({{ code: 403, message: '', detail: '会话权限已变化', data: {{ items: ['new-item'] }} }});
         return new Promise((resolve, reject) => {{ resolveList = resolve; rejectList = reject; }});
       }} }};
       console.log = () => {{}}; console.error = () => {{}};
@@ -205,7 +208,7 @@ def run_stale_admin_response_scenario(scenario: str) -> dict:
       let institutionsLoadPromise = null;
       const sessionSnapshot = () => {{{snapshot}}};
       const sessionUnchanged = (snapshot) => {{{unchanged}}};
-      const loadInstitutions = async () => {{{loader}}};
+      const loadInstitutions = async (silentError = false) => {{{loader}}};
       const initializeAdminHome = async () => {{{initializer}}};
       if ({json.dumps(scenario)} === 'profile') {{
         const stale = initializeAdminHome();
@@ -217,7 +220,7 @@ def run_stale_admin_response_scenario(scenario: str) -> dict:
         const pending = loadInstitutions();
         while (!resolveList) await Promise.resolve();
         storage.accessToken = 'teacher-token'; storage.userInfo = {{ active_role: 'teacher' }};
-        resolveList({{ data: {{ items: ['old-admin-item'] }} }});
+        resolveList({{ code: 0, data: {{ items: ['old-admin-item'] }} }});
         await pending;
       }} else if ({json.dumps(scenario)} === 'list_error') {{
         const pending = loadInstitutions();
@@ -225,6 +228,9 @@ def run_stale_admin_response_scenario(scenario: str) -> dict:
         storage.accessToken = 'teacher-token'; storage.userInfo = {{ active_role: 'teacher' }};
         rejectList(new Error('old admin request failed'));
         await pending;
+      }} else if ({json.dumps(scenario)} === 'envelope') {{
+        items.value = ['existing-admin-item'];
+        await loadInstitutions(true);
       }} else {{
         await initializeAdminHome();
         await initializeAdminHome();
@@ -255,7 +261,7 @@ def test_failed_profile_initialization_can_retry():
     assert result['profileCalls'] == 2
 
 
-def test_request_silent_error_suppresses_only_global_error_ui_and_keeps_401_cleanup():
+def run_request_error_scenarios() -> dict:
     source = REQUEST_PATH.read_text(encoding='utf-8')
     source = "const BASE_URL = '/api/v1'\n" + source[source.index('const requestLogs'):]
     source = re.sub(r'interface ApiResponse[\s\S]*?\n}\n\ninterface RequestError[\s\S]*?\n}\n', '', source)
@@ -286,29 +292,119 @@ def test_request_silent_error_suppresses_only_global_error_ui_and_keeps_401_clea
       }};
       {source}
       const run = async () => {{
-        response = {{ kind: 'status', statusCode: 403 }}; events.length = 0; await get('/x'); const default403 = [...events];
-        response = {{ kind: 'status', statusCode: 403 }}; events.length = 0; await get('/x', undefined, {{ silentError: true }}); const silent403 = [...events];
-        response = {{ kind: 'fail' }}; events.length = 0; try {{ await get('/x') }} catch {{}} const defaultFail = [...events];
-        response = {{ kind: 'fail' }}; events.length = 0; try {{ await get('/x', undefined, {{ silentError: true }}) }} catch {{}} const silentFail = [...events];
-        response = {{ kind: 'status', statusCode: 401 }}; events.length = 0; get('/x', undefined, {{ silentError: true }}); const silent401 = [...events];
-        console.log(JSON.stringify({{ default403, silent403, defaultFail, silentFail, silent401 }}));
+        response = {{ kind: 'status', statusCode: 403 }}; events.length = 0;
+        const default403Value = await get('/x'); const default403 = [...events];
+        response = {{ kind: 'status', statusCode: 403 }}; events.length = 0;
+        const silent403Value = await get('/x', undefined, {{ silentError: true }}); const silent403 = [...events];
+        response = {{ kind: 'fail' }}; events.length = 0;
+        let defaultFailError; try {{ await get('/x') }} catch (error) {{ defaultFailError = error }} const defaultFail = [...events];
+        response = {{ kind: 'fail' }}; events.length = 0;
+        let silentFailError; try {{ await get('/x', undefined, {{ silentError: true }}) }} catch (error) {{ silentFailError = error }} const silentFail = [...events];
+        response = {{ kind: 'status', statusCode: 401 }}; events.length = 0;
+        get('/x', undefined, {{ silentError: true }}); const silent401 = [...events];
+        console.log(JSON.stringify({{ default403, default403Value, silent403, silent403Value, defaultFail, defaultFailError, silentFail, silentFailError, silent401 }}));
       }};
       await run();
     """
     result = subprocess.run(['node', '--input-type=module', '--eval', script], cwd=ROOT, capture_output=True, text=True, encoding='utf-8', check=True)
-    calls = json.loads(result.stdout.splitlines()[-1])
+    return json.loads(result.stdout.splitlines()[-1])
+
+
+def test_request_silent_error_suppresses_only_global_error_ui_and_keeps_401_cleanup():
+    calls = run_request_error_scenarios()
     assert calls['default403'] == [['toast']]
+    assert calls['default403Value'] == {}
     assert calls['silent403'] == []
+    assert calls['silent403Value'] == {}
     assert calls['defaultFail'] == [['modal']]
+    assert calls['defaultFailError'] == {'errMsg': 'offline'}
     assert calls['silentFail'] == []
+    assert calls['silentFailError'] == {'errMsg': 'offline'}
     assert calls['silent401'] == [
         ['remove', 'accessToken'], ['remove', 'refreshToken'], ['remove', 'tokenExpiry'], ['relaunch', '/pages/login/index'],
     ]
 
 
-def test_admin_lifecycle_institution_load_enables_silent_error():
+def test_admin_lifecycle_requests_silently_but_subsequent_refresh_is_also_silent():
+    result = run_admin_lifecycle_scenario('subsequent')
+    assert result['listArgs'] == [
+        [None, {'silentError': True}],
+        [None, {'silentError': True}],
+    ]
+
+
+def run_institution_list_options() -> list[list[object]]:
+    source = (ROOT / 'uniapp' / 'src' / 'api' / 'institutions.ts').read_text(encoding='utf-8')
+    list_start = source.index('  list: (')
+    body_start = source.index('=> {', list_start) + len('=> {')
+    depth = 1
+    index = body_start
+    while depth:
+        if source[index] == '{':
+            depth += 1
+        elif source[index] == '}':
+            depth -= 1
+        index += 1
+    body = source[body_start:index - 1]
+    body = re.sub(r'get<\{[\s\S]*?\}>\(', 'get(', body)
+    script = f"""
+      const calls = [];
+      const get = (...args) => {{ calls.push(args); return Promise.resolve({{}}); }};
+      const list = (params, options) => {{{body}}};
+      await list(undefined, {{ silentError: true }});
+      await list({{ name: 'demo' }});
+      console.log(JSON.stringify(calls));
+    """
+    result = subprocess.run(
+        ['node', '--input-type=module', '--eval', script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_institution_list_forwards_request_options_to_the_real_get_wrapper():
+    calls = run_institution_list_options()
+    assert calls == [
+        ['/admin/institutions', None, {'silentError': True}],
+        ['/admin/institutions?name=demo', None, None],
+    ]
+
+
+def run_confirm_delete_refresh() -> dict:
     source = ADMIN_HOME_PATH.read_text(encoding='utf-8')
-    assert "institutionApi.list(undefined, { silentError: true })" in source
+    body = function_body(source, 'confirmDelete').replace('catch (e: any)', 'catch (e)')
+    script = f"""
+      const refreshArgs = [];
+      const calls = [];
+      const uni = {{
+        showModal: (options) => options.success({{ confirm: true }}),
+        showToast: (toast) => calls.push(toast),
+      }};
+      const institutionApi = {{ remove: async (id) => calls.push(['remove', id]) }};
+      const loadInstitutions = async (...args) => refreshArgs.push(args);
+      const confirmDelete = async (inst) => {{{body}}};
+      await confirmDelete({{ id: 'institution-1', institution_name: '示例机构' }});
+      console.log(JSON.stringify({{ refreshArgs, calls }}));
+    """
+    result = subprocess.run(
+        ['node', '--input-type=module', '--eval', script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_delete_refresh_keeps_the_default_non_silent_error_behavior():
+    result = run_confirm_delete_refresh()
+    assert result['refreshArgs'] == [[]]
+    assert result['calls'] == [['remove', 'institution-1'], {'title': '删除成功', 'icon': 'success'}]
 
 
 def test_stale_failed_institution_request_has_no_toast_or_loading_write():
@@ -316,6 +412,15 @@ def test_stale_failed_institution_request_has_no_toast_or_loading_write():
     assert result['role'] == 'teacher'
     assert result['toasts'] == []
     assert result['loading'] is True
+
+
+def test_current_admin_error_envelope_shows_page_toast_and_preserves_existing_items():
+    result = run_stale_admin_response_scenario('envelope')
+    assert result['role'] == 'admin'
+    assert result['items'] == ['existing-admin-item']
+    assert result['toasts'] == [
+        {'title': '会话权限已变化', 'icon': 'none', 'duration': 3000},
+    ]
 
 
 def function_body(source: str, name: str) -> str:

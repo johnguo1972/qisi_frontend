@@ -77,7 +77,7 @@ function sessionUnchanged(snapshot: unknown[]) {
   return accessToken === snapshot[0] && role === snapshot[1]
 }
 
-async function loadInstitutions() {
+async function loadInstitutions(silentError = false) {
   if (!ensurePageRole('admin')) return
   if (institutionsLoadPromise) return institutionsLoadPromise
 
@@ -85,8 +85,12 @@ async function loadInstitutions() {
   const snapshot = sessionSnapshot()
   try {
     if (!ensurePageRole('admin')) return
-    const res = await institutionApi.list(undefined, { silentError: true })
+    const res = await institutionApi.list(undefined, silentError ? { silentError: true } : undefined)
     if (!sessionUnchanged(snapshot) || !ensurePageRole('admin')) return
+    if (res.code !== 0) {
+      uni.showToast({ title: res.message || (res as any).detail || '加载机构列表失败', icon: 'none', duration: 3000 })
+      return
+    }
     console.log('[admin] institutions loaded:', res)
     items.value = res.data?.items || []
   } catch (e: any) {
@@ -131,7 +135,7 @@ async function initializeAdminHome() {
 onMounted(async () => {
   console.log('[admin] home onMounted')
   await initializeAdminHome()
-  await loadInstitutions()
+  await loadInstitutions(true)
 })
 
 let hasLoadedOnShow = false
@@ -139,7 +143,7 @@ onShow(async () => {
   if (!ensurePageRole('admin')) return
   if (hasLoadedOnShow) {
     await initializeAdminHome()
-    await loadInstitutions()
+    await loadInstitutions(true)
   }
   hasLoadedOnShow = true
 })
