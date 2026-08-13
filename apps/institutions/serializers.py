@@ -1,6 +1,8 @@
 from rest_framework import serializers
+from django.db import transaction
 
 from apps.accounts.models import UserAccount
+from apps.accounts.roles import grant_user_role
 from apps.institutions.models import (
     Institution,
     InstitutionMember,
@@ -69,6 +71,8 @@ class CreateInstitutionSerializer(serializers.ModelSerializer):
 # ──────────────────────────────────────────────
 
 class InstitutionMemberSerializer(serializers.ModelSerializer):
+    user_id = serializers.UUIDField(read_only=True)
+    roles = serializers.SerializerMethodField()
     user_name = serializers.SerializerMethodField()
     user_mobile = serializers.SerializerMethodField()
     user_role_type = serializers.SerializerMethodField()
@@ -77,8 +81,19 @@ class InstitutionMemberSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = InstitutionMember
-        fields = ['id', 'institution', 'user', 'role', 'status',
+        fields = ['id', 'institution', 'user', 'user_id', 'role', 'roles', 'status',
                   'joined_at', 'user_name', 'user_mobile', 'user_role_type', 'user_subject', 'stages']
+
+    def get_roles(self, obj):
+        roles_by_user = self.context.get('roles_by_user', {})
+        if obj.user_id in roles_by_user:
+            return roles_by_user[obj.user_id]
+        active_roles = set(InstitutionMember.objects.filter(
+            institution=obj.institution,
+            user_id=obj.user_id,
+            status='active',
+        ).values_list('role', flat=True))
+        return [role for role in ('admin', 'teacher') if role in active_roles]
 
     def get_user_name(self, obj):
         return obj.user.display_name if obj.user else None
@@ -103,6 +118,7 @@ class AddMemberSerializer(serializers.Serializer):
     subject = serializers.CharField(max_length=20, required=False, allow_blank=True)
     stages = serializers.ListField(child=serializers.CharField(), required=False, default=list)
 
+    @transaction.atomic
     def create(self, validated_data):
         institution = self.context['institution']
         mobile = validated_data['mobile']
@@ -127,16 +143,14 @@ class AddMemberSerializer(serializers.Serializer):
             user.stages = stages
             user.save(update_fields=['stages'])
 
-        member, created = InstitutionMember.objects.get_or_create(
+        member, _ = InstitutionMember.objects.update_or_create(
             institution=institution,
             user=user,
-            defaults={'role': role, 'status': 'active'},
+            role=role,
+            defaults={'status': 'active'},
         )
-        # Reactivate if member was previously removed
-        if not created and member.status != 'active':
-            member.status = 'active'
-            member.role = role
-            member.save(update_fields=['status', 'role'])
+        if role == 'teacher':
+            grant_user_role(user, 'teacher')
         return member
 
 

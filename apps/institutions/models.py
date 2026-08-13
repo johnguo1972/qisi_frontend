@@ -49,7 +49,12 @@ class InstitutionMember(models.Model):
 
     class Meta:
         db_table = 'institution_member'
-        unique_together = ('institution', 'user')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['institution', 'user', 'role'],
+                name='uq_institution_member_role',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.user} @ {self.institution} ({self.role})"
