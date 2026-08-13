@@ -1,9 +1,9 @@
 from django.db.models import Case, IntegerField, Value, When
 
-from apps.accounts.models import UserRole
+from apps.accounts.models import ROLE_NAMES, UserRole
 
 
-VALID_ROLES = ("admin", "teacher", "parent", "student")
+VALID_ROLES = ROLE_NAMES
 
 
 def _validate_role(role):
@@ -33,7 +33,7 @@ def grant_user_role(user, role):
     grant, _ = UserRole.objects.update_or_create(
         user=user,
         role=role,
-        defaults={"status": "active"},
+        defaults={"status": "active", "grant_source": "business"},
     )
     return grant
 

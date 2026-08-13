@@ -3,6 +3,9 @@ from django.db import models
 import uuid_utils.compat as uuid_compat
 
 
+ROLE_NAMES = ("admin", "teacher", "parent", "student")
+
+
 class UserAccount(AbstractBaseUser):
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     role_type = models.CharField(max_length=20)  # teacher/student/parent/admin
@@ -48,12 +51,13 @@ class UserAccount(AbstractBaseUser):
 
 
 class UserRole(models.Model):
-    ROLE_CHOICES = [(role, role) for role in ("admin", "teacher", "parent", "student")]
+    ROLE_CHOICES = [(role, role) for role in ROLE_NAMES]
 
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     user = models.ForeignKey(UserAccount, on_delete=models.CASCADE, related_name="role_grants")
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
     status = models.CharField(max_length=20, default="active")
+    grant_source = models.CharField(max_length=20, default="business")
     granted_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

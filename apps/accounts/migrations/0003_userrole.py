@@ -8,6 +8,10 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+MIGRATABLE_ROLES = ("admin", "teacher", "parent", "student")
+MIGRATION_SOURCE = "migration_0003"
+
+
 def imported_grant_id(user_id, role):
     return uuid.uuid5(uuid.NAMESPACE_URL, f"accounts.UserRole:{user_id}:{role}")
 
@@ -18,23 +22,28 @@ def import_existing_role_grants(apps, schema_editor):
     UserRole = apps.get_model("accounts", "UserRole")
 
     role_pairs = {
-        (user.id, user.role_type)
+        (user.id, role)
         for user in UserAccount.objects.exclude(role_type__isnull=True).iterator()
-        if user.role_type.strip()
+        if (role := user.role_type.strip()) in MIGRATABLE_ROLES
     }
     role_pairs.update(
-        (bind.parent_user_id, "parent")
+        (bind.parent_user_id_id, "parent")
         for bind in StudentParentBind.objects.filter(bind_status="active").iterator()
     )
     role_pairs.update(
-        (bind.student_user_id, "student")
+        (bind.student_user_id_id, "student")
         for bind in StudentParentBind.objects.filter(bind_status="active").iterator()
     )
 
     for user_id, role in sorted(role_pairs, key=lambda pair: (str(pair[0]), pair[1])):
         UserRole.objects.get_or_create(
             id=imported_grant_id(user_id, role),
-            defaults={"user_id": user_id, "role": role, "status": "active"},
+            defaults={
+                "user_id": user_id,
+                "role": role,
+                "status": "active",
+                "grant_source": MIGRATION_SOURCE,
+            },
         )
 
 
@@ -42,10 +51,14 @@ def remove_imported_role_grants(apps, schema_editor):
     UserRole = apps.get_model("accounts", "UserRole")
     imported_grant_ids = [
         grant.id
-        for grant in UserRole.objects.all().only("id", "user_id", "role").iterator()
+        for grant in UserRole.objects.filter(grant_source=MIGRATION_SOURCE)
+        .only("id", "user_id", "role")
+        .iterator()
         if grant.id == imported_grant_id(grant.user_id, grant.role)
     ]
-    UserRole.objects.filter(id__in=imported_grant_ids).delete()
+    UserRole.objects.filter(
+        id__in=imported_grant_ids, grant_source=MIGRATION_SOURCE
+    ).delete()
 
 
 class Migration(migrations.Migration):
@@ -79,6 +92,7 @@ class Migration(migrations.Migration):
                     ),
                 ),
                 ("status", models.CharField(default="active", max_length=20)),
+                ("grant_source", models.CharField(default="business", max_length=20)),
                 ("granted_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 (
