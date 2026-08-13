@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onLaunch } from '@dcloudio/uni-app'
+import { routeForRole, type AppRole } from '@/utils/roles'
 
 onLaunch(() => {
   console.log('App launched')
@@ -35,40 +36,11 @@ onLaunch(() => {
     }
     // 没有 tokenExpiry 的微信登录态同样视为有效登录态，避免冷启动停留在入口页。
     const userInfo = uni.getStorageSync('userInfo')
-    const role = userInfo?.role_type || 'student'
-    navigateByRole(role)
+    const role = (userInfo?.active_role || userInfo?.role_type) as AppRole | undefined
+    if (role) uni.reLaunch({ url: routeForRole(role) })
   } else if (!currentRoute.includes('login/index') && !currentRoute.includes('pages/index/index')) {
     // 通过外部入口进入受保护页面时，未登录用户必须先进入登录页。
     uni.reLaunch({ url: '/pages/login/index' })
   }
 })
-
-function navigateByRole(role: string) {
-  switch (role) {
-    case 'teacher':
-      uni.reLaunch({ url: '/pages/teacher/layout' })
-      break
-    case 'student':
-      // #ifdef MP-WEIXIN
-      uni.reLaunch({ url: '/pages/student/mp-home' })
-      // #endif
-      // #ifndef MP-WEIXIN
-      uni.reLaunch({ url: '/pages/student/layout' })
-      // #endif
-      break
-    case 'parent':
-      // #ifdef MP-WEIXIN
-      uni.reLaunch({ url: '/pages/student/mp-home' })
-      // #endif
-      // #ifndef MP-WEIXIN
-      uni.reLaunch({ url: '/pages/student/layout' })
-      // #endif
-      break
-    case 'admin':
-      uni.reLaunch({ url: '/pages/admin/home' })
-      break
-    default:
-      uni.reLaunch({ url: '/pages/student/layout' })
-  }
-}
 </script>

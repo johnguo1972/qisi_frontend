@@ -7,6 +7,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from apps.accounts.permissions import IsTeacherSession
 from .models import LearningMission, MissionLevel, MissionQuestionRel
 from apps.study.models import AnswerAttempt
 from apps.institutions.models import ClassStudent
@@ -35,8 +36,10 @@ def _mission_student_ids(mission):
         if not targets:
             return UserAccount.objects.none().values_list('id', flat=True)
         return UserAccount.objects.filter(
-            id__in=targets, role_type='student',
-        ).values_list('id', flat=True)
+            id__in=targets,
+            role_grants__role='student',
+            role_grants__status='active',
+        ).distinct().values_list('id', flat=True)
 
     students = ClassStudent.objects.filter(
         class_obj_id=mission.class_obj_id, status='active',
@@ -47,7 +50,7 @@ def _mission_student_ids(mission):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_add_favorites(request, mission_id):
     """Add the teacher's selected favorite questions to a mission."""
     try:
@@ -79,7 +82,7 @@ def mission_add_favorites(request, mission_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_export_pdf(request, mission_id):
     """Export a teacher-owned mission as a downloadable PDF."""
     try:
@@ -121,7 +124,7 @@ def mission_export_pdf(request, mission_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_grading(request, mission_id):
     """Return teacher-facing student submissions for a mission."""
     try:
@@ -165,7 +168,7 @@ def mission_grading(request, mission_id):
 
 
 @api_view(['PATCH'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_grade_attempt(request, mission_id, attempt_id):
     """Save a teacher's score and feedback for one subjective submission."""
     try:
@@ -193,7 +196,7 @@ def mission_grade_attempt(request, mission_id, attempt_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_generate_variant(request, mission_id):
     """Generate a variant from a submitted question for one student."""
     try:
@@ -223,7 +226,7 @@ def mission_generate_variant(request, mission_id):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_list(request):
     """M-01 / M-02: List / Create missions."""
     user = request.user
@@ -264,7 +267,7 @@ def mission_list(request):
 
 
 @api_view(['GET', 'PUT'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_detail(request, mission_id):
     """M-03 / M-04: Mission detail / update."""
     try:
@@ -344,7 +347,7 @@ def mission_detail(request, mission_id):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_delete(request, mission_id):
     """M-04b: Delete mission (only draft missions can be deleted)."""
     try:
@@ -368,7 +371,7 @@ def mission_delete(request, mission_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_levels(request, mission_id):
     """M-05: Add level to mission."""
     try:
@@ -388,7 +391,7 @@ def mission_levels(request, mission_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_levels_batch(request, mission_id):
     """M-05b: Batch create levels with questions for a mission."""
     try:
@@ -439,7 +442,7 @@ def mission_levels_batch(request, mission_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_questions(request, mission_id):
     """M-06: Add questions to level."""
     try:
@@ -473,7 +476,7 @@ def mission_questions(request, mission_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_level_detail(request, mission_id, level_id):
     """M-09: Get level detail with questions (teacher side)."""
     try:
@@ -540,7 +543,7 @@ def mission_level_detail(request, mission_id, level_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_publish(request, mission_id):
     """M-07: Publish mission and create progress records for class students."""
     try:
@@ -579,7 +582,7 @@ def mission_publish(request, mission_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_clone(request, mission_id):
     """M-08: Clone mission."""
     try:
@@ -616,7 +619,7 @@ def mission_clone(request, mission_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_clone_with_class(request, mission_id):
     """M-09: Clone a mission and assign it to a different class with new deadlines."""
     try:
@@ -703,7 +706,7 @@ def _get_question_image_urls(question, max_images=3):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def start_teacher_guidance(request):
     """启动B/C模式引导。
 
@@ -799,7 +802,7 @@ def start_teacher_guidance(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def teacher_guidance_reply(request, session_id):
     """B/C模式引导回复。
 

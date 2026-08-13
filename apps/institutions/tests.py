@@ -1,7 +1,11 @@
-from django.test import TestCase
+from django.db import IntegrityError, connection, transaction
+from django.db.migrations.executor import MigrationExecutor
+from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient
 
 from apps.accounts.models import UserAccount
+from apps.accounts.roles import grant_user_role, has_user_role
+from apps.accounts.services import generate_tokens
 from apps.institutions.models import (
     Institution,
     Class,
@@ -10,6 +14,502 @@ from apps.institutions.models import (
     ClassJoinRequest,
     ClassStudent,
 )
+
+
+def authenticate_as(client, user, role=None):
+    role = role or user.role_type
+    grant_user_role(user, role)
+    token = generate_tokens(user, role)['access_token']
+    client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+
+class InstitutionMemberMultiRoleAPITest(TestCase):
+    """Institution roles are independent relationships, aggregated per user."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.platform_admin = UserAccount.objects.create(
+            mobile='13800000101',
+            display_name='Platform Admin',
+            role_type='admin',
+        )
+        grant_user_role(self.platform_admin, 'admin')
+        self.member_user = UserAccount.objects.create(
+            mobile='13800000102',
+            display_name='Multi Role Member',
+            role_type='student',
+        )
+        self.institution = Institution.objects.create(
+            institution_name='Multi Role School',
+        )
+        self.members_url = f'/api/v1/institutions/{self.institution.id}/members'
+        authenticate_as(self.client, self.platform_admin)
+
+    def test_active_institution_admin_can_also_be_added_as_teacher(self):
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.platform_admin,
+            role='admin',
+            status='active',
+        )
+
+        response = self.client.post(self.members_url, {
+            'mobile': self.platform_admin.mobile,
+            'display_name': self.platform_admin.display_name,
+            'role': 'teacher',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            list(InstitutionMember.objects.filter(
+                institution=self.institution,
+                user=self.platform_admin,
+                status='active',
+            ).values_list('role', flat=True).order_by('role')),
+            ['admin', 'teacher'],
+        )
+        self.assertTrue(has_user_role(self.platform_admin, 'admin'))
+        self.assertTrue(has_user_role(self.platform_admin, 'teacher'))
+
+    def test_member_list_aggregates_roles_in_fixed_order(self):
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='teacher',
+            status='active',
+        )
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='admin',
+            status='active',
+        )
+
+        response = self.client.get(self.members_url)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()['data']
+        self.assertEqual(payload['total'], 1)
+        self.assertEqual(len(payload['items']), 1)
+        self.assertEqual(payload['items'][0]['user_id'], str(self.member_user.id))
+        self.assertEqual(payload['items'][0]['roles'], ['admin', 'teacher'])
+
+    def test_duplicate_teacher_add_is_idempotent_and_preserves_legacy_role(self):
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='teacher',
+            status='active',
+        )
+
+        for _ in range(2):
+            response = self.client.post(self.members_url, {
+                'mobile': self.member_user.mobile,
+                'display_name': self.member_user.display_name,
+                'role': 'teacher',
+            }, format='json')
+            self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(InstitutionMember.objects.filter(
+            institution=self.institution,
+            user=self.member_user,
+            role='teacher',
+        ).count(), 1)
+        self.assertTrue(has_user_role(self.member_user, 'teacher'))
+        self.member_user.refresh_from_db()
+        self.assertEqual(self.member_user.role_type, 'student')
+
+    def test_add_restores_inactive_role(self):
+        member = InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='teacher',
+            status='removed',
+        )
+
+        response = self.client.post(self.members_url, {
+            'mobile': self.member_user.mobile,
+            'display_name': self.member_user.display_name,
+            'role': 'teacher',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        member.refresh_from_db()
+        self.assertEqual(member.status, 'active')
+        self.assertTrue(has_user_role(self.member_user, 'teacher'))
+
+    def test_adding_institution_admin_does_not_grant_global_admin(self):
+        response = self.client.post(self.members_url, {
+            'mobile': self.member_user.mobile,
+            'display_name': self.member_user.display_name,
+            'role': 'admin',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(InstitutionMember.objects.filter(
+            institution=self.institution,
+            user=self.member_user,
+            role='admin',
+            status='active',
+        ).exists())
+        self.assertFalse(has_user_role(self.member_user, 'admin'))
+        self.member_user.refresh_from_db()
+        self.assertEqual(self.member_user.role_type, 'student')
+
+    def test_update_roles_applies_set_diff_and_grants_teacher(self):
+        admin_member = InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='admin',
+            status='active',
+        )
+        teacher_member = InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='teacher',
+            status='removed',
+        )
+
+        response = self.client.put(
+            f'{self.members_url}/{self.member_user.id}',
+            {'roles': ['teacher']},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        admin_member.refresh_from_db()
+        teacher_member.refresh_from_db()
+        self.assertEqual(admin_member.status, 'removed')
+        self.assertEqual(teacher_member.status, 'active')
+        self.assertTrue(has_user_role(self.member_user, 'teacher'))
+
+    def test_remove_member_deactivates_all_institution_roles(self):
+        for role in ('admin', 'teacher'):
+            InstitutionMember.objects.create(
+                institution=self.institution,
+                user=self.member_user,
+                role=role,
+                status='active',
+            )
+
+        response = self.client.put(
+            f'{self.members_url}/{self.member_user.id}',
+            {'status': 'removed'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(InstitutionMember.objects.filter(
+            institution=self.institution,
+            user=self.member_user,
+            status='active',
+        ).exists())
+        self.assertEqual(InstitutionMember.objects.filter(
+            institution=self.institution,
+            user=self.member_user,
+            status='removed',
+        ).count(), 2)
+
+    def test_failed_profile_validation_does_not_commit_role_changes(self):
+        admin_member = InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='admin',
+            status='active',
+        )
+        teacher_member = InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='teacher',
+            status='removed',
+        )
+        conflicting_user = UserAccount.objects.create(
+            mobile='13800000103',
+            display_name='Conflicting User',
+            role_type='student',
+        )
+        original_profile = {
+            'mobile': self.member_user.mobile,
+            'login_name': self.member_user.login_name,
+            'display_name': self.member_user.display_name,
+            'subject': self.member_user.subject,
+            'stages': self.member_user.stages,
+        }
+
+        response = self.client.put(
+            f'{self.members_url}/{self.member_user.id}',
+            {
+                'roles': ['teacher'],
+                'mobile': conflicting_user.mobile,
+                'display_name': 'Changed Name',
+                'subject': 'math',
+                'stages': ['high_school'],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        admin_member.refresh_from_db()
+        teacher_member.refresh_from_db()
+        self.member_user.refresh_from_db()
+        self.assertEqual(admin_member.status, 'active')
+        self.assertEqual(teacher_member.status, 'removed')
+        self.assertEqual(
+            {
+                'mobile': self.member_user.mobile,
+                'login_name': self.member_user.login_name,
+                'display_name': self.member_user.display_name,
+                'subject': self.member_user.subject,
+                'stages': self.member_user.stages,
+            },
+            original_profile,
+        )
+
+    def test_role_filter_selects_users_but_returns_all_active_roles(self):
+        for role in ('admin', 'teacher'):
+            InstitutionMember.objects.create(
+                institution=self.institution,
+                user=self.member_user,
+                role=role,
+                status='active',
+            )
+
+        response = self.client.get(self.members_url, {'role': 'teacher'})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()['data']
+        self.assertEqual(payload['total'], 1)
+        self.assertEqual(payload['items'][0]['roles'], ['admin', 'teacher'])
+
+    def test_removed_filter_returns_only_currently_active_roles(self):
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='admin',
+            status='active',
+        )
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='teacher',
+            status='removed',
+        )
+        removed_only_user = UserAccount.objects.create(
+            mobile='13800000104',
+            display_name='Removed Only',
+            role_type='student',
+        )
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=removed_only_user,
+            role='teacher',
+            status='removed',
+        )
+
+        response = self.client.get(
+            self.members_url,
+            {'role': 'teacher', 'status': 'removed'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        items_by_user = {
+            item['user_id']: item for item in response.json()['data']['items']
+        }
+        self.assertEqual(items_by_user[str(self.member_user.id)]['roles'], ['admin'])
+        self.assertEqual(items_by_user[str(removed_only_user.id)]['roles'], [])
+
+    def test_update_response_uses_active_relationship_and_consistent_roles(self):
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='admin',
+            status='active',
+        )
+        InstitutionMember.objects.create(
+            institution=self.institution,
+            user=self.member_user,
+            role='teacher',
+            status='removed',
+        )
+
+        response = self.client.put(
+            f'{self.members_url}/{self.member_user.id}',
+            {'roles': ['teacher']},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        item = response.json()['data']
+        self.assertEqual(item['role'], 'teacher')
+        self.assertEqual(item['status'], 'active')
+        self.assertEqual(item['roles'], ['teacher'])
+
+
+class InstitutionMultiRoleMigrationTest(TransactionTestCase):
+    migrate_from = [
+        ('accounts', '0003_userrole'),
+        ('institutions', '0001_initial'),
+    ]
+    migrate_to = [
+        ('accounts', '0003_userrole'),
+        ('institutions', '0002_multi_role_memberships'),
+    ]
+
+    def setUp(self):
+        super().setUp()
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_from)
+        old_apps = executor.loader.project_state(self.migrate_from).apps
+        UserAccount = old_apps.get_model('accounts', 'UserAccount')
+        UserRole = old_apps.get_model('accounts', 'UserRole')
+        Institution = old_apps.get_model('institutions', 'Institution')
+        InstitutionMember = old_apps.get_model('institutions', 'InstitutionMember')
+        Class = old_apps.get_model('institutions', 'Class')
+        ClassStudent = old_apps.get_model('institutions', 'ClassStudent')
+
+        self.teacher_id = UserAccount.objects.create(
+            mobile='13800000111', display_name='Teacher', role_type='student',
+        ).id
+        self.student_id = UserAccount.objects.create(
+            mobile='13800000112', display_name='Student', role_type='parent',
+        ).id
+        self.institution_admin_id = UserAccount.objects.create(
+            mobile='13800000113', display_name='Institution Admin', role_type='student',
+        ).id
+        self.inactive_teacher_id = UserAccount.objects.create(
+            mobile='13800000114', display_name='Inactive Teacher', role_type='student',
+        ).id
+        self.inactive_student_id = UserAccount.objects.create(
+            mobile='13800000115', display_name='Inactive Student', role_type='parent',
+        ).id
+        institution = Institution.objects.create(institution_name='Migration School')
+        self.institution_id = institution.id
+        InstitutionMember.objects.create(
+            institution_id=institution.id,
+            user_id=self.teacher_id,
+            role='teacher',
+            status='active',
+        )
+        InstitutionMember.objects.create(
+            institution_id=institution.id,
+            user_id=self.institution_admin_id,
+            role='admin',
+            status='active',
+        )
+        InstitutionMember.objects.create(
+            institution_id=institution.id,
+            user_id=self.inactive_teacher_id,
+            role='teacher',
+            status='removed',
+        )
+        class_obj = Class.objects.create(
+            institution_id=institution.id,
+            class_no='CLS-MIGRATE',
+            class_name='Migration Class',
+            invite_code='MIGRATE1',
+        )
+        ClassStudent.objects.create(
+            class_obj_id=class_obj.id,
+            student_id=self.student_id,
+            join_type='manual',
+            status='active',
+        )
+        ClassStudent.objects.create(
+            class_obj_id=class_obj.id,
+            student_id=self.inactive_student_id,
+            join_type='manual',
+            status='removed',
+        )
+        UserRole.objects.update_or_create(
+            user_id=self.teacher_id,
+            role='teacher',
+            defaults={'status': 'inactive'},
+        )
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_to)
+        self.apps = executor.loader.project_state(self.migrate_to).apps
+
+    def tearDown(self):
+        MigrationExecutor(connection).migrate(
+            MigrationExecutor(connection).loader.graph.leaf_nodes()
+        )
+        super().tearDown()
+
+    def test_imports_active_relationship_roles_without_admin_escalation(self):
+        UserRole = self.apps.get_model('accounts', 'UserRole')
+        self.assertTrue(UserRole.objects.filter(
+            user_id=self.teacher_id, role='teacher', status='active',
+        ).exists())
+        self.assertTrue(UserRole.objects.filter(
+            user_id=self.student_id, role='student', status='active',
+        ).exists())
+        self.assertFalse(UserRole.objects.filter(
+            user_id=self.institution_admin_id, role='admin', status='active',
+        ).exists())
+        self.assertFalse(UserRole.objects.filter(
+            user_id=self.inactive_teacher_id, role='teacher', status='active',
+        ).exists())
+        self.assertFalse(UserRole.objects.filter(
+            user_id=self.inactive_student_id, role='student', status='active',
+        ).exists())
+
+    def test_reverse_restores_single_role_constraint_and_preserves_grants(self):
+        InstitutionMember = self.apps.get_model('institutions', 'InstitutionMember')
+        UserAccount = self.apps.get_model('accounts', 'UserAccount')
+        InstitutionMember.objects.create(
+            institution_id=self.institution_id,
+            user_id=self.teacher_id,
+            role='admin',
+            status='active',
+        )
+        active_teacher_id = UserAccount.objects.create(
+            mobile='13800000116', display_name='Active Teacher', role_type='student',
+        ).id
+        InstitutionMember.objects.create(
+            institution_id=self.institution_id,
+            user_id=active_teacher_id,
+            role='teacher',
+            status='active',
+        )
+        InstitutionMember.objects.create(
+            institution_id=self.institution_id,
+            user_id=active_teacher_id,
+            role='admin',
+            status='removed',
+        )
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_from)
+        old_apps = executor.loader.project_state(self.migrate_from).apps
+        InstitutionMember = old_apps.get_model('institutions', 'InstitutionMember')
+        UserRole = old_apps.get_model('accounts', 'UserRole')
+
+        self.assertTrue(UserRole.objects.filter(
+            user_id=self.teacher_id, role='teacher', status='active',
+        ).exists())
+        self.assertTrue(UserRole.objects.filter(
+            user_id=self.student_id, role='student', status='active',
+        ).exists())
+        retained = InstitutionMember.objects.get(
+            institution_id=self.institution_id,
+            user_id=self.teacher_id,
+        )
+        self.assertEqual(retained.role, 'admin')
+        self.assertEqual(retained.status, 'active')
+        active_retained = InstitutionMember.objects.get(
+            institution_id=self.institution_id,
+            user_id=active_teacher_id,
+        )
+        self.assertEqual(active_retained.role, 'teacher')
+        self.assertEqual(active_retained.status, 'active')
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            InstitutionMember.objects.create(
+                institution_id=self.institution_id,
+                user_id=self.teacher_id,
+                role='admin',
+                status='active',
+            )
 
 
 class InstitutionModelTest(TestCase):
@@ -134,7 +634,7 @@ class InstitutionAPITest(TestCase):
 
     def test_create_institution(self):
         """Admin can create institutions via POST /api/v1/admin/institutions."""
-        self.client.force_authenticate(user=self.admin_user)
+        authenticate_as(self.client, self.admin_user)
         response = self.client.post(
             '/api/v1/admin/institutions',
             {'institution_name': 'Test Primary School'},
@@ -152,7 +652,7 @@ class InstitutionAPITest(TestCase):
     def test_list_institutions(self):
         """GET /api/v1/admin/institutions returns paginated list."""
         Institution.objects.create(institution_name='School A')
-        self.client.force_authenticate(user=self.admin_user)
+        authenticate_as(self.client, self.admin_user)
         response = self.client.get('/api/v1/admin/institutions')
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -162,7 +662,7 @@ class InstitutionAPITest(TestCase):
 
     def test_non_admin_cannot_create(self):
         """Non-admin users get 403 when trying to create institutions."""
-        self.client.force_authenticate(user=self.teacher_user)
+        authenticate_as(self.client, self.teacher_user)
         response = self.client.post(
             '/api/v1/admin/institutions',
             {'institution_name': 'Unauthorized School'},
@@ -204,7 +704,7 @@ class ClassAPITest(TestCase):
 
     def test_create_class(self):
         """Teacher can create a class via POST /api/v1/classes."""
-        self.client.force_authenticate(user=self.teacher_user)
+        authenticate_as(self.client, self.teacher_user)
         response = self.client.post(
             '/api/v1/classes',
             {
@@ -236,7 +736,7 @@ class ClassAPITest(TestCase):
         ClassTeacher.objects.create(
             class_obj=cls, teacher=self.teacher_user, role='owner',
         )
-        self.client.force_authenticate(user=self.teacher_user)
+        authenticate_as(self.client, self.teacher_user)
         response = self.client.get('/api/v1/classes')
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -247,7 +747,7 @@ class ClassAPITest(TestCase):
 
     def test_non_member_cannot_create(self):
         """Students who are not institution members get 403 when creating a class."""
-        self.client.force_authenticate(user=self.student_user)
+        authenticate_as(self.client, self.student_user)
         response = self.client.post(
             '/api/v1/classes',
             {
@@ -296,7 +796,7 @@ class JoinRequestAPITest(TestCase):
 
     def test_student_submit_join_request(self):
         """Student can submit a join request via POST /api/v1/classes/join-request."""
-        self.client.force_authenticate(user=self.student_user)
+        authenticate_as(self.client, self.student_user)
         response = self.client.post(
             '/api/v1/classes/join-request',
             {
@@ -331,7 +831,7 @@ class JoinRequestAPITest(TestCase):
             request_type='self_apply',
             status='pending',
         )
-        self.client.force_authenticate(user=self.teacher_user)
+        authenticate_as(self.client, self.teacher_user)
         response = self.client.post(
             f'/api/v1/classes/join-requests/{join_req.id}/approve',
             {},
@@ -354,7 +854,7 @@ class JoinRequestAPITest(TestCase):
 
     def test_join_by_invite_code(self):
         """Student can join a class by invite code via POST /api/v1/student/classes/join-by-code."""
-        self.client.force_authenticate(user=self.student_user)
+        authenticate_as(self.client, self.student_user)
         response = self.client.post(
             '/api/v1/student/classes/join-by-code',
             {
@@ -380,7 +880,7 @@ class JoinRequestAPITest(TestCase):
 
     def test_invalid_invite_code(self):
         """Student gets 400 when using an invalid invite code."""
-        self.client.force_authenticate(user=self.student_user)
+        authenticate_as(self.client, self.student_user)
         response = self.client.post(
             '/api/v1/student/classes/join-by-code',
             {
@@ -414,7 +914,7 @@ class EndToEndFlowTest(TestCase):
 
     def test_full_flow(self):
         # 1. Admin creates institution
-        self.client.force_authenticate(user=self.admin)
+        authenticate_as(self.client, self.admin)
         resp = self.client.post('/api/v1/admin/institutions', {
             'institution_name': 'Test Academy',
             'contact_name': 'John',
@@ -429,10 +929,10 @@ class EndToEndFlowTest(TestCase):
             'display_name': 'Teacher Li',
             'role': 'teacher',
         }, format='json')
-        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.status_code, 200)
 
         # 3. Teacher creates class
-        self.client.force_authenticate(user=self.teacher)
+        authenticate_as(self.client, self.teacher)
         resp = self.client.post('/api/v1/classes', {
             'institution_id': inst_id,
             'class_name': 'Math 101',
@@ -444,7 +944,7 @@ class EndToEndFlowTest(TestCase):
         invite_code = resp.data['data']['invite_code']
 
         # 4. Student joins by invite code
-        self.client.force_authenticate(user=self.student)
+        authenticate_as(self.client, self.student)
         resp = self.client.post('/api/v1/student/classes/join-by-code', {
             'invite_code': invite_code,
             'applicant_name': self.student.display_name,
@@ -462,7 +962,7 @@ class EndToEndFlowTest(TestCase):
         self.assertEqual(our_class[0]['class_name'], 'Math 101')
 
         # 6. Teacher sees student in class
-        self.client.force_authenticate(user=self.teacher)
+        authenticate_as(self.client, self.teacher)
         resp = self.client.get(f'/api/v1/classes/{cls_id}/students')
         self.assertEqual(resp.status_code, 200)
         items = resp.data['data']['items']

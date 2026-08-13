@@ -9,6 +9,7 @@ export const authApi = {
     return post<{ access_token: string; refresh_token: string; user: any }>('/auth/login', data)
   },
   sendCode: (mobile: string, scene: string = 'login') => post('/auth/send-code', { mobile, scene }),
+  switchRole: (role: string) => post<{ access_token: string; refresh_token: string; user: any }>('/auth/switch-role', { role }),
   logout: () => post('/auth/logout'),
   getProfile: () => get<any>('/profile/me'),
   updateProfile: (data: { display_name?: string; grade_level?: string | null }) => put<any>('/profile/me', data),

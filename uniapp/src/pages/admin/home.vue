@@ -6,6 +6,7 @@
       <view class="sidebar-user">
         <text class="user-name">{{ userInfo.display_name }}</text>
         <text class="user-role">管理员</text>
+        <RoleSwitcher />
       </view>
       <view class="nav-items">
         <view class="nav-item active">
@@ -57,6 +58,7 @@ import { ref, onMounted } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { institutionApi, authApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
+import RoleSwitcher from '@/components/RoleSwitcher.vue'
 
 const userInfo = ref({ display_name: '管理员' })
 const items = ref<any[]>([])
@@ -80,7 +82,10 @@ onMounted(async () => {
   console.log('[admin] home onMounted')
   try {
     const profile = await authApi.getProfile()
-    if (profile.data) userInfo.value = profile.data
+    if (profile.data) {
+      userInfo.value = profile.data
+      userStore.setUserInfo(profile.data)
+    }
   } catch (e: any) {
     console.error('[admin] getProfile failed:', e)
   }

@@ -9,6 +9,9 @@
         </view>
       </view>
       <text class="user-role">学生{{ gradeLabel ? ' · ' + gradeLabel : '' }}</text>
+      <!-- #ifdef H5 -->
+      <RoleSwitcher />
+      <!-- #endif -->
     </view>
     <view class="nav-items">
       <view class="nav-item" :class="{ active: activeItem === 'home' }" @click="goHome">
@@ -75,6 +78,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { authApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
+import RoleSwitcher from '@/components/RoleSwitcher.vue'
 
 const props = defineProps<{
   activeItem: string

@@ -2,11 +2,14 @@
 
 import uuid
 
+from django.db import transaction
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.accounts.auth import get_request_role
+from apps.accounts.roles import grant_user_role, has_user_role
 from apps.institutions.models import Institution, InstitutionMember
 from apps.accounts.models import UserAccount
 from apps.institutions.serializers import (
@@ -17,6 +20,22 @@ from apps.institutions.serializers import (
 
 def _trace() -> str:
     return uuid.uuid4().hex[:16]
+
+
+def _can_manage_institution_members(request, institution_id):
+    active_role = get_request_role(request)
+    if active_role == 'admin' and has_user_role(request.user, 'admin'):
+        return True
+    return (
+        active_role == 'teacher'
+        and has_user_role(request.user, 'teacher')
+        and InstitutionMember.objects.filter(
+            institution_id=institution_id,
+            user=request.user,
+            role='admin',
+            status='active',
+        ).exists()
+    )
 
 
 @api_view(['GET', 'POST'])
@@ -39,15 +58,7 @@ def _member_list_impl(request, institution_id):
             'code': 4004, 'message': '机构不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    # Allow platform admins OR institution admins to view members
-    is_platform_admin = request.user.role_type == 'admin'
-    is_inst_admin = InstitutionMember.objects.filter(
-        institution_id=institution_id,
-        user=request.user,
-        role='admin',
-        status='active',
-    ).exists()
-    if not is_platform_admin and not is_inst_admin:
+    if not _can_manage_institution_members(request, institution_id):
         return Response({
             'code': 4003, 'message': '无权限访问', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
@@ -60,13 +71,35 @@ def _member_list_impl(request, institution_id):
         qs = qs.filter(status='active')
     elif status_filter:
         qs = qs.filter(status=status_filter)
+    if role_filter:
+        qs = qs.filter(role=role_filter)
 
     page_number = request.GET.get('page', 1)
     page_size = int(request.GET.get('page_size', 20))
     start = (int(page_number) - 1) * page_size
     end = start + page_size
-    total = qs.count()
-    items = qs[start:end]
+    grouped = {}
+    for member in qs:
+        grouped.setdefault(member.user_id, []).append(member)
+    grouped_items = list(grouped.values())
+    total = len(grouped_items)
+    page_groups = grouped_items[start:end]
+    items = [members[0] for members in page_groups]
+    page_user_ids = [member.user_id for member in items]
+    active_roles_by_user = {user_id: set() for user_id in page_user_ids}
+    for user_id, role in InstitutionMember.objects.filter(
+        institution=institution,
+        user_id__in=page_user_ids,
+        status='active',
+    ).values_list('user_id', 'role'):
+        active_roles_by_user[user_id].add(role)
+    roles_by_user = {
+        user_id: [
+            role for role in ('admin', 'teacher')
+            if role in active_roles_by_user[user_id]
+        ]
+        for user_id in page_user_ids
+    }
 
     return Response({
         'code': 0,
@@ -75,7 +108,9 @@ def _member_list_impl(request, institution_id):
             'total': total,
             'page': int(page_number),
             'page_size': page_size,
-            'items': InstitutionMemberSerializer(items, many=True).data,
+            'items': InstitutionMemberSerializer(
+                items, many=True, context={'roles_by_user': roles_by_user},
+            ).data,
         },
         'trace_id': _trace(),
     })
@@ -90,15 +125,7 @@ def _add_member_impl(request, institution_id):
             'code': 4004, 'message': '机构不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    # Allow platform admins OR institution admins to add members
-    is_platform_admin = request.user.role_type == 'admin'
-    is_inst_admin = InstitutionMember.objects.filter(
-        institution_id=institution_id,
-        user=request.user,
-        role='admin',
-        status='active',
-    ).exists()
-    if not is_platform_admin and not is_inst_admin:
+    if not _can_manage_institution_members(request, institution_id):
         return Response({
             'code': 4003, 'message': '无权限操作', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
@@ -114,7 +141,7 @@ def _add_member_impl(request, institution_id):
         'message': '添加成功',
         'data': InstitutionMemberSerializer(member).data,
         'trace_id': _trace(),
-    }, status=status.HTTP_201_CREATED)
+    }, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])
@@ -125,6 +152,7 @@ def add_member(request, institution_id):
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated])
+@transaction.atomic
 def update_member(request, institution_id, user_id):
     """PUT /api/v1/institutions/<id>/members/<user_id> - Update member role/status."""
     try:
@@ -134,46 +162,84 @@ def update_member(request, institution_id, user_id):
             'code': 4004, 'message': '机构不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    # Allow platform admins OR institution admins to update members
-    is_platform_admin = request.user.role_type == 'admin'
-    is_inst_admin = InstitutionMember.objects.filter(
-        institution_id=institution_id,
-        user=request.user,
-        role='admin',
-        status='active',
-    ).exists()
-    if not is_platform_admin and not is_inst_admin:
+    if not _can_manage_institution_members(request, institution_id):
         return Response({
             'code': 4003, 'message': '无权限操作', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
 
-    try:
-        member = InstitutionMember.objects.get(
-            institution=institution, user_id=user_id,
-        )
-    except InstitutionMember.DoesNotExist:
+    if not InstitutionMember.objects.filter(
+        institution=institution, user_id=user_id,
+    ).exists():
         return Response({
             'code': 4004, 'message': '成员不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    # Update member role/status
-    if 'role' in request.data:
-        member.role = request.data['role']
-    if 'status' in request.data:
-        member.status = request.data['status']
-    member.save()
+    selected_roles = request.data.get('roles')
+    if selected_roles is not None:
+        if (
+            not isinstance(selected_roles, list)
+            or any(role not in ('admin', 'teacher') for role in selected_roles)
+        ):
+            return Response({
+                'code': 4001,
+                'message': 'roles must contain only admin or teacher',
+                'data': None,
+                'trace_id': _trace(),
+            }, status=status.HTTP_400_BAD_REQUEST)
+        selected_roles = set(selected_roles)
 
-    # Update user info (mobile, display_name, subject)
-    user = member.user
-    user_changed = False
+    with transaction.atomic():
+        members = list(InstitutionMember.objects.select_for_update().filter(
+            institution=institution, user_id=user_id,
+        ).select_related('user'))
+        user = members[0].user
+
+        new_mobile = request.data.get('mobile')
+        if new_mobile is not None:
+            new_mobile = new_mobile.strip()
+            if (
+                new_mobile
+                and new_mobile != user.mobile
+                and UserAccount.objects.filter(mobile=new_mobile).exclude(id=user.id).exists()
+            ):
+                return Response({
+                    'code': 4001,
+                    'message': '该手机号已被其他账号使用',
+                    'data': None,
+                    'trace_id': _trace(),
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        requested_status = request.data.get('status')
+        if requested_status == 'removed':
+            InstitutionMember.objects.filter(
+                institution=institution, user_id=user_id,
+            ).update(status='removed')
+        elif selected_roles is not None:
+            for role in ('admin', 'teacher'):
+                if role in selected_roles:
+                    InstitutionMember.objects.update_or_create(
+                        institution=institution,
+                        user=user,
+                        role=role,
+                        defaults={'status': 'active'},
+                    )
+                    if role == 'teacher':
+                        grant_user_role(user, 'teacher')
+                else:
+                    InstitutionMember.objects.filter(
+                        institution=institution,
+                        user=user,
+                        role=role,
+                    ).update(status='removed')
+        elif requested_status is not None:
+            InstitutionMember.objects.filter(
+                institution=institution, user_id=user_id,
+            ).update(status=requested_status)
+
+        user_changed = False
     if 'mobile' in request.data:
         new_mobile = request.data['mobile'].strip()
         if new_mobile and new_mobile != user.mobile:
-            # Check uniqueness
-            if UserAccount.objects.filter(mobile=new_mobile).exclude(id=user.id).exists():
-                return Response({
-                    'code': 4001, 'message': '该手机号已被其他账号使用', 'data': None, 'trace_id': _trace(),
-                }, status=status.HTTP_400_BAD_REQUEST)
             user.mobile = new_mobile
             user.login_name = new_mobile
             user_changed = True
@@ -192,8 +258,16 @@ def update_member(request, institution_id, user_id):
         if new_stages != user.stages:
             user.stages = new_stages if new_stages else None
             user_changed = True
+
     if user_changed:
         user.save()
+    member = InstitutionMember.objects.filter(
+        institution=institution, user_id=user_id, status='active',
+    ).order_by('role').first()
+    if member is None:
+        member = InstitutionMember.objects.filter(
+            institution=institution, user_id=user_id,
+        ).order_by('role').first()
 
     return Response({
         'code': 0,

@@ -1,6 +1,38 @@
 import { get, post, put, del } from '@/utils/request'
 import type { UUID } from '@/types/uuid'
 
+export type InstitutionRole = 'admin' | 'teacher'
+
+export interface InstitutionMemberItem {
+  id: UUID
+  user: UUID
+  user_id: UUID
+  user_name: string
+  user_mobile: string
+  role: InstitutionRole
+  roles: InstitutionRole[]
+  status: string
+  user_subject?: string | null
+  stages: string[]
+}
+
+export interface UpdateInstitutionMemberPayload {
+  roles?: InstitutionRole[]
+  status?: string
+  display_name?: string
+  mobile?: string
+  subject?: string
+  stages?: string[]
+}
+
+export interface AddInstitutionMemberRolesPayload {
+  mobile: string
+  display_name: string
+  roles: InstitutionRole[]
+  subject?: string
+  stages?: string[]
+}
+
 // === Institution (Admin) ===
 export const institutionApi = {
   list: (params?: { name?: string; page?: number; page_size?: number }) => {
@@ -13,13 +45,41 @@ export const institutionApi = {
   update: (id: UUID, data: any) => put(`/admin/institutions/${id}`, data),
   updateStatus: (id: UUID, status: string) => put(`/admin/institutions/${id}/status`, { status }),
   remove: (id: UUID) => del(`/admin/institutions/${id}`),
-  addMember: (institutionId: UUID, data: { mobile: string; display_name: string; role: string }) =>
+  addMember: (institutionId: UUID, data: { mobile: string; display_name: string; role: InstitutionRole; subject?: string; stages?: string[] }) =>
     post(`/institutions/${institutionId}/members`, data),
+  addMemberRoles: async (institutionId: UUID, data: AddInstitutionMemberRolesPayload) => {
+    const selectedRoles = (['admin', 'teacher'] as InstitutionRole[]).filter(role => data.roles.includes(role))
+    const completedRoles: InstitutionRole[] = []
+    for (const role of selectedRoles) {
+      let response: any
+      try {
+        response = await post(`/institutions/${institutionId}/members`, {
+          mobile: data.mobile,
+          display_name: data.display_name,
+          role,
+          subject: data.subject,
+          stages: data.stages,
+        })
+      } catch (requestError: any) {
+        requestError.completedRoles = completedRoles
+        requestError.failedRole = role
+        throw requestError
+      }
+      if (response.code !== 0) {
+        const error: any = new Error(response.message || '添加角色失败')
+        error.completedRoles = completedRoles
+        error.failedRole = role
+        throw error
+      }
+      completedRoles.push(role)
+    }
+    return { completedRoles }
+  },
   members: (institutionId: UUID, params?: { page?: number; page_size?: number; role?: string; status?: string }) => {
     const qs = params ? '?' + new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString() : ''
-    return get(`/institutions/${institutionId}/members${qs}`)
+    return get<{ items: InstitutionMemberItem[]; total: number; page: number; page_size: number }>(`/institutions/${institutionId}/members${qs}`)
   },
-  updateMember: (institutionId: UUID, userId: UUID, data: { role?: string; status?: string; display_name?: string; mobile?: string }) =>
+  updateMember: (institutionId: UUID, userId: UUID, data: UpdateInstitutionMemberPayload) =>
     put(`/institutions/${institutionId}/members/${userId}`, data),
   removeMember: (institutionId: UUID, userId: UUID) =>
     put(`/institutions/${institutionId}/members/${userId}`, { status: 'removed' }),

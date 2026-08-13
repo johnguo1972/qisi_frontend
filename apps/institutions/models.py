@@ -1,7 +1,7 @@
 import string
 import random
 
-from django.db import models
+from django.db import models, transaction
 import uuid_utils.compat as uuid_compat
 
 from apps.accounts.models import UserAccount
@@ -49,7 +49,12 @@ class InstitutionMember(models.Model):
 
     class Meta:
         db_table = 'institution_member'
-        unique_together = ('institution', 'user')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['institution', 'user', 'role'],
+                name='uq_institution_member_role',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.user} @ {self.institution} ({self.role})"
@@ -118,6 +123,10 @@ class ClassStudent(models.Model):
     class Meta:
         db_table = 'class_student'
         unique_together = ('class_obj', 'student')
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            return super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.student} in {self.class_obj}"

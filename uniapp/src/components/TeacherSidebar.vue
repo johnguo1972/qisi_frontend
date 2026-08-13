@@ -4,6 +4,7 @@
     <view class="sidebar-user">
       <text class="user-name">{{ userInfo.display_name }}</text>
       <text class="user-role">教师</text>
+      <RoleSwitcher />
     </view>
     <view class="nav-items">
       <view class="nav-item" :class="{ active: activeItem === 'workbench' }" @click="goWorkbench">
@@ -52,6 +53,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { authApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
+import RoleSwitcher from '@/components/RoleSwitcher.vue'
 
 const props = defineProps<{
   activeItem: string
@@ -67,7 +69,10 @@ const isClassSectionActive = computed(() => classMenuExpanded.value && ['student
 onMounted(async () => {
   try {
     const profile = await authApi.getProfile()
-    if (profile.data) userInfo.value = profile.data
+    if (profile.data) {
+      userInfo.value = profile.data
+      userStore.setUserInfo(profile.data)
+    }
   } catch {}
 })
 

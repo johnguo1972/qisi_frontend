@@ -15,9 +15,12 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.models import StudentParentBind, UserAccount, WechatIdentity
-from apps.accounts.serializers import ProfileSerializer
+from apps.accounts.auth import get_request_role
+from apps.accounts.permissions import IsTeacherSession
+from apps.accounts.roles import VALID_ROLES, has_user_role
+from apps.accounts.serializers import serialize_user_session
 from apps.accounts.services import generate_tokens, get_or_create_user, verify_code
-from apps.institutions.models import ClassStudent
+from apps.institutions.models import ClassStudent, ClassTeacher
 from apps.missions.models import LearningMission
 from apps.study.models import AnswerAttempt
 from apps.common.media import media_url
@@ -34,8 +37,11 @@ def trace_id():
 
 
 def effective_student(request):
-    if getattr(request.user, 'role_type', None) != 'parent':
+    active_role = get_request_role(request)
+    if active_role == 'student' and has_user_role(request.user, 'student'):
         return request.user
+    if active_role != 'parent' or not has_user_role(request.user, 'parent'):
+        return None
     child_id = cache.get(f'parent_context:{request.user.id}')
     if not child_id:
         return None
@@ -43,6 +49,34 @@ def effective_student(request):
         parent_user_id=request.user, student_user_id=child_id, bind_status='active',
     ).select_related('student_user_id').first()
     return relation.student_user_id if relation else None
+
+
+def _is_platform_admin(request):
+    return (
+        get_request_role(request) == 'admin'
+        and has_user_role(request.user, 'admin')
+    )
+
+
+def _is_related_teacher(request, student):
+    return (
+        get_request_role(request) == 'teacher'
+        and has_user_role(request.user, 'teacher')
+        and ClassTeacher.objects.filter(
+            teacher=request.user,
+            class_obj__class_students__student=student,
+            class_obj__class_students__status='active',
+        ).exists()
+    )
+
+
+def _can_access_student(request, student):
+    owner = effective_student(request)
+    return (
+        (owner is not None and owner.id == student.id)
+        or _is_platform_admin(request)
+        or _is_related_teacher(request, student)
+    )
 
 
 def _expired(code):
@@ -57,7 +91,7 @@ def _expired(code):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_qrcode(request, mission_id):
     try:
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
@@ -72,7 +106,7 @@ def mission_qrcode(request, mission_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_qrcode_info(request, mission_id):
     try:
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
@@ -184,7 +218,12 @@ def wechat_login(request):
         return Response({'code': 400, 'message': result.get('errmsg', '微信登录失败'), 'data': None, 'trace_id': trace_id()}, status=400)
     identity = WechatIdentity.objects.select_related('user').filter(appid=appid, openid=result['openid']).first()
     if identity:
-        return Response({'code': 0, 'message': '登录成功', 'data': {**generate_tokens(identity.user), 'user': ProfileSerializer(identity.user).data}, 'trace_id': trace_id()})
+        active_role = request.data.get('role_type') or identity.user.role_type
+        if active_role not in VALID_ROLES:
+            return Response({'code': 'INVALID_ROLE', 'message': 'Invalid role', 'data': None, 'trace_id': trace_id()}, status=400)
+        if not has_user_role(identity.user, active_role):
+            return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
+        return Response({'code': 0, 'message': '登录成功', 'data': {**generate_tokens(identity.user, active_role), 'user': serialize_user_session(identity.user, active_role)}, 'trace_id': trace_id()})
     return Response({'code': 1001, 'message': '请先绑定手机号', 'data': {'bind_token': cache_wechat_pending(appid, result['openid'], result.get('unionid', ''))}, 'trace_id': trace_id()})
 
 
@@ -197,15 +236,30 @@ def wechat_bind(request):
     verify = str(request.data.get('verify_code') or '')
     if not pending or not mobile or not verify_code(mobile, verify):
         return Response({'code': 4001, 'message': '绑定信息无效或验证码错误', 'data': None, 'trace_id': trace_id()}, status=400)
-    user = get_or_create_user(mobile, role_type=request.data.get('role_type', 'student'))
+    existing_user = UserAccount.objects.filter(mobile=mobile).first()
+    active_role = request.data.get('role_type') or (
+        existing_user.role_type if existing_user is not None else 'student'
+    )
+    if active_role not in VALID_ROLES:
+        return Response({'code': 'INVALID_ROLE', 'message': 'Invalid role', 'data': None, 'trace_id': trace_id()}, status=400)
+    if existing_user is None and active_role not in ('student', 'parent'):
+        return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
+    if existing_user is not None and not has_user_role(existing_user, active_role):
+        return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
+    user, _ = get_or_create_user(mobile, initial_role=active_role)
     identity, _ = WechatIdentity.objects.update_or_create(user=user, defaults={'appid': pending['appid'], 'openid': pending['openid'], 'unionid': pending.get('unionid', '')})
     cache.delete(pending_key)
-    return Response({'code': 0, 'message': '绑定成功', 'data': {**generate_tokens(user), 'user': ProfileSerializer(user).data}, 'trace_id': trace_id()})
+    return Response({'code': 0, 'message': '绑定成功', 'data': {**generate_tokens(user, active_role), 'user': serialize_user_session(user, active_role)}, 'trace_id': trace_id()})
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def parent_children(request):
+    if (
+        get_request_role(request) != 'parent'
+        or not has_user_role(request.user, 'parent')
+    ):
+        return Response({'code': 403, 'message': 'parent role required'}, status=403)
     children = StudentParentBind.objects.filter(parent_user_id=request.user, bind_status='active').select_related('student_user_id')
     return Response({'code': 0, 'message': 'success', 'data': [{'id': b.student_user_id_id, 'display_name': b.student_user_id.display_name, 'grade_level': b.student_user_id.grade_level} for b in children], 'trace_id': trace_id()})
 
@@ -214,17 +268,28 @@ def parent_children(request):
 @permission_classes([IsAuthenticated])
 def parent_context(request):
     child_id = request.data.get('student_id')
-    if request.user.role_type != 'parent' or not StudentParentBind.objects.filter(parent_user_id=request.user, student_user_id=child_id, bind_status='active').exists():
+    if (
+        get_request_role(request) != 'parent'
+        or not has_user_role(request.user, 'parent')
+        or not StudentParentBind.objects.filter(
+            parent_user_id=request.user,
+            student_user_id=child_id,
+            bind_status='active',
+        ).exists()
+    ):
         return Response({'code': 403, 'message': '孩子未绑定或无权切换', 'data': None, 'trace_id': trace_id()}, status=403)
     cache.set(f'parent_context:{request.user.id}', str(child_id), timeout=1800)
     return Response({'code': 0, 'message': '代理对象已切换', 'data': {'student_id': child_id}, 'trace_id': trace_id()})
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def create_scan_batch(request):
     try:
-        mission = LearningMission.objects.get(pk=request.data.get('mission_id'))
+        mission = LearningMission.objects.get(
+            pk=request.data.get('mission_id'),
+            creator_teacher_id=request.user,
+        )
     except LearningMission.DoesNotExist:
         return Response({'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': trace_id()}, status=404)
     batch = PaperScanBatch.objects.create(mission=mission, operator=request.user, expected_count=int(request.data.get('expected_count') or 0))
@@ -232,14 +297,18 @@ def create_scan_batch(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def class_student_codes(request, class_id):
     from apps.institutions.models import Class, ClassTeacher
     try:
         class_obj = Class.objects.get(pk=class_id)
     except Class.DoesNotExist:
         return Response({'code': 404, 'message': '班级不存在', 'data': None, 'trace_id': trace_id()}, status=404)
-    if request.user.role_type not in ('admin', 'teacher') or (request.user.role_type == 'teacher' and not ClassTeacher.objects.filter(class_obj=class_obj, teacher=request.user).exists()):
+    allowed = ClassTeacher.objects.filter(
+        class_obj=class_obj,
+        teacher=request.user,
+    ).exists()
+    if not allowed:
         return Response({'code': 403, 'message': '无权查看班级学生码', 'data': None, 'trace_id': trace_id()}, status=403)
     rows = []
     for link in ClassStudent.objects.filter(class_obj=class_obj, status='active').select_related('student'):
@@ -249,7 +318,7 @@ def class_student_codes(request, class_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def upload_scan_page(request, batch_id):
     from .models import StudentClassShortCode
     try:
@@ -282,7 +351,7 @@ def upload_scan_page(request, batch_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def scan_batch_summary(request, batch_id):
     try:
         batch = PaperScanBatch.objects.get(pk=batch_id, operator=request.user)
@@ -295,7 +364,7 @@ def scan_batch_summary(request, batch_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def complete_scan_batch(request, batch_id):
     try:
         batch = PaperScanBatch.objects.get(pk=batch_id, operator=request.user)
@@ -316,9 +385,16 @@ def _mission_students(mission, requested_id=None):
         link = ClassStudent.objects.filter(class_obj=mission.class_obj, student_id=requested_id, status='active').select_related('student').first()
         return [link.student] if link else []
     if mission.class_obj_id:
-        return list(UserAccount.objects.filter(student_classes__class_obj=mission.class_obj, student_classes__status='active', role_type='student').distinct())
+        return list(UserAccount.objects.filter(
+            student_classes__class_obj=mission.class_obj,
+            student_classes__status='active',
+        ).distinct())
     ids = [str(value) for value in (mission.target_student_ids or [])]
-    return list(UserAccount.objects.filter(id__in=ids, role_type='student'))
+    return list(UserAccount.objects.filter(
+        id__in=ids,
+        role_grants__role='student',
+        role_grants__status='active',
+    ).distinct())
 
 
 def _paper_pdf(mission, students, mission_code):
@@ -368,7 +444,7 @@ def _paper_pdf(mission, students, mission_code):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_wxacode(request, mission_id):
     try:
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
@@ -383,8 +459,13 @@ def mission_wxacode(request, mission_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_paper_pdf(request, mission_id):
+    if (
+        get_request_role(request) != 'teacher'
+        or not has_user_role(request.user, 'teacher')
+    ):
+        return Response({'code': 403, 'message': 'teacher role required', 'data': None, 'trace_id': trace_id()}, status=403)
     try:
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
     except LearningMission.DoesNotExist:
@@ -420,6 +501,8 @@ def practice_sheet_info(request, sheet_code):
     sheet = WrongbookPracticeSheet.objects.select_related('student').filter(sheet_code=str(sheet_code).upper()).first()
     if not sheet:
         return Response({'code': 404, 'message': 'practice sheet not found', 'data': None, 'trace_id': trace_id()}, status=404)
+    if not _can_access_student(request, sheet.student):
+        return Response({'code': 403, 'message': 'no permission', 'data': None, 'trace_id': trace_id()}, status=403)
     return Response({'code': 0, 'message': 'success', 'data': {'sheet_id': sheet.id, 'sheet_code': sheet.sheet_code, 'student_id': sheet.student_id, 'student_name': sheet.student.display_name, 'mode': sheet.mode, 'status': sheet.status, 'original_question_id': sheet.original_question_id, 'variant_question_ids': sheet.variant_question_ids, 'wrong_reason_hint': sheet.wrong_reason_hint}, 'trace_id': trace_id()})
 
 
@@ -432,14 +515,16 @@ def create_practice_sheet(request):
         item = WrongBookItem.objects.get(pk=request.data.get('wrong_item_id'))
     except WrongBookItem.DoesNotExist:
         return Response({'code': 404, 'message': 'wrong book item not found', 'data': None, 'trace_id': trace_id()}, status=404)
-    owner = effective_student(request)
-    if request.user.role_type not in ('teacher', 'admin') and (not owner or item.student_user_id_id != owner.id):
+    if not _can_access_student(request, item.student_user_id):
         return Response({'code': 403, 'message': 'no permission', 'data': None, 'trace_id': trace_id()}, status=403)
+    requested_student_id = request.data.get('student_id')
+    if requested_student_id and str(requested_student_id) != str(item.student_user_id_id):
+        return Response({'code': 400, 'message': 'student_id must match wrong item owner', 'data': None, 'trace_id': trace_id()}, status=400)
     code = uuid.uuid4().hex[:6].upper()
     while WrongbookPracticeSheet.objects.filter(sheet_code=code).exists():
         code = uuid.uuid4().hex[:6].upper()
     variants = find_variant_questions(item.question_id, limit=3)
-    sheet = WrongbookPracticeSheet.objects.create(student_id=request.data.get('student_id') or item.student_user_id_id, wrong_item=item, original_question_id=item.question_id, variant_question_ids=[str(q['id']) for q in variants], wrong_reason_hint=item.wrong_reason_type or '', sheet_code=code, mode=str(request.data.get('mode') or 'online'))
+    sheet = WrongbookPracticeSheet.objects.create(student_id=item.student_user_id_id, wrong_item=item, original_question_id=item.question_id, variant_question_ids=[str(q['id']) for q in variants], wrong_reason_hint=item.wrong_reason_type or '', sheet_code=code, mode=str(request.data.get('mode') or 'online'))
     return Response({'code': 0, 'message': 'success', 'data': {'sheet_code': sheet.sheet_code, 'sheet_id': sheet.id}}, status=201)
 
 
@@ -518,7 +603,7 @@ def attempt_image_check(request):
     score, blurry = analyze_image_blur(image)
     return Response({'code': 0, 'message': 'success', 'data': {'blur_score': score, 'is_blurry': blurry, 'threshold': 50}, 'trace_id': trace_id()})
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_practice_sheet(request, mission_id):
     from apps.wrongbook.models import WrongBookItem
     from apps.wrongbook.services import find_variant_questions

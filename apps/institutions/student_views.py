@@ -7,6 +7,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.institutions.permissions import IsStudentSession
 from apps.institutions.models import Class, ClassStudent, ClassJoinRequest
 from apps.institutions.serializers import (
     SearchClassesSerializer,
@@ -24,7 +25,7 @@ def _trace() -> str:
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudentSession])
 def search_classes(request):
     """POST /api/v1/student/classes/search - Search classes by teacher mobile."""
     serializer = SearchClassesSerializer(data=request.data)
@@ -48,7 +49,7 @@ def search_classes(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudentSession])
 def join_by_code(request):
     """POST /api/v1/student/classes/join-by-code - Join a class by invite code."""
     serializer = JoinByCodeSerializer(
@@ -69,7 +70,7 @@ def join_by_code(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudentSession])
 def submit_join_request(request):
     """POST /api/v1/classes/join-request - Submit a join request for approval."""
     serializer = CreateJoinRequestSerializer(
@@ -87,7 +88,7 @@ def submit_join_request(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudentSession])
 def my_classes(request):
     """GET /api/v1/student/my-classes - List my active classes."""
     qs = ClassStudent.objects.filter(
@@ -118,7 +119,7 @@ def my_classes(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudentSession])
 def my_join_requests(request):
     """GET /api/v1/student/join-requests - List my join requests."""
     qs = ClassJoinRequest.objects.filter(
@@ -150,7 +151,7 @@ def my_join_requests(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudentSession])
 def quit_class(request, class_id):
     """POST /api/v1/student/classes/{class_id}/quit - Quit a class."""
     student = request.user

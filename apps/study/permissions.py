@@ -1,19 +1,33 @@
 from rest_framework import permissions
 from django.core.cache import cache
+from apps.accounts.auth import get_request_role
 from apps.accounts.models import StudentParentBind
+from apps.accounts.roles import has_user_role
+from apps.institutions.models import ClassStudent
 
 
 class IsStudent(permissions.BasePermission):
-    """仅允许 role_type=='student'。"""
+    """Require a student session, active grant, and active class membership."""
     def has_permission(self, request, view):
-        return getattr(request.user, 'role_type', None) == 'student'
+        return (
+            get_request_role(request) == 'student'
+            and has_user_role(request.user, 'student')
+            and ClassStudent.objects.filter(
+                student=request.user, status='active',
+            ).exists()
+        )
 
 
 def effective_student_user(request):
     """Return the student represented by a student or an active parent context."""
-    if getattr(request.user, 'role_type', None) == 'student':
+    active_role = get_request_role(request)
+    if (
+        active_role == 'student'
+        and has_user_role(request.user, 'student')
+        and ClassStudent.objects.filter(student=request.user, status='active').exists()
+    ):
         return request.user
-    if getattr(request.user, 'role_type', None) != 'parent':
+    if active_role != 'parent' or not has_user_role(request.user, 'parent'):
         return None
     child_id = cache.get(f'parent_context:{request.user.id}')
     if not child_id:

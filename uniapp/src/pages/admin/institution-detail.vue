@@ -49,18 +49,21 @@
         <view class="form-row">
           <view class="form-item">
             <text class="label">角色 *</text>
-            <picker mode="selector" :range="roleLabelsAdd" :value="addRoleIndex" @change="memberForm.role = roleOptions[$event.detail.value].value">
-              <view class="picker-display">{{ selectedRoleLabel }}</view>
-            </picker>
+            <view class="checkbox-group">
+              <view v-for="opt in roleOptions" :key="opt.value" class="checkbox-item" @click="toggleMemberRole(opt.value)">
+                <text class="checkbox-icon" :class="{ checked: memberForm.roles.includes(opt.value) }">{{ memberForm.roles.includes(opt.value) ? '✓' : '○' }}</text>
+                <text class="checkbox-label">{{ opt.label }}</text>
+              </view>
+            </view>
           </view>
-          <view class="form-item">
+          <view v-if="memberForm.roles.includes('teacher')" class="form-item">
             <text class="label">科目</text>
             <picker mode="selector" :range="subjectLabelsAdd" :value="addSubjectIndex" @change="memberForm.subject = subjectOptions[$event.detail.value].value">
               <view class="picker-display">{{ selectedSubjectLabel }}</view>
             </picker>
           </view>
         </view>
-        <view class="form-row">
+        <view v-if="memberForm.roles.includes('teacher')" class="form-row">
           <view class="form-item full-width">
             <text class="label">学段（可多选）</text>
             <view class="checkbox-group">
@@ -79,18 +82,18 @@
         <text>暂无成员</text>
       </view>
       <view v-else class="member-list">
-        <view v-for="m in members" :key="m.id" class="member-card">
+        <view v-for="m in members" :key="m.user_id" class="member-card">
           <view class="member-main" @click="openEditModal(m)">
             <text class="member-name">{{ m.user_name || m.display_name || '-' }}</text>
             <text class="member-phone">{{ m.user_mobile || m.mobile || '-' }}</text>
-            <text v-if="m.user_subject" class="member-subject">{{ subjectText(m.user_subject) }}</text>
-            <view v-if="m.role === 'teacher' && m.stages && m.stages.length > 0" class="member-stages">
+            <text v-if="m.roles.includes('teacher') && m.user_subject" class="member-subject">{{ subjectText(m.user_subject) }}</text>
+            <view v-if="m.roles.includes('teacher') && m.stages && m.stages.length > 0" class="member-stages">
               <text v-for="s in m.stages" :key="s" class="stage-tag">{{ s }}</text>
             </view>
           </view>
           <view class="member-actions">
-            <view class="role-badge" :class="roleClass(m.role)" @click.stop="handleToggleRole(m)">
-              <text class="role-text">{{ roleText(m.role) }}</text>
+            <view v-for="role in m.roles" :key="role" class="role-badge" :class="roleClass(role)">
+              <text class="role-text">{{ roleText(role) }}</text>
             </view>
             <view class="status-badge" :class="m.status === 'active' ? 'status-active' : 'status-removed'" @click.stop="handleToggleStatus(m)">
               <text class="status-text-small">{{ m.status === 'active' ? '在职' : '已移除' }}</text>
@@ -122,17 +125,20 @@
             </view>
             <view class="edit-item">
               <text class="edit-label">角色</text>
-              <picker mode="selector" :range="roleLabels" :value="editRoleIndex" @change="editForm.role = roleOptions[$event.detail.value].value">
-                <view class="picker-display">{{ editRoleLabel }}</view>
-              </picker>
+              <view class="checkbox-group">
+                <view v-for="opt in roleOptions" :key="opt.value" class="checkbox-item" @click="toggleEditRole(opt.value)">
+                  <text class="checkbox-icon" :class="{ checked: editForm.roles.includes(opt.value) }">{{ editForm.roles.includes(opt.value) ? '✓' : '○' }}</text>
+                  <text class="checkbox-label">{{ opt.label }}</text>
+                </view>
+              </view>
             </view>
-            <view class="edit-item">
+            <view v-if="editForm.roles.includes('teacher')" class="edit-item">
               <text class="edit-label">科目</text>
               <picker mode="selector" :range="subjectLabels" :value="editSubjectIndex" @change="editForm.subject = subjectOptions[$event.detail.value].value">
                 <view class="picker-display">{{ editSubjectLabel }}</view>
               </picker>
             </view>
-            <view class="edit-item">
+            <view v-if="editForm.roles.includes('teacher')" class="edit-item">
               <text class="edit-label">学段（可多选）</text>
               <view class="checkbox-group">
                 <view v-for="opt in stageOptions" :key="opt.value" class="checkbox-item" @click="toggleEditStage(opt.value)">
@@ -155,15 +161,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
-import { institutionApi } from '@/api/institutions.ts'
+import { institutionApi, type InstitutionRole } from '@/api/institutions.ts'
+import { normalizeMember } from '@/utils/institution-members'
 
 const institutionId = ref<string>('')
 const institution = ref<any>({})
 const members = ref<any[]>([])
 const loading = ref(false)
 
-const roleOptions = [
-  { label: '系统管理员', value: 'admin' },
+const roleOptions: Array<{ label: string; value: InstitutionRole }> = [
+  { label: '机构管理员', value: 'admin' },
   { label: '教师', value: 'teacher' },
 ]
 
@@ -185,25 +192,15 @@ const stageOptions = [
   { label: '高中', value: '高中' },
 ]
 
-const memberForm = ref({ mobile: '', display_name: '', role: 'teacher', subject: '', stages: [] as string[] })
+const memberForm = ref({ mobile: '', display_name: '', roles: ['teacher'] as InstitutionRole[], subject: '', stages: [] as string[] })
 
 // Edit modal state
 const showEditModal = ref(false)
-const editForm = ref({ user_id: 0, display_name: '', mobile: '', role: 'teacher', subject: '', stages: [] as string[] })
-
-const selectedRoleLabel = computed(() => {
-  const opt = roleOptions.find(o => o.value === memberForm.value.role)
-  return opt?.label || '教师'
-})
+const editForm = ref({ user_id: '', display_name: '', mobile: '', roles: [] as InstitutionRole[], subject: '', stages: [] as string[] })
 
 const selectedSubjectLabel = computed(() => {
   const opt = subjectOptions.find(o => o.value === memberForm.value.subject)
   return opt?.label || '未设置'
-})
-
-const addRoleIndex = computed(() => {
-  const idx = roleOptions.findIndex(o => o.value === memberForm.value.role)
-  return idx >= 0 ? idx : 0
 })
 
 const addSubjectIndex = computed(() => {
@@ -212,18 +209,7 @@ const addSubjectIndex = computed(() => {
 })
 
 // Simple string arrays for picker range
-const roleLabelsAdd = computed(() => roleOptions.map(o => o.label))
 const subjectLabelsAdd = computed(() => subjectOptions.map(o => o.label))
-
-const editRoleIndex = computed(() => {
-  const idx = roleOptions.findIndex(o => o.value === editForm.value.role)
-  return idx >= 0 ? idx : 0
-})
-
-const editRoleLabel = computed(() => {
-  const opt = roleOptions.find(o => o.value === editForm.value.role)
-  return opt?.label || '教师'
-})
 
 const editSubjectIndex = computed(() => {
   const idx = subjectOptions.findIndex(o => o.value === editForm.value.subject)
@@ -236,7 +222,6 @@ const editSubjectLabel = computed(() => {
 })
 
 // Simple string arrays for picker range (more reliable than object arrays)
-const roleLabels = computed(() => roleOptions.map(o => o.label))
 const subjectLabels = computed(() => subjectOptions.map(o => o.label))
 
 onLoad((options: any) => {
@@ -268,7 +253,8 @@ async function loadData() {
     ])
     institution.value = instRes.data || {}
     const membersData = membersRes.data
-    members.value = Array.isArray(membersData) ? membersData : (membersData?.items || [])
+    const memberItems = Array.isArray(membersData) ? membersData : (membersData?.items || [])
+    members.value = memberItems.map(normalizeMember)
   } catch (e) {
     console.error('Failed to load institution data:', e)
     uni.showToast({ title: '加载失败', icon: 'none' })
@@ -291,12 +277,30 @@ function toggleStage(value: string) {
   }
 }
 
+function toggleMemberRole(role: InstitutionRole) {
+  const index = memberForm.value.roles.indexOf(role)
+  if (index >= 0) {
+    memberForm.value.roles.splice(index, 1)
+  } else {
+    memberForm.value.roles.push(role)
+  }
+}
+
 function toggleEditStage(value: string) {
   const idx = editForm.value.stages.indexOf(value)
   if (idx >= 0) {
     editForm.value.stages.splice(idx, 1)
   } else {
     editForm.value.stages.push(value)
+  }
+}
+
+function toggleEditRole(role: InstitutionRole) {
+  const index = editForm.value.roles.indexOf(role)
+  if (index >= 0) {
+    editForm.value.roles.splice(index, 1)
+  } else {
+    editForm.value.roles.push(role)
   }
 }
 
@@ -311,7 +315,7 @@ function statusClass(status: string): string {
 }
 
 function roleText(role: string): string {
-  const map: Record<string, string> = { teacher: '教师', admin: '系统管理员' }
+  const map: Record<string, string> = { teacher: '教师', admin: '机构管理员' }
   return map[role] || role
 }
 
@@ -328,24 +332,26 @@ async function handleAddMember() {
     uni.showToast({ title: '请输入姓名', icon: 'none' })
     return
   }
+  if (memberForm.value.roles.length === 0) {
+    uni.showToast({ title: '请至少选择一个角色', icon: 'none' })
+    return
+  }
 
   try {
-    const res: any = await institutionApi.addMember(institutionId.value, {
+    await institutionApi.addMemberRoles(institutionId.value, {
       mobile: memberForm.value.mobile.trim(),
       display_name: memberForm.value.display_name.trim(),
-      role: memberForm.value.role,
-      subject: memberForm.value.subject,
-      stages: memberForm.value.stages,
+      roles: [...memberForm.value.roles],
+      subject: memberForm.value.roles.includes('teacher') ? memberForm.value.subject : '',
+      stages: memberForm.value.roles.includes('teacher') ? memberForm.value.stages : [],
     })
-    if (res.code === 0) {
-      uni.showToast({ title: '添加成功', icon: 'success' })
-      memberForm.value = { mobile: '', display_name: '', role: 'teacher', subject: '', stages: [] }
-      await loadData()
-    } else {
-      uni.showToast({ title: res.message || '添加失败', icon: 'none' })
-    }
-  } catch (e) {
-    uni.showToast({ title: '添加失败', icon: 'none' })
+    uni.showToast({ title: '添加成功', icon: 'success' })
+    memberForm.value = { mobile: '', display_name: '', roles: ['teacher'], subject: '', stages: [] }
+    await loadData()
+  } catch (e: any) {
+    const message = e?.completedRoles?.length ? '部分角色添加失败，列表已刷新' : (e?.message || '添加失败')
+    uni.showToast({ title: message, icon: 'none' })
+    await loadData()
   }
 }
 
@@ -357,7 +363,7 @@ function openEditModal(member: any) {
     user_id: member.user_id || member.user,
     display_name: member.user_name || '',
     mobile: member.user_mobile || '',
-    role: member.role || 'teacher',
+    roles: Array.isArray(member.roles) ? [...member.roles] : [member.role || 'teacher'],
     subject: member.user_subject || '',
     stages: Array.isArray(stages) ? stages : [],
   }
@@ -377,12 +383,16 @@ async function handleSaveEdit() {
     uni.showToast({ title: '手机号不能为空', icon: 'none' })
     return
   }
+  if (editForm.value.roles.length === 0) {
+    uni.showToast({ title: '请至少选择一个角色', icon: 'none' })
+    return
+  }
 
   try {
     const res: any = await institutionApi.updateMember(institutionId.value, editForm.value.user_id, {
       display_name: editForm.value.display_name.trim(),
       mobile: editForm.value.mobile.trim(),
-      role: editForm.value.role,
+      roles: [...editForm.value.roles],
       subject: editForm.value.subject,
       stages: editForm.value.stages,
     })
@@ -396,31 +406,6 @@ async function handleSaveEdit() {
   } catch (e: any) {
     uni.showToast({ title: '保存失败', icon: 'none' })
   }
-}
-
-async function handleToggleRole(member: any) {
-  const newRole = member.role === 'teacher' ? 'admin' : 'teacher'
-  const roleLabel = newRole === 'admin' ? '系统管理员' : '教师'
-
-  uni.showModal({
-    title: '确认修改角色',
-    content: `将 ${member.user_name} 的角色改为${roleLabel}？`,
-    success: async (res) => {
-      if (res.confirm) {
-        try {
-          const resp: any = await institutionApi.updateMember(institutionId.value, member.user_id, { role: newRole })
-          if (resp.code === 0) {
-            uni.showToast({ title: '修改成功', icon: 'success' })
-            await loadData()
-          } else {
-            uni.showToast({ title: resp.message || '修改失败', icon: 'none' })
-          }
-        } catch (e) {
-          uni.showToast({ title: '修改失败', icon: 'none' })
-        }
-      }
-    }
-  })
 }
 
 async function handleToggleStatus(member: any) {
