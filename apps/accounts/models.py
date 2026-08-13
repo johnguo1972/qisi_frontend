@@ -36,6 +36,33 @@ class UserAccount(AbstractBaseUser):
     def is_superuser(self):
         return self.role_type == 'admin'
 
+    def get_roles(self):
+        from apps.accounts.roles import get_user_roles
+
+        return get_user_roles(self)
+
+    def has_role(self, role):
+        from apps.accounts.roles import has_user_role
+
+        return has_user_role(self, role)
+
+
+class UserRole(models.Model):
+    ROLE_CHOICES = [(role, role) for role in ("admin", "teacher", "parent", "student")]
+
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    user = models.ForeignKey(UserAccount, on_delete=models.CASCADE, related_name="role_grants")
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    status = models.CharField(max_length=20, default="active")
+    granted_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "user_role"
+        constraints = [
+            models.UniqueConstraint(fields=["user", "role"], name="uq_user_role_user_role"),
+        ]
+
 
 class StudentParentBind(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
