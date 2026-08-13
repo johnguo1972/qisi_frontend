@@ -82,18 +82,19 @@ async function loadInstitutions() {
   if (institutionsLoadPromise) return institutionsLoadPromise
 
   institutionsLoadPromise = (async () => {
+  const snapshot = sessionSnapshot()
   try {
     if (!ensurePageRole('admin')) return
-    const snapshot = sessionSnapshot()
     const res = await institutionApi.list()
     if (!sessionUnchanged(snapshot) || !ensurePageRole('admin')) return
     console.log('[admin] institutions loaded:', res)
     items.value = res.data?.items || []
   } catch (e: any) {
+    if (!sessionUnchanged(snapshot) || !ensurePageRole('admin')) return
     console.error('[admin] Failed to load institutions:', e)
     uni.showToast({ title: `加载机构列表失败: ${e?.errMsg || '请重试'}`, icon: 'none', duration: 3000 })
   } finally {
-    loading.value = false
+    if (sessionUnchanged(snapshot) && ensurePageRole('admin')) loading.value = false
     institutionsLoadPromise = null
   }
   })()
@@ -118,7 +119,6 @@ async function initializeAdminHome() {
   }
 
   if (!ensurePageRole('admin')) return
-  await loadInstitutions()
   })()
   initializationPromise = promise
   try {
@@ -131,6 +131,7 @@ async function initializeAdminHome() {
 onMounted(async () => {
   console.log('[admin] home onMounted')
   await initializeAdminHome()
+  await loadInstitutions()
 })
 
 let hasLoadedOnShow = false
