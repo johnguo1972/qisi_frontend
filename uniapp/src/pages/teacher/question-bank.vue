@@ -146,7 +146,9 @@
         @basket="handleBasket"
         @batch-ai="handleBatchAi"
         @ai-explore="handleAiExplore"
-        @ai-mode-a="handleAiModeA"
+        @ai-mode-a="handleAiMode('A')"
+        @ai-mode-b="handleAiMode('B')"
+        @ai-mode-c="handleAiMode('C')"
       />
     </view>
 
@@ -522,12 +524,12 @@ async function handleAiExplore() {
     uni.showToast({ title: 'AI探索任务已提交', icon: 'success' })
   } catch { uni.showToast({ title: 'AI探索提交失败', icon: 'none' }) }
 }
-async function handleAiModeA() {
+async function handleAiMode(mode: 'A' | 'B' | 'C') {
   if (!selectedQuestionIds.value.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
   try {
-    await Promise.all(selectedQuestionIds.value.map(id => questionApi.aiProcessMode(id, 'A')))
-    uni.showToast({ title: 'AI-A模式任务已提交', icon: 'success' })
-  } catch { uni.showToast({ title: 'AI-A模式提交失败', icon: 'none' }) }
+    await Promise.all(selectedQuestionIds.value.map(id => questionApi.aiProcessMode(id, mode)))
+    uni.showToast({ title: `AI-${mode}模式任务已提交`, icon: 'success' })
+  } catch { uni.showToast({ title: `AI-${mode}模式提交失败`, icon: 'none' }) }
 }
 
 function openAiAnswer(question: any, mode: 'ALL' | 'A' | 'B' | 'C' = 'ALL') {

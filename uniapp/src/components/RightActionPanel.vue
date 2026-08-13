@@ -11,6 +11,8 @@
     <button class="action-btn btn-ai" @click="$emit('batch-ai')">批量AI</button>
     <button class="action-btn btn-ai-sub" @click="$emit('ai-explore')">AI探索</button>
     <button class="action-btn btn-ai-sub" @click="$emit('ai-mode-a')">AI-A模式</button>
+    <button class="action-btn btn-ai-sub" @click="$emit('ai-mode-b')">AI-B模式</button>
+    <button class="action-btn btn-ai-sub" @click="$emit('ai-mode-c')">AI-C模式</button>
   </view>
 </template>
 
@@ -20,7 +22,7 @@ defineProps<{
   compactMode?: boolean
 }>()
 
-defineEmits(['refresh', 'toggle-answer', 'toggle-mode', 'basket', 'batch-ai', 'ai-explore', 'ai-mode-a'])
+defineEmits(['refresh', 'toggle-answer', 'toggle-mode', 'basket', 'batch-ai', 'ai-explore', 'ai-mode-a', 'ai-mode-b', 'ai-mode-c'])
 </script>
 
 <style scoped>

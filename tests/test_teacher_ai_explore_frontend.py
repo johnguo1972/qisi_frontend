@@ -10,6 +10,7 @@ QUESTION_BANK_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'teacher' / 'question-b
 ROLES_PATH = ROOT / 'uniapp' / 'src' / 'utils' / 'roles.ts'
 ADMIN_HOME_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'admin' / 'home.vue'
 REQUEST_PATH = ROOT / 'uniapp' / 'src' / 'utils' / 'request.ts'
+RIGHT_ACTION_PANEL_PATH = ROOT / 'uniapp' / 'src' / 'components' / 'RightActionPanel.vue'
 
 
 def run_role_helpers(user_info: dict | None, expected_role: str) -> dict:
@@ -511,3 +512,74 @@ def test_batch_ai_keeps_using_the_complete_batch_pipeline():
     assert calls['probe'] == []
     assert calls['batch'] == [[['first', 'second'], 'deepseek']]
     assert calls['toasts'] == [{'title': '批量AI任务已提交', 'icon': 'success'}]
+
+
+def run_ai_mode_handler(selected_ids: list[str], mode: str, rejected: bool = False) -> dict:
+    source = QUESTION_BANK_PATH.read_text(encoding='utf-8')
+    body = function_body(source, 'handleAiMode')
+    encoded_handler = base64.b64encode(
+        ('return async function handler(mode) {' + body + '}').encode('utf-8')
+    ).decode('ascii')
+    script = f"""
+      const selectedQuestionIds = {{ value: {json.dumps(selected_ids)} }};
+      const calls = {{ modes: [], batch: [], toasts: [] }};
+      const questionApi = {{
+        aiProcessMode: async (id, requestedMode) => {{
+          calls.modes.push([id, requestedMode]);
+          if ({json.dumps(rejected)}) throw new Error('mode rejected');
+        }},
+        batchAi: async (...args) => calls.batch.push(args),
+      }};
+      const uni = {{ showToast: (toast) => calls.toasts.push(toast) }};
+      const handler = new Function(
+        'selectedQuestionIds', 'questionApi', 'uni',
+        Buffer.from({json.dumps(encoded_handler)}, 'base64').toString('utf8')
+      )(selectedQuestionIds, questionApi, uni);
+      await handler({json.dumps(mode)});
+      console.log(JSON.stringify(calls));
+    """
+    result = subprocess.run(
+        ['node', '--input-type=module', '--eval', script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_ai_mode_buttons_emit_and_bind_each_mode_to_the_shared_handler():
+    panel = RIGHT_ACTION_PANEL_PATH.read_text(encoding='utf-8')
+    page = QUESTION_BANK_PATH.read_text(encoding='utf-8')
+
+    for mode in 'ABC':
+        event = f'ai-mode-{mode.lower()}'
+        assert f'$emit(\'{event}\')' in panel
+        assert re.search(rf"defineEmits\(\[[^]]*'{event}'", panel)
+        assert f'@{event}="handleAiMode(\'{mode}\')"' in page
+
+
+def test_ai_mode_dispatches_each_selected_question_once_without_batch_pipeline():
+    for mode in 'ABC':
+        calls = run_ai_mode_handler(['first', 'second'], mode)
+
+        assert calls['modes'] == [['first', mode], ['second', mode]]
+        assert calls['batch'] == []
+        assert calls['toasts'] == [{'title': f'AI-{mode}模式任务已提交', 'icon': 'success'}]
+
+
+def test_ai_mode_empty_selection_does_not_call_any_ai_api():
+    calls = run_ai_mode_handler([], 'B')
+
+    assert calls['modes'] == []
+    assert calls['batch'] == []
+    assert calls['toasts'] == [{'title': '请先选择题目', 'icon': 'none'}]
+
+
+def test_ai_mode_rejection_shows_mode_specific_failure_toast():
+    calls = run_ai_mode_handler(['first'], 'C', rejected=True)
+
+    assert calls['modes'] == [['first', 'C']]
+    assert calls['batch'] == []
+    assert calls['toasts'] == [{'title': 'AI-C模式提交失败', 'icon': 'none'}]
