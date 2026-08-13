@@ -36,6 +36,33 @@ def test_response_parser_preserves_array_top_level():
     assert parsed == [{"answer": "A"}, {"answer": "B"}]
 
 
+def test_response_parser_keeps_first_complete_object_before_tail_fragment():
+    parsed = ResponseParser.parse_json(
+        '{"answer":"B"} {"partial":{"detail":"unfinished"}'
+    )
+
+    assert parsed == {"answer": "B"}
+
+
+def test_response_parser_ignores_braces_and_escapes_inside_first_object_string():
+    parsed = ResponseParser.parse_json(
+        r'{"answer":"literal { and } quote \" and slash \\ done"} '
+        r'{"partial":{"detail":"unfinished"}'
+    )
+
+    assert parsed == {
+        "answer": 'literal { and } quote " and slash \\ done'
+    }
+
+
+def test_response_parser_keeps_first_complete_array_before_tail_fragment():
+    parsed = ResponseParser.parse_json(
+        '[{"answer":"A"}] [{"partial":["unfinished"]'
+    )
+
+    assert parsed == [{"answer": "A"}]
+
+
 def test_response_parser_extracts_first_choice_content():
     payload = {
         "choices": [{"message": {"role": "assistant", "content": "ok"}}]

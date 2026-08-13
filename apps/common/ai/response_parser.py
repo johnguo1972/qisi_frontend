@@ -33,15 +33,23 @@ class ResponseParser:
         if not isinstance(text, str):
             raise AIResponseError("AI response JSON must be text")
 
-        candidate = _extract_json_candidate(text)
-        if candidate.startswith("["):
+        candidate, ignored_structured_tail = _extract_json_candidate(text)
+        parse_failed = True
+        if ignored_structured_tail:
+            try:
+                parsed = json.loads(candidate)
+                parse_failed = False
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if parse_failed and candidate.startswith("["):
             repaired = repair_json_string('{"_root":' + candidate + "}")
             try:
                 parsed = json.loads(repaired)["_root"]
                 parse_failed = False
             except (json.JSONDecodeError, KeyError, TypeError):
                 parse_failed = True
-        else:
+        elif parse_failed:
             repaired = repair_json_string(candidate)
             try:
                 parsed = json.loads(repaired)
@@ -73,15 +81,55 @@ class ResponseParser:
         return text.strip()
 
 
-def _extract_json_candidate(text: str) -> str:
+def _extract_json_candidate(text: str) -> tuple[str, bool]:
     stripped = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.IGNORECASE)
     stripped = re.sub(r"\s*```\s*$", "", stripped).strip()
     object_start = stripped.find("{")
     array_start = stripped.find("[")
     starts = [index for index in (object_start, array_start) if index >= 0]
     if not starts:
-        return stripped
+        return stripped, False
     start = min(starts)
+    complete_end = _first_complete_json_end(stripped, start)
+    if complete_end is not None:
+        trailing = stripped[complete_end + 1 :].lstrip()
+        return (
+            stripped[start : complete_end + 1],
+            trailing.startswith(("{", "[")),
+        )
     closing = "}" if stripped[start] == "{" else "]"
     end = stripped.rfind(closing)
-    return stripped[start : end + 1] if end > start else stripped[start:]
+    return (
+        stripped[start : end + 1] if end > start else stripped[start:],
+        False,
+    )
+
+
+def _first_complete_json_end(text: str, start: int) -> int | None:
+    opening = {"{": "}", "[": "]"}
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+
+    for index in range(start, len(text)):
+        character = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+
+        if character == '"':
+            in_string = True
+        elif character in opening:
+            stack.append(opening[character])
+        elif character in ("}", "]"):
+            if not stack or character != stack[-1]:
+                return None
+            stack.pop()
+            if not stack:
+                return index
+    return None
