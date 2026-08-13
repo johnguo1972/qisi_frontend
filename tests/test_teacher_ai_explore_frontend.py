@@ -63,6 +63,11 @@ def test_role_helper_rejects_absent_role_without_navigation():
     assert result == {'allowed': False, 'calls': []}
 
 
+def test_role_helper_rejects_unknown_stored_role_without_navigation():
+    result = run_role_helpers({'active_role': 'operator'}, 'admin')
+    assert result == {'allowed': False, 'calls': []}
+
+
 def lifecycle_body(source: str, hook: str) -> str:
     marker = f'{hook}(async () => {{'
     start = source.index(marker) + len(marker)
@@ -77,27 +82,80 @@ def lifecycle_body(source: str, hook: str) -> str:
     return source[start:index - 1]
 
 
-def run_admin_lifecycles(allowed: bool) -> list[str]:
+def run_admin_async_scenario(scenario: str) -> int:
     source = ADMIN_HOME_PATH.read_text(encoding='utf-8')
+    loader = function_body(source, 'loadInstitutions')
+    initializer = function_body(source, 'initializeAdminHome')
     mounted = lifecycle_body(source, 'onMounted')
     shown = lifecycle_body(source, 'onShow')
-    mounted = re.sub(r'catch \(e: any\)', 'catch (e)', mounted)
-    shown = re.sub(r'catch \(e: any\)', 'catch (e)', shown)
+    loader = loader.replace('catch (e: any)', 'catch (e)')
+    initializer = initializer.replace('catch (e: any)', 'catch (e)')
+    mounted = mounted.replace('catch (e: any)', 'catch (e)')
+    shown = shown.replace('catch (e: any)', 'catch (e)')
+
     script = f"""
-      const calls = [];
-      let hasLoadedOnShow = false;
-      const ensurePageRole = () => {{ calls.push('guard'); return {json.dumps(allowed)}; }};
-      const authApi = {{ getProfile: async () => {{ calls.push('profile'); return {{}}; }} }};
+      let listCalls = 0;
+      const storage = {{ userInfo: {{ active_role: 'admin' }} }};
+      const items = {{ value: [] }};
+      const loading = {{ value: true }};
       const userInfo = {{ value: {{}} }};
-      const userStore = {{ setUserInfo: () => {{}} }};
-      const uni = {{ showToast: () => {{}} }};
-      const loadInstitutions = async () => calls.push('institutions');
+      const uni = {{
+        showToast: () => {{}},
+        reLaunch: () => {{}},
+        getStorageSync: (key) => storage[key],
+      }};
+      const ensurePageRole = () => storage.userInfo?.active_role === 'admin';
+      const userStore = {{ setUserInfo: (info) => {{ storage.userInfo = info; }} }};
+      let resolveProfile;
+      const resolveLists = [];
+      const authApi = {{
+        getProfile: () => new Promise((resolve) => {{ resolveProfile = resolve; }}),
+      }};
+      const institutionApi = {{
+        list: () => {{
+          listCalls += 1;
+          if ({json.dumps(scenario)} === 'role_changes_during_profile') {{
+            return Promise.resolve({{ data: {{ items: [] }} }});
+          }}
+          return new Promise((resolve) => {{ resolveLists.push(resolve); }});
+        }},
+      }};
+      const output = console.log;
+      console.log = () => {{}};
+      console.error = () => {{}};
+      let hasLoadedOnShow = false;
+      let initializationPromise = null;
+      let institutionsLoadPromise = null;
+      const loadInstitutions = async () => {{{loader}}};
+      const initializeAdminHome = async () => {{{initializer}}};
       const mounted = async () => {{{mounted}}};
       const shown = async () => {{{shown}}};
-      await mounted();
-      await shown();
-      await shown();
-      console.log(JSON.stringify(calls));
+
+      if ({json.dumps(scenario)} === 'role_changes_during_profile') {{
+        const mount = mounted();
+        await Promise.resolve();
+        const firstShow = shown();
+        const secondShow = shown();
+        resolveProfile({{ data: {{ active_role: 'teacher' }} }});
+        await Promise.all([mount, firstShow, secondShow]);
+      }} else {{
+        const mount = mounted();
+        await Promise.resolve();
+        resolveProfile({{ data: {{ active_role: 'admin' }} }});
+        while (!resolveLists.length) await Promise.resolve();
+        resolveLists.shift()({{ data: {{ items: [] }} }});
+        await mount;
+        const firstShow = shown();
+        await firstShow;
+        const secondShow = shown();
+        const thirdShow = shown();
+        while (!resolveLists.length) await Promise.resolve();
+        const callsBeforeRelease = listCalls;
+        while (resolveLists.length) resolveLists.shift()({{ data: {{ items: [] }} }});
+        await Promise.all([secondShow, thirdShow]);
+        output(JSON.stringify(callsBeforeRelease));
+      }}
+      output(JSON.stringify(listCalls));
     """
     result = subprocess.run(
         ['node', '--input-type=module', '--eval', script],
@@ -110,16 +168,12 @@ def run_admin_lifecycles(allowed: bool) -> list[str]:
     return json.loads(result.stdout.splitlines()[-1])
 
 
-def test_admin_lifecycle_guards_requests_and_keeps_one_initial_load():
-    source = ADMIN_HOME_PATH.read_text(encoding='utf-8')
-    assert "import { ensurePageRole } from '@/utils/roles'" in source
+def test_delayed_profile_role_change_prevents_all_institution_requests():
+    assert run_admin_async_scenario('role_changes_during_profile') == 0
 
-    assert run_admin_lifecycles(True) == [
-        'guard', 'profile', 'institutions',
-        'guard',
-        'guard', 'institutions',
-    ]
-    assert run_admin_lifecycles(False) == ['guard', 'guard', 'guard']
+
+def test_concurrent_valid_admin_onshow_calls_share_one_institution_request():
+    assert run_admin_async_scenario('concurrent_admin_onshow') == 2
 
 
 def function_body(source: str, name: str) -> str:

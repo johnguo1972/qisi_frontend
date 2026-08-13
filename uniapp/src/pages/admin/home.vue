@@ -65,9 +65,16 @@ const userInfo = ref({ display_name: '管理员' })
 const items = ref<any[]>([])
 const loading = ref(true)
 const userStore = useUserStore()
+let initializationPromise: Promise<void> | null = null
+let institutionsLoadPromise: Promise<void> | null = null
 
 async function loadInstitutions() {
+  if (!ensurePageRole('admin')) return
+  if (institutionsLoadPromise) return institutionsLoadPromise
+
+  institutionsLoadPromise = (async () => {
   try {
+    if (!ensurePageRole('admin')) return
     const res = await institutionApi.list()
     console.log('[admin] institutions loaded:', res)
     items.value = res.data?.items || []
@@ -76,11 +83,16 @@ async function loadInstitutions() {
     uni.showToast({ title: `加载机构列表失败: ${e?.errMsg || '请重试'}`, icon: 'none', duration: 3000 })
   } finally {
     loading.value = false
+    institutionsLoadPromise = null
   }
+  })()
+  return institutionsLoadPromise
 }
 
-onMounted(async () => {
-  console.log('[admin] home onMounted')
+async function initializeAdminHome() {
+  if (initializationPromise) return initializationPromise
+
+  initializationPromise = (async () => {
   if (!ensurePageRole('admin')) return
   try {
     const profile = await authApi.getProfile()
@@ -92,13 +104,22 @@ onMounted(async () => {
     console.error('[admin] getProfile failed:', e)
   }
 
+  if (!ensurePageRole('admin')) return
   await loadInstitutions()
+  })()
+  return initializationPromise
+}
+
+onMounted(async () => {
+  console.log('[admin] home onMounted')
+  await initializeAdminHome()
 })
 
 let hasLoadedOnShow = false
 onShow(async () => {
   if (!ensurePageRole('admin')) return
   if (hasLoadedOnShow) {
+    await initializeAdminHome()
     await loadInstitutions()
   }
   hasLoadedOnShow = true

@@ -12,7 +12,10 @@ export function routeForRole(role: AppRole): string {
 
 export function currentSessionRole(): AppRole | undefined {
   const userInfo = uni.getStorageSync('userInfo')
-  return (userInfo?.active_role || userInfo?.role_type) as AppRole | undefined
+  const role = userInfo?.active_role || userInfo?.role_type
+  return role === 'admin' || role === 'teacher' || role === 'parent' || role === 'student'
+    ? role
+    : undefined
 }
 
 export function ensurePageRole(expectedRole: AppRole): boolean {
