@@ -82,98 +82,81 @@ def lifecycle_body(source: str, hook: str) -> str:
     return source[start:index - 1]
 
 
-def run_admin_async_scenario(scenario: str) -> int:
+def run_stale_admin_response_scenario(scenario: str) -> dict:
     source = ADMIN_HOME_PATH.read_text(encoding='utf-8')
-    loader = function_body(source, 'loadInstitutions')
-    initializer = function_body(source, 'initializeAdminHome')
-    mounted = lifecycle_body(source, 'onMounted')
-    shown = lifecycle_body(source, 'onShow')
-    loader = loader.replace('catch (e: any)', 'catch (e)')
-    initializer = initializer.replace('catch (e: any)', 'catch (e)')
-    mounted = mounted.replace('catch (e: any)', 'catch (e)')
-    shown = shown.replace('catch (e: any)', 'catch (e)')
-
+    loader = function_body(source, 'loadInstitutions').replace('catch (e: any)', 'catch (e)')
+    initializer = function_body(source, 'initializeAdminHome').replace('catch (e: any)', 'catch (e)')
+    snapshot = function_body(source, 'sessionSnapshot')
+    unchanged = function_body(source, 'sessionUnchanged')
     script = f"""
-      let listCalls = 0;
-      const storage = {{ userInfo: {{ active_role: 'admin' }} }};
+      const storage = {{ accessToken: 'admin-token', userInfo: {{ active_role: 'admin' }} }};
       const items = {{ value: [] }};
       const loading = {{ value: true }};
       const userInfo = {{ value: {{}} }};
-      const uni = {{
-        showToast: () => {{}},
-        reLaunch: () => {{}},
-        getStorageSync: (key) => storage[key],
-      }};
+      let profileCalls = 0;
+      let listCalls = 0;
+      let resolveProfile;
+      let resolveList;
+      const uni = {{ getStorageSync: (key) => storage[key], showToast: () => {{}}, reLaunch: () => {{}} }};
+      const currentSessionRole = () => storage.userInfo?.active_role;
       const ensurePageRole = () => storage.userInfo?.active_role === 'admin';
       const userStore = {{ setUserInfo: (info) => {{ storage.userInfo = info; }} }};
-      let resolveProfile;
-      const resolveLists = [];
-      const authApi = {{
-        getProfile: () => new Promise((resolve) => {{ resolveProfile = resolve; }}),
-      }};
-      const institutionApi = {{
-        list: () => {{
-          listCalls += 1;
-          if ({json.dumps(scenario)} === 'role_changes_during_profile') {{
-            return Promise.resolve({{ data: {{ items: [] }} }});
-          }}
-          return new Promise((resolve) => {{ resolveLists.push(resolve); }});
-        }},
-      }};
-      const output = console.log;
-      console.log = () => {{}};
-      console.error = () => {{}};
-      let hasLoadedOnShow = false;
+      const authApi = {{ getProfile: () => {{
+        profileCalls += 1;
+        if ({json.dumps(scenario)} === 'retry' && profileCalls === 1) return Promise.reject(new Error('network'));
+        if ({json.dumps(scenario)} === 'retry') return Promise.resolve({{ data: {{ active_role: 'admin' }} }});
+        return new Promise((resolve) => {{ resolveProfile = resolve; }});
+      }} }};
+      const institutionApi = {{ list: () => {{
+        listCalls += 1;
+        if ({json.dumps(scenario)} === 'profile') return Promise.resolve({{ data: {{ items: [] }} }});
+        if ({json.dumps(scenario)} === 'retry') return Promise.resolve({{ data: {{ items: [] }} }});
+        return new Promise((resolve) => {{ resolveList = resolve; }});
+      }} }};
+      console.log = () => {{}}; console.error = () => {{}};
       let initializationPromise = null;
       let institutionsLoadPromise = null;
+      const sessionSnapshot = () => {{{snapshot}}};
+      const sessionUnchanged = (snapshot) => {{{unchanged}}};
       const loadInstitutions = async () => {{{loader}}};
       const initializeAdminHome = async () => {{{initializer}}};
-      const mounted = async () => {{{mounted}}};
-      const shown = async () => {{{shown}}};
-
-      if ({json.dumps(scenario)} === 'role_changes_during_profile') {{
-        const mount = mounted();
+      if ({json.dumps(scenario)} === 'profile') {{
+        const stale = initializeAdminHome();
         await Promise.resolve();
-        const firstShow = shown();
-        const secondShow = shown();
-        resolveProfile({{ data: {{ active_role: 'teacher' }} }});
-        await Promise.all([mount, firstShow, secondShow]);
-      }} else {{
-        const mount = mounted();
-        await Promise.resolve();
+        storage.accessToken = 'teacher-token'; storage.userInfo = {{ active_role: 'teacher' }};
         resolveProfile({{ data: {{ active_role: 'admin' }} }});
-        while (!resolveLists.length) await Promise.resolve();
-        resolveLists.shift()({{ data: {{ items: [] }} }});
-        await mount;
-        const firstShow = shown();
-        await firstShow;
-        const secondShow = shown();
-        const thirdShow = shown();
-        while (!resolveLists.length) await Promise.resolve();
-        const callsBeforeRelease = listCalls;
-        while (resolveLists.length) resolveLists.shift()({{ data: {{ items: [] }} }});
-        await Promise.all([secondShow, thirdShow]);
-        output(JSON.stringify(callsBeforeRelease));
+        await stale;
+      }} else if ({json.dumps(scenario)} === 'list') {{
+        const pending = initializeAdminHome();
+        await Promise.resolve(); resolveProfile({{ data: {{ active_role: 'admin' }} }});
+        while (!resolveList) await Promise.resolve();
+        storage.accessToken = 'teacher-token'; storage.userInfo = {{ active_role: 'teacher' }};
+        resolveList({{ data: {{ items: ['old-admin-item'] }} }});
+        await pending;
+      }} else {{
+        await initializeAdminHome();
+        await initializeAdminHome();
       }}
-      output(JSON.stringify(listCalls));
+      process.stdout.write(JSON.stringify({{ profileCalls, listCalls, role: storage.userInfo.active_role, token: storage.accessToken, items: items.value }}));
     """
-    result = subprocess.run(
-        ['node', '--input-type=module', '--eval', script],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        encoding='utf-8',
-        check=True,
-    )
-    return json.loads(result.stdout.splitlines()[-1])
+    result = subprocess.run(['node', '--input-type=module', '--eval', script], cwd=ROOT, capture_output=True, text=True, encoding='utf-8', check=True)
+    return json.loads(result.stdout)
 
 
-def test_delayed_profile_role_change_prevents_all_institution_requests():
-    assert run_admin_async_scenario('role_changes_during_profile') == 0
+def test_stale_profile_response_does_not_restore_old_admin_session():
+    result = run_stale_admin_response_scenario('profile')
+    assert result == {'profileCalls': 1, 'listCalls': 0, 'role': 'teacher', 'token': 'teacher-token', 'items': []}
 
 
-def test_concurrent_valid_admin_onshow_calls_share_one_institution_request():
-    assert run_admin_async_scenario('concurrent_admin_onshow') == 2
+def test_stale_institution_response_does_not_write_admin_items():
+    result = run_stale_admin_response_scenario('list')
+    assert result['items'] == []
+    assert result['role'] == 'teacher'
+
+
+def test_failed_profile_initialization_can_retry():
+    result = run_stale_admin_response_scenario('retry')
+    assert result['profileCalls'] == 2
 
 
 def function_body(source: str, name: str) -> str:

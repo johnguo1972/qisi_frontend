@@ -58,7 +58,7 @@ import { ref, onMounted } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { institutionApi, authApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
-import { ensurePageRole } from '@/utils/roles'
+import { currentSessionRole, ensurePageRole } from '@/utils/roles'
 import RoleSwitcher from '@/components/RoleSwitcher.vue'
 
 const userInfo = ref({ display_name: '管理员' })
@@ -68,6 +68,15 @@ const userStore = useUserStore()
 let initializationPromise: Promise<void> | null = null
 let institutionsLoadPromise: Promise<void> | null = null
 
+function sessionSnapshot() {
+  return [uni.getStorageSync('accessToken'), currentSessionRole()]
+}
+
+function sessionUnchanged(snapshot: unknown[]) {
+  const [accessToken, role] = sessionSnapshot()
+  return accessToken === snapshot[0] && role === snapshot[1]
+}
+
 async function loadInstitutions() {
   if (!ensurePageRole('admin')) return
   if (institutionsLoadPromise) return institutionsLoadPromise
@@ -75,7 +84,9 @@ async function loadInstitutions() {
   institutionsLoadPromise = (async () => {
   try {
     if (!ensurePageRole('admin')) return
+    const snapshot = sessionSnapshot()
     const res = await institutionApi.list()
+    if (!sessionUnchanged(snapshot) || !ensurePageRole('admin')) return
     console.log('[admin] institutions loaded:', res)
     items.value = res.data?.items || []
   } catch (e: any) {
@@ -92,10 +103,12 @@ async function loadInstitutions() {
 async function initializeAdminHome() {
   if (initializationPromise) return initializationPromise
 
-  initializationPromise = (async () => {
+  const promise = (async () => {
   if (!ensurePageRole('admin')) return
+  const snapshot = sessionSnapshot()
   try {
     const profile = await authApi.getProfile()
+    if (!sessionUnchanged(snapshot)) return
     if (profile.data) {
       userInfo.value = profile.data
       userStore.setUserInfo(profile.data)
@@ -107,7 +120,12 @@ async function initializeAdminHome() {
   if (!ensurePageRole('admin')) return
   await loadInstitutions()
   })()
-  return initializationPromise
+  initializationPromise = promise
+  try {
+    await promise
+  } finally {
+    if (initializationPromise === promise) initializationPromise = null
+  }
 }
 
 onMounted(async () => {

@@ -82,3 +82,30 @@ cd uniapp; npm run build:h5
 
 - Delayed Promise tests execute extracted lifecycle and loader bodies, including profile persistence and concurrent requests; they assert zero institution calls after a role change and one shared reload for concurrent valid calls.
 - No backend permission or endpoint path changed.
+
+## Fix round 2: stale async response remediation
+
+### RED evidence
+
+Added executable delayed-Promise contracts. Before this change they failed as expected: a stale profile response restored `admin` and triggered one list call after the stored session had changed to teacher; an in-flight list response wrote stale items after a teacher switch; a rejected profile left `initializationPromise` settled and blocked the second attempt.
+
+### Implementation
+
+- Added token-and-role session snapshots around profile and institution requests.
+- Drops stale profile/list responses before store or UI writes, and rechecks the administrator role before using a list response.
+- Clears `initializationPromise` in `finally`, while keeping concurrent callers attached to the same in-flight promise.
+
+### GREEN evidence
+
+The regular pytest process was blocked by an existing locked Django test database (`test_appdb`), so the same executable contracts were run directly without pytest collection:
+
+```powershell
+C:\Users\johng\miniconda3\envs\ai-tools\python.exe -c "import runpy; tests=runpy.run_path('tests/test_teacher_ai_explore_frontend.py'); [tests[name]() for name in tests if name.startswith('test_')]; print('13 direct contracts passed')"
+# 13 direct contracts passed
+
+C:\Users\johng\miniconda3\envs\ai-tools\python.exe -c "import runpy; tests=runpy.run_path('tests/test_multi_role_frontend_contract.py'); [tests[name]() for name in tests if name.startswith('test_')]; print('9 direct multi-role contracts passed')"
+# 9 direct multi-role contracts passed
+
+cd uniapp; npm run build:h5
+# DONE Build complete.
+```
