@@ -8,7 +8,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.accounts.roles import grant_user_role
+from apps.accounts.auth import get_request_role
+from apps.accounts.roles import grant_user_role, has_user_role
 from apps.institutions.models import Institution, InstitutionMember
 from apps.accounts.models import UserAccount
 from apps.institutions.serializers import (
@@ -42,7 +43,10 @@ def _member_list_impl(request, institution_id):
         }, status=status.HTTP_404_NOT_FOUND)
 
     # Allow platform admins OR institution admins to view members
-    is_platform_admin = request.user.role_type == 'admin'
+    is_platform_admin = (
+        get_request_role(request) == 'admin'
+        and has_user_role(request.user, 'admin')
+    )
     is_inst_admin = InstitutionMember.objects.filter(
         institution_id=institution_id,
         user=request.user,
@@ -117,7 +121,10 @@ def _add_member_impl(request, institution_id):
         }, status=status.HTTP_404_NOT_FOUND)
 
     # Allow platform admins OR institution admins to add members
-    is_platform_admin = request.user.role_type == 'admin'
+    is_platform_admin = (
+        get_request_role(request) == 'admin'
+        and has_user_role(request.user, 'admin')
+    )
     is_inst_admin = InstitutionMember.objects.filter(
         institution_id=institution_id,
         user=request.user,
@@ -162,7 +169,10 @@ def update_member(request, institution_id, user_id):
         }, status=status.HTTP_404_NOT_FOUND)
 
     # Allow platform admins OR institution admins to update members
-    is_platform_admin = request.user.role_type == 'admin'
+    is_platform_admin = (
+        get_request_role(request) == 'admin'
+        and has_user_role(request.user, 'admin')
+    )
     is_inst_admin = InstitutionMember.objects.filter(
         institution_id=institution_id,
         user=request.user,

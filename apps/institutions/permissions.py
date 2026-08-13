@@ -1,5 +1,7 @@
 from rest_framework import permissions
 
+from apps.accounts.auth import get_request_role
+from apps.accounts.roles import has_user_role
 from apps.institutions.models import InstitutionMember, ClassTeacher
 
 
@@ -7,14 +9,22 @@ class IsPlatformAdmin(permissions.BasePermission):
     """Only platform admins (role_type == 'admin') can access."""
 
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role_type == 'admin'
+        return (
+            request.user.is_authenticated
+            and get_request_role(request) == 'admin'
+            and has_user_role(request.user, 'admin')
+        )
 
 
 class IsInstitutionAdmin(permissions.BasePermission):
     """Only active admin members of the institution can access."""
 
     def has_object_permission(self, request, view, obj):
-        if not request.user.is_authenticated:
+        if (
+            not request.user.is_authenticated
+            or get_request_role(request) != 'teacher'
+            or not has_user_role(request.user, 'teacher')
+        ):
             return False
         institution_id = getattr(obj, 'id', None)
         if institution_id is None:
@@ -34,7 +44,11 @@ class IsClassTeacher(permissions.BasePermission):
     """Only teachers assigned to the class can access."""
 
     def has_object_permission(self, request, view, obj):
-        if not request.user.is_authenticated:
+        if (
+            not request.user.is_authenticated
+            or get_request_role(request) != 'teacher'
+            or not has_user_role(request.user, 'teacher')
+        ):
             return False
         class_id = getattr(obj, 'id', None)
         if class_id is None:

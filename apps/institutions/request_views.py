@@ -8,6 +8,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.accounts.auth import get_request_role
+from apps.accounts.roles import has_user_role
 from apps.institutions.models import Class, ClassJoinRequest, ClassStudent
 from apps.institutions.serializers import ClassJoinRequestSerializer
 
@@ -16,12 +18,16 @@ def _trace() -> str:
     return uuid.uuid4().hex[:16]
 
 
-def _check_teacher_of_class(user, class_id):
+def _check_teacher_of_class(request, class_id):
     """Return True if user is a teacher of the given class."""
     from apps.institutions.models import ClassTeacher
-    return ClassTeacher.objects.filter(
-        class_obj_id=class_id, teacher=user,
-    ).exists()
+    return (
+        get_request_role(request) == 'teacher'
+        and has_user_role(request.user, 'teacher')
+        and ClassTeacher.objects.filter(
+            class_obj_id=class_id, teacher=request.user,
+        ).exists()
+    )
 
 
 @api_view(['GET'])
@@ -35,7 +41,7 @@ def join_request_list(request, class_id):
             'code': 4004, 'message': '班级不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    if not _check_teacher_of_class(request.user, class_id):
+    if not _check_teacher_of_class(request, class_id):
         return Response({
             'code': 4003, 'message': '无权限访问', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
@@ -76,7 +82,7 @@ def approve_request(request, request_id):
             'code': 4004, 'message': '申请不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    if not _check_teacher_of_class(request.user, join_req.class_obj_id):
+    if not _check_teacher_of_class(request, join_req.class_obj_id):
         return Response({
             'code': 4003, 'message': '无权限操作', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
@@ -117,7 +123,7 @@ def reject_request(request, request_id):
             'code': 4004, 'message': '申请不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    if not _check_teacher_of_class(request.user, join_req.class_obj_id):
+    if not _check_teacher_of_class(request, join_req.class_obj_id):
         return Response({
             'code': 4003, 'message': '无权限操作', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)

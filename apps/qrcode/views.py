@@ -15,6 +15,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.models import StudentParentBind, UserAccount, WechatIdentity
+from apps.accounts.auth import get_request_role
 from apps.accounts.roles import VALID_ROLES, has_user_role
 from apps.accounts.serializers import serialize_user_session
 from apps.accounts.services import generate_tokens, get_or_create_user, verify_code
@@ -35,8 +36,11 @@ def trace_id():
 
 
 def effective_student(request):
-    if getattr(request.user, 'role_type', None) != 'parent':
+    active_role = get_request_role(request)
+    if active_role == 'student' and has_user_role(request.user, 'student'):
         return request.user
+    if active_role != 'parent' or not has_user_role(request.user, 'parent'):
+        return None
     child_id = cache.get(f'parent_context:{request.user.id}')
     if not child_id:
         return None
@@ -230,7 +234,15 @@ def parent_children(request):
 @permission_classes([IsAuthenticated])
 def parent_context(request):
     child_id = request.data.get('student_id')
-    if request.user.role_type != 'parent' or not StudentParentBind.objects.filter(parent_user_id=request.user, student_user_id=child_id, bind_status='active').exists():
+    if (
+        get_request_role(request) != 'parent'
+        or not has_user_role(request.user, 'parent')
+        or not StudentParentBind.objects.filter(
+            parent_user_id=request.user,
+            student_user_id=child_id,
+            bind_status='active',
+        ).exists()
+    ):
         return Response({'code': 403, 'message': '孩子未绑定或无权切换', 'data': None, 'trace_id': trace_id()}, status=403)
     cache.set(f'parent_context:{request.user.id}', str(child_id), timeout=1800)
     return Response({'code': 0, 'message': '代理对象已切换', 'data': {'student_id': child_id}, 'trace_id': trace_id()})
@@ -255,7 +267,15 @@ def class_student_codes(request, class_id):
         class_obj = Class.objects.get(pk=class_id)
     except Class.DoesNotExist:
         return Response({'code': 404, 'message': '班级不存在', 'data': None, 'trace_id': trace_id()}, status=404)
-    if request.user.role_type not in ('admin', 'teacher') or (request.user.role_type == 'teacher' and not ClassTeacher.objects.filter(class_obj=class_obj, teacher=request.user).exists()):
+    active_role = get_request_role(request)
+    allowed = (
+        active_role == 'admin' and has_user_role(request.user, 'admin')
+    ) or (
+        active_role == 'teacher'
+        and has_user_role(request.user, 'teacher')
+        and ClassTeacher.objects.filter(class_obj=class_obj, teacher=request.user).exists()
+    )
+    if not allowed:
         return Response({'code': 403, 'message': '无权查看班级学生码', 'data': None, 'trace_id': trace_id()}, status=403)
     rows = []
     for link in ClassStudent.objects.filter(class_obj=class_obj, status='active').select_related('student'):
@@ -332,9 +352,16 @@ def _mission_students(mission, requested_id=None):
         link = ClassStudent.objects.filter(class_obj=mission.class_obj, student_id=requested_id, status='active').select_related('student').first()
         return [link.student] if link else []
     if mission.class_obj_id:
-        return list(UserAccount.objects.filter(student_classes__class_obj=mission.class_obj, student_classes__status='active', role_type='student').distinct())
+        return list(UserAccount.objects.filter(
+            student_classes__class_obj=mission.class_obj,
+            student_classes__status='active',
+        ).distinct())
     ids = [str(value) for value in (mission.target_student_ids or [])]
-    return list(UserAccount.objects.filter(id__in=ids, role_type='student'))
+    return list(UserAccount.objects.filter(
+        id__in=ids,
+        role_grants__role='student',
+        role_grants__status='active',
+    ).distinct())
 
 
 def _paper_pdf(mission, students, mission_code):
@@ -449,7 +476,12 @@ def create_practice_sheet(request):
     except WrongBookItem.DoesNotExist:
         return Response({'code': 404, 'message': 'wrong book item not found', 'data': None, 'trace_id': trace_id()}, status=404)
     owner = effective_student(request)
-    if request.user.role_type not in ('teacher', 'admin') and (not owner or item.student_user_id_id != owner.id):
+    active_role = get_request_role(request)
+    is_staff_session = (
+        active_role in ('teacher', 'admin')
+        and has_user_role(request.user, active_role)
+    )
+    if not is_staff_session and (not owner or item.student_user_id_id != owner.id):
         return Response({'code': 403, 'message': 'no permission', 'data': None, 'trace_id': trace_id()}, status=403)
     code = uuid.uuid4().hex[:6].upper()
     while WrongbookPracticeSheet.objects.filter(sheet_code=code).exists():

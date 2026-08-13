@@ -10,6 +10,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.accounts.auth import get_request_role
+from apps.accounts.roles import has_user_role
 from apps.institutions.models import (
     Institution,
     InstitutionMember,
@@ -31,15 +33,25 @@ def _trace() -> str:
     return uuid.uuid4().hex[:16]
 
 
-def _check_teacher_of_class(user, class_id):
+def _is_teacher_request(request):
+    return (
+        get_request_role(request) == 'teacher'
+        and has_user_role(request.user, 'teacher')
+    )
+
+
+def _check_teacher_of_class(request, class_id):
     """Return True if user is a teacher of the given class."""
-    return ClassTeacher.objects.filter(
-        class_obj_id=class_id, teacher=user,
+    return _is_teacher_request(request) and ClassTeacher.objects.filter(
+        class_obj_id=class_id, teacher=request.user,
     ).exists()
 
 
 def _create_class_impl(request):
     """POST /api/v1/classes - Create a class. User must be a teacher member of the institution."""
+    if not _is_teacher_request(request):
+        return Response({'code': 4003, 'message': '无权限操作'}, status=403)
+
     institution_id = request.data.get('institution_id')
     if not institution_id:
         return Response({
@@ -102,6 +114,9 @@ def class_list_create(request):
 
 def _class_list_impl(request):
     """GET /api/v1/classes - List classes where user is a teacher."""
+    if not _is_teacher_request(request):
+        return Response({'code': 4003, 'message': '无权限访问'}, status=403)
+
     qs = Class.objects.filter(
         Q(class_teachers__teacher=request.user) | Q(creator_teacher=request.user),
     ).distinct().order_by('-created_at')
@@ -141,6 +156,9 @@ def class_list(request):
 @permission_classes([IsAuthenticated])
 def class_simple_list(request):
     """GET /api/v1/classes/simple - Simple list of classes for dropdown selectors (no pagination)."""
+    if not _is_teacher_request(request):
+        return Response({'code': 4003, 'message': '无权限访问'}, status=403)
+
     qs = Class.objects.filter(
         class_teachers__teacher=request.user,
         status='active',
@@ -200,7 +218,7 @@ def class_detail(request, class_id):
             'code': 4004, 'message': '班级不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    if not _check_teacher_of_class(request.user, class_id):
+    if not _check_teacher_of_class(request, class_id):
         return Response({
             'code': 4003, 'message': '无权限访问', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
@@ -239,7 +257,7 @@ def update_class(request, class_id):
             'code': 4004, 'message': '班级不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    if not _check_teacher_of_class(request.user, class_id):
+    if not _check_teacher_of_class(request, class_id):
         return Response({
             'code': 4003, 'message': '无权限操作', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
@@ -270,7 +288,7 @@ def regenerate_invite_code(request, class_id):
             'code': 4004, 'message': '班级不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    if not _check_teacher_of_class(request.user, class_id):
+    if not _check_teacher_of_class(request, class_id):
         return Response({
             'code': 4003, 'message': '无权限操作', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
@@ -303,7 +321,7 @@ def class_students(request, class_id):
             'code': 4004, 'message': '班级不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    if not _check_teacher_of_class(request.user, class_id):
+    if not _check_teacher_of_class(request, class_id):
         return Response({
             'code': 4003, 'message': '无权限访问', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
@@ -341,7 +359,7 @@ def class_learning_stats(request, class_id):
         cls = Class.objects.get(id=class_id)
     except Class.DoesNotExist:
         return Response({'code': 404, 'message': '班级不存在', 'data': None}, status=404)
-    if not _check_teacher_of_class(request.user, class_id):
+    if not _check_teacher_of_class(request, class_id):
         return Response({'code': 403, 'message': '无权访问'}, status=403)
 
     from apps.missions.models import LearningMission
@@ -387,7 +405,7 @@ def remove_student(request, class_id, student_id):
             'code': 4004, 'message': '班级不存在', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    if not _check_teacher_of_class(request.user, class_id):
+    if not _check_teacher_of_class(request, class_id):
         return Response({
             'code': 4003, 'message': '无权限操作', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)

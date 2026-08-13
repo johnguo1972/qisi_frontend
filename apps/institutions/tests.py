@@ -5,6 +5,7 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import UserAccount
 from apps.accounts.roles import grant_user_role, has_user_role
+from apps.accounts.services import generate_tokens
 from apps.institutions.models import (
     Institution,
     Class,
@@ -13,6 +14,13 @@ from apps.institutions.models import (
     ClassJoinRequest,
     ClassStudent,
 )
+
+
+def authenticate_as(client, user, role=None):
+    role = role or user.role_type
+    grant_user_role(user, role)
+    token = generate_tokens(user, role)['access_token']
+    client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
 
 
 class InstitutionMemberMultiRoleAPITest(TestCase):
@@ -35,7 +43,7 @@ class InstitutionMemberMultiRoleAPITest(TestCase):
             institution_name='Multi Role School',
         )
         self.members_url = f'/api/v1/institutions/{self.institution.id}/members'
-        self.client.force_authenticate(user=self.platform_admin)
+        authenticate_as(self.client, self.platform_admin)
 
     def test_active_institution_admin_can_also_be_added_as_teacher(self):
         InstitutionMember.objects.create(
@@ -590,7 +598,7 @@ class InstitutionAPITest(TestCase):
 
     def test_create_institution(self):
         """Admin can create institutions via POST /api/v1/admin/institutions."""
-        self.client.force_authenticate(user=self.admin_user)
+        authenticate_as(self.client, self.admin_user)
         response = self.client.post(
             '/api/v1/admin/institutions',
             {'institution_name': 'Test Primary School'},
@@ -608,7 +616,7 @@ class InstitutionAPITest(TestCase):
     def test_list_institutions(self):
         """GET /api/v1/admin/institutions returns paginated list."""
         Institution.objects.create(institution_name='School A')
-        self.client.force_authenticate(user=self.admin_user)
+        authenticate_as(self.client, self.admin_user)
         response = self.client.get('/api/v1/admin/institutions')
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -618,7 +626,7 @@ class InstitutionAPITest(TestCase):
 
     def test_non_admin_cannot_create(self):
         """Non-admin users get 403 when trying to create institutions."""
-        self.client.force_authenticate(user=self.teacher_user)
+        authenticate_as(self.client, self.teacher_user)
         response = self.client.post(
             '/api/v1/admin/institutions',
             {'institution_name': 'Unauthorized School'},
@@ -660,7 +668,7 @@ class ClassAPITest(TestCase):
 
     def test_create_class(self):
         """Teacher can create a class via POST /api/v1/classes."""
-        self.client.force_authenticate(user=self.teacher_user)
+        authenticate_as(self.client, self.teacher_user)
         response = self.client.post(
             '/api/v1/classes',
             {
@@ -692,7 +700,7 @@ class ClassAPITest(TestCase):
         ClassTeacher.objects.create(
             class_obj=cls, teacher=self.teacher_user, role='owner',
         )
-        self.client.force_authenticate(user=self.teacher_user)
+        authenticate_as(self.client, self.teacher_user)
         response = self.client.get('/api/v1/classes')
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -703,7 +711,7 @@ class ClassAPITest(TestCase):
 
     def test_non_member_cannot_create(self):
         """Students who are not institution members get 403 when creating a class."""
-        self.client.force_authenticate(user=self.student_user)
+        authenticate_as(self.client, self.student_user)
         response = self.client.post(
             '/api/v1/classes',
             {
@@ -752,7 +760,7 @@ class JoinRequestAPITest(TestCase):
 
     def test_student_submit_join_request(self):
         """Student can submit a join request via POST /api/v1/classes/join-request."""
-        self.client.force_authenticate(user=self.student_user)
+        authenticate_as(self.client, self.student_user)
         response = self.client.post(
             '/api/v1/classes/join-request',
             {
@@ -787,7 +795,7 @@ class JoinRequestAPITest(TestCase):
             request_type='self_apply',
             status='pending',
         )
-        self.client.force_authenticate(user=self.teacher_user)
+        authenticate_as(self.client, self.teacher_user)
         response = self.client.post(
             f'/api/v1/classes/join-requests/{join_req.id}/approve',
             {},
@@ -810,7 +818,7 @@ class JoinRequestAPITest(TestCase):
 
     def test_join_by_invite_code(self):
         """Student can join a class by invite code via POST /api/v1/student/classes/join-by-code."""
-        self.client.force_authenticate(user=self.student_user)
+        authenticate_as(self.client, self.student_user)
         response = self.client.post(
             '/api/v1/student/classes/join-by-code',
             {
@@ -836,7 +844,7 @@ class JoinRequestAPITest(TestCase):
 
     def test_invalid_invite_code(self):
         """Student gets 400 when using an invalid invite code."""
-        self.client.force_authenticate(user=self.student_user)
+        authenticate_as(self.client, self.student_user)
         response = self.client.post(
             '/api/v1/student/classes/join-by-code',
             {
@@ -870,7 +878,7 @@ class EndToEndFlowTest(TestCase):
 
     def test_full_flow(self):
         # 1. Admin creates institution
-        self.client.force_authenticate(user=self.admin)
+        authenticate_as(self.client, self.admin)
         resp = self.client.post('/api/v1/admin/institutions', {
             'institution_name': 'Test Academy',
             'contact_name': 'John',
@@ -888,7 +896,7 @@ class EndToEndFlowTest(TestCase):
         self.assertEqual(resp.status_code, 200)
 
         # 3. Teacher creates class
-        self.client.force_authenticate(user=self.teacher)
+        authenticate_as(self.client, self.teacher)
         resp = self.client.post('/api/v1/classes', {
             'institution_id': inst_id,
             'class_name': 'Math 101',
@@ -900,7 +908,7 @@ class EndToEndFlowTest(TestCase):
         invite_code = resp.data['data']['invite_code']
 
         # 4. Student joins by invite code
-        self.client.force_authenticate(user=self.student)
+        authenticate_as(self.client, self.student)
         resp = self.client.post('/api/v1/student/classes/join-by-code', {
             'invite_code': invite_code,
             'applicant_name': self.student.display_name,
@@ -918,7 +926,7 @@ class EndToEndFlowTest(TestCase):
         self.assertEqual(our_class[0]['class_name'], 'Math 101')
 
         # 6. Teacher sees student in class
-        self.client.force_authenticate(user=self.teacher)
+        authenticate_as(self.client, self.teacher)
         resp = self.client.get(f'/api/v1/classes/{cls_id}/students')
         self.assertEqual(resp.status_code, 200)
         items = resp.data['data']['items']
