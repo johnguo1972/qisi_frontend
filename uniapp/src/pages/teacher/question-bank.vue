@@ -472,7 +472,13 @@ async function handleBatchAi(model?: string) {
   try { await questionApi.batchAi(selectedQuestionIds.value, model); uni.showToast({ title: '批量AI任务已提交', icon: 'success' }) }
   catch { uni.showToast({ title: '批量AI提交失败', icon: 'none' }) }
 }
-function handleAiExplore() { handleBatchAi() }
+async function handleAiExplore() {
+  if (!selectedQuestionIds.value.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
+  try {
+    await Promise.all(selectedQuestionIds.value.map(id => questionApi.aiProcessProbe(id)))
+    uni.showToast({ title: 'AI探索任务已提交', icon: 'success' })
+  } catch { uni.showToast({ title: 'AI探索提交失败', icon: 'none' }) }
+}
 async function handleAiModeA() {
   if (!selectedQuestionIds.value.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
   try {
