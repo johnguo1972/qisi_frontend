@@ -1,12 +1,14 @@
 """Authentication services: SMS code, JWT token generation, verification."""
-import random
-from datetime import datetime
 import logging
+import random
 
 from django.core.cache import cache
+from django.db import transaction
+from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import UserAccount
+from .roles import grant_user_role, has_user_role
 
 logger = logging.getLogger(__name__)
 
@@ -58,33 +60,50 @@ def verify_code(mobile: str, code: str) -> bool:
     return cached == code
 
 
-def get_or_create_user(mobile: str, role_type: str = 'student') -> UserAccount:
-    """Get or create user by mobile, updating role_type on each login."""
+class RoleNotGranted(Exception):
+    """Raised when a session role has no active grant."""
+
+    def __init__(self, role: str):
+        self.role = role
+        super().__init__(f"role not granted: {role}")
+
+
+@transaction.atomic
+def get_or_create_user(
+    mobile: str, initial_role: str = 'student'
+) -> tuple[UserAccount, bool]:
+    """Create a new account with one safe initial grant; never change an existing account's roles."""
     user = UserAccount.objects.filter(mobile=mobile).first()
-    if user:
-        created = False
-    else:
+    if user is None:
         display_name = f"User{mobile[-4:]}"
         user = UserAccount.objects.create(
             mobile=mobile,
-            role_type=role_type,
+            role_type=initial_role,
             display_name=display_name,
             status='active',
             password='',
         )
+        grant_user_role(user, initial_role)
         created = True
-    # Update role_type on each login (user selected a different role tab)
-    if user.role_type != role_type:
-        user.role_type = role_type
-        user.save(update_fields=['role_type'])
-    user.last_login = datetime.now()
+    else:
+        created = False
+
+    user.last_login = timezone.now()
     user.save(update_fields=['last_login'])
-    return user
+    return user, created
 
 
-def generate_tokens(user: UserAccount) -> dict:
-    """Generate JWT access and refresh tokens."""
+def generate_tokens(user: UserAccount, active_role: str) -> dict:
+    """Generate a JWT pair bound to one currently authorized role."""
+    try:
+        granted = has_user_role(user, active_role)
+    except ValueError as exc:
+        raise RoleNotGranted(active_role) from exc
+    if not granted:
+        raise RoleNotGranted(active_role)
+
     refresh = RefreshToken.for_user(user)
+    refresh['active_role'] = active_role
     return {
         'access_token': str(refresh.access_token),
         'refresh_token': str(refresh),

@@ -2,6 +2,7 @@
 from django.core.management.base import BaseCommand
 
 from apps.accounts.models import UserAccount
+from apps.accounts.roles import grant_user_role
 
 
 class Command(BaseCommand):
@@ -31,18 +32,11 @@ class Command(BaseCommand):
                 'status': 'active',
             },
         )
+        grant_user_role(user, 'admin')
         if not created:
-            # Update role if it changed
-            if user.role_type != 'admin':
-                user.role_type = 'admin'
-                user.save(update_fields=['role_type'])
-                self.stdout.write(self.style.WARNING(
-                    f'Updated {display_name} ({mobile}) role to admin',
-                ))
-            else:
-                self.stdout.write(
-                    self.style.WARNING(f'Admin {display_name} ({mobile}) already exists'),
-                )
+            self.stdout.write(
+                self.style.WARNING(f'Admin grant for {display_name} ({mobile}) is ready'),
+            )
 
         self.stdout.write(self.style.SUCCESS(
             f'Admin user ready: {mobile} / {display_name}',

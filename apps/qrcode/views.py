@@ -15,7 +15,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.models import StudentParentBind, UserAccount, WechatIdentity
-from apps.accounts.serializers import ProfileSerializer
+from apps.accounts.roles import VALID_ROLES, has_user_role
+from apps.accounts.serializers import serialize_user_session
 from apps.accounts.services import generate_tokens, get_or_create_user, verify_code
 from apps.institutions.models import ClassStudent
 from apps.missions.models import LearningMission
@@ -184,7 +185,12 @@ def wechat_login(request):
         return Response({'code': 400, 'message': result.get('errmsg', '微信登录失败'), 'data': None, 'trace_id': trace_id()}, status=400)
     identity = WechatIdentity.objects.select_related('user').filter(appid=appid, openid=result['openid']).first()
     if identity:
-        return Response({'code': 0, 'message': '登录成功', 'data': {**generate_tokens(identity.user), 'user': ProfileSerializer(identity.user).data}, 'trace_id': trace_id()})
+        active_role = request.data.get('role_type') or identity.user.role_type
+        if active_role not in VALID_ROLES:
+            return Response({'code': 'INVALID_ROLE', 'message': 'Invalid role', 'data': None, 'trace_id': trace_id()}, status=400)
+        if not has_user_role(identity.user, active_role):
+            return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
+        return Response({'code': 0, 'message': '登录成功', 'data': {**generate_tokens(identity.user, active_role), 'user': serialize_user_session(identity.user, active_role)}, 'trace_id': trace_id()})
     return Response({'code': 1001, 'message': '请先绑定手机号', 'data': {'bind_token': cache_wechat_pending(appid, result['openid'], result.get('unionid', ''))}, 'trace_id': trace_id()})
 
 
@@ -197,10 +203,20 @@ def wechat_bind(request):
     verify = str(request.data.get('verify_code') or '')
     if not pending or not mobile or not verify_code(mobile, verify):
         return Response({'code': 4001, 'message': '绑定信息无效或验证码错误', 'data': None, 'trace_id': trace_id()}, status=400)
-    user = get_or_create_user(mobile, role_type=request.data.get('role_type', 'student'))
+    existing_user = UserAccount.objects.filter(mobile=mobile).first()
+    active_role = request.data.get('role_type') or (
+        existing_user.role_type if existing_user is not None else 'student'
+    )
+    if active_role not in VALID_ROLES:
+        return Response({'code': 'INVALID_ROLE', 'message': 'Invalid role', 'data': None, 'trace_id': trace_id()}, status=400)
+    if existing_user is None and active_role not in ('student', 'parent'):
+        return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
+    if existing_user is not None and not has_user_role(existing_user, active_role):
+        return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
+    user, _ = get_or_create_user(mobile, initial_role=active_role)
     identity, _ = WechatIdentity.objects.update_or_create(user=user, defaults={'appid': pending['appid'], 'openid': pending['openid'], 'unionid': pending.get('unionid', '')})
     cache.delete(pending_key)
-    return Response({'code': 0, 'message': '绑定成功', 'data': {**generate_tokens(user), 'user': ProfileSerializer(user).data}, 'trace_id': trace_id()})
+    return Response({'code': 0, 'message': '绑定成功', 'data': {**generate_tokens(user, active_role), 'user': serialize_user_session(user, active_role)}, 'trace_id': trace_id()})
 
 
 @api_view(['GET'])

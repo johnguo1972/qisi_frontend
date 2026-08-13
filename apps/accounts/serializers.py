@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import UserAccount
+from .roles import get_user_roles
 
 
 class LoginSerializer(serializers.Serializer):
@@ -23,3 +24,14 @@ class ProfileUpdateSerializer(serializers.Serializer):
 
 class RefreshTokenSerializer(serializers.Serializer):
     refresh_token = serializers.CharField()
+
+
+def serialize_user_session(user, active_role):
+    """Serialize account data with session-scoped role compatibility fields."""
+    data = ProfileSerializer(user).data
+    data.update({
+        'roles': get_user_roles(user),
+        'active_role': active_role,
+        'role_type': active_role,
+    })
+    return data

@@ -1,5 +1,13 @@
 """Custom DRF authentication that allows unauthenticated requests."""
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.authentication import JWTAuthentication
+
+from .roles import VALID_ROLES, has_user_role
+
+
+def get_request_role(request) -> str | None:
+    """Return the independently authenticated role for this request."""
+    return getattr(request, 'active_role', None)
 
 
 class OptionalJWTAuthentication(JWTAuthentication):
@@ -13,4 +21,18 @@ class OptionalJWTAuthentication(JWTAuthentication):
         header = self.get_header(request)
         if header is None:
             return None
-        return super().authenticate(request)
+
+        result = super().authenticate(request)
+        if result is None:
+            return None
+
+        user, validated_token = result
+        active_role = validated_token.get('active_role') or user.role_type
+        if active_role not in VALID_ROLES or not has_user_role(user, active_role):
+            raise AuthenticationFailed('Role is no longer granted', code='role_not_granted')
+
+        request.active_role = active_role
+        # Compatibility for existing permission code. This is the request-loaded
+        # instance only and must never be persisted by authentication.
+        user.role_type = active_role
+        return user, validated_token
