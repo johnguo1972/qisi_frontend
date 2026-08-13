@@ -1106,20 +1106,18 @@ def test_single_view_uses_injectable_dispatch_and_keeps_envelope_and_permission(
     )
 
     assert response.status_code == 200
-    assert response.data == {
-        "success": True,
-        "data": {
-            "task_id": "task-1",
-            "status": "pending",
-            "question_id": variant_records.question.id,
-        },
-        "message": "变式题生成任务已提交",
-    }
+    assert response.data["success"] is True
+    assert response.data["data"]["status"] == "pending"
+    assert response.data["data"]["question_id"] == str(variant_records.question.id)
+    created_task = VariantTask.objects.get(id=response.data["data"]["task_id"])
+    assert created_task.original_question_id == variant_records.question.id
+    assert created_task.variant_mode == "数值变化"
     assert dispatched == [
         {
-            "question_id": variant_records.question.id,
+            "question_id": str(variant_records.question.id),
             "variant_mode": "数值变化",
             "tree_node_id": None,
+            "variant_task_id": str(created_task.id),
         }
     ]
 
@@ -1141,7 +1139,7 @@ def test_batch_view_uses_injectable_dispatch_and_keeps_envelope(
     dispatched = []
     monkeypatch.setattr(
         views,
-        "batch_variant_task_dispatch",
+        "generate_variant_task_dispatch",
         lambda **kwargs: dispatched.append(kwargs) or SimpleNamespace(id="batch-1"),
         raising=False,
     )
@@ -1165,20 +1163,19 @@ def test_batch_view_uses_injectable_dispatch_and_keeps_envelope(
     )
 
     assert response.status_code == 200
-    assert response.data == {
-        "success": True,
-        "data": {
-            "task_id": "batch-1",
-            "status": "pending",
-            "question_count": 1,
-        },
-        "message": "已提交 1 道变式题生成任务",
-    }
+    assert response.data["success"] is True
+    assert response.data["data"]["status"] == "pending"
+    assert response.data["data"]["question_count"] == 1
+    assert len(response.data["data"]["task_ids"]) == 1
+    created_task = VariantTask.objects.get(id=response.data["data"]["task_ids"][0])
+    assert created_task.original_question_id == variant_records.question.id
+    assert created_task.variant_mode == "情境变化"
     assert dispatched == [
         {
-            "question_ids": [str(question_id) for question_id in question_ids],
+            "question_id": str(question_ids[0]),
             "variant_mode": "情境变化",
             "tree_node_id": None,
+            "variant_task_id": response.data["data"]["task_ids"][0],
         }
     ]
 

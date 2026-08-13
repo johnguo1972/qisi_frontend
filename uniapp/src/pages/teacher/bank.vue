@@ -87,7 +87,7 @@
               <text>{{ selectedIds.includes(q.id) ? '☑' : '☐' }}</text>
             </view>
             <text class="col-stem" @click.stop="goEdit(q.id)">{{ q.stem_preview }}</text>
-            <text :class="['col-diff', 'diff-' + q.difficulty]">L{{ q.difficulty }}</text>
+            <text :class="['col-diff', 'diff-' + q.difficulty]">{{ q.difficulty_label || '未评定' }}</text>
             <text class="col-kp">{{ q.knowledge_points_count }}</text>
             <text :class="['col-confirm', q.review_status === 'confirmed' ? 'confirmed' : 'pending']">
               {{ q.review_status === 'confirmed' ? '✓' : '待审核' }}
@@ -191,7 +191,6 @@ const selectedKP = ref<number | null>(null)
 const tree = ref<TreeNode[]>([])
 const modes = ['a', 'b', 'c']
 const selectedIds = ref<number[]>([])
-
 const aiConfirmVisible = ref(false)
 const currentQuestion = ref<Question | null>(null)
 const aiAnswerHtml = ref<Record<string, string>>({ a: '', b: '', c: '' })

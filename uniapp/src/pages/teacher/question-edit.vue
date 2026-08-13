@@ -21,10 +21,19 @@
             <view class="meta-grid">
               <view class="field"><text class="field-label">题型</text><picker mode="selector" :range="questionTypeRange" :value="questionTypeIndex" @change="onQuestionTypeChange"><view class="control picker-control">{{ questionTypeLabel }}</view></picker></view>
               <view class="field"><text class="field-label">题号</text><input v-model="form.question_no" class="control" /></view>
-              <view class="field"><text class="field-label">难度</text><picker mode="selector" :range="difficultyRange" :value="difficultyIndex" @change="onDifficultyChange"><view class="control picker-control">L{{ form.difficulty }}</view></picker></view>
+              <view class="field"><text class="field-label">难度</text><picker mode="selector" :range="difficultyRange" :value="difficultyIndex" @change="onDifficultyChange"><view class="control picker-control">{{ difficultyLabel }}</view></picker></view>
             </view>
 
             <view class="content-field stem-field"><text class="field-label">题干 <text class="question-uuid">UUID：{{ question.id }}</text></text><textarea v-model="form.stem" class="editor-textarea" rows="6" @input="scheduleRender" /></view>
+
+            <view v-if="editableTables.length" class="content-field tables-field">
+              <view class="table-editor-heading"><text class="field-label">表格</text><text class="table-editor-hint">可直接修改单元格；保存题目时同步保存</text></view>
+              <view v-for="(table, tableIndex) in editableTables" :key="table.table_id || tableIndex" class="table-editor">
+                <view class="table-editor-toolbar"><text class="table-editor-title">表格{{ editableTables.length > 1 ? ` ${tableIndex + 1}` : '' }}</text><view class="table-editor-actions"><button size="mini" @click="addTableRow(tableIndex)">+ 行</button><button size="mini" @click="addTableColumn(tableIndex)">+ 列</button><button size="mini" type="warn" @click="removeTable(tableIndex)">删除表格</button></view></view>
+                <scroll-view scroll-x class="table-editor-scroll"><view class="table-editor-grid" :style="{ gridTemplateColumns: tableGridColumns(table) }"><view v-for="(cell, cellIndex) in flattenedEditableCells(table)" :key="cellIndex" class="table-editor-cell"><input v-model="table.cells[Math.floor(cellIndex / tableColumnCount(table))][cellIndex % tableColumnCount(table)]" class="table-cell-input" @input="scheduleRender" /><button size="mini" type="warn" class="table-cell-remove" @click="removeTableCell(tableIndex, cellIndex)">×</button></view></view></scroll-view>
+              </view>
+            </view>
+            <view v-else class="content-field tables-field"><view class="table-editor-heading"><text class="field-label">表格</text><button size="mini" @click="addTable">+ 添加表格</button></view></view>
 
             <view v-if="isChoice" class="content-field options-field">
               <text class="field-label">选项</text>
@@ -98,9 +107,9 @@
         <scroll-view scroll-y class="render-pane">
           <view class="render-toolbar"><text class="section-title">渲染预览</text><text class="render-hint">图片显示尺寸与左侧画布保存的尺寸一致</text></view>
             <view class="render-card">
-            <view class="render-stem"><text class="render-question-prefix">{{ form.question_no || question.question_no || '-' }}（{{ questionTypeLabel }}）.</text><view class="render-stem-content" v-html="stemHtml"></view></view>
+            <view class="render-stem"><text class="render-question-prefix">{{ form.question_no || question.question_no || '-' }}（{{ questionTypeLabel }}）.</text><view class="render-stem-content"><view v-html="stemHtml"></view><view v-if="renderedTables.length" class="render-tables"><view v-for="(table, tableIndex) in renderedTables" :key="table.table_id || tableIndex" class="render-table"><text class="render-table-caption">表格{{ renderedTables.length > 1 ? ` ${tableIndex + 1}` : '' }}</text><view class="render-data-grid" :style="{ gridTemplateColumns: table.gridColumns }"><view v-for="(cell, cellIndex) in table.cells" :key="cellIndex" class="render-data-cell" v-html="cell || '&nbsp;'" /></view></view></view></view></view>
             <view class="render-question-meta">
-              <view class="render-meta-group"><text class="render-meta-label">难度</text><text class="render-meta-chip">L{{ form.difficulty || '-' }}</text></view>
+              <view class="render-meta-group"><text class="render-meta-label">难度</text><text class="render-meta-chip">{{ difficultyLabel }}</text></view>
               <view v-if="selectedKps.length" class="render-meta-group"><text class="render-meta-label">知识点</text><text v-for="kp in selectedKps" :key="kp.id" class="render-meta-chip">{{ kp.name }}</text></view>
               <view v-if="questionTags.length" class="render-meta-group"><text class="render-meta-label">标签</text><text v-for="tag in questionTags" :key="tag.id" class="render-meta-chip tag-chip">{{ tag.name }}</text></view>
             </view>
@@ -149,7 +158,7 @@ const QUESTION_TYPE_OPTIONS = [
   { value: 'solution', label: '解答题' },
 ]
 const questionTypeRange = QUESTION_TYPE_OPTIONS.map((item) => item.label)
-const difficultyRange = ['L1', 'L2', 'L3', 'L4', 'L5']
+const difficultyRange = ['基础巩固', '较易', '中等', '较难', '困难']
 const question = ref<any>(null)
 const questionId = ref('')
 const selectedAiQuestionId = ref<string | number | null>(null)
@@ -163,12 +172,16 @@ const answerHtml = ref('')
 const analysisHtml = ref('')
 const solutionHtml = ref('')
 const renderedOptions = ref<Array<{ label: string; html: string }>>([])
+const renderedTables = ref<Array<{ table_id?: string; gridColumns: string; cells: string[] }>>([])
+type EditableTable = { table_id?: string; cells: string[][] }
+const editableTables = ref<EditableTable[]>([])
 let renderTimer: ReturnType<typeof setTimeout> | null = null
 let lastWheelAt = 0
 
 const questionTypeLabel = computed(() => QUESTION_TYPE_LABELS[form.value.question_type] || form.value.question_type || '未知题型')
 const questionTypeIndex = computed(() => Math.max(0, QUESTION_TYPE_OPTIONS.findIndex((item) => item.value === form.value.question_type)))
 const difficultyIndex = computed(() => Math.max(0, Math.min(4, Number(form.value.difficulty || 1) - 1)))
+const difficultyLabel = computed(() => form.value.difficulty ? difficultyRange[Math.max(0, Math.min(4, Number(form.value.difficulty) - 1))] : '未评定')
 const isChoice = computed(() => ['single_choice', 'multiple_choice'].includes(form.value.question_type))
 const subjectLabel = computed(() => ({ physics: '物理', math: '数学', chemistry: '化学' } as Record<string, string>)[String(question.value?.subject || '')] || '当前科目')
 
@@ -252,7 +265,39 @@ function getImageUrl(path: string) { return getMediaUrl(path) }
 function renderImageStyle(image: ImageItem) { return { width: `${displayWidth(image)}px`, maxWidth: '100%' } }
 function stripPlaceholders(html: string) { return html.replace(/\{\{image_\d+\}\}/g, '') }
 async function renderText(value: string) { return stripPlaceholders(await renderWithKatex(value || '')) }
-async function renderPreview() { stemHtml.value = await renderText(form.value.stem); answerHtml.value = await renderText(form.value.answer); analysisHtml.value = await renderText(form.value.analysis); solutionHtml.value = await renderText(form.value.solution); renderedOptions.value = await Promise.all(form.value.options.map(async (option) => ({ label: option.label, html: await renderText(option.content) }))) }
+function normalizePreviewRows(table: any): string[][] {
+  const rows = Array.isArray(table?.rows)
+    ? table.rows.filter((row: any) => Array.isArray(row) && row.some((cell: any) => String(cell ?? '').trim()))
+    : []
+  const width = Math.max(1, ...rows.map((row) => row.length))
+  return rows.map((row) => row.map((cell: any) => String(cell ?? '')).concat(Array(Math.max(0, width - row.length)).fill('')))
+}
+function cloneEditableTables(tables: any): EditableTable[] {
+  if (!Array.isArray(tables)) return []
+  return tables.map((table: any, index: number) => ({ table_id: table?.table_id || `table_${index + 1}`, cells: normalizePreviewRows(table) })).filter((table) => table.cells.length > 0)
+}
+function tableColumnCount(table: EditableTable): number { return Math.max(1, ...table.cells.map((row) => row.length)) }
+function tableGridColumns(table: EditableTable): string { return `repeat(${tableColumnCount(table)}, minmax(110px, 1fr))` }
+function flattenedEditableCells(table: EditableTable): string[] { const width = tableColumnCount(table); return table.cells.flatMap((row) => row.concat(Array(Math.max(0, width - row.length)).fill(''))) }
+function addTable() { editableTables.value.push({ table_id: `table_${Date.now()}`, cells: [['']] }); scheduleRender() }
+function addTableRow(index: number) { const table = editableTables.value[index]; if (!table) return; table.cells.push(Array(tableColumnCount(table)).fill('')); scheduleRender() }
+function addTableColumn(index: number) { const table = editableTables.value[index]; if (!table) return; table.cells.forEach((row) => row.push('')); scheduleRender() }
+function removeTable(index: number) { editableTables.value.splice(index, 1); scheduleRender() }
+function removeTableCell(tableIndex: number, cellIndex: number) { const table = editableTables.value[tableIndex]; if (!table) return; const width = tableColumnCount(table); const rowIndex = Math.floor(cellIndex / width); const columnIndex = cellIndex % width; if (table.cells[rowIndex]) table.cells[rowIndex].splice(columnIndex, 1); if (table.cells[rowIndex]?.length === 0) table.cells.splice(rowIndex, 1); if (table.cells.length === 0) editableTables.value.splice(tableIndex, 1); scheduleRender() }
+async function renderPreviewTable(table: any) {
+  const rows = normalizePreviewRows({ rows: table?.rows || table?.cells || [] })
+  const width = Math.max(1, ...rows.map((row) => row.length))
+  const cells = await Promise.all(rows.flatMap((row) => row).map((cell) => renderText(cell)))
+  return { table_id: table?.table_id, gridColumns: `repeat(${width}, minmax(72px, 1fr))`, cells }
+}
+async function renderPreview() {
+  stemHtml.value = await renderText(form.value.stem)
+  answerHtml.value = await renderText(form.value.answer)
+  analysisHtml.value = await renderText(form.value.analysis)
+  solutionHtml.value = await renderText(form.value.solution)
+  renderedOptions.value = await Promise.all(form.value.options.map(async (option) => ({ label: option.label, html: await renderText(option.content) })))
+  renderedTables.value = await Promise.all(editableTables.value.map(renderPreviewTable))
+}
 function scheduleRender() { if (renderTimer) clearTimeout(renderTimer); renderTimer = setTimeout(renderPreview, 150) }
 
 async function loadQuestion(id: string) {
@@ -261,7 +306,8 @@ async function loadQuestion(id: string) {
     const response: any = await getQuestionDetail(id); const data = response.data || response
     if (!data?.id) return
     question.value = data
-    form.value = { stem: data.stem || '', answer: data.answer || '', analysis: data.analysis || '', solution: data.solution || '', difficulty: Number(data.difficulty || 1), question_type: data.question_type || 'short_answer', question_no: data.question_no || '', page_start: data.page_start || 1, page_end: data.page_end || 1, options: data.options?.length ? data.options.map((option: any) => ({ label: option.option_label || option.label, content: option.content || '' })) : form.value.options }
+    form.value = { stem: data.display_stem || data.stem || '', answer: data.answer || '', analysis: data.analysis || '', solution: data.solution || '', difficulty: Number(data.difficulty || 1), question_type: data.question_type || 'short_answer', question_no: data.question_no || '', page_start: data.page_start || 1, page_end: data.page_end || 1, options: data.options?.length ? data.options.map((option: any) => ({ label: option.option_label || option.label, content: option.content || '' })) : form.value.options }
+    editableTables.value = cloneEditableTables(data.tables)
     const assets: any = await getQuestionAssets(id)
     images.value = (assets.data?.images || data.images || []).map(normalizeImage)
     if (images.value[0]) selectImage(images.value[0])
@@ -292,7 +338,7 @@ async function loadQuestionTags() { if (!questionId.value) return; try { const r
 async function addTag() { const name = newTag.value.trim(); if (!name) return; try { await addQuestionTag(questionId.value, { tag_name: name }); newTag.value = ''; await loadQuestionTags() } catch { uni.showToast({ title: '添加标签失败', icon: 'none' }) } }
 async function removeTag(tagId: string | number) { try { await removeQuestionTag(questionId.value, String(tagId)); questionTags.value = questionTags.value.filter((tag) => String(tag.id) !== String(tagId)) } catch { uni.showToast({ title: '删除标签失败', icon: 'none' }) } }
 
-async function handleSave() { if (saving.value || !question.value) return; saving.value = true; try { await updateQuestion(question.value.id, { ...form.value, knowledge_points: selectedKps.value.map((kp) => ({ id: kp.id, module: kp.module })), tags: questionTags.value.map((tag) => tag.name) }); uni.showToast({ title: '保存成功', icon: 'success' }) } catch (error: any) { uni.showToast({ title: error?.message || '保存失败', icon: 'none' }) } finally { saving.value = false } }
+async function handleSave() { if (saving.value || !question.value) return; saving.value = true; try { const response: any = await updateQuestion(question.value.id, { ...form.value, tables: editableTables.value.map((table) => ({ table_id: table.table_id, rows: table.cells })), knowledge_points: selectedKps.value.map((kp) => ({ id: kp.id, module: kp.module })), tags: questionTags.value.map((tag) => tag.name) }); const saved = response?.data || response; if (saved?.tables) { question.value = { ...question.value, ...saved }; editableTables.value = cloneEditableTables(saved.tables) } uni.showToast({ title: '保存成功', icon: 'success' }) } catch (error: any) { uni.showToast({ title: error?.message || '保存失败', icon: 'none' }) } finally { saving.value = false } }
 async function handleConfirm() { await handleSave(); if (!question.value) return; try { await confirmQuestion(question.value.id); uni.showToast({ title: '已确认题目', icon: 'success' }) } catch { uni.showToast({ title: '确认失败', icon: 'none' }) } }
 function handleBack() { uni.navigateBack({ delta: 1 }) }
 function handleBackToList() { handleBack() }
@@ -377,11 +423,12 @@ onUnmounted(() => { if (typeof window !== 'undefined') window.removeEventListene
 .section-card, .render-card { margin-bottom: 12px; padding: 18px; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.04); }.section-heading, .render-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }.section-title { font-size: 15px; font-weight: 600; }.section-hint, .render-hint { color: #909399; font-size: 12px; }
 .meta-grid { display: grid; grid-template-columns: 1.3fr 1fr .7fr; gap: 10px; margin-bottom: 14px; }.field, .content-field { margin-bottom: 14px; }.field-label { display: block; margin-bottom: 6px; color: #606266; font-size: 13px; font-weight: 600; }
 .control, .editor-textarea, .image-name { box-sizing: border-box; width: 100%; border: 1px solid #dcdfe6; border-radius: 5px; background: #fff; color: #303133; font-size: 13px; }.control { height: 34px; padding: 0 9px; }.picker-control { display: flex; align-items: center; justify-content: center; min-width: 0; line-height: 1.2; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.editor-textarea { display: block; min-height: 108px; padding: 10px; line-height: 1.7; resize: vertical; }.stem-field .editor-textarea { min-height: 132px; }.question-uuid { margin-left: 8px; color: #909399; font-size: 11px; font-weight: 400; user-select: all; }.option-editor { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }.option-label { min-width: 16px; padding-top: 10px; color: #409eff; font-weight: 600; }.option-textarea { min-height: 58px; height: 68px; max-height: 130px; }.answer-textarea { min-height: 46px; height: 52px; }.analysis-textarea { min-height: 150px; }
+.tables-field { overflow: hidden; }.table-editor-heading, .table-editor-toolbar, .table-editor-actions { display: flex; align-items: center; }.table-editor-heading, .table-editor-toolbar { justify-content: space-between; gap: 8px; }.table-editor-hint { color: #909399; font-size: 11px; }.table-editor { margin-top: 8px; padding: 8px; border: 1px solid #dcdfe6; border-radius: 5px; background: #fafafa; }.table-editor-title { color: #606266; font-size: 12px; font-weight: 600; }.table-editor-actions { gap: 5px; }.table-editor-actions button, .table-cell-remove { margin: 0; }.table-editor-scroll { margin-top: 8px; width: 100%; }.table-editor-grid { display: grid; width: max-content; min-width: 100%; border-top: 1px solid #dcdfe6; border-left: 1px solid #dcdfe6; }.table-editor-cell { position: relative; min-width: 110px; min-height: 36px; padding: 3px 25px 3px 3px; border-right: 1px solid #dcdfe6; border-bottom: 1px solid #dcdfe6; background: #fff; box-sizing: border-box; }.table-cell-input { width: 100%; height: 30px; padding: 0 5px; border: 1px solid #ebeef5; border-radius: 3px; box-sizing: border-box; color: #303133; font-size: 12px; }.table-cell-remove { position: absolute; top: 5px; right: 2px; width: 20px; height: 24px; padding: 0; color: #f56c6c; font-size: 15px; line-height: 20px; }
 .kp-picker { position: relative; }.kp-dropdown-panel { position: relative; z-index: 3; margin-top: 6px; overflow: hidden; border: 1px solid #dcdfe6; border-radius: 6px; background: #fff; box-shadow: 0 3px 12px rgba(0,0,0,.1); }.knowledge-tree-scroll { height: 420px; padding: 6px 0; box-sizing: border-box; }.tree-row { display: flex; align-items: center; min-height: 30px; gap: 6px; padding-right: 8px; color: #303133; font-size: 12px; cursor: pointer; }.tree-row:hover { background: #f5f7fa; }.tree-arrow { width: 14px; text-align: center; color: #909399; }.tree-grade { padding-left: 8px; font-weight: 600; }.tree-semester { padding-left: 26px; }.tree-chapter { padding-left: 44px; }.tree-leaf { min-height: 32px; padding-left: 60px; cursor: pointer; }.tree-checkbox { display: flex; width: 16px; height: 16px; align-items: center; justify-content: center; flex: 0 0 16px; border: 1px solid #bfc7d3; border-radius: 3px; color: #fff; background: #fff; font-size: 12px; }.tree-checkbox.checked { border-color: #409eff; background: #409eff; }.kp-dropdown-actions { padding: 8px; border-top: 1px solid #ebeef5; text-align: right; }.selected-kp-list, .tag-list { display: flex; flex-wrap: wrap; gap: 6px; min-height: 34px; margin-top: 8px; padding: 8px; border-radius: 5px; background: #fafafa; }.kp-tag { padding: 4px 8px; border-radius: 12px; color: #409eff; background: #ecf5ff; font-size: 12px; }.tag-remove { margin-left: 5px; color: #f56c6c; cursor: pointer; }.tag-add-row .control { flex: 1; }.edit-tag { padding: 4px 9px; border-radius: 12px; color: #67c23a; background: #f0f9eb; font-size: 12px; }
 .image-list { display: flex; flex-direction: column; gap: 10px; }.image-item { display: flex; gap: 10px; padding: 10px; border: 1px solid #ebeef5; border-radius: 6px; }.image-item.active { border-color: #409eff; box-shadow: 0 0 0 2px rgba(64,158,255,.12); }.image-thumb { width: 104px; height: 82px; flex: 0 0 104px; border-radius: 4px; background: #f5f7fa; cursor: pointer; }.image-settings { display: flex; flex: 1; min-width: 0; flex-direction: column; justify-content: space-between; }.image-name { height: 32px; padding: 0 8px; }.image-actions { justify-content: flex-end; margin-top: 8px; }
 .empty-hint { color: #a0a5ad; font-size: 12px; }
 .editor-bottom-space { height: 64px; }
 .canvas-editor { margin-top: 14px; padding: 12px; border: 1px solid #bfdcff; border-radius: 8px; background: #f8fbff; }.canvas-title { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: #606266; font-size: 12px; }.canvas-title text:first-child { color: #303133; font-weight: 600; }.canvas-tools { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin: -2px 0 10px; }.canvas-tools button { margin: 0; }.canvas-stage { position: relative; height: 320px; overflow: hidden; overscroll-behavior: contain; touch-action: none; user-select: none; background: #e9eef5; cursor: crosshair; }.canvas-surface { position: absolute; z-index: 1; left: 50%; top: 50%; display: block; max-width: none; transform: translate(-50%, -50%); }.canvas-image { display: block; max-width: none; object-fit: fill; pointer-events: none; }.selection-box { position: absolute; z-index: 2; border: 2px solid #409eff; background: rgba(64,158,255,.16); cursor: move; }.selection-resize { position: absolute; right: -6px; bottom: -6px; width: 10px; height: 10px; border: 1px solid #fff; border-radius: 2px; background: #409eff; cursor: nwse-resize; }.canvas-footer { justify-content: space-between; margin-top: 10px; color: #606266; font-size: 12px; }
-.render-toolbar { padding: 4px 4px 10px; }.render-card { min-height: calc(100vh - 110px); font-size: 14px; line-height: 1.8; }.render-stem { display: flex; align-items: flex-start; gap: 4px; }.render-question-prefix { flex: 0 0 auto; color: #303133; font-weight: 700; }.render-stem-content { min-width: 0; flex: 1; }.render-stem-content :deep(p:first-child) { margin-top: 0; }.render-question-meta { display: flex; flex-wrap: wrap; gap: 7px 14px; margin: 10px 0 14px; padding: 8px 10px; border-radius: 5px; background: #f7f9fc; }.render-meta-group { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }.render-meta-label { color: #909399; font-size: 12px; }.render-meta-chip { padding: 1px 7px; border-radius: 10px; color: #409eff; background: #ecf5ff; font-size: 12px; line-height: 20px; }.tag-chip { color: #67c23a; background: #f0f9eb; }.render-options { margin-top: 14px; }.render-option { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 9px; }.render-option-label { min-width: 16px; color: #409eff; font-weight: 600; }.render-images { margin: 14px 0; }.render-image-wrap { display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 12px; overflow: hidden; }.render-image { display: block; border-radius: 4px; cursor: pointer; }.render-image-caption { margin-top: 4px; color: #606266; font-size: 12px; }.render-answer { margin-top: 16px; padding: 12px; border-left: 3px solid #409eff; border-radius: 4px; background: #f8fafc; }.render-label { display: block; margin-bottom: 5px; color: #409eff; font-weight: 600; }.state { padding: 100px 0; text-align: center; color: #909399; }
+.render-toolbar { padding: 4px 4px 10px; }.render-card { min-height: calc(100vh - 110px); font-size: 14px; line-height: 1.8; }.render-stem { display: flex; align-items: flex-start; gap: 4px; }.render-question-prefix { flex: 0 0 auto; color: #303133; font-weight: 700; }.render-stem-content { min-width: 0; flex: 1; }.render-stem-content :deep(p:first-child) { margin-top: 0; }.render-tables { margin-top: 12px; overflow-x: auto; }.render-table { min-width: 100%; margin-bottom: 12px; }.render-table-caption { display: block; margin-bottom: 4px; color: #909399; font-size: 12px; }.render-data-grid { display: grid; width: max-content; min-width: 100%; border-top: 1px solid #dcdfe6; border-left: 1px solid #dcdfe6; }.render-data-cell { min-width: 72px; min-height: 28px; padding: 5px 7px; box-sizing: border-box; white-space: pre-wrap; overflow-wrap: anywhere; border-right: 1px solid #dcdfe6; border-bottom: 1px solid #dcdfe6; color: #606266; background: #fff; }.render-question-meta { display: flex; flex-wrap: wrap; gap: 7px 14px; margin: 10px 0 14px; padding: 8px 10px; border-radius: 5px; background: #f7f9fc; }.render-meta-group { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }.render-meta-label { color: #909399; font-size: 12px; }.render-meta-chip { padding: 1px 7px; border-radius: 10px; color: #409eff; background: #ecf5ff; font-size: 12px; line-height: 20px; }.tag-chip { color: #67c23a; background: #f0f9eb; }.render-options { margin-top: 14px; }.render-option { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 9px; }.render-option-label { min-width: 16px; color: #409eff; font-weight: 600; }.render-images { margin: 14px 0; }.render-image-wrap { display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 12px; overflow: hidden; }.render-image { display: block; border-radius: 4px; cursor: pointer; }.render-image-caption { margin-top: 4px; color: #606266; font-size: 12px; }.render-answer { margin-top: 16px; padding: 12px; border-left: 3px solid #409eff; border-radius: 4px; background: #f8fafc; }.render-label { display: block; margin-bottom: 5px; color: #409eff; font-weight: 600; }.state { padding: 100px 0; text-align: center; color: #909399; }
 @media (max-width: 900px) { .editor-shell { height: auto; min-height: 100vh; }.workspace { flex-direction: column; }.editor-pane, .render-pane { width: 100%; }.render-card { min-height: 300px; }.meta-grid { grid-template-columns: 1fr; }.canvas-title, .canvas-footer { align-items: flex-start; flex-direction: column; } }
 </style>

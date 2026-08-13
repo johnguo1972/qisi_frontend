@@ -71,7 +71,7 @@
           </view>
           <view v-for="q in questions" :key="q.id" class="table-row">
             <text class="col-stem" @click="goEdit(q.id)">{{ q.stem_preview }}</text>
-            <text :class="['col-diff', 'diff-' + q.difficulty]">L{{ q.difficulty }}</text>
+            <text :class="['col-diff', 'diff-' + q.difficulty]">{{ q.difficulty_label || '未评定' }}</text>
             <text class="col-kp">{{ q.knowledge_points_count }}</text>
             <text :class="['col-confirm', q.review_status === 'confirmed' ? 'confirmed' : 'pending']">
               {{ q.review_status === 'confirmed' ? '✓' : '待审核' }}

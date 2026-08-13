@@ -17,7 +17,7 @@ def update_question(question, data: dict, option_data: dict = None):
     updatable = [
         'stem', 'stem_html', 'answer', 'analysis', 'solution',
         'comment', 'raw_explanation', 'knowledge_points', 'difficulty',
-        'question_type', 'review_status', 'page_start', 'page_end', 'tags',
+        'question_type', 'review_status', 'page_start', 'page_end', 'tags', 'tables',
     ]
     for field in updatable:
         if field in data:

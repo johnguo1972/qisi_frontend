@@ -2,6 +2,7 @@
 from rest_framework import serializers
 from apps.parser.models import ExamQuestion, QuestionOption, QuestionImage, ExamPage
 from apps.papers.models import ExamPaper
+from apps.common.question_display import difficulty_label, normalize_tables, preview_text
 
 
 class QuestionOptionSerializer(serializers.ModelSerializer):
@@ -27,22 +28,34 @@ class QuestionImageListSerializer(serializers.ModelSerializer):
 class QuestionDetailSerializer(serializers.ModelSerializer):
     options = QuestionOptionSerializer(many=True, read_only=True)
     images = serializers.SerializerMethodField()
+    tables = serializers.SerializerMethodField()
+    display_stem = serializers.SerializerMethodField()
+    difficulty_label = serializers.SerializerMethodField()
     pdf_file_path = serializers.CharField(source='paper.pdf_file_path', read_only=True, default='')
 
     def get_images(self, obj):
         images = obj.images.filter(image_type='diagram').order_by('sort_order')
         return QuestionImageListSerializer(images, many=True).data
 
+    def get_tables(self, obj):
+        return normalize_tables(obj.tables)
+
+    def get_display_stem(self, obj):
+        return preview_text(obj.stem, obj.subquestions, obj.tables, limit=100000)
+
+    def get_difficulty_label(self, obj):
+        return difficulty_label(obj.difficulty)
+
     class Meta:
         model = ExamQuestion
         fields = [
             'id', 'question_no', 'section_title', 'question_type', 'subject',
             'paper',  # FK ID for frontend paper_id binding
-            'stem', 'stem_html', 'answer', 'analysis', 'solution', 'comment',
+            'stem', 'display_stem', 'stem_html', 'answer', 'analysis', 'solution', 'comment',
             'knowledge_points', 'difficulty', 'page_start', 'page_end',
             'bbox', 'confidence', 'formula_need_review', 'need_review',
             'review_status', 'parse_status', 'sort_order',
-            'options', 'images', 'pdf_file_path',
+            'options', 'images', 'tables', 'subquestions', 'difficulty_label', 'pdf_file_path',
             # AI enrichment fields
             'ai_answer_a', 'ai_answer_b', 'ai_answer_c',
             'ai_knowledge_enrichment', 'ai_probe_result',
@@ -57,7 +70,7 @@ class QuestionUpdateSerializer(serializers.ModelSerializer):
         fields = [
             'stem', 'stem_html', 'answer', 'analysis', 'solution',
             'comment', 'raw_explanation', 'knowledge_points', 'difficulty',
-            'question_type', 'review_status', 'page_start', 'page_end', 'tags',
+            'question_type', 'review_status', 'page_start', 'page_end', 'tags', 'tables',
         ]
 
 

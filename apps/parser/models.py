@@ -112,6 +112,17 @@ class ExamQuestion(models.Model):
     comment = models.TextField(null=True, blank=True, verbose_name='点评')
     raw_explanation = models.TextField(null=True, blank=True, verbose_name='原始解释')
     raw_text = models.TextField(null=True, blank=True, verbose_name='原始文本')
+    source_external_id = models.CharField(
+        max_length=255, null=True, blank=True, db_index=True,
+        verbose_name='来源题目标识',
+    )
+    source_question_type = models.CharField(
+        max_length=50, null=True, blank=True,
+        verbose_name='来源题型',
+    )
+    material = models.TextField(null=True, blank=True, verbose_name='材料')
+    subquestions = models.JSONField(null=True, blank=True, default=list, verbose_name='子问题')
+    tables = models.JSONField(null=True, blank=True, default=list, verbose_name='表格')
 
     knowledge_points = models.JSONField(null=True, blank=True, verbose_name='知识点')
     difficulty = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True, verbose_name='难度')

@@ -24,7 +24,9 @@ function courseFetch<T>(url: string, options?: RequestInit): Promise<T> {
     }
     if (!res.ok) {
       return res.text().then(text => {
-        throw new Error(`HTTP ${res.status}: ${text || res.statusText}`)
+        const error: any = new Error(`HTTP ${res.status}: ${text || res.statusText}`)
+        error.status = res.status
+        throw error
       })
     }
     return res.json()
