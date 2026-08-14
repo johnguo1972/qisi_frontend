@@ -196,3 +196,53 @@ def test_hash_is_deterministic_and_ignores_target_mode_but_covers_answer_facts()
         changed_vision,
     ):
         assert context.question_context_hash(changed) != base_hash
+
+
+def test_payload_and_hash_canonically_sort_nested_sets():
+    """Catch hash-seed-dependent ordering of set values inside question metadata."""
+    context = _question_context_module()
+    first = context.QuestionInput(
+        stem="set ordering",
+        metadata={
+            "tables": [
+                {
+                    "groups": [
+                        {"delta", "alpha", "charlie", "bravo"},
+                        {"four", "one", "three", "two"},
+                    ]
+                }
+            ],
+            "vision_result": {"labels": {"south", "north", "east", "west"}},
+        },
+    )
+    second = context.QuestionInput(
+        stem="set ordering",
+        metadata={
+            "tables": [
+                {
+                    "groups": [
+                        set(reversed(("alpha", "bravo", "charlie", "delta"))),
+                        set(reversed(("one", "two", "three", "four"))),
+                    ]
+                }
+            ],
+            "vision_result": {
+                "labels": set(reversed(("north", "east", "south", "west")))
+            },
+        },
+    )
+
+    payload = context.question_context_payload(first)
+
+    assert payload["tables"] == [
+        {
+            "groups": [
+                ["alpha", "bravo", "charlie", "delta"],
+                ["four", "one", "three", "two"],
+            ]
+        }
+    ]
+    assert payload["vision_result"] == {
+        "labels": ["east", "north", "south", "west"]
+    }
+    assert context.question_context_hash(first) == context.question_context_hash(second)

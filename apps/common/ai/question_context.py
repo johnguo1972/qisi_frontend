@@ -7,20 +7,28 @@ from decimal import Decimal
 import hashlib
 import json
 
-from .components.base import QuestionInput, to_plain_data
+from .components.base import QuestionInput
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
 
 
 def _plain_value(value: object) -> object:
     """Return only JSON-compatible values; never retain ORM objects/managers."""
-    value = to_plain_data(value)
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, Mapping):
         return {str(key): _plain_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set, frozenset)):
+    if isinstance(value, (list, tuple)):
         return [_plain_value(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        values = [_plain_value(item) for item in value]
+        return sorted(values, key=_canonical_json)
     if getattr(value, "_meta", None) is not None:
         return ""
     if callable(getattr(value, "all", None)):
