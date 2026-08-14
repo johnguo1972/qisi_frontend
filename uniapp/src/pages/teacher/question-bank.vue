@@ -139,6 +139,7 @@
       <!-- 右侧：操作面板 -->
       <RightActionPanel
         :all-shown="allAnswersShown"
+        :ai-mode-running="aiModeRunning"
         @refresh="handleRefresh"
         @toggle-answer="toggleAllAnswers"
         :compact-mode="viewMode === 'compact'"
@@ -181,8 +182,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
+import { ref, computed, onUnmounted } from 'vue'
+import { onShow, onUnload } from '@dcloudio/uni-app'
 import { questionApi, aiProcessProbe, importJsonPackage, getQuestionTags, addQuestionTag, removeQuestionTag, getTagList } from '@/api/questions'
 import { knowledgeApi } from '@/api/knowledge'
 import { favoriteApi } from '@/api/favorites'
@@ -227,6 +228,19 @@ const activeDifficulty = ref('')
 const showAnswerMap = ref<Record<string, boolean>>({})
 const selectedQuestionIds = ref<string[]>([])
 const viewMode = ref<'compact' | 'detail'>('detail')
+type AiMode = 'A' | 'B' | 'C'
+type AiModeTerminalStatus = 'complete' | 'partial' | 'failed' | 'skipped' | 'cancelled'
+type AiModePoll = {
+  taskId: string
+  mode: AiMode
+  timer?: ReturnType<typeof setTimeout>
+  releaseDelay?: () => void
+  cancelled: boolean
+}
+const aiModeRunning = ref<Record<AiMode, boolean>>({ A: false, B: false, C: false })
+const aiModeTaskIds = ref<Record<AiMode, string[]>>({ A: [], B: [], C: [] })
+const aiModePolls = new Map<string, AiModePoll>()
+let aiModePageActive = true
 
 const addMenuVisible = ref(false)
 const relatedVisible = ref(false)
@@ -295,6 +309,7 @@ const tagFilterLabel = computed(() => tagSearch.value || '全部标签')
 // Reload on every return from the edit page so saved changes are visible
 // without a manual refresh, while preserving the current filters and page.
 onShow(() => {
+  aiModePageActive = true
   loadKnowledgeTree()
   loadTags()
   loadQuestions()
@@ -526,11 +541,111 @@ async function handleAiExplore() {
 }
 async function handleAiMode(mode: 'A' | 'B' | 'C') {
   if (!selectedQuestionIds.value.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
+  if (aiModeRunning.value[mode]) {
+    uni.showToast({ title: `AI-${mode}模式正在处理中`, icon: 'none' })
+    return
+  }
+  aiModeRunning.value[mode] = true
+  aiModeTaskIds.value[mode] = []
   try {
-    await Promise.all(selectedQuestionIds.value.map(id => questionApi.aiProcessMode(id, mode)))
-    uni.showToast({ title: `AI-${mode}模式任务已提交`, icon: 'success' })
-  } catch { uni.showToast({ title: `AI-${mode}模式提交失败`, icon: 'none' }) }
+    const submissions = await Promise.all(selectedQuestionIds.value.map(async (id) => {
+      try {
+        const response: any = await questionApi.aiProcessMode(id, mode)
+        const taskId = response?.data?.task_id
+        if (response?.success !== true || !taskId) return null
+        return String(taskId)
+      } catch {
+        return null
+      }
+    }))
+    if (!aiModePageActive) return
+
+    const taskIds = submissions.filter((taskId): taskId is string => Boolean(taskId))
+    aiModeTaskIds.value[mode] = taskIds
+    if (!taskIds.length) {
+      uni.showToast({ title: `AI-${mode}模式提交失败`, icon: 'none' })
+      return
+    }
+    if (taskIds.length < selectedQuestionIds.value.length) {
+      uni.showToast({ title: `AI-${mode}部分任务提交失败`, icon: 'none' })
+    } else {
+      uni.showToast({ title: `AI-${mode}模式任务已提交`, icon: 'success' })
+    }
+
+    const terminalStatuses = await Promise.all(
+      taskIds.map(taskId => pollAiModeTask(taskId, mode))
+    )
+    if (!aiModePageActive) return
+    const completed = terminalStatuses.some(
+      status => status === 'complete' || status === 'partial'
+    )
+    if (completed) await loadQuestions()
+    if (terminalStatuses.some(status => status === 'failed')) {
+      uni.showToast({ title: `AI-${mode}模式处理失败，请稍后重试`, icon: 'none' })
+    } else if (terminalStatuses.some(status => status === 'skipped')) {
+      uni.showToast({ title: `AI-${mode}模式任务已跳过，请刷新后重试`, icon: 'none' })
+    } else if (completed) {
+      uni.showToast({ title: `AI-${mode}模式处理完成`, icon: 'success' })
+    }
+  } finally {
+    aiModeRunning.value[mode] = false
+    aiModeTaskIds.value[mode] = []
+  }
 }
+
+function waitForAiModePoll(poll: AiModePoll, milliseconds: number) {
+  return new Promise<void>((resolve) => {
+    const release = () => {
+      poll.releaseDelay = undefined
+      resolve()
+    }
+    poll.releaseDelay = release
+    poll.timer = setTimeout(release, milliseconds)
+  })
+}
+
+async function pollAiModeTask(taskId: string, mode: AiMode): Promise<AiModeTerminalStatus> {
+  const poll: AiModePoll = { taskId, mode, cancelled: false }
+  aiModePolls.set(taskId, poll)
+  try {
+    for (let attempt = 0; attempt < 900; attempt += 1) {
+      await waitForAiModePoll(poll, attempt === 0 ? 1000 : 5000)
+      if (poll.cancelled || !aiModePageActive) return 'cancelled'
+      try {
+        const response: any = await questionApi.getTaskStatus(taskId)
+        if (poll.cancelled || !aiModePageActive) return 'cancelled'
+        if (response?.success === false) return 'failed'
+        const status = response?.data?.status
+        if (status === 'complete' || status === 'partial' || status === 'failed' || status === 'skipped') {
+          return status
+        }
+      } catch {
+        if (attempt >= 899) return 'failed'
+      }
+    }
+    return 'failed'
+  } finally {
+    if (poll.timer) clearTimeout(poll.timer)
+    aiModePolls.delete(taskId)
+  }
+}
+
+function stopAiModePolling() {
+  aiModePageActive = false
+  aiModePolls.forEach((poll) => {
+    poll.cancelled = true
+    if (poll.timer) clearTimeout(poll.timer)
+    poll.releaseDelay?.()
+  })
+  aiModePolls.clear()
+  ;(['A', 'B', 'C'] as AiMode[]).forEach((mode) => {
+    aiModeRunning.value[mode] = false
+    aiModeTaskIds.value[mode] = []
+  })
+}
+
+onUnload(stopAiModePolling)
+onUnmounted(stopAiModePolling)
 
 function openAiAnswer(question: any, mode: 'ALL' | 'A' | 'B' | 'C' = 'ALL') {
   answerQuestion.value = question

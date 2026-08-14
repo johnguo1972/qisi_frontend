@@ -10,9 +10,15 @@
     <button class="action-btn btn-warning" @click="$emit('basket')">加入精选</button>
     <button class="action-btn btn-ai" @click="$emit('batch-ai')">批量AI</button>
     <button class="action-btn btn-ai-sub" @click="$emit('ai-explore')">AI探索</button>
-    <button class="action-btn btn-ai-sub" @click="$emit('ai-mode-a')">AI-A模式</button>
-    <button class="action-btn btn-ai-sub" @click="$emit('ai-mode-b')">AI-B模式</button>
-    <button class="action-btn btn-ai-sub" @click="$emit('ai-mode-c')">AI-C模式</button>
+    <button class="action-btn btn-ai-sub" :disabled="aiModeRunning?.A" @click="$emit('ai-mode-a')">
+      {{ aiModeRunning?.A ? 'AI-A处理中...' : 'AI-A模式' }}
+    </button>
+    <button class="action-btn btn-ai-sub" :disabled="aiModeRunning?.B" @click="$emit('ai-mode-b')">
+      {{ aiModeRunning?.B ? 'AI-B处理中...' : 'AI-B模式' }}
+    </button>
+    <button class="action-btn btn-ai-sub" :disabled="aiModeRunning?.C" @click="$emit('ai-mode-c')">
+      {{ aiModeRunning?.C ? 'AI-C处理中...' : 'AI-C模式' }}
+    </button>
   </view>
 </template>
 
@@ -20,6 +26,7 @@
 defineProps<{
   allShown?: boolean
   compactMode?: boolean
+  aiModeRunning?: Partial<Record<'A' | 'B' | 'C', boolean>>
 }>()
 
 defineEmits(['refresh', 'toggle-answer', 'toggle-mode', 'basket', 'batch-ai', 'ai-explore', 'ai-mode-a', 'ai-mode-b', 'ai-mode-c'])
@@ -48,6 +55,7 @@ defineEmits(['refresh', 'toggle-answer', 'toggle-mode', 'basket', 'batch-ai', 'a
 .btn-warning { background: #e6a23c; color: #fff; border-color: #e6a23c; }
 .btn-ai { background: #9254de; color: #fff; border-color: #9254de; }
 .btn-ai-sub { background: #f3e8ff; color: #7e22ce; border-color: #c084fc; }
+.btn-ai-sub:disabled { opacity: 0.65; cursor: not-allowed; }
 .btn-warning:hover { background: #ebb563; color: #fff; }
 .basket-count {
   font-size: 12px; color: #409eff; text-align: center;

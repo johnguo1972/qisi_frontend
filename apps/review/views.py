@@ -1,6 +1,7 @@
 """DRF views for review API."""
 import json
 import logging
+import uuid
 from rest_framework import generics, status as http_status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -18,8 +19,13 @@ from .serializers import (
     QuestionListSerializer, PaperReviewSerializer, QuestionImageListSerializer
 )
 from .services.question_edit_service import update_question
+from .ai_mode_dispatch import dispatch_single_mode_ai_task
 
 logger = logging.getLogger(__name__)
+
+
+def make_trace_id():
+    return str(uuid.uuid4())
 
 
 @api_view(['GET'])
@@ -240,12 +246,16 @@ def ai_process_single_mode(request, question_id, mode):
     serializer.is_valid(raise_exception=True)
     model = serializer.validated_data.get('model')
 
-    from .tasks import single_mode_ai_process_question
-    task = single_mode_ai_process_question.delay(question_id, mode, model=model)
+    dispatch = dispatch_single_mode_ai_task(str(question_id), mode, model)
 
     return Response({
         'success': True,
-        'data': {'task_id': task.id, 'status': 'pending', 'mode': mode},
+        'data': {
+            'task_id': dispatch.task_id,
+            'status': dispatch.status,
+            'mode': mode,
+            'deduplicated': not dispatch.created,
+        },
     })
 
 

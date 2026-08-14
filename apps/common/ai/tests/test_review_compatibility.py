@@ -1,6 +1,7 @@
 """Compatibility tests for review/common callers of the shared AI facade."""
 
 from io import StringIO
+from copy import deepcopy
 import json
 import logging
 import uuid
@@ -26,6 +27,7 @@ from apps.common.ai.components import (
     VisionExtractionComponent,
 )
 from apps.common.ai.answer_arbitration import (
+    ArbitrationError,
     ArbitrationOutcome,
     ArbitrationProviderError,
 )
@@ -412,6 +414,10 @@ def test_legacy_automatic_task_skips_without_creating_a_facade():
             "AIReviewService",
             side_effect=AssertionError("legacy constructor used"),
         ),
+        patch(
+            "apps.review.ai_mode_dispatch.dispatch_single_mode_ai_task",
+            side_effect=AssertionError("automatic task dispatched a mode"),
+        ) as mode_dispatch,
     ):
         result = batch_tasks.single_generate_ai_answers.run("legacy-question")
 
@@ -421,6 +427,7 @@ def test_legacy_automatic_task_skips_without_creating_a_facade():
         "reason": "automatic_generation_disabled",
     }
     service_factory.assert_not_called()
+    mode_dispatch.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -499,13 +506,29 @@ def test_single_mode_task_persists_its_route_model_unless_overridden(
         stem="1 + 1 = ?",
         ai_probe_result={},
         ai_vision_extract={},
+        ai_verifier_result=None,
         save=MagicMock(),
     )
-    service = _real_facade_with_components()
-    expected_model = model or service._task_route(task_key)[1]
+    service = MagicMock()
+    expected_model = model or 'configured-route-model'
+    service._get_question_image_urls.return_value = []
+    service._task_route.return_value = ('qwen', expected_model)
+    service._get_model.return_value = expected_model
+    service.solve_mode_with_arbitration.return_value = ArbitrationOutcome(
+        answer={'mode': mode, 'final_answer': '2'},
+        verification={'status': 'accepted'},
+        shared_verifier_result=None,
+    )
+    locked_queryset = MagicMock()
+    locked_queryset.get.return_value = question
 
     with (
         patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(
+            tasks.ExamQuestion.objects,
+            'select_for_update',
+            return_value=locked_queryset,
+        ),
         patch.object(tasks, "create_ai_review_service", return_value=service),
         patch.object(tasks.cache, "set"),
     ):
@@ -672,6 +695,196 @@ def test_review_single_mode_uses_facade_and_preserves_answer_metadata(
     assert saved_answer["generated_at"]
     assert question.ai_processing_status == "success"
     assert question.ai_processed_at is not None
+
+
+def test_single_mode_task_exposes_doubled_time_limits():
+    from apps.review import tasks
+
+    assert tasks.single_mode_ai_process_question.soft_time_limit == 3800
+    assert tasks.single_mode_ai_process_question.time_limit == 3900
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ('mode', 'field'),
+    [('A', 'ai_answer_a'), ('B', 'ai_answer_b'), ('C', 'ai_answer_c')],
+)
+def test_single_mode_success_uses_arbitration_and_updates_only_requested_mode(
+    mode, field
+):
+    from apps.review import tasks
+
+    question = _make_question()
+    question.ai_answer_a = {'mode': 'A', 'marker': 'old-a'}
+    question.ai_answer_b = {'mode': 'B', 'marker': 'old-b'}
+    question.ai_answer_c = {'mode': 'C', 'marker': 'old-c'}
+    question.ai_verifier_result = {'context_hash': 'old'}
+    question.save()
+    old_answers = {
+        name: deepcopy(getattr(question, name))
+        for name in ('ai_answer_a', 'ai_answer_b', 'ai_answer_c')
+    }
+    verification = {
+        'status': 'accepted',
+        'context_hash': 'new-context',
+        'trusted_answer': '2',
+    }
+    shared = {
+        'context_hash': 'new-context',
+        'independent_answer': '2',
+        'reference_answer_valid': True,
+    }
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service._task_route.return_value = ('qwen', 'configured-model')
+    service.solve_mode_with_arbitration.return_value = ArbitrationOutcome(
+        answer={'mode': mode, 'final_answer': '2', 'verification': verification},
+        verification=verification,
+        shared_verifier_result=shared,
+    )
+    locked_queryset = MagicMock()
+    locked_queryset.get.side_effect = ExamQuestion.objects.get
+
+    with (
+        patch.object(tasks, 'create_ai_review_service', return_value=service),
+        patch.object(
+            tasks.ExamQuestion.objects,
+            'select_for_update',
+            return_value=locked_queryset,
+        ) as select_for_update,
+        patch.object(tasks.cache, 'set'),
+    ):
+        result = tasks.single_mode_ai_process_question.run(
+            str(question.id), mode
+        )
+
+    assert result == {
+        'status': 'complete',
+        'question_id': str(question.id),
+        'mode': mode,
+    }
+    service.solve_mode_with_arbitration.assert_called_once()
+    assert service.solve_mode_with_arbitration.call_args.kwargs['mode'] == mode
+    select_for_update.assert_called_once_with()
+    question.refresh_from_db()
+    assert getattr(question, field)['final_answer'] == '2'
+    for other_field, old_value in old_answers.items():
+        if other_field != field:
+            assert getattr(question, other_field) == old_value
+    assert question.ai_verifier_result == shared
+    assert question.ai_processing_status == 'success'
+    assert question.ai_processed_at is not None
+    service.close.assert_called_once_with()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    'error',
+    [
+        ArbitrationProviderError(),
+        ArbitrationError('verification failed'),
+        RuntimeError('unexpected provider wrapper failure'),
+    ],
+)
+def test_single_mode_failure_preserves_old_mode_verifier_and_success_timestamp(
+    error
+):
+    from apps.review import tasks
+
+    question = _make_question()
+    question.ai_answer_a = {'mode': 'A', 'marker': 'byte-stable'}
+    question.ai_verifier_result = {'context_hash': 'old-verifier'}
+    question.ai_processing_status = 'success'
+    question.ai_processed_at = tasks.timezone.now()
+    question.save()
+    old_answer = deepcopy(question.ai_answer_a)
+    old_verifier = deepcopy(question.ai_verifier_result)
+    old_processed_at = question.ai_processed_at
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service.solve_mode_with_arbitration.side_effect = error
+
+    with (
+        patch.object(tasks, 'create_ai_review_service', return_value=service),
+        patch.object(tasks.cache, 'set'),
+    ):
+        result = tasks.single_mode_ai_process_question.run(
+            str(question.id), 'A'
+        )
+
+    assert result['status'] == 'failed'
+    question.refresh_from_db()
+    assert question.ai_answer_a == old_answer
+    assert question.ai_verifier_result == old_verifier
+    assert question.ai_processing_status == 'success'
+    assert question.ai_processed_at == old_processed_at
+    service.close.assert_called_once_with()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ('error', 'expected_status'),
+    [
+        (None, 'complete'),
+        (ArbitrationProviderError(), 'failed'),
+        ('soft_timeout', 'failed'),
+        (RuntimeError('unexpected'), 'failed'),
+    ],
+    ids=['success', 'handled_failure', 'soft_timeout', 'unexpected_exception'],
+)
+def test_single_mode_task_releases_its_owned_lock_on_every_terminal_path(
+    error, expected_status
+):
+    from celery.exceptions import SoftTimeLimitExceeded
+    from apps.review import tasks
+
+    question = _make_question()
+    task_id = f'owner-{expected_status}-{type(error).__name__}'
+    lock_key = f'ai-mode-lock:{question.id}:A'
+    tasks.cache.set(lock_key, json.dumps({'task_id': task_id}), timeout=4200)
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service._task_route.return_value = ('qwen', 'configured-model')
+    service.solve_mode_with_arbitration.return_value = ArbitrationOutcome(
+        answer={'mode': 'A', 'final_answer': '2'},
+        verification={'status': 'accepted'},
+        shared_verifier_result=None,
+    )
+    if error == 'soft_timeout':
+        service.solve_mode_with_arbitration.side_effect = SoftTimeLimitExceeded()
+    elif error is not None:
+        service.solve_mode_with_arbitration.side_effect = error
+
+    with patch.object(tasks, 'create_ai_review_service', return_value=service):
+        result = tasks.single_mode_ai_process_question.apply(
+            args=(str(question.id), 'A'), task_id=task_id
+        ).get()
+
+    assert result['status'] == expected_status
+    assert tasks.cache.get(lock_key) is None
+    service.close.assert_called_once_with()
+
+
+@pytest.mark.django_db
+def test_single_mode_task_never_releases_a_newer_lock_owner():
+    from apps.review import tasks
+
+    question = _make_question()
+    lock_key = f'ai-mode-lock:{question.id}:A'
+    newer_owner = json.dumps({'task_id': 'newer-owner'})
+    tasks.cache.set(lock_key, newer_owner, timeout=4200)
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service.solve_mode_with_arbitration.side_effect = RuntimeError('failed')
+
+    with patch.object(tasks, 'create_ai_review_service', return_value=service):
+        result = tasks.single_mode_ai_process_question.apply(
+            args=(str(question.id), 'A'), task_id='older-owner'
+        ).get()
+
+    assert result['status'] == 'failed'
+    assert tasks.cache.get(lock_key) == newer_owner
+    tasks.cache.delete(lock_key)
 
 
 @pytest.mark.django_db

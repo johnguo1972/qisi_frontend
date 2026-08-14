@@ -3,6 +3,8 @@ import json
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
 from django.core.cache import cache
+from django.urls import reverse
+from rest_framework.test import APIClient
 
 from apps.parser.models import ExamQuestion, ExamPaper
 from apps.common.exceptions import AIRequestError
@@ -343,19 +345,18 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertIsNone(self.question.difficulty)
 
     @patch.object(AIReviewService, 'analyze_knowledge')
-    @patch.object(AIReviewService, 'generate_answer_a')
-    @patch.object(AIReviewService, 'generate_answer_b')
-    @patch.object(AIReviewService, 'generate_answer_c')
+    @patch.object(AIReviewService, 'solve_mode_with_arbitration')
     def test_process_question_full_all_success(
-            self, mock_c, mock_b, mock_a, mock_knowledge):
+            self, mock_arbitrate, mock_knowledge):
         mock_knowledge.return_value = {
             'knowledge_points': [{'id': 1, 'module': '函数'}],
             'grade_term': {'label': '高一'},
             'solving_methods': ['代入法']
         }
-        mock_a.return_value = {'mode': 'A', 'final_answer': '5'}
-        mock_b.return_value = {'mode': 'B', 'final_answer': '5'}
-        mock_c.return_value = {'mode': 'C', 'final_answer': '5'}
+        mock_arbitrate.side_effect = lambda question, *, mode, **kwargs: MagicMock(
+            answer={'mode': mode, 'final_answer': '5'},
+            shared_verifier_result=None,
+        )
 
         with patch('apps.knowledge.models.KnowledgePoint.objects.filter') as mock_filter:
             mock_filter.return_value = _make_qs_mock([])
@@ -377,15 +378,14 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(results['answer_c']['mode'], 'C')
 
     @patch.object(AIReviewService, 'analyze_knowledge')
-    @patch.object(AIReviewService, 'generate_answer_a')
-    @patch.object(AIReviewService, 'generate_answer_b')
-    @patch.object(AIReviewService, 'generate_answer_c')
+    @patch.object(AIReviewService, 'solve_mode_with_arbitration')
     def test_process_question_full_knowledge_failure(
-            self, mock_c, mock_b, mock_a, mock_knowledge):
+            self, mock_arbitrate, mock_knowledge):
         mock_knowledge.side_effect = AIRequestError('API timeout')
-        mock_a.return_value = {'mode': 'A', 'final_answer': '5'}
-        mock_b.return_value = {'mode': 'B', 'final_answer': '5'}
-        mock_c.return_value = {'mode': 'C', 'final_answer': '5'}
+        mock_arbitrate.side_effect = lambda question, *, mode, **kwargs: MagicMock(
+            answer={'mode': mode, 'final_answer': '5'},
+            shared_verifier_result=None,
+        )
 
         with patch('apps.parser.models.QuestionImage.objects.filter') as mock_img:
             mock_img.return_value = _make_qs_mock([])
@@ -426,14 +426,45 @@ class AIProcessFullPipelineTest(TestCase):
                 'entities': [],
             },
             ModeAAnswerComponent: {
-                'mode': 'A', 'steps': [1, 2, 3], 'final_answer': '5',
+                'mode': 'A',
+                'steps': [
+                    {'step': 1, 'content': '列式'},
+                    {'step': 2, 'content': '求解'},
+                    {'step': 3, 'content': '验算'},
+                ],
+                'final_answer': '5',
                 'summary': '完成',
             },
             ModeBAnswerComponent: {
-                'mode': 'B', 'questions': [], 'final_answer': '5',
+                'mode': 'B',
+                'questions': [
+                    {
+                        'question': f'第{index}步应选择什么？',
+                        'options': {'A': '2', 'B': '3', 'C': '4', 'D': '5'},
+                        'correct_option': 'D',
+                        'correct_answer': 'D',
+                        'reference_answer': '5',
+                        'analysis': '代入计算',
+                        'explanation': '代入计算',
+                    }
+                    for index in range(1, 4)
+                ],
+                'final_answer': '5',
+                'summary': '完成',
             },
             ModeCAnswerComponent: {
-                'mode': 'C', 'questions': [], 'final_answer': '5',
+                'mode': 'C',
+                'questions': [
+                    {
+                        'question': f'第{index}步如何思考？',
+                        'reference_answer': '代入计算',
+                        'key_points': ['函数求值'],
+                        'followup_hint': '检查代入值',
+                    }
+                    for index in range(1, 4)
+                ],
+                'final_answer': '5',
+                'summary': '完成',
             },
             ResultVerifierComponent: {
                 'pass': True, 'issues': [], 'retry_needed': False,
@@ -448,6 +479,9 @@ class AIProcessFullPipelineTest(TestCase):
             return component
 
         service = AIReviewService(component_factory=component_factory)
+        self.question.answer = '5'
+        self.question.question_type = 'calculation'
+        self.question.save(update_fields=['answer', 'question_type'])
         image_urls = [
             'https://example.test/one.png',
             'https://example.test/two.png',
@@ -545,9 +579,47 @@ class AIProcessFullPipelineTest(TestCase):
         responses = {
             KnowledgeAnalysisComponent: {'knowledge_points': []},
             VisionExtractionComponent: {'figure_present': False},
-            ModeAAnswerComponent: {'mode': 'A', 'final_answer': '2'},
-            ModeBAnswerComponent: {'mode': 'B', 'final_answer': '2'},
-            ModeCAnswerComponent: {'mode': 'C', 'final_answer': '2'},
+            ModeAAnswerComponent: {
+                'mode': 'A',
+                'steps': [
+                    {'step': 1, 'content': '列式'},
+                    {'step': 2, 'content': '求解'},
+                    {'step': 3, 'content': '验算'},
+                ],
+                'final_answer': '2',
+                'summary': '完成',
+            },
+            ModeBAnswerComponent: {
+                'mode': 'B',
+                'questions': [
+                    {
+                        'question': f'第{index}步应选择什么？',
+                        'options': {'A': '1', 'B': '2', 'C': '3', 'D': '4'},
+                        'correct_option': 'B',
+                        'correct_answer': 'B',
+                        'reference_answer': '2',
+                        'analysis': '两边减一',
+                        'explanation': '两边减一',
+                    }
+                    for index in range(1, 4)
+                ],
+                'final_answer': '2',
+                'summary': '完成',
+            },
+            ModeCAnswerComponent: {
+                'mode': 'C',
+                'questions': [
+                    {
+                        'question': f'第{index}步如何思考？',
+                        'reference_answer': '两边减一',
+                        'key_points': ['等式性质'],
+                        'followup_hint': '保持等式成立',
+                    }
+                    for index in range(1, 4)
+                ],
+                'final_answer': '2',
+                'summary': '完成',
+            },
             ResultVerifierComponent: {'pass': True},
         }
         registry = PromptRegistry()
@@ -560,6 +632,9 @@ class AIProcessFullPipelineTest(TestCase):
             return component
 
         service = AIReviewService(component_factory=component_factory)
+        self.question.answer = '2'
+        self.question.question_type = 'calculation'
+        self.question.save(update_fields=['answer', 'question_type'])
         with patch.object(service, '_get_question_image_urls', return_value=[]):
             results = service.process_question_full_v2(self.question.id)
 
@@ -669,6 +744,7 @@ class AIProcessFullPipelineTest(TestCase):
                 'retry_needed': False,
                 'retry_reason': '',
             },
+            'deepseek_independent_verify': {'invalid': True},
         }
 
         class _ConfiguredResponseClient:
@@ -687,6 +763,9 @@ class AIProcessFullPipelineTest(TestCase):
             _ConfiguredResponseClient(), PromptRegistry()
         )
         service = AIReviewService(component_factory=component_factory)
+        self.question.answer = '2'
+        self.question.question_type = 'calculation'
+        self.question.save(update_fields=['answer', 'question_type'])
         with patch.object(service, '_get_question_image_urls', return_value=[]):
             results = service.process_question_full_v2(self.question.id)
 
@@ -799,3 +878,204 @@ class BatchTaskTest(TestCase):
     def test_batch_cancel_flag_stops_processing(self):
         result = self._run_batch_task(self.question_ids, cancel=True)
         self.assertEqual(result['status'], 'cancelled')
+
+
+class SingleModeDispatchTest(TestCase):
+    """Manual A/B/C dispatch must be idempotent and owner-aware."""
+
+    def _dispatch_module(self):
+        try:
+            from apps.review import ai_mode_dispatch
+        except ModuleNotFoundError:
+            self.fail('apps.review.ai_mode_dispatch is required')
+        return ai_mode_dispatch
+
+    def test_dispatch_first_call_uses_generated_id_and_4200_second_lock(self):
+        dispatch = self._dispatch_module()
+        task_uuid = '12345678-1234-5678-1234-567812345678'
+
+        with (
+            patch.object(dispatch.uuid, 'uuid4', return_value=task_uuid),
+            patch.object(dispatch.cache, 'add', return_value=True) as cache_add,
+            patch(
+                'apps.review.tasks.single_mode_ai_process_question.apply_async'
+            ) as apply_async,
+        ):
+            result = dispatch.dispatch_single_mode_ai_task(
+                'question-1', 'b', 'qwen3-vl-plus'
+            )
+
+        self.assertEqual(
+            result,
+            dispatch.ModeTaskDispatch(
+                task_id=task_uuid, status='pending', created=True
+            ),
+        )
+        lock_value = cache_add.call_args.args[1]
+        self.assertEqual(json.loads(lock_value)['task_id'], task_uuid)
+        cache_add.assert_called_once_with(
+            'ai-mode-lock:question-1:B', lock_value, timeout=4200
+        )
+        apply_async.assert_called_once_with(
+            args=('question-1', 'B'),
+            kwargs={'model': 'qwen3-vl-plus'},
+            task_id=task_uuid,
+        )
+
+    def test_dispatch_duplicate_returns_stored_id_without_enqueue(self):
+        dispatch = self._dispatch_module()
+        owner = json.dumps({'task_id': 'existing-task'})
+
+        with (
+            patch.object(dispatch.cache, 'add', return_value=False),
+            patch.object(dispatch.cache, 'get', return_value=owner),
+            patch(
+                'apps.review.tasks.single_mode_ai_process_question.apply_async'
+            ) as apply_async,
+        ):
+            result = dispatch.dispatch_single_mode_ai_task(
+                'question-2', 'A', None
+            )
+
+        self.assertEqual(result.task_id, 'existing-task')
+        self.assertEqual(result.status, 'running')
+        self.assertFalse(result.created)
+        apply_async.assert_not_called()
+
+    def test_enqueue_failure_releases_only_its_own_lock(self):
+        dispatch = self._dispatch_module()
+        task_uuid = 'new-task'
+        own_value = json.dumps({'task_id': task_uuid})
+
+        with (
+            patch.object(dispatch.uuid, 'uuid4', return_value=task_uuid),
+            patch.object(dispatch.cache, 'add', return_value=True),
+            patch.object(dispatch.cache, 'get', return_value=own_value),
+            patch.object(dispatch.cache, 'delete') as cache_delete,
+            patch(
+                'apps.review.tasks.single_mode_ai_process_question.apply_async',
+                side_effect=RuntimeError('broker unavailable'),
+            ),
+            self.assertRaisesRegex(RuntimeError, 'broker unavailable'),
+        ):
+            dispatch.dispatch_single_mode_ai_task('question-3', 'C', None)
+
+        cache_delete.assert_called_once_with('ai-mode-lock:question-3:C')
+
+        newer_value = json.dumps({'task_id': 'newer-task'})
+        with (
+            patch.object(dispatch.cache, 'add', return_value=True),
+            patch.object(dispatch.cache, 'get', return_value=newer_value),
+            patch.object(dispatch.cache, 'delete') as cache_delete,
+            patch(
+                'apps.review.tasks.single_mode_ai_process_question.apply_async',
+                side_effect=RuntimeError('broker unavailable'),
+            ),
+            self.assertRaisesRegex(RuntimeError, 'broker unavailable'),
+        ):
+            dispatch.dispatch_single_mode_ai_task('question-3', 'C', None)
+
+        cache_delete.assert_not_called()
+
+    def test_malformed_duplicate_owner_is_stable_and_never_deleted(self):
+        dispatch = self._dispatch_module()
+
+        with (
+            patch.object(dispatch.cache, 'add', return_value=False),
+            patch.object(dispatch.cache, 'get', return_value='not-json'),
+            patch.object(dispatch.cache, 'delete') as cache_delete,
+            patch(
+                'apps.review.tasks.single_mode_ai_process_question.apply_async'
+            ) as apply_async,
+        ):
+            first = dispatch.dispatch_single_mode_ai_task('question-4', 'A', None)
+            second = dispatch.dispatch_single_mode_ai_task('question-4', 'a', None)
+
+        self.assertEqual(first.task_id, second.task_id)
+        self.assertFalse(first.created)
+        cache_delete.assert_not_called()
+        apply_async.assert_not_called()
+
+
+class SingleModeDispatchViewTest(TestCase):
+    def setUp(self):
+        self.paper = ExamPaper.objects.create(title='Dispatch paper', subject='math')
+        self.question = ExamQuestion.objects.create(
+            paper=self.paper,
+            stem='1 + 1 = ?',
+            answer='2',
+            question_type='calculation',
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=MagicMock(is_authenticated=True))
+
+    def test_view_returns_dispatcher_envelope_and_duplicate_flag(self):
+        from apps.review.ai_mode_dispatch import ModeTaskDispatch
+
+        with patch(
+            'apps.review.views.dispatch_single_mode_ai_task',
+            return_value=ModeTaskDispatch(
+                task_id='same-task', status='running', created=False
+            ),
+        ) as dispatch:
+            response = self.client.post(
+                reverse(
+                    'ai-process-single-mode', args=[self.question.id, 'b']
+                ),
+                {'model': 'qwen3-vl-plus'},
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            'success': True,
+            'data': {
+                'task_id': 'same-task',
+                'status': 'running',
+                'mode': 'B',
+                'deduplicated': True,
+            },
+        })
+        dispatch.assert_called_once_with(
+            str(self.question.id), 'B', 'qwen3-vl-plus'
+        )
+
+    def test_invalid_or_missing_target_never_dispatches(self):
+        with patch(
+            'apps.review.views.dispatch_single_mode_ai_task'
+        ) as dispatch:
+            invalid = self.client.post(
+                reverse(
+                    'ai-process-single-mode', args=[self.question.id, 'D']
+                ),
+                {},
+                format='json',
+            )
+            missing = self.client.post(
+                reverse(
+                    'ai-process-single-mode', args=['12345678-1234-5678-1234-567812345678', 'A']
+                ),
+                {},
+                format='json',
+            )
+
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.json()['code'], 4001)
+        self.assertEqual(missing.status_code, 404)
+        dispatch.assert_not_called()
+
+    def test_unauthenticated_request_never_dispatches(self):
+        anonymous_client = APIClient()
+        with patch(
+            'apps.review.views.dispatch_single_mode_ai_task'
+        ) as dispatch:
+            response = anonymous_client.post(
+                reverse(
+                    'ai-process-single-mode', args=[self.question.id, 'A']
+                ),
+                {},
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 401)
+        dispatch.assert_not_called()
