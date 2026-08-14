@@ -1092,6 +1092,53 @@ def test_mode_a_normalizes_qwen_step_reason_with_stable_content_priority(
 
 
 @pytest.mark.parametrize(
+    ("step_patch", "expected_content"),
+    [
+        ({"reasoning": "derive the equation"}, "derive the equation"),
+        (
+            {"reason": "visible reason", "reasoning": "hidden fallback"},
+            "visible reason",
+        ),
+        (
+            {"content": "canonical content", "reasoning": "hidden fallback"},
+            "canonical content",
+        ),
+    ],
+)
+def test_mode_a_normalizes_reasoning_step_fallback_without_leaking_alias(
+    step_patch, expected_content
+):
+    """Mode A supports Qwen's lowest-priority reasoning step alias."""
+    components = _components()
+    steps = [
+        {"step": index, "content": f"existing content {index}"}
+        for index in range(1, 4)
+    ]
+    steps[1] = {"step": 2, **step_patch}
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(
+                {
+                    "mode": "A",
+                    "steps": steps,
+                    "final_answer": "2",
+                    "summary": "completed",
+                }
+            )
+        }
+    )
+
+    result = components.ModeAAnswerComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["steps"][1]["content"] == expected_content
+    assert "reasoning" not in result["steps"][1]
+
+
+@pytest.mark.parametrize(
     ("component_name", "task_key", "content", "expected"),
     [
         (

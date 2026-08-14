@@ -76,15 +76,17 @@ class ModeAAnswerComponent(_ModeAnswerComponent):
                 content = step.get("content")
                 description = step.get("description")
                 reason = step.get("reason")
+                reasoning = step.get("reasoning")
                 content_missing = content is None or (
                     isinstance(content, str) and not has_visible_text(content)
                 )
                 if content_missing:
-                    for fallback in (description, reason):
+                    for fallback in (description, reason, reasoning):
                         if isinstance(fallback, str) and has_visible_text(fallback):
                             step["content"] = fallback
                             break
                 step.pop("reason", None)
+                step.pop("reasoning", None)
                 normalized_steps.append(step)
             normalized["steps"] = normalized_steps
         missing = normalized.get("missing_conditions")
