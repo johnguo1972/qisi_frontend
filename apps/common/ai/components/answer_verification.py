@@ -91,6 +91,29 @@ def _json_text(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _safe_text(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _safe_question_input(question: QuestionInput) -> QuestionInput:
+    """Copy only JSON-safe question values before canonical context rendering."""
+    metadata = _plain_json(question.metadata)
+    options = _plain_json(question.options)
+    image_urls = _plain_json(question.image_urls)
+    return QuestionInput(
+        stem=_safe_text(question.stem),
+        options=None if options is _DROP else options,
+        answer=_safe_text(question.answer),
+        solution=_safe_text(question.solution),
+        image_urls=tuple(
+            value for value in image_urls if isinstance(value, str)
+        )
+        if isinstance(image_urls, list)
+        else (),
+        metadata=metadata if isinstance(metadata, dict) else {},
+    )
+
+
 def _target_mode(question: QuestionInput) -> str:
     target_mode = question.metadata.get("target_mode", "")
     mode = target_mode.strip().upper() if isinstance(target_mode, str) else ""
@@ -104,7 +127,7 @@ def _mode_schema_json(target_mode: str) -> str:
 
 
 def _clean_question_context(question: QuestionInput) -> dict[str, object]:
-    payload = question_context_payload(question)
+    payload = question_context_payload(_safe_question_input(question))
     cleaned = _plain_json(payload)
     if not isinstance(cleaned, dict):  # pragma: no cover - fixed payload contract
         raise AIResponseError("Question context must be a JSON object")
@@ -138,9 +161,10 @@ class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
         }
 
     def run(self, question: QuestionInput) -> dict:
-        result = super().run(question)
-        answer_available = _has_reference_answer(question)
-        analysis_available = _has_reference_analysis(question)
+        safe_question = _safe_question_input(question)
+        result = super().run(safe_question)
+        answer_available = _has_reference_answer(safe_question)
+        analysis_available = _has_reference_analysis(safe_question)
         if ("reference_answer_valid" in result) != answer_available:
             raise AIResponseError(
                 "Independent verification reference-answer flag mismatches context"

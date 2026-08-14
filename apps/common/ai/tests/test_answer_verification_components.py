@@ -16,6 +16,18 @@ from apps.common.ai.types import AIResult
 QWEN_MARKER = "UNIQUE_QWEN_MARKER_DO_NOT_LEAK"
 
 
+class StringLeak:
+    def __str__(self):
+        return QWEN_MARKER
+
+    def __repr__(self):
+        return QWEN_MARKER
+
+
+class VisionFact(BaseModel):
+    caption: str
+
+
 class RecordingAIClient:
     """Provider-boundary fake that retains the real rendering and parsing path."""
 
@@ -183,6 +195,26 @@ def test_independent_stage_renders_full_canonical_context_but_never_candidate_da
     assert "conflicts" not in rendered
     assert "qwen" not in rendered.casefold()
     assert "deepseek" not in rendered.casefold()
+
+
+def test_independent_stage_drops_unknown_visual_objects_before_canonical_context():
+    """Catch question-context stringification leaking an arbitrary visual object."""
+    components = _components()
+    client = RecordingAIClient(
+        {"deepseek_independent_verify": _independent_response()}
+    )
+    question = _question(
+        vision_result={
+            "safe_fact": VisionFact(caption="kept vision fact"),
+            "unsafe_fact": StringLeak(),
+        }
+    )
+
+    components.DeepSeekIndependentVerifierComponent(client).run(question)
+    rendered = f"{client.calls[0]['system']}\n{client.calls[0]['user']}"
+
+    assert QWEN_MARKER not in rendered
+    assert '"caption":"kept vision fact"' in rendered
 
 
 def test_final_review_renders_neutral_candidates_conflicts_and_mode_schema():
