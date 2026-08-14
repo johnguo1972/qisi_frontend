@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+import re
+import unicodedata
 
 from apps.common.exceptions import AIRequestError
 
@@ -79,6 +81,23 @@ def _missing_conditions(value: Mapping[str, object]) -> bool:
     return isinstance(missing, (list, tuple)) and any(
         _nonblank_text(item) for item in missing
     )
+
+
+def _canonical_visible_text(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", value).casefold()).strip()
+
+
+def _visible_text_values(value: object):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _visible_text_values(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _visible_text_values(item)
 
 
 class ModeAnswerArbitrator:
@@ -202,6 +221,13 @@ class ModeAnswerArbitrator:
             warnings.append("independent_content_invalid")
         if used_cached:
             warnings.append("independent_verification_cached")
+        qwen_facts_cover = self._qwen_facts_cover(qwen, independent)
+        if (
+            normalized_qwen.valid
+            and normalized_deepseek.value == normalized_qwen.value
+            and not qwen_facts_cover
+        ):
+            warnings.append("qwen_key_facts_unproven")
 
         # Required escalation conditions take precedence over answer equality.
         if independent["confidence"] < self.INDEPENDENT_CONFIDENCE_THRESHOLD:
@@ -213,6 +239,16 @@ class ModeAnswerArbitrator:
             )
         if normalized_reference.valid and independent["reference_analysis_valid"] is False:
             warnings.append("reference_analysis_invalid")
+            return self._review(
+                normalized_mode, context, qwen, independent, warnings, context_hash,
+                normalized_reference.value, normalized_qwen.value,
+                normalized_deepseek.value, shared,
+            )
+        if (
+            normalized_reference.valid
+            and independent["reference_answer_valid"] is not True
+        ):
+            warnings.append("reference_answer_not_verified")
             return self._review(
                 normalized_mode, context, qwen, independent, warnings, context_hash,
                 normalized_reference.value, normalized_qwen.value,
@@ -269,6 +305,7 @@ class ModeAnswerArbitrator:
                 normalized_qwen.valid
                 and normalized_deepseek.value == normalized_qwen.value
                 and qwen_content.valid
+                and qwen_facts_cover
             ):
                 return self._accepted(
                     selected=qwen,
@@ -288,6 +325,7 @@ class ModeAnswerArbitrator:
             normalized_qwen.valid
             and normalized_qwen.value == normalized_deepseek.value
             and qwen_content.valid
+            and qwen_facts_cover
         ):
             return self._accepted(
                 selected=qwen,
@@ -456,6 +494,31 @@ class ModeAnswerArbitrator:
             and 0 <= confidence <= 1
             and _plain_mapping(result.get("mode_content")) is not None
         )
+
+    @staticmethod
+    def _qwen_facts_cover(
+        qwen: Mapping[str, object], independent: Mapping[str, object]
+    ) -> bool:
+        independent_facts = {
+            _canonical_visible_text(fact)
+            for fact in independent["key_facts"]
+        }
+        if not independent_facts or "" in independent_facts:
+            return False
+        if "key_facts" in qwen:
+            qwen_facts = qwen["key_facts"]
+            if not isinstance(qwen_facts, (list, tuple)):
+                return False
+            qwen_fact_values = {
+                _canonical_visible_text(fact) for fact in qwen_facts
+            }
+            return "" not in qwen_fact_values and independent_facts.issubset(
+                qwen_fact_values
+            )
+        visible_values = {
+            _canonical_visible_text(item) for item in _visible_text_values(qwen)
+        }
+        return "" not in visible_values and independent_facts.issubset(visible_values)
 
     def _shared(self, independent: Mapping[str, object], context_hash: str) -> dict:
         return {

@@ -238,7 +238,14 @@ def test_reference_qwen_mismatch_and_incomplete_independent_content_requires_fin
 
 
 def test_reference_qwen_mismatch_and_matching_independent_accepts_qwen_with_confidence():
-    calls = _Calls(_qwen(answer="B"), _independent(answer="B"), _final())
+    calls = _Calls(
+        _qwen(
+            answer="B",
+            key_facts=["The supplied fact determines the answer."],
+        ),
+        _independent(answer="B"),
+        _final(),
+    )
 
     outcome = _arbitrator(calls).process("A", _context())
 
@@ -246,6 +253,70 @@ def test_reference_qwen_mismatch_and_matching_independent_accepts_qwen_with_conf
     assert outcome.answer["final_answer"] == "B"
     assert outcome.verification["selected_content_provider"] == "qwen"
     assert "reference_answer_conflict" in outcome.verification["warnings"]
+
+
+def test_matching_candidates_accept_qwen_when_explicit_qwen_key_facts_cover_independent_facts():
+    calls = _Calls(
+        _qwen(
+            answer="B",
+            key_facts=["The supplied fact determines the answer."],
+        ),
+        _independent(answer="B"),
+        _final(),
+    )
+
+    outcome = _arbitrator(calls).process("A", _context())
+
+    _assert_counts(calls, 1, 1, 0)
+    assert outcome.verification["selected_content_provider"] == "qwen"
+
+
+@pytest.mark.parametrize(
+    "qwen_overrides",
+    [
+        {},
+        {"key_facts": []},
+        {"key_facts": ["A different fact."]},
+    ],
+    ids=["fact_unproven", "fact_empty", "fact_conflict"],
+)
+def test_matching_candidates_require_final_review_when_qwen_facts_do_not_cover_independent_facts(qwen_overrides):
+    calls = _Calls(
+        _qwen(answer="B", **qwen_overrides),
+        _independent(answer="B"),
+        _final(answer="B"),
+    )
+
+    outcome = _arbitrator(calls).process("A", _context())
+
+    _assert_counts(calls, 1, 1, 1)
+    assert outcome.verification["selected_content_provider"] == "deepseek_final_review"
+
+
+def test_no_reference_matching_candidates_require_final_review_when_qwen_facts_are_unproven():
+    calls = _Calls(
+        _qwen(answer="B"),
+        _independent(answer="B", reference_answer_valid=None, reference_analysis_valid=None),
+        _final(answer="B"),
+    )
+
+    outcome = _arbitrator(calls).process("A", _context(answer=""))
+
+    _assert_counts(calls, 1, 1, 1)
+    assert outcome.verification["selected_content_provider"] == "deepseek_final_review"
+
+
+def test_matching_candidates_accept_qwen_when_canonical_visible_content_exactly_covers_facts():
+    calls = _Calls(
+        _qwen(answer="B", summary="  The supplied fact determines the answer.  "),
+        _independent(answer="B"),
+        _final(),
+    )
+
+    outcome = _arbitrator(calls).process("A", _context())
+
+    _assert_counts(calls, 1, 1, 0)
+    assert outcome.verification["selected_content_provider"] == "qwen"
 
 
 def test_all_three_different_answers_require_final_review():
@@ -259,7 +330,10 @@ def test_all_three_different_answers_require_final_review():
 
 def test_no_valid_reference_with_matching_candidates_accepts_qwen_when_valid_and_confident():
     calls = _Calls(
-        _qwen(answer="B"),
+        _qwen(
+            answer="B",
+            key_facts=["The supplied fact determines the answer."],
+        ),
         _independent(answer="B", reference_answer_valid=None, reference_analysis_valid=None),
         _final(),
     )
@@ -305,6 +379,22 @@ def test_explicit_invalid_reference_analysis_requires_final_review():
     assert outcome.answer["final_answer"] == "C"
 
 
+@pytest.mark.parametrize("reference_answer_valid", [False, None])
+def test_available_reference_with_missing_or_invalid_independent_reference_finding_requires_final_review(
+    reference_answer_valid,
+):
+    calls = _Calls(
+        _qwen(answer="B"),
+        _independent(answer="C", reference_answer_valid=reference_answer_valid),
+        _final(answer="C"),
+    )
+
+    outcome = _arbitrator(calls).process("A", _context())
+
+    _assert_counts(calls, 1, 1, 1)
+    assert outcome.verification["selected_content_provider"] == "deepseek_final_review"
+
+
 def test_malformed_independent_result_fails_closed():
     calls = _Calls(_qwen(answer="B"), {"independent_answer": "B"}, _final())
 
@@ -338,7 +428,14 @@ def test_independent_stage_never_receives_qwen_marker_or_context_mutation():
 
 
 def test_matching_context_hash_reuses_only_safe_cached_first_stage_fields():
-    calls = _Calls(_qwen(answer="B"), _independent(answer="D"), _final(answer="B"))
+    calls = _Calls(
+        _qwen(
+            answer="B",
+            key_facts=["The supplied fact determines the answer."],
+        ),
+        _independent(answer="D"),
+        _final(answer="B"),
+    )
     cache = {
         "context_hash": ModeAnswerArbitrator.context_hash(_context()),
         "independent_answer": "B",
@@ -359,7 +456,14 @@ def test_matching_context_hash_reuses_only_safe_cached_first_stage_fields():
 
 
 def test_mismatching_cache_hash_forces_a_new_independent_call():
-    calls = _Calls(_qwen(answer="B"), _independent(answer="B"), _final())
+    calls = _Calls(
+        _qwen(
+            answer="B",
+            key_facts=["The supplied fact determines the answer."],
+        ),
+        _independent(answer="B"),
+        _final(),
+    )
     cache = {
         "context_hash": "wrong",
         "independent_answer": "B",
@@ -376,7 +480,14 @@ def test_mismatching_cache_hash_forces_a_new_independent_call():
 
 
 def test_incomplete_cached_verification_forces_a_new_independent_call():
-    calls = _Calls(_qwen(answer="B"), _independent(answer="B"), _final())
+    calls = _Calls(
+        _qwen(
+            answer="B",
+            key_facts=["The supplied fact determines the answer."],
+        ),
+        _independent(answer="B"),
+        _final(),
+    )
     cache = {
         "context_hash": ModeAnswerArbitrator.context_hash(_context()),
         "independent_answer": "B",
@@ -392,7 +503,14 @@ def test_incomplete_cached_verification_forces_a_new_independent_call():
 
 
 def test_confidence_at_threshold_accepts_the_matching_qwen_candidate():
-    calls = _Calls(_qwen(answer="B"), _independent(answer="B", confidence=0.80), _final())
+    calls = _Calls(
+        _qwen(
+            answer="B",
+            key_facts=["The supplied fact determines the answer."],
+        ),
+        _independent(answer="B", confidence=0.80),
+        _final(),
+    )
 
     outcome = _arbitrator(calls).process("A", _context())
 
