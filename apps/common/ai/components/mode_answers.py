@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 
 from apps.common.ai.schemas import (
@@ -13,6 +14,11 @@ from apps.common.ai.schemas import (
 )
 
 from .base import QuestionAIComponent, QuestionInput, to_plain_data
+
+
+_MODE_A_STEP_NUMBER_PATTERN = re.compile(
+    r"(?:(?:步骤|step)\s*)?([1-9]\d*)", re.IGNORECASE
+)
 
 
 def _knowledge_refs(question: QuestionInput) -> str:
@@ -73,6 +79,13 @@ class ModeAAnswerComponent(_ModeAnswerComponent):
                     normalized_steps.append(item)
                     continue
                 step = dict(item)
+                step_number = step.get("step")
+                if isinstance(step_number, str):
+                    match = _MODE_A_STEP_NUMBER_PATTERN.fullmatch(step_number)
+                    if match is not None:
+                        step["step"] = int(match.group(1))
+                elif isinstance(step_number, int) and step_number <= 0:
+                    step["step"] = None
                 content = step.get("content")
                 description = step.get("description")
                 reason = step.get("reason")

@@ -1139,6 +1139,76 @@ def test_mode_a_normalizes_reasoning_step_fallback_without_leaking_alias(
 
 
 @pytest.mark.parametrize(
+    ("raw_step", "expected_step"),
+    [
+        ("1", 1),
+        ("步骤1", 1),
+        ("Step 1", 1),
+        ("sTeP 2", 2),
+        (3, 3),
+    ],
+)
+def test_mode_a_normalizes_explicit_positive_step_numbers(raw_step, expected_step):
+    """Mode A converts only explicit positive step-number text to integers."""
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(
+                {
+                    "mode": "A",
+                    "steps": [
+                        {"step": raw_step, "content": "first step"},
+                        {"step": 2, "content": "second step"},
+                        {"step": 3, "content": "third step"},
+                    ],
+                    "final_answer": "2",
+                    "summary": "completed",
+                }
+            )
+        }
+    )
+
+    result = components.ModeAAnswerComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["steps"][0]["step"] == expected_step
+    assert isinstance(result["steps"][0]["step"], int)
+
+
+@pytest.mark.parametrize(
+    "raw_step",
+    ["0", "步骤0", "Step 0", "1.0", "Step 1 of 2", "first step", 0, -1],
+)
+def test_mode_a_rejects_ambiguous_or_nonpositive_step_numbers(raw_step):
+    """Mode A leaves invalid step identifiers for schema rejection."""
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(
+                {
+                    "mode": "A",
+                    "steps": [
+                        {"step": raw_step, "content": "first step"},
+                        {"step": 2, "content": "second step"},
+                        {"step": 3, "content": "third step"},
+                    ],
+                    "final_answer": "2",
+                    "summary": "completed",
+                }
+            )
+        }
+    )
+
+    with pytest.raises(AIResponseError):
+        components.ModeAAnswerComponent(
+            client, prompt_registry=StaticPromptRegistry()
+        ).run(components.QuestionInput(stem="solve x+1=2"))
+
+
+@pytest.mark.parametrize(
     ("component_name", "task_key", "content", "expected"),
     [
         (
