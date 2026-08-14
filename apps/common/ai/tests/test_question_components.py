@@ -1874,15 +1874,26 @@ def test_service_reuses_only_shared_verification_while_routing_all_mode_componen
 
     def complete_mode_content(task_key):
         content = _mode_answer_response(task_key)
+        content["reasoning_content"] = "private chain"
+        content["raw_response"] = {"provider": "private raw"}
+        content["provider_payload"] = {"request_id": "private request"}
+        content["verification"] = {"provider": "candidate supplied"}
+        if task_key == "mode_a_answer":
+            content["steps"][0]["raw_response"] = "nested private raw"
         if task_key == "mode_b_answer":
             content["questions"] = [
                 {
                     **question,
                     "correct_answer": question["correct_option"],
                     "explanation": question["analysis"],
+                    "reasoning_content": "nested private chain",
                 }
                 for question in content["questions"]
             ]
+        if task_key == "mode_c_answer":
+            content["questions"][0]["provider_payload"] = {
+                "request_id": "nested private request"
+            }
         return content
 
     class Component:
@@ -1969,3 +1980,37 @@ def test_service_reuses_only_shared_verification_while_routing_all_mode_componen
     assert "independent_verification_cached" in (
         outcomes[2].answer["verification"]["warnings"]
     )
+    expected_keys = {
+        "A": {"mode", "steps", "final_answer", "summary", "missing_conditions"},
+        "B": {"mode", "questions", "final_answer", "summary"},
+        "C": {"mode", "questions", "final_answer", "summary"},
+    }
+    for mode, outcome in zip("ABC", outcomes):
+        assert set(outcome.answer) == expected_keys[mode] | {"verification"}
+        serialized = json.dumps(outcome.answer, ensure_ascii=False)
+        for forbidden in (
+            "reasoning_content",
+            "raw_response",
+            "provider_payload",
+            "private chain",
+            "private raw",
+            "private request",
+            "candidate supplied",
+        ):
+            assert forbidden not in serialized
+    assert set(outcomes[0].answer["steps"][0]) == {"step", "content"}
+    assert set(outcomes[1].answer["questions"][0]) == {
+        "question",
+        "options",
+        "correct_option",
+        "reference_answer",
+        "analysis",
+        "correct_answer",
+        "explanation",
+    }
+    assert set(outcomes[2].answer["questions"][0]) == {
+        "question",
+        "reference_answer",
+        "key_points",
+        "followup_hint",
+    }

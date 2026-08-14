@@ -15,6 +15,8 @@ from rest_framework.test import APIClient
 
 from apps.common import ai_service as common_ai_service
 from apps.common.ai.components import (
+    DeepSeekFinalReviewComponent,
+    DeepSeekIndependentVerifierComponent,
     KnowledgeAnalysisComponent,
     ModeAAnswerComponent,
     ModeBAnswerComponent,
@@ -891,7 +893,32 @@ def test_arbitration_uses_complete_real_question_context_in_stable_option_order(
     factory = _CapturingFactory(
         {
             ModeAAnswerComponent: _component_responses()[ModeAAnswerComponent]
-            | {"final_answer": "C"}
+            | {
+                "final_answer": "B",
+                "reasoning_content": "private Qwen chain",
+            },
+            DeepSeekIndependentVerifierComponent: {
+                "independent_answer": "C",
+                "independent_reasoning_summary": "C follows from the options.",
+                "key_facts": ["C is the only matching option"],
+                "reference_answer_valid": True,
+                "reference_analysis_valid": False,
+                "reference_issues": ["analysis requires final review"],
+                "confidence": 0.95,
+                "mode_content": _component_responses()[ModeAAnswerComponent]
+                | {"final_answer": "C"},
+            },
+            DeepSeekFinalReviewComponent: {
+                "trusted_answer": "C",
+                "qwen_content_valid": False,
+                "candidate_issues": ["Qwen answer conflicts with reference"],
+                "confidence": 0.99,
+                "mode_content": _component_responses()[ModeAAnswerComponent]
+                | {
+                    "final_answer": "C",
+                    "raw_response": {"provider": "private DeepSeek raw"},
+                },
+            },
         }
     )
     service = common_ai_service.AIReviewService(component_factory=factory)
@@ -907,32 +934,43 @@ def test_arbitration_uses_complete_real_question_context_in_stable_option_order(
 
     assert outcome.answer["verification"]["status"] == "accepted"
     assert [component for component, _context in factory.calls] == [
-        ModeAAnswerComponent
+        ModeAAnswerComponent,
+        DeepSeekIndependentVerifierComponent,
+        DeepSeekFinalReviewComponent,
     ]
-    context = factory.calls[0][1]
-    assert list(context.options) == [
-        {"label": "A", "content": "one"},
-        {"label": "B", "content": "two"},
-        {"label": "C", "content": "three"},
-        {"label": "D", "content": "four"},
-    ]
-    assert context.stem == "Which value is correct?"
-    assert context.answer == "C"
-    assert context.solution == "Reference solution"
-    assert context.image_urls == ("https://cdn.example.test/q.png",)
-    assert dict(context.metadata) == {
-        "reference_analysis": "Reference analysis",
-        "question_type": "single_choice",
-        "subject": "math",
-        "difficulty": "2.50",
-        "material": "Read the material",
-        "tables": ({"rows": (("x", "3"),)},),
-        "subquestions": ({"stem": "Subquestion one"},),
-        "normalized_text": "Normalized stem",
-        "vision_result": {"figure_present": True},
-        "knowledge_refs": "linear equations",
-        "target_mode": "A",
-    }
+    for component_type, context in factory.calls:
+        assert list(context.options) == [
+            {"label": "A", "content": "one"},
+            {"label": "B", "content": "two"},
+            {"label": "C", "content": "three"},
+            {"label": "D", "content": "four"},
+        ]
+        assert context.stem == "Which value is correct?"
+        assert context.answer == "C"
+        assert context.solution == "Reference solution"
+        assert context.image_urls == ("https://cdn.example.test/q.png",)
+        assert context.metadata["reference_analysis"] == "Reference analysis"
+        assert context.metadata["question_type"] == "single_choice"
+        assert context.metadata["subject"] == "math"
+        assert context.metadata["difficulty"] == "2.50"
+        assert context.metadata["material"] == "Read the material"
+        assert context.metadata["tables"] == ({"rows": (("x", "3"),)},)
+        assert context.metadata["subquestions"] == (
+            {"stem": "Subquestion one"},
+        )
+        assert context.metadata["normalized_text"] == "Normalized stem"
+        assert context.metadata["vision_result"] == {"figure_present": True}
+        assert context.metadata["knowledge_refs"] == "linear equations"
+        assert context.metadata["target_mode"] == "A"
+        assert "RelatedManager" not in repr(context.options)
+        assert "Manager" not in repr(context.options)
+        if component_type is DeepSeekFinalReviewComponent:
+            assert context.metadata["qwen_result"]["final_answer"] == "B"
+            assert context.metadata["independent_result"][
+                "independent_answer"
+            ] == "C"
+    assert "reasoning_content" not in outcome.answer
+    assert "raw_response" not in outcome.answer
 
 
 def _arbitration_outcome(mode, shared):

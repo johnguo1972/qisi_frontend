@@ -1,9 +1,11 @@
 """Backward-compatible facade for the shared question AI components."""
+from copy import deepcopy
 import logging
 import time
 import os
 import threading
 from django.conf import settings
+from pydantic import BaseModel, ValidationError
 from apps.common.exceptions import AIRequestError
 from apps.common.ai.client import AIClient
 from apps.common.ai.config import load_ai_config
@@ -30,8 +32,36 @@ from apps.common.ai.answer_arbitration import (
     ModeAnswerArbitrator,
 )
 from apps.common.ai.question_context import QuestionContextBuilder
+from apps.common.ai.schemas import ModeAResponse, ModeBResponse, ModeCResponse
 
 logger = logging.getLogger(__name__)
+
+
+_MODE_RESPONSE_SCHEMAS = {
+    "A": ModeAResponse,
+    "B": ModeBResponse,
+    "C": ModeCResponse,
+}
+
+
+def _project_schema_value(value):
+    """Project validated mode output to declared public schema fields only."""
+    if isinstance(value, BaseModel):
+        projected = {}
+        for field_name, field in type(value).model_fields.items():
+            output_name = field.serialization_alias or field.alias or field_name
+            projected[output_name] = _project_schema_value(
+                getattr(value, field_name)
+            )
+        return projected
+    if isinstance(value, dict):
+        return {
+            str(key): _project_schema_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_project_schema_value(item) for item in value]
+    return value
 
 
 class _LegacyComponentClient:
@@ -484,10 +514,24 @@ class AIReviewService:
             independent_verify=independent_verify,
             final_review=final_review,
         )
-        return arbitrator.process(
+        outcome = arbitrator.process(
             normalized_mode,
             context,
             cached_verification=cached_verification,
+        )
+        try:
+            validated_answer = _MODE_RESPONSE_SCHEMAS[
+                normalized_mode
+            ].model_validate(outcome.answer)
+        except ValidationError:
+            raise ArbitrationProviderError() from None
+        public_answer = _project_schema_value(validated_answer)
+        verification = deepcopy(outcome.verification)
+        public_answer["verification"] = verification
+        return ArbitrationOutcome(
+            answer=public_answer,
+            verification=verification,
+            shared_verifier_result=deepcopy(outcome.shared_verifier_result),
         )
 
     def solve_mode_a(self, question, image_urls: list, normalized_text: str,
