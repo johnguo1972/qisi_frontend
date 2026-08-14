@@ -152,6 +152,25 @@ class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
     task_key = "deepseek_independent_verify"
     response_schema = IndependentVerificationResponse
 
+    def normalize(self, result: dict) -> dict:
+        if "reference_issues" not in result:
+            return result
+
+        reference_issues = result["reference_issues"]
+        if reference_issues is None:
+            result["reference_issues"] = []
+        elif isinstance(reference_issues, str):
+            issue = reference_issues.strip()
+            if (
+                not has_visible_text(issue)
+                or issue == "无"
+                or issue.casefold() == "none"
+            ):
+                result["reference_issues"] = []
+            else:
+                result["reference_issues"] = [issue]
+        return result
+
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
         target_mode = _target_mode(question)
         return {

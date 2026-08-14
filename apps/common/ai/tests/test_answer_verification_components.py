@@ -159,6 +159,55 @@ def test_verification_schemas_reject_blank_or_malformed_contract_values(payload)
         schema.model_validate(payload)
 
 
+@pytest.mark.parametrize(
+    ("reference_issues", "expected_issues"),
+    [
+        (None, []),
+        ("", []),
+        (" \t\n", []),
+        (" 无 ", []),
+        (" NONE ", []),
+        ("  nOnE\t", []),
+        ("  reference answer needs review  ", ["reference answer needs review"]),
+        (["existing issue"], ["existing issue"]),
+    ],
+)
+def test_independent_stage_normalizes_reference_issue_strings(
+    reference_issues, expected_issues
+):
+    """Accept the provider's known scalar variants without weakening the list schema."""
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "deepseek_independent_verify": _independent_response(
+                reference_issues=reference_issues
+            )
+        }
+    )
+
+    result = components.DeepSeekIndependentVerifierComponent(client).run(_question())
+
+    assert result["reference_issues"] == expected_issues
+
+
+@pytest.mark.parametrize("reference_issues", [{}, 0, True])
+def test_independent_stage_rejects_nonlist_nonstring_reference_issues(
+    reference_issues,
+):
+    """Keep unexpected provider shapes visible to the strict response schema."""
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "deepseek_independent_verify": _independent_response(
+                reference_issues=reference_issues
+            )
+        }
+    )
+
+    with pytest.raises(AIResponseError):
+        components.DeepSeekIndependentVerifierComponent(client).run(_question())
+
+
 def test_independent_stage_renders_full_canonical_context_but_never_candidate_data():
     """Catch a first-stage prompt that leaks a Qwen candidate into independent work."""
     components = _components()
