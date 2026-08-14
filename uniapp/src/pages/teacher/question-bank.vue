@@ -233,14 +233,21 @@ type AiModeTerminalStatus = 'complete' | 'partial' | 'failed' | 'skipped' | 'can
 type AiModePoll = {
   taskId: string
   mode: AiMode
+  generation: number
   timer?: ReturnType<typeof setTimeout>
   releaseDelay?: () => void
   cancelled: boolean
 }
 const aiModeRunning = ref<Record<AiMode, boolean>>({ A: false, B: false, C: false })
 const aiModeTaskIds = ref<Record<AiMode, string[]>>({ A: [], B: [], C: [] })
+const aiModeRunGeneration = ref<Record<AiMode, number | null>>({ A: null, B: null, C: null })
 const aiModePolls = new Map<string, AiModePoll>()
 let aiModePageActive = true
+let aiModeGeneration = 0
+
+function isCurrentAiModeGeneration(generation: number) {
+  return aiModePageActive && generation === aiModeGeneration
+}
 
 const addMenuVisible = ref(false)
 const relatedVisible = ref(false)
@@ -545,12 +552,16 @@ async function handleAiMode(mode: 'A' | 'B' | 'C') {
     uni.showToast({ title: `AI-${mode}模式正在处理中`, icon: 'none' })
     return
   }
+  const requestGeneration = aiModeGeneration
+  if (!isCurrentAiModeGeneration(requestGeneration)) return
   aiModeRunning.value[mode] = true
+  aiModeRunGeneration.value[mode] = requestGeneration
   aiModeTaskIds.value[mode] = []
   try {
     const submissions = await Promise.all(selectedQuestionIds.value.map(async (id) => {
       try {
         const response: any = await questionApi.aiProcessMode(id, mode)
+        if (!isCurrentAiModeGeneration(requestGeneration)) return null
         const taskId = response?.data?.task_id
         if (response?.success !== true || !taskId) return null
         return String(taskId)
@@ -558,7 +569,7 @@ async function handleAiMode(mode: 'A' | 'B' | 'C') {
         return null
       }
     }))
-    if (!aiModePageActive) return
+    if (!isCurrentAiModeGeneration(requestGeneration)) return
 
     const taskIds = submissions.filter((taskId): taskId is string => Boolean(taskId))
     aiModeTaskIds.value[mode] = taskIds
@@ -573,13 +584,16 @@ async function handleAiMode(mode: 'A' | 'B' | 'C') {
     }
 
     const terminalStatuses = await Promise.all(
-      taskIds.map(taskId => pollAiModeTask(taskId, mode))
+      taskIds.map(taskId => pollAiModeTask(taskId, mode, requestGeneration))
     )
-    if (!aiModePageActive) return
+    if (!isCurrentAiModeGeneration(requestGeneration)) return
     const completed = terminalStatuses.some(
       status => status === 'complete' || status === 'partial'
     )
-    if (completed) await loadQuestions()
+    if (completed) {
+      await loadQuestions()
+      if (!isCurrentAiModeGeneration(requestGeneration)) return
+    }
     if (terminalStatuses.some(status => status === 'failed')) {
       uni.showToast({ title: `AI-${mode}模式处理失败，请稍后重试`, icon: 'none' })
     } else if (terminalStatuses.some(status => status === 'skipped')) {
@@ -588,49 +602,67 @@ async function handleAiMode(mode: 'A' | 'B' | 'C') {
       uni.showToast({ title: `AI-${mode}模式处理完成`, icon: 'success' })
     }
   } finally {
-    aiModeRunning.value[mode] = false
-    aiModeTaskIds.value[mode] = []
+    if (aiModeRunGeneration.value[mode] === requestGeneration) {
+      aiModeRunning.value[mode] = false
+      aiModeTaskIds.value[mode] = []
+      aiModeRunGeneration.value[mode] = null
+    }
   }
 }
 
-function waitForAiModePoll(poll: AiModePoll, milliseconds: number) {
-  return new Promise<void>((resolve) => {
+function waitForAiModePoll(poll: AiModePoll, milliseconds: number): Promise<boolean> {
+  if (poll.cancelled || !isCurrentAiModeGeneration(poll.generation)) {
+    return Promise.resolve(false)
+  }
+  return new Promise<boolean>((resolve) => {
     const release = () => {
+      poll.timer = undefined
       poll.releaseDelay = undefined
-      resolve()
+      resolve(!poll.cancelled && isCurrentAiModeGeneration(poll.generation))
     }
     poll.releaseDelay = release
+    if (poll.cancelled || !isCurrentAiModeGeneration(poll.generation)) {
+      release()
+      return
+    }
     poll.timer = setTimeout(release, milliseconds)
   })
 }
 
-async function pollAiModeTask(taskId: string, mode: AiMode): Promise<AiModeTerminalStatus> {
-  const poll: AiModePoll = { taskId, mode, cancelled: false }
+async function pollAiModeTask(
+  taskId: string,
+  mode: AiMode,
+  generation: number,
+): Promise<AiModeTerminalStatus> {
+  if (!isCurrentAiModeGeneration(generation)) return 'cancelled'
+  const poll: AiModePoll = { taskId, mode, generation, cancelled: false }
   aiModePolls.set(taskId, poll)
   try {
     for (let attempt = 0; attempt < 900; attempt += 1) {
-      await waitForAiModePoll(poll, attempt === 0 ? 1000 : 5000)
-      if (poll.cancelled || !aiModePageActive) return 'cancelled'
+      const shouldPoll = await waitForAiModePoll(poll, attempt === 0 ? 1000 : 5000)
+      if (!shouldPoll || poll.cancelled || !isCurrentAiModeGeneration(generation)) return 'cancelled'
       try {
         const response: any = await questionApi.getTaskStatus(taskId)
-        if (poll.cancelled || !aiModePageActive) return 'cancelled'
+        if (poll.cancelled || !isCurrentAiModeGeneration(generation)) return 'cancelled'
         if (response?.success === false) return 'failed'
         const status = response?.data?.status
         if (status === 'complete' || status === 'partial' || status === 'failed' || status === 'skipped') {
           return status
         }
       } catch {
+        if (poll.cancelled || !isCurrentAiModeGeneration(generation)) return 'cancelled'
         if (attempt >= 899) return 'failed'
       }
     }
     return 'failed'
   } finally {
     if (poll.timer) clearTimeout(poll.timer)
-    aiModePolls.delete(taskId)
+    if (aiModePolls.get(taskId) === poll) aiModePolls.delete(taskId)
   }
 }
 
 function stopAiModePolling() {
+  aiModeGeneration += 1
   aiModePageActive = false
   aiModePolls.forEach((poll) => {
     poll.cancelled = true
@@ -641,6 +673,7 @@ function stopAiModePolling() {
   ;(['A', 'B', 'C'] as AiMode[]).forEach((mode) => {
     aiModeRunning.value[mode] = false
     aiModeTaskIds.value[mode] = []
+    aiModeRunGeneration.value[mode] = null
   })
 }
 
