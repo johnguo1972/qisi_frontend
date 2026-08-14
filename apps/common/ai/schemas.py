@@ -196,6 +196,33 @@ class ResultVerifierResponse(_StrictResponseModel):
         return self
 
 
+class IndependentVerificationResponse(_StrictResponseModel):
+    """Structured output from the independent answer-verification stage."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+    independent_answer: NonBlankStr
+    independent_reasoning_summary: NonBlankStr
+    key_facts: list[NonBlankStr]
+    reference_answer_valid: bool | None
+    reference_analysis_valid: bool | None
+    reference_issues: list[str]
+    confidence: float = Field(ge=0, le=1)
+    mode_content: dict[str, Any]
+
+
+class FinalReviewResponse(_StrictResponseModel):
+    """Structured output from the escalated final-answer review stage."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+    trusted_answer: NonBlankStr
+    qwen_content_valid: bool
+    candidate_issues: list[NonBlankStr]
+    confidence: float = Field(ge=0, le=1)
+    mode_content: dict[str, Any]
+
+
 _COURSE_IMAGE_SECURITY_MAX_INPUT_LENGTH = 4096
 _COURSE_IMAGE_SECURITY_MAX_TRANSFORMS = 16
 _SENSITIVE_MARKER_VALUE_PATTERN = re.compile(
