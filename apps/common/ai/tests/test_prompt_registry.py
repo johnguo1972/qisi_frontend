@@ -355,6 +355,38 @@ def test_independent_verifier_prompt_requires_reference_issue_array(provider_env
     assert "无问题时输出 []" in system
 
 
+@pytest.mark.parametrize(
+    ("task_key", "variables"),
+    [
+        (
+            "deepseek_independent_verify",
+            {
+                "question_context_json": '{"stem":"题目"}',
+                "target_mode": "A",
+                "mode_schema_json": "{}",
+            },
+        ),
+        (
+            "deepseek_final_review",
+            {
+                "question_context_json": '{"stem":"题目"}',
+                "target_mode": "A",
+                "qwen_result_json": "{}",
+                "independent_result_json": "{}",
+                "conflicts_json": "[]",
+                "mode_schema_json": "{}",
+            },
+        ),
+    ],
+)
+def test_deepseek_verification_prompts_require_numeric_confidence(
+    provider_env, task_key, variables
+):
+    system, _ = PromptRegistry(AIConfig.load()).render(task_key, **variables)
+
+    assert "confidence 必须为 number，不得为字符串" in system
+
+
 def test_question_probe_prompt_requests_complete_canonical_taxonomy(provider_env):
     system, _ = PromptRegistry(AIConfig.load()).render(
         "question_probe",

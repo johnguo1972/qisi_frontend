@@ -208,6 +208,65 @@ def test_independent_stage_rejects_nonlist_nonstring_reference_issues(
         components.DeepSeekIndependentVerifierComponent(client).run(_question())
 
 
+@pytest.mark.parametrize(
+    ("confidence", "expected_confidence"),
+    [
+        ("0", 0.0),
+        ("1", 1.0),
+        ("0.95", 0.95),
+        (".95", 0.95),
+        (" \t.95\n", 0.95),
+    ],
+)
+@pytest.mark.parametrize(
+    ("component_name", "task_key", "response_factory"),
+    [
+        (
+            "DeepSeekIndependentVerifierComponent",
+            "deepseek_independent_verify",
+            _independent_response,
+        ),
+        ("DeepSeekFinalReviewComponent", "deepseek_final_review", _final_response),
+    ],
+)
+def test_verification_components_normalize_strict_decimal_confidence_strings(
+    component_name, task_key, response_factory, confidence, expected_confidence
+):
+    """Accept only provider decimal strings that are unambiguously JSON numbers."""
+    components = _components()
+    client = RecordingAIClient({task_key: response_factory(confidence=confidence)})
+
+    result = getattr(components, component_name)(client).run(_question())
+
+    assert result["confidence"] == expected_confidence
+
+
+@pytest.mark.parametrize(
+    "confidence",
+    ["95%", "1e-1", "NaN", "Inf", "-Inf", "high", "2"],
+)
+@pytest.mark.parametrize(
+    ("component_name", "task_key", "response_factory"),
+    [
+        (
+            "DeepSeekIndependentVerifierComponent",
+            "deepseek_independent_verify",
+            _independent_response,
+        ),
+        ("DeepSeekFinalReviewComponent", "deepseek_final_review", _final_response),
+    ],
+)
+def test_verification_components_reject_nondecimal_or_out_of_range_confidence_strings(
+    component_name, task_key, response_factory, confidence
+):
+    """Keep unsafe numeric-looking provider strings subject to strict validation."""
+    components = _components()
+    client = RecordingAIClient({task_key: response_factory(confidence=confidence)})
+
+    with pytest.raises(AIResponseError):
+        getattr(components, component_name)(client).run(_question())
+
+
 def test_independent_stage_renders_full_canonical_context_but_never_candidate_data():
     """Catch a first-stage prompt that leaks a Qwen candidate into independent work."""
     components = _components()

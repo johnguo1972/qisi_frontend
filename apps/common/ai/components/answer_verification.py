@@ -27,6 +27,7 @@ _ISOLATED_KEYS = frozenset({"qwen_result", "independent_result", "conflicts"})
 _PROVIDER_KEYS = frozenset({"provider", "model", "provider_name", "model_name"})
 _PROVIDER_NAMES = ("qwen", "deepseek")
 _MODE_SCHEMAS = {"A": ModeAResponse, "B": ModeBResponse, "C": ModeCResponse}
+_DECIMAL_CONFIDENCE = re.compile(r"(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+")
 
 
 def _plain_json(value: object, *, redact_provider_names: bool = False) -> object:
@@ -146,6 +147,15 @@ def _has_reference_analysis(question: QuestionInput) -> bool:
     )
 
 
+def _normalize_confidence(result: dict) -> dict:
+    confidence = result.get("confidence")
+    if isinstance(confidence, str):
+        normalized_confidence = confidence.strip()
+        if _DECIMAL_CONFIDENCE.fullmatch(normalized_confidence):
+            result["confidence"] = float(normalized_confidence)
+    return result
+
+
 class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
     """Solve independently, without any candidate or conflict information."""
 
@@ -153,6 +163,7 @@ class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
     response_schema = IndependentVerificationResponse
 
     def normalize(self, result: dict) -> dict:
+        _normalize_confidence(result)
         if "reference_issues" not in result:
             return result
 
@@ -200,6 +211,9 @@ class DeepSeekFinalReviewComponent(QuestionAIComponent):
 
     task_key = "deepseek_final_review"
     response_schema = FinalReviewResponse
+
+    def normalize(self, result: dict) -> dict:
+        return _normalize_confidence(result)
 
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
         target_mode = _target_mode(question)
