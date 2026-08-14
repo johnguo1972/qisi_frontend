@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import importlib
 import json
 
@@ -119,6 +120,26 @@ def _final_response(**overrides):
     return payload
 
 
+def _legacy_mode_b_content():
+    question = {
+        "question": "Which option follows?",
+        "options": [
+            {"label": "D", "content": "four"},
+            {"label": "B", "content": "two"},
+            {"label": "A", "content": "one"},
+            {"label": "C", "content": "three"},
+        ],
+        "correct_answer": "C",
+        "explanation": "C matches the stated condition.",
+    }
+    return {
+        "mode": "B",
+        "questions": [dict(question) for _ in range(3)],
+        "final_answer": "C",
+        "summary": "option C is correct",
+    }
+
+
 def test_public_components_and_strict_response_schemas_are_available():
     """Catch missing public contracts or an extra-permissive verification schema."""
     components = _components()
@@ -134,6 +155,116 @@ def test_public_components_and_strict_response_schemas_are_available():
         schemas.FinalReviewResponse.model_validate(
             {**_final_response(), "confidence": 1.01}
         )
+
+
+@pytest.mark.parametrize(
+    ("component_name", "task_key", "response_factory"),
+    [
+        (
+            "DeepSeekIndependentVerifierComponent",
+            "deepseek_independent_verify",
+            _independent_response,
+        ),
+        ("DeepSeekFinalReviewComponent", "deepseek_final_review", _final_response),
+    ],
+)
+def test_verification_components_normalize_nested_mode_b_content(
+    component_name, task_key, response_factory
+):
+    """Keep DeepSeek B content compatible with the Qwen legacy normalization path."""
+    components = _components()
+    client = RecordingAIClient(
+        {task_key: response_factory(mode_content=_legacy_mode_b_content())}
+    )
+
+    result = getattr(components, component_name)(client).run(_question(target_mode="B"))
+    normalized_question = result["mode_content"]["questions"][0]
+
+    assert normalized_question["options"] == {
+        "A": "one",
+        "B": "two",
+        "C": "three",
+        "D": "four",
+    }
+    assert normalized_question["correct_option"] == "C"
+    assert normalized_question["correct_answer"] == "C"
+    assert normalized_question["analysis"] == "C matches the stated condition."
+    assert normalized_question["explanation"] == "C matches the stated condition."
+
+
+@pytest.mark.parametrize(
+    ("mode", "payload", "expected"),
+    [
+        (
+            "A",
+            {
+                "mode": "A",
+                "steps": [{"step": "Step 1", "description": "read the condition"}],
+                "missing_conditions": None,
+            },
+            {
+                "mode": "A",
+                "steps": [{"step": 1, "description": "read the condition", "content": "read the condition"}],
+                "missing_conditions": [],
+            },
+        ),
+        (
+            "C",
+            {"mode": "C", "questions": [{"question": "What follows?"}]},
+            {"mode": "C", "questions": [{"question": "What follows?"}]},
+        ),
+    ],
+)
+def test_shared_mode_content_normalizer_preserves_a_and_c_behavior_without_mutation(
+    mode, payload, expected
+):
+    """Catch shared normalization drifting from the established Qwen A/C contract."""
+    mode_answers = importlib.import_module("apps.common.ai.components.mode_answers")
+    original = deepcopy(payload)
+
+    normalized = mode_answers.normalize_mode_answer_payload(mode, payload)
+
+    assert normalized == expected
+    assert payload == original
+    assert normalized is not payload
+
+
+def test_shared_mode_content_normalizer_does_not_mutate_nested_b_payload():
+    """Catch legacy B field completion mutating the provider-owned nested payload."""
+    mode_answers = importlib.import_module("apps.common.ai.components.mode_answers")
+    payload = _legacy_mode_b_content()
+    original = deepcopy(payload)
+
+    normalized = mode_answers.normalize_mode_answer_payload("B", payload)
+
+    assert payload == original
+    assert normalized["questions"][0]["options"] == {
+        "A": "one",
+        "B": "two",
+        "C": "three",
+        "D": "four",
+    }
+
+
+@pytest.mark.parametrize("mode_content", [{"mode": "Z", "steps": []}, {"steps": []}])
+def test_verification_components_leave_unrecognized_mode_content_for_strict_validation(
+    mode_content,
+):
+    """Do not repair unknown or missing modes before downstream mode-schema checks."""
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "deepseek_independent_verify": _independent_response(
+                mode_content=mode_content
+            )
+        }
+    )
+
+    result = components.DeepSeekIndependentVerifierComponent(client).run(_question())
+
+    assert result["mode_content"] == mode_content
+    with pytest.raises(ValidationError):
+        _schemas().ModeAResponse.model_validate(result["mode_content"])
 
 
 @pytest.mark.parametrize(

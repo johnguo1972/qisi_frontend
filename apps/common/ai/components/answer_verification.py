@@ -20,6 +20,7 @@ from apps.common.ai.schemas import (
 )
 
 from .base import QuestionAIComponent, QuestionInput
+from .mode_answers import normalize_mode_answer_payload
 
 
 _DROP = object()
@@ -156,6 +157,16 @@ def _normalize_confidence(result: dict) -> dict:
     return result
 
 
+def _normalize_mode_content(result: dict) -> dict:
+    mode_content = result.get("mode_content")
+    if not isinstance(mode_content, dict):
+        return result
+    mode = mode_content.get("mode")
+    if mode in _MODE_SCHEMAS:
+        result["mode_content"] = normalize_mode_answer_payload(mode, mode_content)
+    return result
+
+
 class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
     """Solve independently, without any candidate or conflict information."""
 
@@ -164,6 +175,7 @@ class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
 
     def normalize(self, result: dict) -> dict:
         _normalize_confidence(result)
+        _normalize_mode_content(result)
         key_facts = result.get("key_facts")
         if isinstance(key_facts, str) and has_visible_text(key_facts):
             result["key_facts"] = [key_facts.strip()]
@@ -216,7 +228,7 @@ class DeepSeekFinalReviewComponent(QuestionAIComponent):
     response_schema = FinalReviewResponse
 
     def normalize(self, result: dict) -> dict:
-        return _normalize_confidence(result)
+        return _normalize_mode_content(_normalize_confidence(result))
 
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
         target_mode = _target_mode(question)

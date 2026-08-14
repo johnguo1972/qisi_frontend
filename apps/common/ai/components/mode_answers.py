@@ -41,47 +41,10 @@ def _knowledge_refs(question: QuestionInput) -> str:
     return str(refs) if refs else ""
 
 
-class _ModeAnswerComponent(QuestionAIComponent):
-    mode: str
-
-    def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
-        from apps.common.ai.question_context import question_context_payload
-
-        vision = question.metadata.get("vision_result", {})
-        context = question_context_payload(question)
-        normalized_text = question.metadata.get("normalized_text") or question.stem
-        options = context["options"]
-        if options:
-            normalized_text = "{}\n\n完整选项：\n{}".format(
-                normalized_text,
-                "\n".join(
-                    f"{option['label']}: {option['content']}" for option in options
-                ),
-            )
-        return {
-            "question_context_json": json.dumps(
-                context,
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-            "normalized_text": normalized_text,
-            "vision_json": json.dumps(
-                to_plain_data(vision), ensure_ascii=False
-            ),
-            "knowledge_refs": _knowledge_refs(question),
-        }
-
-    def normalize(self, result: dict) -> dict:
-        return dict(result)
-
-
-class ModeAAnswerComponent(_ModeAnswerComponent):
-    task_key = "mode_a_answer"
-    mode = "A"
-    response_schema = ModeAResponse
-
-    def normalize(self, result: dict) -> dict:
-        normalized = super().normalize(result)
+def normalize_mode_answer_payload(mode: str, result: dict) -> dict:
+    """Return a normalized mode payload without mutating the provider result."""
+    normalized = dict(result)
+    if mode == "A":
         steps = normalized.get("steps")
         if isinstance(steps, list):
             normalized_steps = []
@@ -126,16 +89,7 @@ class ModeAAnswerComponent(_ModeAnswerComponent):
             normalized["missing_conditions"] = []
         elif isinstance(missing, str):
             normalized["missing_conditions"] = [missing] if missing.strip() else []
-        return normalized
-
-
-class ModeBAnswerComponent(_ModeAnswerComponent):
-    task_key = "mode_b_answer"
-    mode = "B"
-    response_schema = ModeBResponse
-
-    def normalize(self, result: dict) -> dict:
-        normalized = super().normalize(result)
+    elif mode == "B":
         questions = normalized.get("questions")
         if isinstance(questions, list):
             normalized_questions = []
@@ -189,10 +143,62 @@ class ModeBAnswerComponent(_ModeAnswerComponent):
                 question["analysis"] = explanation
                 normalized_questions.append(question)
             normalized["questions"] = normalized_questions
-        return normalized
+    return normalized
+
+
+class _ModeAnswerComponent(QuestionAIComponent):
+    mode: str
+
+    def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
+        from apps.common.ai.question_context import question_context_payload
+
+        vision = question.metadata.get("vision_result", {})
+        context = question_context_payload(question)
+        normalized_text = question.metadata.get("normalized_text") or question.stem
+        options = context["options"]
+        if options:
+            normalized_text = "{}\n\n完整选项：\n{}".format(
+                normalized_text,
+                "\n".join(
+                    f"{option['label']}: {option['content']}" for option in options
+                ),
+            )
+        return {
+            "question_context_json": json.dumps(
+                context,
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            "normalized_text": normalized_text,
+            "vision_json": json.dumps(
+                to_plain_data(vision), ensure_ascii=False
+            ),
+            "knowledge_refs": _knowledge_refs(question),
+        }
+
+
+class ModeAAnswerComponent(_ModeAnswerComponent):
+    task_key = "mode_a_answer"
+    mode = "A"
+    response_schema = ModeAResponse
+
+    def normalize(self, result: dict) -> dict:
+        return normalize_mode_answer_payload(self.mode, result)
+
+
+class ModeBAnswerComponent(_ModeAnswerComponent):
+    task_key = "mode_b_answer"
+    mode = "B"
+    response_schema = ModeBResponse
+
+    def normalize(self, result: dict) -> dict:
+        return normalize_mode_answer_payload(self.mode, result)
 
 
 class ModeCAnswerComponent(_ModeAnswerComponent):
     task_key = "mode_c_answer"
     mode = "C"
     response_schema = ModeCResponse
+
+    def normalize(self, result: dict) -> dict:
+        return normalize_mode_answer_payload(self.mode, result)
