@@ -210,16 +210,7 @@ def _exact_option_key(value: object, labels: tuple[str, ...]) -> str | None:
 
 def _mode_b_answer_conflict(
     result: Mapping[object, object],
-    *,
-    trusted: NormalizedAnswer,
-    context: Mapping[object, object],
-    normalizer: AnswerNormalizer,
 ) -> bool:
-    labels = _option_labels_from_context(context)
-    question_type = context.get(
-        "question_type", context.get("question_style", "")
-    )
-    trusted_key = _exact_option_key(trusted.value, labels)
     questions = result.get("questions", ())
     if not isinstance(questions, (list, tuple)):
         return False
@@ -228,7 +219,9 @@ def _mode_b_answer_conflict(
         if question is None:
             continue
         options = _plain_mapping(question.get("options")) or {}
-        local_labels = _allowed_labels(tuple(options.keys()))
+        local_labels = tuple(
+            label for label in ("A", "B", "C", "D") if label in options
+        )
         answer_keys = [
             key
             for field in ("correct_option", "correct_answer", "reference_answer")
@@ -238,18 +231,6 @@ def _mode_b_answer_conflict(
         if not answer_keys:
             continue
         if len(set(answer_keys)) != 1:
-            return True
-        answer_key = answer_keys[0]
-        if trusted_key is not None:
-            if answer_key != trusted_key:
-                return True
-            continue
-        local_answer = normalizer.normalize(
-            options.get(answer_key),
-            question_type=question_type,
-            option_labels=labels,
-        )
-        if not local_answer.valid or local_answer.value != trusted.value:
             return True
     return False
 
@@ -421,12 +402,7 @@ class ModeContentValidator:
             and trusted.valid
             and final.valid
             and final.value == trusted.value
-            and _mode_b_answer_conflict(
-                plain_result,
-                trusted=trusted,
-                context=plain_context,
-                normalizer=self._normalizer,
-            )
+            and _mode_b_answer_conflict(plain_result)
         ):
             observed.add("mode_b_answer_conflict")
         if (

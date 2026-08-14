@@ -260,15 +260,51 @@ def test_mode_b_rejects_reviewer_a_d_c_answer_field_contradiction():
     assert "mode_b_answer_conflict" in validation.issues
 
 
-def test_mode_b_accepts_consistent_option_keys_and_ignores_explanatory_reference_text():
+def test_mode_b_accepts_per_question_consistent_answers_that_differ_from_top_level_answer():
     result = _mode_b()
-    result["questions"][0]["reference_answer"] = "C follows from the stated rule."
+    for question, answer in zip(result["questions"], ("A", "B", "D"), strict=True):
+        question.update(
+            correct_option=answer,
+            correct_answer=answer,
+            reference_answer=answer,
+        )
 
     validation = VALIDATOR.validate(
         "B", result, trusted_answer="C", context=CHOICE_CONTEXT
     )
 
     assert validation.valid is True
+
+
+def test_mode_b_preserves_top_level_final_answer_conflict_check():
+    result = _mode_b()
+
+    validation = VALIDATOR.validate(
+        "B", result, trusted_answer="A", context=CHOICE_CONTEXT
+    )
+
+    assert validation.valid is False
+    assert validation.issues == ("final_answer_conflict",)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("correct_option", "E"),
+        ("correct_answer", None),
+        ("reference_answer", ""),
+    ],
+)
+def test_mode_b_invalid_or_missing_answer_fields_remain_schema_incomplete(field, value):
+    result = _mode_b()
+    result["questions"][0][field] = value
+
+    validation = VALIDATOR.validate(
+        "B", result, trusted_answer="C", context=CHOICE_CONTEXT
+    )
+
+    assert validation.valid is False
+    assert validation.issues == ("mode_schema_incomplete",)
 
 
 def test_mode_c_checks_exact_option_key_reference_but_not_explanatory_text():
