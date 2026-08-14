@@ -31,6 +31,8 @@ REQUIRED_TASKS = {
     "teacher_guidance_evaluate",
     "variant_generate",
     "variant_verify_deepseek",
+    "deepseek_independent_verify",
+    "deepseek_final_review",
     "photo_recognize",
     "course_material_recognize",
 }
@@ -51,6 +53,8 @@ EXPECTED_ROUTE_MATRIX = {
     "teacher_guidance_evaluate": ("qwen", "qwen3.7-flash", 300.0),
     "variant_generate": ("qwen", "qwen3.7-plus", 300.0),
     "variant_verify_deepseek": ("deepseek", "deepseek-v4-pro", 300.0),
+    "deepseek_independent_verify": ("deepseek", "deepseek-v4-pro", 300.0),
+    "deepseek_final_review": ("deepseek", "deepseek-v4-pro", 300.0),
     "photo_recognize": ("qwen", "qwen3-vl-plus", 300.0),
     "course_material_recognize": ("qwen", "qwen3-vl-plus", 300.0),
 }
@@ -88,9 +92,27 @@ def write_minimal_cfg(
     retry_count: str = "3",
     retry_backoff_seconds: str = "1, 2, 4",
     response_format: str = "json",
+    enable_thinking: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> Path:
     env_prefix = "QWEN" if provider == "qwen" else "DEEPSEEK"
     cfg = tmp_path / "ai_config.cfg"
+    thinking_options = "\n".join(
+        option
+        for option in (
+            (
+                f"enable_thinking = {enable_thinking}"
+                if enable_thinking is not None
+                else ""
+            ),
+            (
+                f"reasoning_effort = {reasoning_effort}"
+                if reasoning_effort is not None
+                else ""
+            ),
+        )
+        if option
+    )
     cfg.write_text(
         dedent(
             f"""
@@ -108,6 +130,7 @@ def write_minimal_cfg(
             retry_count = {retry_count}
             retry_backoff_seconds = {retry_backoff_seconds}
             response_format = {response_format}
+            {thinking_options}
 
             [prompt:{task}]
             template = {prompt}
@@ -145,6 +168,36 @@ def test_position_detection_routes_to_qwen37_plus_with_300_second_timeout(
     position_task = loaded.get_task_config("vision_position_detect")
     assert position_task.model == "qwen3.7-plus"
     assert position_task.timeout_seconds == 300
+
+
+def test_answer_verification_tasks_enable_deepseek_thinking(provider_env):
+    config = AIConfig.load()
+
+    for key in ("deepseek_independent_verify", "deepseek_final_review"):
+        task = config.get_task_config(key)
+        assert task.provider == "deepseek"
+        assert task.model == "deepseek-v4-pro"
+        assert task.timeout_seconds == 300
+        assert task.retry_count == 1
+        assert task.enable_thinking is True
+        assert task.reasoning_effort == "high"
+
+    for key in ("mode_a_answer", "mode_b_answer", "mode_c_answer"):
+        assert config.get_task_config(key).retry_count == 1
+
+
+@pytest.mark.parametrize(
+    ("option", "bad_value"),
+    [("enable_thinking", "maybe"), ("reasoning_effort", "extreme")],
+)
+def test_rejects_invalid_thinking_configuration_without_echoing_value(
+    tmp_path, provider_env, option, bad_value
+):
+    with pytest.raises(AIConfigError) as caught:
+        AIConfig.load(write_minimal_cfg(tmp_path, **{option: bad_value}))
+
+    assert option in str(caught.value)
+    assert_untrusted_value_is_redacted(caught.value, bad_value)
 
 
 def test_provider_repr_does_not_expose_api_key(tmp_path, provider_env):
@@ -324,7 +377,14 @@ def test_default_config_declares_every_task_with_300_second_timeout(provider_env
     assert {
         key: loaded.get_task_config(key).provider for key in REQUIRED_TASKS
     } == {
-        key: "deepseek" if key == "variant_verify_deepseek" else "qwen"
+        key: "deepseek"
+        if key
+        in {
+            "variant_verify_deepseek",
+            "deepseek_independent_verify",
+            "deepseek_final_review",
+        }
+        else "qwen"
         for key in REQUIRED_TASKS
     }
 

@@ -314,6 +314,10 @@ def _build_payload(
         if response_type == "json":
             response_type = "json_object"
         payload["response_format"] = {"type": response_type}
+    if task.enable_thinking is not None:
+        payload["enable_thinking"] = task.enable_thinking
+    if task.reasoning_effort is not None:
+        payload["reasoning_effort"] = task.reasoning_effort
     return payload
 
 

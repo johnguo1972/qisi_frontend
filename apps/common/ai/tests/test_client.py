@@ -86,6 +86,8 @@ def _config(
     provider: str = "qwen",
     model: str = "qwen3.7-flash",
     response_format: str | None = None,
+    enable_thinking: bool | None = None,
+    reasoning_effort: str | None = None,
     retry_count: int = 0,
     retry_backoff_seconds: tuple[float, ...] = (),
     api_key: str = TEST_SECRET,
@@ -102,6 +104,8 @@ def _config(
         retry_count=retry_count,
         retry_backoff_seconds=retry_backoff_seconds,
         response_format=response_format,
+        enable_thinking=enable_thinking,
+        reasoning_effort=reasoning_effort,
     )
     provider_config = AIProviderConfig(
         name=provider,
@@ -209,6 +213,8 @@ def test_complete_sends_text_payload_from_cached_config(monkeypatch):
     assert result.model == "qwen3.7-flash"
     assert result.latency_ms >= 0
     assert result.raw_response["id"] == "chatcmpl-test"
+    assert "enable_thinking" not in seen["payload"]
+    assert "reasoning_effort" not in seen["payload"]
 
 
 def test_complete_sends_openai_multimodal_image_url_payload(monkeypatch):
@@ -580,6 +586,8 @@ def test_deepseek_request_uses_its_configured_model_url_key_and_300s_timeout(
         task_key="variant_verify_deepseek",
         provider="deepseek",
         model="deepseek-v4-pro",
+        enable_thinking=True,
+        reasoning_effort="high",
     )
     result = _client(monkeypatch, handler, config=config).complete(
         "variant_verify_deepseek", system="verify", user="candidate"
@@ -588,6 +596,8 @@ def test_deepseek_request_uses_its_configured_model_url_key_and_300s_timeout(
     assert seen["url"] == "https://example.test/deepseek/chat/completions"
     assert seen["authorization"] == "Bearer test-secret"
     assert seen["payload"]["model"] == "deepseek-v4-pro"
+    assert seen["payload"]["enable_thinking"] is True
+    assert seen["payload"]["reasoning_effort"] == "high"
     assert seen["timeout"] == {
         "connect": 300.0,
         "read": 300.0,
