@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import re
+import unicodedata
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,13 @@ def _nonblank_string(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _normalize_mode_b_option_text(value: object) -> str | None:
+    if not _nonblank_string(value):
+        return None
+    normalized = " ".join(unicodedata.normalize("NFKC", value).split())
+    return normalized or None
+
+
 def _option_labels_from_context(context: Mapping[object, object]) -> tuple[str, ...]:
     options = context.get("options", ())
     if isinstance(options, Mapping):
@@ -219,18 +227,32 @@ def _mode_b_answer_conflict(
         if question is None:
             continue
         options = _plain_mapping(question.get("options")) or {}
-        local_labels = tuple(
-            label for label in ("A", "B", "C", "D") if label in options
-        )
-        answer_keys = [
-            key
-            for field in ("correct_option", "correct_answer", "reference_answer")
-            if (key := _exact_option_key(question.get(field), local_labels))
-            is not None
-        ]
-        if not answer_keys:
+        local_labels = ("A", "B", "C", "D")
+        if set(options) != set(local_labels):
             continue
-        if len(set(answer_keys)) != 1:
+        normalized_options = {
+            label: _normalize_mode_b_option_text(options.get(label))
+            for label in local_labels
+        }
+        if any(value is None for value in normalized_options.values()):
+            continue
+        if len(set(normalized_options.values())) != len(local_labels):
+            return True
+        correct_option = question.get("correct_option")
+        correct_answer = question.get("correct_answer")
+        if correct_option not in local_labels or correct_answer not in local_labels:
+            continue
+        if correct_option != correct_answer:
+            return True
+        reference_key = _exact_option_key(question.get("reference_answer"), local_labels)
+        if reference_key is not None:
+            if reference_key != correct_option:
+                return True
+            continue
+        reference_answer = _normalize_mode_b_option_text(question.get("reference_answer"))
+        if reference_answer is None:
+            continue
+        if reference_answer != normalized_options[correct_option]:
             return True
     return False
 
@@ -397,13 +419,7 @@ class ModeContentValidator:
             observed.add("trusted_answer_invalid")
         elif final.valid and final.value != trusted.value:
             observed.add("final_answer_conflict")
-        if (
-            normalized_mode == "B"
-            and trusted.valid
-            and final.valid
-            and final.value == trusted.value
-            and _mode_b_answer_conflict(plain_result)
-        ):
+        if normalized_mode == "B" and _mode_b_answer_conflict(plain_result):
             observed.add("mode_b_answer_conflict")
         if (
             normalized_mode == "C"

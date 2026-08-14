@@ -123,7 +123,7 @@ def _mode_b():
                 "question": "Which option follows?",
                 "options": {"A": "one", "B": "two", "C": "three", "D": "four"},
                 "correct_option": "C",
-                "reference_answer": "C is correct.",
+                "reference_answer": "three",
                 "analysis": "The rule selects C.",
                 "correct_answer": "C",
                 "explanation": "The rule selects C.",
@@ -244,13 +244,56 @@ def test_validator_orders_and_deduplicates_issues_without_mutating_inputs():
     assert CHOICE_CONTEXT == original_context
 
 
-def test_mode_b_rejects_reviewer_a_d_c_answer_field_contradiction():
+def test_mode_b_rejects_correct_option_and_correct_answer_disagreement():
     result = _mode_b()
     result["questions"][0].update(
         correct_option="A",
         correct_answer="D",
-        reference_answer="C",
+        reference_answer="A",
     )
+
+    validation = VALIDATOR.validate(
+        "B", result, trusted_answer="C", context=CHOICE_CONTEXT
+    )
+
+    assert validation.valid is False
+    assert "mode_b_answer_conflict" in validation.issues
+
+
+def test_mode_b_rejects_reference_option_key_that_disagrees_with_correct_option():
+    result = _mode_b()
+    result["questions"][0].update(
+        correct_option="A",
+        correct_answer="A",
+        reference_answer="D",
+    )
+
+    validation = VALIDATOR.validate(
+        "B", result, trusted_answer="C", context=CHOICE_CONTEXT
+    )
+
+    assert validation.valid is False
+    assert "mode_b_answer_conflict" in validation.issues
+
+
+def test_mode_b_rejects_options_with_duplicate_nfkc_whitespace_normalized_content():
+    result = _mode_b()
+    result["questions"][0]["options"].update(
+        A="  two  ",
+        B="\uff54\uff57\uff4f",
+    )
+
+    validation = VALIDATOR.validate(
+        "B", result, trusted_answer="C", context=CHOICE_CONTEXT
+    )
+
+    assert validation.valid is False
+    assert "mode_b_answer_conflict" in validation.issues
+
+
+def test_mode_b_rejects_reference_text_that_differs_from_correct_option_content():
+    result = _mode_b()
+    result["questions"][0]["reference_answer"] = "two"
 
     validation = VALIDATOR.validate(
         "B", result, trusted_answer="C", context=CHOICE_CONTEXT
@@ -276,6 +319,36 @@ def test_mode_b_accepts_per_question_consistent_answers_that_differ_from_top_lev
     assert validation.valid is True
 
 
+@pytest.mark.parametrize(
+    ("options", "answer", "reference_answer"),
+    [
+        ({"A": "加法", "B": "减法", "C": "乘法", "D": "除法"}, "C", "乘法"),
+        (
+            {"A": "addition", "B": "square root", "C": "division", "D": "fraction"},
+            "B",
+            "square root",
+        ),
+    ],
+)
+def test_mode_b_accepts_reference_text_matching_chinese_or_english_option_content(
+    options, answer, reference_answer
+):
+    result = _mode_b()
+    for question in result["questions"]:
+        question.update(
+            options=options,
+            correct_option=answer,
+            correct_answer=answer,
+            reference_answer=reference_answer,
+        )
+
+    validation = VALIDATOR.validate(
+        "B", result, trusted_answer="C", context=CHOICE_CONTEXT
+    )
+
+    assert validation.valid is True
+
+
 def test_mode_b_preserves_top_level_final_answer_conflict_check():
     result = _mode_b()
 
@@ -285,6 +358,22 @@ def test_mode_b_preserves_top_level_final_answer_conflict_check():
 
     assert validation.valid is False
     assert validation.issues == ("final_answer_conflict",)
+
+
+def test_mode_b_reports_local_contract_conflict_alongside_top_level_conflict():
+    result = _mode_b()
+    result["final_answer"] = "A"
+    result["questions"][0]["reference_answer"] = "two"
+
+    validation = VALIDATOR.validate(
+        "B", result, trusted_answer="C", context=CHOICE_CONTEXT
+    )
+
+    assert validation.valid is False
+    assert validation.issues == (
+        "final_answer_conflict",
+        "mode_b_answer_conflict",
+    )
 
 
 @pytest.mark.parametrize(
