@@ -1776,3 +1776,196 @@ def test_service_close_does_not_close_injected_client():
     service.close()
 
     borrowed_client.close.assert_not_called()
+
+
+def test_service_arbitration_uses_one_injected_factory_for_qwen_and_deepseek():
+    from apps.common.ai.components import QuestionComponentFactory
+    from apps.common.ai_service import AIReviewService
+
+    qwen = _mode_answer_response("mode_a_answer") | {"final_answer": "B"}
+    independent = {
+        "independent_answer": "C",
+        "independent_reasoning_summary": "The reference answer follows from the data.",
+        "key_facts": ["three is the required value"],
+        "reference_answer_valid": True,
+        "reference_analysis_valid": False,
+        "reference_issues": ["analysis needs review"],
+        "confidence": 0.95,
+        "mode_content": _mode_answer_response("mode_a_answer"),
+    }
+    final = {
+        "trusted_answer": "C",
+        "qwen_content_valid": False,
+        "candidate_issues": ["candidate answer conflicts with the reference"],
+        "confidence": 0.99,
+        "mode_content": _mode_answer_response("mode_a_answer"),
+    }
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(qwen),
+            "deepseek_independent_verify": json.dumps(independent),
+            "deepseek_final_review": json.dumps(final),
+        }
+    )
+    factory = QuestionComponentFactory(client)
+    service = AIReviewService(component_factory=factory)
+    question = SimpleNamespace(
+        stem="Which value is correct?",
+        options=PromptOptionsManager(),
+        answer="C",
+        analysis="Reference analysis",
+        solution="Reference solution",
+        question_type="single_choice",
+        subject="math",
+        difficulty=2,
+        material="Read the material",
+        tables=[{"rows": [["x", "3"]]}],
+        subquestions=[{"stem": "Subquestion one"}],
+    )
+
+    outcome = service.solve_mode_with_arbitration(
+        question,
+        mode="A",
+        image_urls=("https://cdn.example.test/q.png",),
+        normalized_text="Normalized stem",
+        vision_result={"figure_present": True},
+        knowledge_refs="linear equations",
+    )
+
+    assert outcome.answer["final_answer"] == "C"
+    assert outcome.answer["verification"]["selected_content_provider"] == (
+        "deepseek_final_review"
+    )
+    assert [call["task_key"] for call in client.calls] == [
+        "mode_a_answer",
+        "deepseek_independent_verify",
+        "deepseek_final_review",
+    ]
+    rendered = "\n".join(str(call["user"]) for call in client.calls)
+    for expected in (
+        "Which value is correct?",
+        "Reference analysis",
+        "Reference solution",
+        "Normalized stem",
+        "linear equations",
+        "https://cdn.example.test/q.png",
+    ):
+        assert expected in rendered
+    assert "<PromptOptionsManager>" not in rendered
+
+
+def test_service_reuses_only_shared_verification_while_routing_all_mode_components():
+    from apps.common.ai.components import (
+        DeepSeekFinalReviewComponent,
+        DeepSeekIndependentVerifierComponent,
+        ModeAAnswerComponent,
+        ModeBAnswerComponent,
+        ModeCAnswerComponent,
+    )
+    from apps.common.ai_service import AIReviewService
+
+    mode_components = {
+        ModeAAnswerComponent: "mode_a_answer",
+        ModeBAnswerComponent: "mode_b_answer",
+        ModeCAnswerComponent: "mode_c_answer",
+    }
+    factory_calls = []
+    run_calls = []
+
+    def complete_mode_content(task_key):
+        content = _mode_answer_response(task_key)
+        if task_key == "mode_b_answer":
+            content["questions"] = [
+                {
+                    **question,
+                    "correct_answer": question["correct_option"],
+                    "explanation": question["analysis"],
+                }
+                for question in content["questions"]
+            ]
+        return content
+
+    class Component:
+        def __init__(self, component_type):
+            self.component_type = component_type
+
+        def run(self, question_input):
+            run_calls.append((self.component_type, question_input))
+            if self.component_type in mode_components:
+                return complete_mode_content(
+                    mode_components[self.component_type]
+                ) | {"final_answer": "B"}
+            if self.component_type is DeepSeekIndependentVerifierComponent:
+                return {
+                    "independent_answer": "C",
+                    "independent_reasoning_summary": "C follows from the data.",
+                    "key_facts": ["three is the required value"],
+                    "reference_answer_valid": True,
+                    "reference_analysis_valid": False,
+                    "reference_issues": ["analysis needs review"],
+                    "confidence": 0.95,
+                    "mode_content": complete_mode_content("mode_a_answer"),
+                }
+            target_mode = question_input.metadata["target_mode"]
+            return {
+                "trusted_answer": "C",
+                "qwen_content_valid": False,
+                "candidate_issues": ["candidate answer conflicts with reference"],
+                "confidence": 0.99,
+                "mode_content": complete_mode_content(
+                    f"mode_{target_mode.lower()}_answer"
+                ),
+            }
+
+    def factory(component_type):
+        factory_calls.append(component_type)
+        return Component(component_type)
+
+    service = AIReviewService(component_factory=factory)
+    question = SimpleNamespace(
+        stem="Which value is correct?",
+        options=PromptOptionsManager(),
+        answer="C",
+        analysis="Reference analysis",
+        solution="Reference solution",
+        question_type="single_choice",
+        subject="math",
+        difficulty=2,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    shared = None
+    outcomes = []
+
+    for mode in "ABC":
+        outcome = service.solve_mode_with_arbitration(
+            question,
+            mode=mode,
+            cached_verification=shared,
+        )
+        outcomes.append(outcome)
+        shared = outcome.shared_verifier_result or shared
+
+    assert [component_type for component_type, _context in run_calls] == [
+        ModeAAnswerComponent,
+        DeepSeekIndependentVerifierComponent,
+        DeepSeekFinalReviewComponent,
+        ModeBAnswerComponent,
+        DeepSeekFinalReviewComponent,
+        ModeCAnswerComponent,
+        DeepSeekFinalReviewComponent,
+    ]
+    assert factory_calls == [component_type for component_type, _context in run_calls]
+    assert [outcome.answer["mode"] for outcome in outcomes] == ["A", "B", "C"]
+    assert all(
+        outcome.answer["verification"]["selected_content_provider"]
+        == "deepseek_final_review"
+        for outcome in outcomes
+    )
+    assert "independent_verification_cached" in (
+        outcomes[1].answer["verification"]["warnings"]
+    )
+    assert "independent_verification_cached" in (
+        outcomes[2].answer["verification"]["warnings"]
+    )

@@ -11,6 +11,8 @@ from apps.common.ai.exceptions import AIConfigError, AIPromptError, AIResponseEr
 from apps.common.ai.prompt_registry import PromptRegistry
 from apps.common.ai.types import AIResult
 from apps.common.ai.components import (
+    DeepSeekFinalReviewComponent,
+    DeepSeekIndependentVerifierComponent,
     KnowledgeAnalysisComponent,
     ModeAAnswerComponent,
     ModeBAnswerComponent,
@@ -21,6 +23,13 @@ from apps.common.ai.components import (
     ResultVerifierComponent,
     VisionExtractionComponent,
 )
+from apps.common.ai.answer_arbitration import (
+    ArbitrationError,
+    ArbitrationOutcome,
+    ArbitrationProviderError,
+    ModeAnswerArbitrator,
+)
+from apps.common.ai.question_context import QuestionContextBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -329,66 +338,54 @@ class AIReviewService:
             }
 
         knowledge_ref = results.get('knowledge')
+        image_urls = self._get_question_image_urls(question)
+        normalized_text = getattr(question, "stem", "") or ""
+        knowledge_refs = (
+            knowledge_ref.get("knowledge_points", [])
+            if isinstance(knowledge_ref, dict)
+            else []
+        )
+        shared_verification = None
 
-        # Step 2: A mode
-        try:
-            answer_a = self.generate_answer_a(question, knowledge_ref, model=model)
-            if not isinstance(answer_a, dict):
-                raise AIRequestError(f"AI returned non-dict response for answer_a: {type(answer_a).__name__}")
-            answer_a['mode'] = 'A'
-            answer_a['model'] = self._get_model(model)
-            answer_a['generated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
-            answer_a['confirmed'] = False
-            answer_a['confirmed_at'] = None
-            answer_a['edited_content'] = None
-            answer_a['error'] = None
-            results['answer_a'] = answer_a
-        except AIRequestError as e:
-            errors['answer_a'] = str(e)
-            results['answer_a'] = {
-                'error': str(e), 'model': self._get_model(model),
-                'generated_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-            }
-
-        # Step 3: B mode
-        try:
-            answer_b = self.generate_answer_b(question, knowledge_ref, model=model)
-            if not isinstance(answer_b, dict):
-                raise AIRequestError(f"AI returned non-dict response for answer_b: {type(answer_b).__name__}")
-            answer_b['mode'] = 'B'
-            answer_b['model'] = self._get_model(model)
-            answer_b['generated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
-            answer_b['confirmed'] = False
-            answer_b['confirmed_at'] = None
-            answer_b['edited_content'] = None
-            answer_b['error'] = None
-            results['answer_b'] = answer_b
-        except AIRequestError as e:
-            errors['answer_b'] = str(e)
-            results['answer_b'] = {
-                'error': str(e), 'model': self._get_model(model),
-                'generated_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-            }
-
-        # Step 4: C mode
-        try:
-            answer_c = self.generate_answer_c(question, knowledge_ref, model=model)
-            if not isinstance(answer_c, dict):
-                raise AIRequestError(f"AI returned non-dict response for answer_c: {type(answer_c).__name__}")
-            answer_c['mode'] = 'C'
-            answer_c['model'] = self._get_model(model)
-            answer_c['generated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
-            answer_c['confirmed'] = False
-            answer_c['confirmed_at'] = None
-            answer_c['edited_content'] = None
-            answer_c['error'] = None
-            results['answer_c'] = answer_c
-        except AIRequestError as e:
-            errors['answer_c'] = str(e)
-            results['answer_c'] = {
-                'error': str(e), 'model': self._get_model(model),
-                'generated_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-            }
+        for mode in "ABC":
+            answer_key = f"answer_{mode.lower()}"
+            try:
+                outcome = self.solve_mode_with_arbitration(
+                    question,
+                    mode=mode,
+                    image_urls=image_urls,
+                    normalized_text=normalized_text,
+                    vision_result={},
+                    knowledge_refs=knowledge_refs,
+                    cached_verification=shared_verification,
+                    model=model,
+                )
+                answer = dict(outcome.answer)
+                answer['mode'] = mode
+                answer['model'] = (
+                    self._get_model(model)
+                    if model is not None
+                    else self._task_route(f"mode_{mode.lower()}_answer")[1]
+                )
+                answer['generated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
+                answer['confirmed'] = False
+                answer['confirmed_at'] = None
+                answer['edited_content'] = None
+                answer['error'] = None
+                results[answer_key] = answer
+                if outcome.shared_verifier_result is not None:
+                    shared_verification = outcome.shared_verifier_result
+            except (AIRequestError, ArbitrationError) as error:
+                errors[answer_key] = str(error)
+                results[answer_key] = {
+                    'error': str(error),
+                    'model': (
+                        self._get_model(model)
+                        if model is not None
+                        else self._task_route(f"mode_{mode.lower()}_answer")[1]
+                    ),
+                    'generated_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                }
 
         results['errors'] = errors
         return results
@@ -408,6 +405,89 @@ class AIReviewService:
         )
         return self._run_component(
             self._component(VisionExtractionComponent), question_input
+        )
+
+    def solve_mode_with_arbitration(
+        self,
+        question,
+        *,
+        mode,
+        image_urls=(),
+        normalized_text="",
+        vision_result=None,
+        knowledge_refs="",
+        cached_verification=None,
+        model=None,
+    ) -> ArbitrationOutcome:
+        """Generate and verify one mode against one complete question context.
+
+        ``model`` remains a compatibility argument: the configured task route
+        continues to select the provider model, while callers may retain the
+        existing supported override as result metadata.  DeepSeek stages always
+        use their own fixed task keys.
+        """
+        normalized_mode = mode.strip().upper() if isinstance(mode, str) else ""
+        component_types = {
+            "A": ModeAAnswerComponent,
+            "B": ModeBAnswerComponent,
+            "C": ModeCAnswerComponent,
+        }
+        component_type = component_types.get(normalized_mode)
+        if component_type is None:
+            raise ArbitrationProviderError()
+
+        # Preserve the legacy supported/unsupported override behavior without
+        # allowing a Qwen choice to leak into either fixed DeepSeek route.
+        self._get_model(model)
+        context = QuestionContextBuilder.build(
+            question,
+            image_urls=image_urls,
+            normalized_text=normalized_text,
+            vision_result=vision_result,
+            knowledge_refs=knowledge_refs,
+            target_mode=normalized_mode,
+        )
+        generator = self._component(component_type)
+
+        def generate(_mode, question_input):
+            return self._run_component(generator, question_input)
+
+        def independent_verify(_mode, question_input):
+            return self._run_component(
+                self._component(DeepSeekIndependentVerifierComponent),
+                question_input,
+            )
+
+        def final_review(
+            _mode, question_input, qwen_result, independent_result, conflicts
+        ):
+            review_input = QuestionInput(
+                stem=question_input.stem,
+                options=question_input.options,
+                answer=question_input.answer,
+                solution=question_input.solution,
+                image_urls=question_input.image_urls,
+                metadata={
+                    **dict(question_input.metadata),
+                    "target_mode": normalized_mode,
+                    "qwen_result": qwen_result,
+                    "independent_result": independent_result,
+                    "conflicts": list(conflicts),
+                },
+            )
+            return self._run_component(
+                self._component(DeepSeekFinalReviewComponent), review_input
+            )
+
+        arbitrator = ModeAnswerArbitrator(
+            generate=generate,
+            independent_verify=independent_verify,
+            final_review=final_review,
+        )
+        return arbitrator.process(
+            normalized_mode,
+            context,
+            cached_verification=cached_verification,
         )
 
     def solve_mode_a(self, question, image_urls: list, normalized_text: str,
@@ -566,38 +646,27 @@ class AIReviewService:
         if results.get('probe', {}).get('topic_tags_top3'):
             knowledge_refs = ", ".join(results['probe']['topic_tags_top3'])
 
-        # Step 3a: Solver A
-        try:
-            answer_a = self.solve_mode_a(
-                question, image_urls, normalized_text, vision_result,
-                knowledge_refs, model=model
-            )
-            results['answer_a'] = answer_a
-        except AIRequestError as e:
-            errors['answer_a'] = str(e)
-            results['answer_a'] = {'error': str(e)}
-
-        # Step 3b: Solver B
-        try:
-            answer_b = self.solve_mode_b(
-                question, image_urls, normalized_text, vision_result,
-                knowledge_refs, model=model
-            )
-            results['answer_b'] = answer_b
-        except AIRequestError as e:
-            errors['answer_b'] = str(e)
-            results['answer_b'] = {'error': str(e)}
-
-        # Step 3c: Solver C
-        try:
-            answer_c = self.solve_mode_c(
-                question, image_urls, normalized_text, vision_result,
-                knowledge_refs, model=model
-            )
-            results['answer_c'] = answer_c
-        except AIRequestError as e:
-            errors['answer_c'] = str(e)
-            results['answer_c'] = {'error': str(e)}
+        # Step 3: Solver A/B/C with independent verification and arbitration.
+        shared_verification = None
+        for mode in "ABC":
+            answer_key = f"answer_{mode.lower()}"
+            try:
+                outcome = self.solve_mode_with_arbitration(
+                    question,
+                    mode=mode,
+                    image_urls=image_urls,
+                    normalized_text=normalized_text,
+                    vision_result=vision_result,
+                    knowledge_refs=knowledge_refs,
+                    cached_verification=shared_verification,
+                    model=model,
+                )
+                results[answer_key] = dict(outcome.answer)
+                if outcome.shared_verifier_result is not None:
+                    shared_verification = outcome.shared_verifier_result
+            except (AIRequestError, ArbitrationError) as error:
+                errors[answer_key] = str(error)
+                results[answer_key] = {'error': str(error)}
 
         # Step 4: Verifier
         try:

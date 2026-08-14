@@ -23,7 +23,11 @@ from apps.common.ai.components import (
     ResultVerifierComponent,
     VisionExtractionComponent,
 )
-from apps.parser.models import ExamPaper, ExamQuestion
+from apps.common.ai.answer_arbitration import (
+    ArbitrationOutcome,
+    ArbitrationProviderError,
+)
+from apps.parser.models import ExamPaper, ExamQuestion, QuestionOption
 from apps.knowledge.models import KnowledgePoint
 
 
@@ -65,13 +69,32 @@ def _component_responses():
         },
         ModeBAnswerComponent: {
             "mode": "B",
-            "questions": [],
+            "questions": [
+                {
+                    "question": f"Guided step {index}",
+                    "options": {"A": "1", "B": "2", "C": "3", "D": "4"},
+                    "correct_option": "B",
+                    "correct_answer": "B",
+                    "reference_answer": "2",
+                    "analysis": "Two is correct",
+                    "explanation": "Two is correct",
+                }
+                for index in range(1, 4)
+            ],
             "final_answer": "2",
             "summary": "引导完成",
         },
         ModeCAnswerComponent: {
             "mode": "C",
-            "questions": [],
+            "questions": [
+                {
+                    "question": f"Open prompt {index}",
+                    "reference_answer": "2",
+                    "key_points": ["addition"],
+                    "followup_hint": "Combine the values",
+                }
+                for index in range(1, 4)
+            ],
             "final_answer": "2",
             "summary": "开放引导完成",
         },
@@ -813,4 +836,279 @@ def test_deepseek_route_and_all_ai_timeouts_remain_fixed():
     assert all(
         config.get_task_config(task_key).timeout_seconds == 300
         for task_key in config.task_keys
+    )
+
+
+class _CapturingComponent:
+    def __init__(self, component_type, calls, responses):
+        self._component_type = component_type
+        self._calls = calls
+        self._responses = responses
+
+    def run(self, question_input):
+        self._calls.append((self._component_type, question_input))
+        return self._responses[self._component_type]
+
+
+class _CapturingFactory:
+    def __init__(self, responses):
+        self.calls = []
+        self.responses = responses
+
+    def __call__(self, component_type):
+        return _CapturingComponent(component_type, self.calls, self.responses)
+
+
+@pytest.mark.django_db
+def test_arbitration_uses_complete_real_question_context_in_stable_option_order():
+    paper = ExamPaper.objects.create(title="Arbitration context", subject="math")
+    question = ExamQuestion.objects.create(
+        paper=paper,
+        question_no="1",
+        stem="Which value is correct?",
+        answer="C",
+        analysis="Reference analysis",
+        solution="Reference solution",
+        question_type="single_choice",
+        subject="math",
+        difficulty="2.50",
+        material="Read the material",
+        tables=[{"rows": [["x", "3"]]}],
+        subquestions=[{"stem": "Subquestion one"}],
+    )
+    for label, content, sort_order in (
+        ("D", "four", 3),
+        ("B", "two", 1),
+        ("A", "one", 0),
+        ("C", "three", 2),
+    ):
+        QuestionOption.objects.create(
+            question=question,
+            option_label=label,
+            content=content,
+            sort_order=sort_order,
+        )
+    factory = _CapturingFactory(
+        {
+            ModeAAnswerComponent: _component_responses()[ModeAAnswerComponent]
+            | {"final_answer": "C"}
+        }
+    )
+    service = common_ai_service.AIReviewService(component_factory=factory)
+
+    outcome = service.solve_mode_with_arbitration(
+        question,
+        mode="A",
+        image_urls=("https://cdn.example.test/q.png",),
+        normalized_text="Normalized stem",
+        vision_result={"figure_present": True},
+        knowledge_refs="linear equations",
+    )
+
+    assert outcome.answer["verification"]["status"] == "accepted"
+    assert [component for component, _context in factory.calls] == [
+        ModeAAnswerComponent
+    ]
+    context = factory.calls[0][1]
+    assert list(context.options) == [
+        {"label": "A", "content": "one"},
+        {"label": "B", "content": "two"},
+        {"label": "C", "content": "three"},
+        {"label": "D", "content": "four"},
+    ]
+    assert context.stem == "Which value is correct?"
+    assert context.answer == "C"
+    assert context.solution == "Reference solution"
+    assert context.image_urls == ("https://cdn.example.test/q.png",)
+    assert dict(context.metadata) == {
+        "reference_analysis": "Reference analysis",
+        "question_type": "single_choice",
+        "subject": "math",
+        "difficulty": "2.50",
+        "material": "Read the material",
+        "tables": ({"rows": (("x", "3"),)},),
+        "subquestions": ({"stem": "Subquestion one"},),
+        "normalized_text": "Normalized stem",
+        "vision_result": {"figure_present": True},
+        "knowledge_refs": "linear equations",
+        "target_mode": "A",
+    }
+
+
+def _arbitration_outcome(mode, shared):
+    verification = {
+        "status": "accepted",
+        "context_hash": "same-context",
+        "trusted_answer": "C",
+    }
+    return ArbitrationOutcome(
+        answer={
+            "mode": mode,
+            "final_answer": "C",
+            "verification": dict(verification),
+        },
+        verification=verification,
+        shared_verifier_result=shared,
+    )
+
+
+@pytest.mark.parametrize("entrypoint", ["process_question_full", "process_question_full_v2"])
+def test_full_entrypoints_route_all_modes_through_arbitration_and_reuse_shared_verification(
+    entrypoint,
+):
+    question = SimpleNamespace(
+        stem="Which value is correct?",
+        subject="math",
+        ai_processing_status=None,
+        save=MagicMock(),
+    )
+    shared = {"context_hash": "same-context", "independent_answer": "C"}
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda component_type: MagicMock()
+    )
+    service._get_question_image_urls = MagicMock(
+        return_value=["https://cdn.example.test/q.png"]
+    )
+    service.analyze_knowledge = MagicMock(return_value={"knowledge_points": []})
+    service.probe_and_norm = MagicMock(
+        return_value={
+            "subject": "math",
+            "normalized_text": "Normalized stem",
+            "topic_tags_top3": ["linear equations"],
+        }
+    )
+    service.analyze_knowledge_points = MagicMock(
+        return_value={"knowledge_points": []}
+    )
+    service.vision_extraction = MagicMock(
+        return_value={"figure_present": True}
+    )
+    service.solve_mode_with_arbitration = MagicMock(
+        side_effect=lambda _question, *, mode, **_kwargs: _arbitration_outcome(
+            mode, shared
+        )
+    )
+
+    with patch.object(
+        ExamQuestion.objects, "get", return_value=question
+    ):
+        results = getattr(service, entrypoint)("question-id")
+
+    assert [
+        call.kwargs["mode"]
+        for call in service.solve_mode_with_arbitration.call_args_list
+    ] == ["A", "B", "C"]
+    calls = service.solve_mode_with_arbitration.call_args_list
+    assert calls[0].kwargs["cached_verification"] is None
+    assert calls[1].kwargs["cached_verification"] is shared
+    assert calls[2].kwargs["cached_verification"] is shared
+    for mode in "ABC":
+        answer = results[f"answer_{mode.lower()}"]
+        assert answer["mode"] == mode
+        assert answer["verification"]["context_hash"] == "same-context"
+
+
+def test_full_pipeline_keeps_failed_mode_non_savable_without_legacy_fallback():
+    question = SimpleNamespace(stem="Question", subject="math")
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda component_type: MagicMock()
+    )
+    service._get_question_image_urls = MagicMock(return_value=[])
+    service.analyze_knowledge = MagicMock(return_value={"knowledge_points": []})
+    service.generate_answer_b = MagicMock(
+        side_effect=AssertionError("legacy B fallback was called")
+    )
+
+    def arbitrate(_question, *, mode, **_kwargs):
+        if mode == "B":
+            raise ArbitrationProviderError()
+        return _arbitration_outcome(mode, None)
+
+    service.solve_mode_with_arbitration = MagicMock(side_effect=arbitrate)
+
+    with patch.object(ExamQuestion.objects, "get", return_value=question):
+        results = service.process_question_full("question-id")
+
+    assert results["errors"] == {"answer_b": "arbitration_provider_failure"}
+    assert results["answer_b"] == {
+        "error": "arbitration_provider_failure",
+        "model": service._task_route("mode_b_answer")[1],
+        "generated_at": results["answer_b"]["generated_at"],
+    }
+    service.generate_answer_b.assert_not_called()
+
+
+def test_full_v2_keeps_failed_mode_partial_without_raw_solver_fallback():
+    question = SimpleNamespace(
+        stem="Question",
+        subject="math",
+        ai_processing_status=None,
+        save=MagicMock(),
+    )
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda component_type: MagicMock()
+    )
+    service._get_question_image_urls = MagicMock(return_value=[])
+    service.probe_and_norm = MagicMock(
+        return_value={"normalized_text": "Question", "topic_tags_top3": []}
+    )
+    service.analyze_knowledge_points = MagicMock(
+        return_value={"knowledge_points": []}
+    )
+    service.vision_extraction = MagicMock(return_value={})
+    service.verify_result = MagicMock(return_value={"pass": True})
+    service.solve_mode_b = MagicMock(
+        side_effect=AssertionError("raw V2 B solver was called")
+    )
+
+    def arbitrate(_question, *, mode, **_kwargs):
+        if mode == "B":
+            raise ArbitrationProviderError()
+        return _arbitration_outcome(mode, None)
+
+    service.solve_mode_with_arbitration = MagicMock(side_effect=arbitrate)
+
+    with patch.object(ExamQuestion.objects, "get", return_value=question):
+        results = service.process_question_full_v2("question-id")
+
+    assert results["errors"] == {"answer_b": "arbitration_provider_failure"}
+    assert results["answer_b"] == {"error": "arbitration_provider_failure"}
+    assert results["answer_a"]["verification"]["status"] == "accepted"
+    assert results["answer_c"]["verification"]["status"] == "accepted"
+    assert question.ai_processing_status == "failed"
+    service.solve_mode_b.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_model"),
+    [
+        (None, "qwen3.7-plus"),
+        ("qwen3-vl-plus", "qwen3-vl-plus"),
+        ("unsupported-model", "qwen3.7-flash"),
+    ],
+)
+def test_arbitrated_full_pipeline_preserves_mode_model_metadata(model, expected_model):
+    question = SimpleNamespace(stem="Question", subject="math")
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda component_type: MagicMock()
+    )
+    service._get_question_image_urls = MagicMock(return_value=[])
+    service.analyze_knowledge = MagicMock(return_value={"knowledge_points": []})
+    service.solve_mode_with_arbitration = MagicMock(
+        side_effect=lambda _question, *, mode, **_kwargs: _arbitration_outcome(
+            mode, None
+        )
+    )
+
+    with patch.object(ExamQuestion.objects, "get", return_value=question):
+        results = service.process_question_full("question-id", model=model)
+
+    assert [results[f"answer_{mode.lower()}"]["model"] for mode in "ABC"] == [
+        expected_model,
+        expected_model,
+        expected_model,
+    ]
+    assert all(
+        call.kwargs["model"] == model
+        for call in service.solve_mode_with_arbitration.call_args_list
     )
