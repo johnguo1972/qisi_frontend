@@ -18,6 +18,7 @@ from apps.common.exceptions import AIRequestError
 from .answer_validation import AnswerNormalizer, ModeContentValidator
 from .components.base import QuestionInput
 from .question_context import question_context_hash, question_context_payload
+from .schemas import has_visible_text
 
 
 class ArbitrationError(RuntimeError):
@@ -100,6 +101,106 @@ def _visible_text_values(value: object):
             yield from _visible_text_values(item)
 
 
+_CHOICE_TYPES = frozenset(
+    {"single_choice", "multiple_choice", "单选题", "多选题"}
+)
+_SUBJECTIVE_TYPES = frozenset(
+    {
+        "essay",
+        "short_answer",
+        "free_response",
+        "open_response",
+        "subjective",
+        "proof",
+        "unknown",
+        "简答题",
+        "作文题",
+        "证明题",
+        "主观题",
+    }
+)
+_VISUAL_MARKERS = (
+    "as shown in the figure",
+    "shown in the figure",
+    "see figure",
+    "the diagram",
+    "如图",
+    "见图",
+    "下图",
+    "图中",
+    "观察图",
+)
+
+
+def _question_type(value: object) -> str:
+    return value.strip().casefold() if isinstance(value, str) else ""
+
+
+def _complete_choice_options(payload: Mapping[str, object]) -> bool:
+    options = payload.get("options", ())
+    if not isinstance(options, (list, tuple)) or len(options) < 2:
+        return False
+    labels: list[str] = []
+    contents: list[str] = []
+    for raw_option in options:
+        option = _plain_mapping(raw_option)
+        if option is None:
+            return False
+        label = option.get("label")
+        content = option.get("content")
+        if (
+            not isinstance(label, str)
+            or len(label.strip()) != 1
+            or not label.strip().isascii()
+            or not label.strip().isalpha()
+            or not _nonblank_text(content)
+        ):
+            return False
+        labels.append(label.strip().upper())
+        contents.append(_canonical_visible_text(content))
+    return (
+        len(set(labels)) == len(labels)
+        and "" not in contents
+        and len(set(contents)) == len(contents)
+    )
+
+
+def _has_usable_visual_facts(value: object) -> bool:
+    vision = _plain_mapping(value)
+    if vision is None:
+        return False
+    for key in (
+        "diagram_facts",
+        "visual_summary",
+        "target_related_visual_info",
+        "text_marks_in_figure",
+        "variables_and_symbols",
+    ):
+        candidate = vision.get(key)
+        if isinstance(candidate, str) and has_visible_text(candidate):
+            return True
+        if isinstance(candidate, Mapping) and candidate:
+            return True
+        if isinstance(candidate, (list, tuple)) and any(
+            _nonblank_text(item) or isinstance(item, Mapping) and bool(item)
+            for item in candidate
+        ):
+            return True
+    return False
+
+
+def _reference_availability(context: QuestionInput) -> tuple[bool, bool]:
+    answer_available = isinstance(context.answer, str) and has_visible_text(
+        context.answer
+    )
+    metadata_analysis = context.metadata.get("reference_analysis", "")
+    analysis_available = any(
+        isinstance(value, str) and has_visible_text(value)
+        for value in (metadata_analysis, context.solution)
+    )
+    return answer_available, analysis_available
+
+
 class ModeAnswerArbitrator:
     """Select a validated mode answer using the approved decision table only."""
 
@@ -169,6 +270,9 @@ class ModeAnswerArbitrator:
             trusted_answer=normalized_qwen.value,
             context=payload,
         )
+        preflight_issues, qwen_confidence = self._fast_path_preflight(
+            payload, qwen
+        )
 
         # Decision row 1: a valid reference and valid matching Qwen payload end here.
         if (
@@ -176,6 +280,7 @@ class ModeAnswerArbitrator:
             and normalized_qwen.valid
             and normalized_reference.value == normalized_qwen.value
             and qwen_content.valid
+            and not preflight_issues
         ):
             return self._accepted(
                 selected=qwen,
@@ -187,7 +292,7 @@ class ModeAnswerArbitrator:
                 trusted_answer=normalized_qwen.value,
                 deepseek_used=False,
                 final_review_used=False,
-                confidence=1.0,
+                confidence=qwen_confidence,
                 warnings=(),
                 shared=None,
             )
@@ -213,6 +318,7 @@ class ModeAnswerArbitrator:
             context=payload,
         )
         warnings: list[str] = []
+        warnings.extend(preflight_issues)
         if not qwen_content.valid:
             warnings.append("qwen_content_invalid")
         if normalized_reference.valid and normalized_qwen.valid and normalized_qwen.value != normalized_reference.value:
@@ -228,6 +334,18 @@ class ModeAnswerArbitrator:
             and not qwen_facts_cover
         ):
             warnings.append("qwen_key_facts_unproven")
+
+        if (
+            normalized_reference.valid
+            and independent["reference_answer_valid"] is True
+            and normalized_deepseek.value != normalized_reference.value
+        ):
+            warnings.append("independent_reference_answer_conflict")
+            return self._review(
+                normalized_mode, context, qwen, independent, warnings, context_hash,
+                normalized_reference.value, normalized_qwen.value,
+                normalized_deepseek.value, shared,
+            )
 
         # Required escalation conditions take precedence over answer equality.
         if independent["confidence"] < self.INDEPENDENT_CONFIDENCE_THRESHOLD:
@@ -368,24 +486,45 @@ class ModeAnswerArbitrator:
     def _independent(
         self, mode: str, context: QuestionInput, context_hash: str, cached: object
     ) -> tuple[dict[str, object], bool]:
+        answer_available, analysis_available = _reference_availability(context)
         cache = _plain_mapping(cached)
         if cache is not None and cache.get("context_hash") == context_hash:
-            candidate = self._validated_independent(cache, cached=True)
+            candidate = self._validated_independent(
+                cache,
+                cached=True,
+                answer_available=answer_available,
+                analysis_available=analysis_available,
+            )
             if candidate is not None:
                 return candidate, True
         try:
             result = self._independent_verify(mode, context)
         except (AIRequestError, TypeError, ValueError):
             raise ArbitrationProviderError() from None
-        candidate = self._validated_independent(_plain_mapping(result), cached=False)
+        candidate = self._validated_independent(
+            _plain_mapping(result),
+            cached=False,
+            answer_available=answer_available,
+            analysis_available=analysis_available,
+        )
         if candidate is None:
             raise ArbitrationProviderError()
         return candidate, False
 
     def _validated_independent(
-        self, result: dict[str, object] | None, *, cached: bool
+        self,
+        result: dict[str, object] | None,
+        *,
+        cached: bool,
+        answer_available: bool,
+        analysis_available: bool,
     ) -> dict[str, object] | None:
-        required = set(self._CACHE_FIELDS - {"context_hash"})
+        flag_fields = {"reference_answer_valid", "reference_analysis_valid"}
+        required = set(self._CACHE_FIELDS - {"context_hash"} - flag_fields)
+        if answer_available:
+            required.add("reference_answer_valid")
+        if analysis_available:
+            required.add("reference_analysis_valid")
         if not cached:
             required.update({"independent_reasoning_summary", "mode_content"})
         if result is None or not required.issubset(result):
@@ -394,7 +533,8 @@ class ModeAnswerArbitrator:
         facts = result.get("key_facts")
         issues = result.get("reference_issues")
         confidence = result.get("confidence")
-        flags = (result.get("reference_answer_valid"), result.get("reference_analysis_valid"))
+        answer_flag = result.get("reference_answer_valid")
+        analysis_flag = result.get("reference_analysis_valid")
         if (
             not _nonblank_text(answer)
             or not isinstance(facts, (list, tuple))
@@ -402,7 +542,10 @@ class ModeAnswerArbitrator:
             or not all(_nonblank_text(item) for item in facts)
             or not isinstance(issues, (list, tuple))
             or not all(isinstance(item, str) for item in issues)
-            or any(flag is not None and not isinstance(flag, bool) for flag in flags)
+            or (answer_available and not isinstance(answer_flag, bool))
+            or (not answer_available and answer_flag is not None)
+            or (analysis_available and not isinstance(analysis_flag, bool))
+            or (not analysis_available and analysis_flag is not None)
             or isinstance(confidence, bool)
             or not isinstance(confidence, (int, float))
             or not 0 <= confidence <= 1
@@ -412,7 +555,7 @@ class ModeAnswerArbitrator:
             return None
         try:
             safe = {
-                key: deepcopy(result[key])
+                key: deepcopy(result.get(key))
                 for key in self._CACHE_FIELDS
                 if key != "context_hash"
             }
@@ -524,8 +667,8 @@ class ModeAnswerArbitrator:
         return {
             "context_hash": context_hash,
             "independent_answer": independent["independent_answer"],
-            "reference_answer_valid": independent["reference_answer_valid"],
-            "reference_analysis_valid": independent["reference_analysis_valid"],
+            "reference_answer_valid": independent.get("reference_answer_valid"),
+            "reference_analysis_valid": independent.get("reference_analysis_valid"),
             "reference_issues": deepcopy(independent["reference_issues"]),
             "key_facts": deepcopy(independent["key_facts"]),
             "confidence": independent["confidence"],
@@ -543,7 +686,7 @@ class ModeAnswerArbitrator:
         trusted_answer: str,
         deepseek_used: bool,
         final_review_used: bool,
-        confidence: float,
+        confidence: float | None,
         warnings: tuple[str, ...] | list[str],
         shared: dict | None,
     ) -> ArbitrationOutcome:
@@ -561,5 +704,47 @@ class ModeAnswerArbitrator:
             "warnings": list(warnings),
         }
         answer = _copy_mapping(selected)
+        answer["final_answer"] = trusted_answer
         answer["verification"] = deepcopy(verification)
         return ArbitrationOutcome(answer, verification, deepcopy(shared))
+
+    def _fast_path_preflight(
+        self, payload: Mapping[str, object], qwen: Mapping[str, object]
+    ) -> tuple[tuple[str, ...], float | None]:
+        issues: list[str] = []
+        kind = _question_type(payload.get("question_type", ""))
+        if not _nonblank_text(payload.get("stem")):
+            issues.append("incomplete_question_context")
+        if kind in _CHOICE_TYPES and not _complete_choice_options(payload):
+            issues.append("incomplete_choice_options")
+        if kind in _SUBJECTIVE_TYPES or not kind:
+            issues.append("subjective_answer_requires_verification")
+        if _missing_conditions(qwen):
+            issues.append("missing_conditions_reported")
+
+        stem = _canonical_visible_text(payload.get("stem"))
+        vision = _plain_mapping(payload.get("vision_result")) or {}
+        visually_dependent = vision.get("figure_present") is True or any(
+            marker in stem for marker in _VISUAL_MARKERS
+        )
+        image_urls = payload.get("image_urls", ())
+        has_image = isinstance(image_urls, (list, tuple)) and any(
+            _nonblank_text(url) for url in image_urls
+        )
+        if visually_dependent and not has_image and not _has_usable_visual_facts(vision):
+            issues.append("visual_context_incomplete")
+
+        confidence: float | None = None
+        if "confidence" in qwen:
+            raw_confidence = qwen.get("confidence")
+            if (
+                isinstance(raw_confidence, bool)
+                or not isinstance(raw_confidence, (int, float))
+                or not 0 <= raw_confidence <= 1
+            ):
+                issues.append("invalid_qwen_confidence")
+            else:
+                confidence = float(raw_confidence)
+                if confidence < self.INDEPENDENT_CONFIDENCE_THRESHOLD:
+                    issues.append("low_qwen_confidence")
+        return tuple(issues), confidence

@@ -7,6 +7,10 @@ from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 from apps.common.ai_service import AIReviewService, create_ai_review_service
+from apps.common.ai.question_context import (
+    QuestionContextBuilder,
+    question_context_hash,
+)
 from apps.parser.models import ExamQuestion
 from .ai_mode_dispatch import release_single_mode_ai_task_lock
 
@@ -273,13 +277,11 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         mode_key = f'ai_answer_{normalized_mode.lower()}'
         answer = dict(outcome.answer)
         answer['mode'] = normalized_mode
-        answer['model'] = (
-            service._get_model(model)
-            if model is not None
-            else service._task_route(
-                f'mode_{normalized_mode.lower()}_answer'
-            )[1]
+        route_provider, route_model = service._task_route(
+            f'mode_{normalized_mode.lower()}_answer'
         )
+        answer['provider'] = route_provider
+        answer['model'] = route_model
         processed_at = timezone.now()
         answer['generated_at'] = processed_at.strftime('%Y-%m-%dT%H:%M:%S')
         answer['confirmed'] = False
@@ -292,6 +294,28 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
             locked_question = (
                 ExamQuestion.objects.select_for_update().get(id=question_id)
             )
+            locked_probe = locked_question.ai_probe_result or {}
+            locked_vision = locked_question.ai_vision_extract or {}
+            locked_normalized_text = locked_probe.get(
+                'normalized_text', locked_question.stem or ''
+            )
+            locked_knowledge_refs = ''
+            if locked_probe.get('topic_tags_top3'):
+                locked_knowledge_refs = ', '.join(
+                    locked_probe['topic_tags_top3']
+                )
+            locked_context = QuestionContextBuilder.build(
+                locked_question,
+                image_urls=service._get_question_image_urls(locked_question),
+                normalized_text=locked_normalized_text,
+                vision_result=locked_vision,
+                knowledge_refs=locked_knowledge_refs,
+                target_mode=normalized_mode,
+            )
+            if question_context_hash(locked_context) != outcome.verification.get(
+                'context_hash'
+            ):
+                raise RuntimeError('question_context_changed')
             setattr(locked_question, mode_key, answer)
             if outcome.shared_verifier_result is not None:
                 locked_question.ai_verifier_result = dict(

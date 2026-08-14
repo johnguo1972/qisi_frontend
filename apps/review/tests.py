@@ -1,5 +1,6 @@
 """Integration tests for AI review service and batch processing."""
 import json
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
 from django.core.cache import cache
@@ -9,6 +10,9 @@ from rest_framework.test import APIClient
 from apps.parser.models import ExamQuestion, ExamPaper
 from apps.common.exceptions import AIRequestError
 from apps.common.ai_service import AIReviewService
+from apps.accounts.models import UserAccount
+from apps.accounts.roles import grant_user_role
+from apps.accounts.services import generate_tokens
 
 
 def _make_qs_mock(items):
@@ -406,7 +410,6 @@ class AIProcessFullPipelineTest(TestCase):
             ModeBAnswerComponent,
             ModeCAnswerComponent,
             QuestionProbeComponent,
-            ResultVerifierComponent,
             VisionExtractionComponent,
         )
 
@@ -466,9 +469,6 @@ class AIProcessFullPipelineTest(TestCase):
                 'final_answer': '5',
                 'summary': '完成',
             },
-            ResultVerifierComponent: {
-                'pass': True, 'issues': [], 'retry_needed': False,
-            },
         }
         created_types = []
 
@@ -500,14 +500,13 @@ class AIProcessFullPipelineTest(TestCase):
                 ModeAAnswerComponent,
                 ModeBAnswerComponent,
                 ModeCAnswerComponent,
-                ResultVerifierComponent,
             ],
         )
         self.assertEqual(
             set(results),
             {
                 'probe', 'knowledge', 'vision', 'answer_a', 'answer_b',
-                'answer_c', 'verifier', 'errors', 'image_count',
+                'answer_c', 'errors', 'image_count',
             },
         )
         self.assertEqual(results['image_count'], 2)
@@ -515,7 +514,7 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(results['answer_a']['mode'], 'A')
         self.assertEqual(results['answer_b']['mode'], 'B')
         self.assertEqual(results['answer_c']['mode'], 'C')
-        self.assertTrue(results['verifier']['pass'])
+        self.assertNotIn('verifier', results)
 
         self.question.refresh_from_db()
         self.assertEqual(self.question.ai_processing_status, 'success')
@@ -1080,7 +1079,14 @@ class SingleModeDispatchViewTest(TestCase):
             question_type='calculation',
         )
         self.client = APIClient()
-        self.client.force_authenticate(user=MagicMock(is_authenticated=True))
+        self.teacher = UserAccount.objects.create(
+            mobile='13900008201',
+            display_name='Dispatch Teacher',
+            role_type='teacher',
+        )
+        grant_user_role(self.teacher, 'teacher')
+        access = generate_tokens(self.teacher, 'teacher')['access_token']
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
 
     def test_view_returns_dispatcher_envelope_and_duplicate_flag(self):
         from apps.review.ai_mode_dispatch import ModeTaskDispatch
@@ -1152,3 +1158,173 @@ class SingleModeDispatchViewTest(TestCase):
 
         self.assertEqual(response.status_code, 401)
         dispatch.assert_not_called()
+
+
+class TeacherAIEndpointPermissionTest(TestCase):
+    """Teacher AI endpoints must honor the independently authenticated role."""
+
+    def setUp(self):
+        self.paper = ExamPaper.objects.create(
+            title='Teacher permission paper', subject='math'
+        )
+        self.question = ExamQuestion.objects.create(
+            paper=self.paper,
+            stem='1 + 1 = ?',
+            answer='2',
+            question_type='calculation',
+        )
+
+    def _client(self, *, legacy_role, active_role, grants):
+        user = UserAccount.objects.create(
+            mobile=f'139{UserAccount.objects.count():08d}',
+            display_name=f'{active_role} session',
+            role_type=legacy_role,
+        )
+        for role in grants:
+            grant_user_role(user, role)
+        access = generate_tokens(user, active_role)['access_token']
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
+        return client
+
+    def _teacher_ai_requests(self, client):
+        question_id = self.question.id
+        return (
+            client.post(reverse('ai-process-question', args=[question_id]), {}, format='json'),
+            client.post(reverse('ai-process-probe', args=[question_id]), {}, format='json'),
+            client.get(reverse('single-ai-task-status', args=['permission-task'])),
+            client.post(
+                reverse('ai-process-single-mode', args=[question_id, 'A']),
+                {},
+                format='json',
+            ),
+            client.post(
+                reverse('ai-confirm-answer', args=[question_id, 'A']),
+                {},
+                format='json',
+            ),
+            client.patch(
+                reverse('ai-update-answer', args=[question_id, 'A']),
+                {'edited_content': {'final_answer': '2'}},
+                format='json',
+            ),
+            client.post(
+                reverse('ai-update-knowledge', args=[question_id]),
+                {'knowledge_data': {'difficulty': 'L1'}},
+                format='json',
+            ),
+            client.get(reverse('ai-question-status', args=[question_id])),
+            client.post(
+                reverse('batch-ai-process'),
+                {'question_ids': [str(question_id)]},
+                format='json',
+            ),
+            client.get(reverse('batch-task-status', args=['permission-task'])),
+            client.post(reverse('batch-task-cancel', args=['permission-task']), {}, format='json'),
+            client.get(reverse('ai-task-status', args=['permission-task'])),
+        )
+
+    def test_student_parent_and_admin_sessions_are_forbidden_before_side_effects(self):
+        from apps.review.ai_mode_dispatch import ModeTaskDispatch
+
+        with (
+            patch(
+                'apps.review.tasks.single_ai_process_question.delay',
+                return_value=SimpleNamespace(id='full-task'),
+            ) as full,
+            patch(
+                'apps.review.tasks.single_probe_ai_process_question.delay',
+                return_value=SimpleNamespace(id='probe-task'),
+            ) as probe,
+            patch(
+                'apps.review.views.dispatch_single_mode_ai_task',
+                return_value=ModeTaskDispatch(
+                    task_id='mode-task', status='pending', created=True
+                ),
+            ) as single_mode,
+            patch('apps.review.views.confirm_ai_answer', return_value={}) as confirm,
+            patch('apps.review.views.update_ai_answer', return_value={}) as update_answer,
+            patch(
+                'apps.review.views.update_knowledge_enrichment', return_value={}
+            ) as update_knowledge,
+            patch(
+                'apps.review.views.batch_ai_process_questions.delay',
+                return_value=SimpleNamespace(id='batch-task'),
+            ) as batch,
+            patch('apps.review.views.cache.set') as cache_set,
+        ):
+            for role in ('student', 'parent', 'admin'):
+                with self.subTest(role=role):
+                    client = self._client(
+                        legacy_role=role,
+                        active_role=role,
+                        grants=(role,),
+                    )
+                    responses = self._teacher_ai_requests(client)
+                    self.assertTrue(responses)
+                    self.assertTrue(all(response.status_code == 403 for response in responses))
+
+        for side_effect in (
+            full, probe, single_mode, confirm, update_answer,
+            update_knowledge, batch, cache_set,
+        ):
+            side_effect.assert_not_called()
+
+    def test_teacher_session_retains_success_and_validation_behavior(self):
+        teacher = self._client(
+            legacy_role='teacher', active_role='teacher', grants=('teacher',)
+        )
+        task = SimpleNamespace(id='teacher-task')
+        with patch(
+            'apps.review.tasks.single_ai_process_question.delay', return_value=task
+        ) as dispatch:
+            success = teacher.post(
+                reverse('ai-process-question', args=[self.question.id]),
+                {},
+                format='json',
+            )
+        invalid = teacher.post(
+            reverse('ai-process-single-mode', args=[self.question.id, 'D']),
+            {},
+            format='json',
+        )
+
+        self.assertEqual(success.status_code, 200)
+        self.assertEqual(success.json()['data']['task_id'], 'teacher-task')
+        self.assertEqual(invalid.status_code, 400)
+        dispatch.assert_called_once_with(str(self.question.id), model=None)
+
+    def test_multi_role_account_requires_teacher_active_session(self):
+        user = UserAccount.objects.create(
+            mobile='13900008299',
+            display_name='Admin Teacher',
+            role_type='admin',
+        )
+        grant_user_role(user, 'admin')
+        grant_user_role(user, 'teacher')
+        task = SimpleNamespace(id='multi-role-task')
+
+        with patch(
+            'apps.review.tasks.single_ai_process_question.delay', return_value=task
+        ) as dispatch:
+            admin_client = APIClient()
+            admin_access = generate_tokens(user, 'admin')['access_token']
+            admin_client.credentials(HTTP_AUTHORIZATION=f'Bearer {admin_access}')
+            denied = admin_client.post(
+                reverse('ai-process-question', args=[self.question.id]),
+                {},
+                format='json',
+            )
+
+            teacher_client = APIClient()
+            teacher_access = generate_tokens(user, 'teacher')['access_token']
+            teacher_client.credentials(HTTP_AUTHORIZATION=f'Bearer {teacher_access}')
+            allowed = teacher_client.post(
+                reverse('ai-process-question', args=[self.question.id]),
+                {},
+                format='json',
+            )
+
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(allowed.status_code, 200)
+        dispatch.assert_called_once_with(str(self.question.id), model=None)

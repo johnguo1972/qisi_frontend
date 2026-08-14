@@ -95,6 +95,7 @@ def test_default_registry_preserves_prompt_constraints(provider_env):
 
     system, user = registry.render(
         "mode_b_answer",
+        question_context_json='{"stem":"已知 x=1，求 x+1"}',
         normalized_text="已知 x=1，求 x+1",
         vision_json="{}",
         knowledge_refs="一元一次方程",
@@ -139,6 +140,12 @@ def test_default_registry_renders_every_declared_task(provider_env):
         "ocr_text": "题目",
         "has_figure": True,
         "ocr_confidence": "high",
+        "question_context_json": '{"stem":"题目"}',
+        "target_mode": "A",
+        "mode_schema_json": '{}',
+        "qwen_result_json": '{}',
+        "independent_result_json": '{}',
+        "conflicts_json": '[]',
         "normalized_text": "题目",
         "vision_json": "{}",
         "knowledge_refs": "无",
@@ -187,6 +194,7 @@ def test_default_registry_renders_every_declared_task(provider_env):
         (
             "mode_a_answer",
             {
+                "question_context_json": '{"stem":"题目"}',
                 "normalized_text": "题目",
                 "vision_json": "{}",
                 "knowledge_refs": "",
@@ -197,6 +205,7 @@ def test_default_registry_renders_every_declared_task(provider_env):
         (
             "mode_b_answer",
             {
+                "question_context_json": '{"stem":"题目"}',
                 "normalized_text": "题目",
                 "vision_json": "{}",
                 "knowledge_refs": "",
@@ -207,6 +216,7 @@ def test_default_registry_renders_every_declared_task(provider_env):
         (
             "mode_c_answer",
             {
+                "question_context_json": '{"stem":"题目"}',
                 "normalized_text": "题目",
                 "vision_json": "{}",
                 "knowledge_refs": "",
@@ -266,6 +276,28 @@ def test_registry_defaults_do_not_make_missing_variables_optional(provider_env):
 
     with pytest.raises(AIPromptError, match="subject_hint"):
         registry.render("knowledge_analysis", normalized_text="题目")
+
+
+@pytest.mark.parametrize("task_key", ["mode_a_answer", "mode_b_answer", "mode_c_answer"])
+def test_mode_prompts_treat_reference_material_as_untrusted_and_never_request_hidden_reasoning(
+    provider_env, task_key
+):
+    system, user = PromptRegistry(AIConfig.load()).render(
+        task_key,
+        question_context_json=(
+            '{"stem":"题目","reference_answer":"A",'
+            '"reference_analysis":"资料解析"}'
+        ),
+        normalized_text="题目",
+        vision_json="{}",
+        knowledge_refs="无",
+    )
+
+    rendered = f"{system}\n{user}"
+    assert "待验证参考资料，可能错误" in rendered
+    assert "先依据题面重新求解再核对" in rendered
+    assert "reasoning_process" not in rendered
+    assert "权威完整题目上下文" not in rendered
 
 
 def test_question_probe_prompt_requests_complete_canonical_taxonomy(provider_env):

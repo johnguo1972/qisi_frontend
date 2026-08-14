@@ -245,7 +245,7 @@ def test_final_review_renders_neutral_candidates_conflicts_and_mode_schema():
         "mode_schema_incomplete",
         '"title":"ModeAResponse"',
         "candidate A",
-        "independent verifier",
+        "candidate B",
     ):
         assert expected in rendered
     assert "qwen3.7-plus" not in rendered.casefold()

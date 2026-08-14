@@ -42,6 +42,15 @@ _MODE_RESPONSE_SCHEMAS = {
     "B": ModeBResponse,
     "C": ModeCResponse,
 }
+_SHARED_VERIFIER_FIELDS = (
+    "context_hash",
+    "independent_answer",
+    "reference_answer_valid",
+    "reference_analysis_valid",
+    "reference_issues",
+    "key_facts",
+    "confidence",
+)
 
 
 def _project_schema_value(value):
@@ -62,6 +71,41 @@ def _project_schema_value(value):
     if isinstance(value, (list, tuple)):
         return [_project_schema_value(item) for item in value]
     return value
+
+
+def _safe_shared_verifier_result(value) -> dict | None:
+    """Return only the reusable DeepSeek audit fields, never mode content."""
+    if not isinstance(value, dict):
+        return None
+    if not all(field in value for field in _SHARED_VERIFIER_FIELDS):
+        return None
+    if not all(
+        isinstance(value[field], str) and bool(value[field].strip())
+        for field in ("context_hash", "independent_answer")
+    ):
+        return None
+    for field in ("reference_answer_valid", "reference_analysis_valid"):
+        flag = value[field]
+        if flag is not None and not isinstance(flag, bool):
+            return None
+    issues = value["reference_issues"]
+    facts = value["key_facts"]
+    confidence = value["confidence"]
+    if (
+        not isinstance(issues, (list, tuple))
+        or not all(isinstance(item, str) for item in issues)
+        or not isinstance(facts, (list, tuple))
+        or not facts
+        or not all(isinstance(item, str) and bool(item.strip()) for item in facts)
+        or isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not 0 <= confidence <= 1
+    ):
+        return None
+    return {
+        field: deepcopy(value[field])
+        for field in _SHARED_VERIFIER_FIELDS
+    }
 
 
 class _LegacyComponentClient:
@@ -392,11 +436,11 @@ class AIReviewService:
                 )
                 answer = dict(outcome.answer)
                 answer['mode'] = mode
-                answer['model'] = (
-                    self._get_model(model)
-                    if model is not None
-                    else self._task_route(f"mode_{mode.lower()}_answer")[1]
+                route_provider, route_model = self._task_route(
+                    f"mode_{mode.lower()}_answer"
                 )
+                answer['provider'] = route_provider
+                answer['model'] = route_model
                 answer['generated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
                 answer['confirmed'] = False
                 answer['confirmed_at'] = None
@@ -404,19 +448,24 @@ class AIReviewService:
                 answer['error'] = None
                 results[answer_key] = answer
                 if outcome.shared_verifier_result is not None:
-                    shared_verification = outcome.shared_verifier_result
+                    shared_verification = _safe_shared_verifier_result(
+                        outcome.shared_verifier_result
+                    )
             except (AIRequestError, ArbitrationError) as error:
                 errors[answer_key] = str(error)
                 results[answer_key] = {
                     'error': str(error),
-                    'model': (
-                        self._get_model(model)
-                        if model is not None
-                        else self._task_route(f"mode_{mode.lower()}_answer")[1]
-                    ),
+                    'provider': self._task_route(
+                        f"mode_{mode.lower()}_answer"
+                    )[0],
+                    'model': self._task_route(
+                        f"mode_{mode.lower()}_answer"
+                    )[1],
                     'generated_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
                 }
 
+        if shared_verification is not None and not errors:
+            results['verifier'] = deepcopy(shared_verification)
         results['errors'] = errors
         return results
 
@@ -705,23 +754,23 @@ class AIReviewService:
                     cached_verification=shared_verification,
                     model=model,
                 )
-                results[answer_key] = dict(outcome.answer)
+                answer = dict(outcome.answer)
+                route_provider, route_model = self._task_route(
+                    f"mode_{mode.lower()}_answer"
+                )
+                answer['provider'] = route_provider
+                answer['model'] = route_model
+                results[answer_key] = answer
                 if outcome.shared_verifier_result is not None:
-                    shared_verification = outcome.shared_verifier_result
+                    shared_verification = _safe_shared_verifier_result(
+                        outcome.shared_verifier_result
+                    )
             except (AIRequestError, ArbitrationError) as error:
                 errors[answer_key] = str(error)
                 results[answer_key] = {'error': str(error)}
 
-        # Step 4: Verifier
-        try:
-            verifier = self.verify_result(
-                normalized_text, vision_result,
-                results.get('answer_a', {}), model=model
-            )
-            results['verifier'] = verifier
-        except AIRequestError as e:
-            errors['verifier'] = str(e)
-            results['verifier'] = {'error': str(e)}
+        if shared_verification is not None and not errors:
+            results['verifier'] = deepcopy(shared_verification)
 
         results['errors'] = errors
         results['image_count'] = len(image_urls)
@@ -804,9 +853,15 @@ class AIReviewService:
         if 'vision' in results:
             question.ai_vision_extract = results['vision']
 
-        # Save verifier result
-        if 'verifier' in results:
-            question.ai_verifier_result = results['verifier']
+        # Save only the shared DeepSeek verification cache. Legacy verifier
+        # envelopes and partial/failed runs must preserve the previous cache.
+        safe_verifier = (
+            _safe_shared_verifier_result(results.get('verifier'))
+            if not results.get('errors')
+            else None
+        )
+        if safe_verifier is not None:
+            question.ai_verifier_result = safe_verifier
 
         # Save A/B/C answers (existing logic)
         if 'answer_a' in results and not results['answer_a'].get('error'):

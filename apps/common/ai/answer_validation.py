@@ -199,6 +199,84 @@ def _complete_choice_context(context: Mapping[object, object]) -> bool:
     ) >= 2
 
 
+def _exact_option_key(value: object, labels: tuple[str, ...]) -> str | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip().upper()
+    if len(candidate) != 1 or not candidate.isascii() or not candidate.isalpha():
+        return None
+    return candidate if candidate in labels else None
+
+
+def _mode_b_answer_conflict(
+    result: Mapping[object, object],
+    *,
+    trusted: NormalizedAnswer,
+    context: Mapping[object, object],
+    normalizer: AnswerNormalizer,
+) -> bool:
+    labels = _option_labels_from_context(context)
+    question_type = context.get(
+        "question_type", context.get("question_style", "")
+    )
+    trusted_key = _exact_option_key(trusted.value, labels)
+    questions = result.get("questions", ())
+    if not isinstance(questions, (list, tuple)):
+        return False
+    for item in questions:
+        question = _plain_mapping(item)
+        if question is None:
+            continue
+        options = _plain_mapping(question.get("options")) or {}
+        local_labels = _allowed_labels(tuple(options.keys()))
+        answer_keys = [
+            key
+            for field in ("correct_option", "correct_answer", "reference_answer")
+            if (key := _exact_option_key(question.get(field), local_labels))
+            is not None
+        ]
+        if not answer_keys:
+            continue
+        if len(set(answer_keys)) != 1:
+            return True
+        answer_key = answer_keys[0]
+        if trusted_key is not None:
+            if answer_key != trusted_key:
+                return True
+            continue
+        local_answer = normalizer.normalize(
+            options.get(answer_key),
+            question_type=question_type,
+            option_labels=labels,
+        )
+        if not local_answer.valid or local_answer.value != trusted.value:
+            return True
+    return False
+
+
+def _mode_c_answer_conflict(
+    result: Mapping[object, object],
+    *,
+    trusted: NormalizedAnswer,
+    context: Mapping[object, object],
+) -> bool:
+    labels = _option_labels_from_context(context)
+    trusted_key = _exact_option_key(trusted.value, labels)
+    if trusted_key is None:
+        return False
+    questions = result.get("questions", ())
+    if not isinstance(questions, (list, tuple)):
+        return False
+    for item in questions:
+        question = _plain_mapping(item)
+        if question is None:
+            continue
+        reference_key = _exact_option_key(question.get("reference_answer"), labels)
+        if reference_key is not None and reference_key != trusted_key:
+            return True
+    return False
+
+
 def _has_missing_conditions(result: Mapping[object, object]) -> bool:
     value = result.get("missing_conditions", ())
     if isinstance(value, str):
@@ -297,6 +375,8 @@ class ModeContentValidator:
         "invalid_final_answer",
         "trusted_answer_invalid",
         "final_answer_conflict",
+        "mode_b_answer_conflict",
+        "mode_c_answer_conflict",
         "false_missing_conditions",
         "claims_options_missing",
         "mode_schema_incomplete",
@@ -336,6 +416,29 @@ class ModeContentValidator:
             observed.add("trusted_answer_invalid")
         elif final.valid and final.value != trusted.value:
             observed.add("final_answer_conflict")
+        if (
+            normalized_mode == "B"
+            and trusted.valid
+            and final.valid
+            and final.value == trusted.value
+            and _mode_b_answer_conflict(
+                plain_result,
+                trusted=trusted,
+                context=plain_context,
+                normalizer=self._normalizer,
+            )
+        ):
+            observed.add("mode_b_answer_conflict")
+        if (
+            normalized_mode == "C"
+            and trusted.valid
+            and final.valid
+            and final.value == trusted.value
+            and _mode_c_answer_conflict(
+                plain_result, trusted=trusted, context=plain_context
+            )
+        ):
+            observed.add("mode_c_answer_conflict")
         if normalized_mode == "A" and complete_choice and _has_missing_conditions(plain_result):
             observed.add("false_missing_conditions")
         if complete_choice and _has_option_missing_claim(plain_result):

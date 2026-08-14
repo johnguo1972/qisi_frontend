@@ -14,6 +14,9 @@ from django.core.management import call_command
 from django.urls import reverse
 from rest_framework.test import APIClient
 
+from apps.accounts.models import UserAccount
+from apps.accounts.roles import grant_user_role
+from apps.accounts.services import generate_tokens
 from apps.common import ai_service as common_ai_service
 from apps.common.ai.components import (
     DeepSeekFinalReviewComponent,
@@ -31,6 +34,7 @@ from apps.common.ai.answer_arbitration import (
     ArbitrationOutcome,
     ArbitrationProviderError,
 )
+from apps.common.ai.question_context import QuestionContextBuilder, question_context_hash
 from apps.parser.models import ExamPaper, ExamQuestion, QuestionOption
 from apps.knowledge.models import KnowledgePoint
 
@@ -43,6 +47,19 @@ def _make_question(*, stem="1 + 1 = ?"):
         answer="2",
         question_type="calculation",
     )
+
+
+def _teacher_api_client() -> APIClient:
+    user = UserAccount.objects.create(
+        mobile=f"138{UserAccount.objects.count():08d}",
+        display_name="AI compatibility teacher",
+        role_type="teacher",
+    )
+    grant_user_role(user, "teacher")
+    access = generate_tokens(user, "teacher")["access_token"]
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+    return client
 
 
 def _component_responses():
@@ -289,8 +306,7 @@ def test_probe_task_skips_missing_question_without_creating_facade():
 def test_probe_endpoint_dispatches_only_probe_task_with_validated_model():
     """Probe POST must dispatch the dedicated task and return its pending contract."""
     question = _make_question()
-    client = APIClient()
-    client.force_authenticate(user=MagicMock(is_authenticated=True))
+    client = _teacher_api_client()
     delayed_task = MagicMock(id="probe-task-id")
 
     with patch(
@@ -314,8 +330,7 @@ def test_probe_endpoint_dispatches_only_probe_task_with_validated_model():
 @pytest.mark.django_db
 def test_probe_endpoint_returns_not_found_without_dispatching():
     """A missing probe target must not enqueue any task."""
-    client = APIClient()
-    client.force_authenticate(user=MagicMock(is_authenticated=True))
+    client = _teacher_api_client()
 
     with patch(
         "apps.review.tasks.single_probe_ai_process_question.delay"
@@ -496,7 +511,7 @@ def test_missing_question_manual_tasks_skip_before_creating_facade(
         ("A", "ai_answer_a", "mode_a_answer", "qwen3-vl-plus"),
     ],
 )
-def test_single_mode_task_persists_its_route_model_unless_overridden(
+def test_single_mode_task_persists_actual_route_metadata_even_when_compat_model_is_passed(
     mode, field, task_key, model
 ):
     """Each mode stores its configured route model without an override."""
@@ -510,13 +525,19 @@ def test_single_mode_task_persists_its_route_model_unless_overridden(
         save=MagicMock(),
     )
     service = MagicMock()
-    expected_model = model or 'configured-route-model'
+    expected_model = 'configured-route-model'
     service._get_question_image_urls.return_value = []
     service._task_route.return_value = ('qwen', expected_model)
-    service._get_model.return_value = expected_model
+    service._get_model.return_value = model or 'compatibility-default'
+    context = QuestionContextBuilder.build(
+        question, normalized_text=question.stem, vision_result={}
+    )
     service.solve_mode_with_arbitration.return_value = ArbitrationOutcome(
         answer={'mode': mode, 'final_answer': '2'},
-        verification={'status': 'accepted'},
+        verification={
+            'status': 'accepted',
+            'context_hash': question_context_hash(context),
+        },
         shared_verifier_result=None,
     )
     locked_queryset = MagicMock()
@@ -542,6 +563,7 @@ def test_single_mode_task_persists_its_route_model_unless_overridden(
         "mode": mode,
     }
     assert getattr(question, field)["model"] == expected_model
+    assert getattr(question, field)["provider"] == 'qwen'
 
 
 @pytest.mark.parametrize(
@@ -724,13 +746,18 @@ def test_single_mode_success_uses_arbitration_and_updates_only_requested_mode(
         name: deepcopy(getattr(question, name))
         for name in ('ai_answer_a', 'ai_answer_b', 'ai_answer_c')
     }
+    original_context = QuestionContextBuilder.build(
+        question,
+        normalized_text=question.stem,
+        vision_result={},
+    )
     verification = {
         'status': 'accepted',
-        'context_hash': 'new-context',
+        'context_hash': question_context_hash(original_context),
         'trusted_answer': '2',
     }
     shared = {
-        'context_hash': 'new-context',
+        'context_hash': verification['context_hash'],
         'independent_answer': '2',
         'reference_answer_valid': True,
     }
@@ -775,6 +802,89 @@ def test_single_mode_success_uses_arbitration_and_updates_only_requested_mode(
     assert question.ai_processing_status == 'success'
     assert question.ai_processed_at is not None
     service.close.assert_called_once_with()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    'mutation', ['stem', 'option', 'reference_answer', 'reference_analysis']
+)
+def test_single_mode_locked_save_rejects_question_context_changes(mutation):
+    from apps.review import tasks
+
+    question = _make_question(stem='Which option is correct?')
+    question.question_type = 'single_choice'
+    question.answer = 'C'
+    question.analysis = 'Original analysis'
+    question.solution = 'Original solution'
+    question.ai_answer_a = {'mode': 'A', 'marker': 'old-answer'}
+    question.ai_verifier_result = {'context_hash': 'old-verifier'}
+    question.ai_processing_status = 'success'
+    question.ai_processed_at = tasks.timezone.now()
+    question.save()
+    for index, (label, content) in enumerate(
+        [('A', 'one'), ('B', 'two'), ('C', 'three'), ('D', 'four')]
+    ):
+        QuestionOption.objects.create(
+            question=question,
+            option_label=label,
+            content=content,
+            sort_order=index,
+        )
+    original_context = QuestionContextBuilder.build(
+        question,
+        normalized_text=question.stem,
+        vision_result={},
+    )
+    original_hash = question_context_hash(original_context)
+    old_answer = deepcopy(question.ai_answer_a)
+    old_verifier = deepcopy(question.ai_verifier_result)
+    old_status = question.ai_processing_status
+    old_timestamp = question.ai_processed_at
+
+    def mutate_then_return(*_args, **_kwargs):
+        if mutation == 'stem':
+            ExamQuestion.objects.filter(id=question.id).update(stem='Edited stem')
+        elif mutation == 'option':
+            QuestionOption.objects.filter(
+                question=question, option_label='A'
+            ).update(content='edited option')
+        elif mutation == 'reference_answer':
+            ExamQuestion.objects.filter(id=question.id).update(answer='D')
+        else:
+            ExamQuestion.objects.filter(id=question.id).update(
+                analysis='Edited analysis'
+            )
+        return ArbitrationOutcome(
+            answer={'mode': 'A', 'final_answer': 'C'},
+            verification={'status': 'accepted', 'context_hash': original_hash},
+            shared_verifier_result={
+                'context_hash': original_hash,
+                'independent_answer': 'C',
+                'reference_answer_valid': True,
+                'reference_analysis_valid': True,
+                'reference_issues': [],
+                'key_facts': ['Original fact'],
+                'confidence': 0.95,
+            },
+        )
+
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service._task_route.return_value = ('qwen', 'configured-model')
+    service.solve_mode_with_arbitration.side_effect = mutate_then_return
+
+    with (
+        patch.object(tasks, 'create_ai_review_service', return_value=service),
+        patch.object(tasks.cache, 'set'),
+    ):
+        result = tasks.single_mode_ai_process_question.run(str(question.id), 'A')
+
+    assert result['status'] == 'failed'
+    question.refresh_from_db()
+    assert question.ai_answer_a == old_answer
+    assert question.ai_verifier_result == old_verifier
+    assert question.ai_processing_status == old_status
+    assert question.ai_processed_at == old_timestamp
 
 
 @pytest.mark.django_db
@@ -849,9 +959,15 @@ def test_single_mode_task_releases_its_owned_lock_on_every_terminal_path(
     service = MagicMock()
     service._get_question_image_urls.return_value = []
     service._task_route.return_value = ('qwen', 'configured-model')
+    context = QuestionContextBuilder.build(
+        question, normalized_text=question.stem, vision_result={}
+    )
     service.solve_mode_with_arbitration.return_value = ArbitrationOutcome(
         answer={'mode': 'A', 'final_answer': '2'},
-        verification={'status': 'accepted'},
+        verification={
+            'status': 'accepted',
+            'context_hash': question_context_hash(context),
+        },
         shared_verifier_result=None,
     )
     if error == 'soft_timeout':
@@ -1250,7 +1366,15 @@ def test_full_entrypoints_route_all_modes_through_arbitration_and_reuse_shared_v
         ai_processing_status=None,
         save=MagicMock(),
     )
-    shared = {"context_hash": "same-context", "independent_answer": "C"}
+    shared = {
+        "context_hash": "same-context",
+        "independent_answer": "C",
+        "reference_answer_valid": True,
+        "reference_analysis_valid": True,
+        "reference_issues": [],
+        "key_facts": ["The facts select C."],
+        "confidence": 0.95,
+    }
     service = common_ai_service.AIReviewService(
         component_factory=lambda component_type: MagicMock()
     )
@@ -1271,6 +1395,9 @@ def test_full_entrypoints_route_all_modes_through_arbitration_and_reuse_shared_v
     service.vision_extraction = MagicMock(
         return_value={"figure_present": True}
     )
+    service.verify_result = MagicMock(
+        side_effect=AssertionError("legacy verifier must not run")
+    )
     service.solve_mode_with_arbitration = MagicMock(
         side_effect=lambda _question, *, mode, **_kwargs: _arbitration_outcome(
             mode, shared
@@ -1288,16 +1415,24 @@ def test_full_entrypoints_route_all_modes_through_arbitration_and_reuse_shared_v
     ] == ["A", "B", "C"]
     calls = service.solve_mode_with_arbitration.call_args_list
     assert calls[0].kwargs["cached_verification"] is None
-    assert calls[1].kwargs["cached_verification"] is shared
-    assert calls[2].kwargs["cached_verification"] is shared
+    assert calls[1].kwargs["cached_verification"] == shared
+    assert calls[2].kwargs["cached_verification"] == shared
     for mode in "ABC":
         answer = results[f"answer_{mode.lower()}"]
         assert answer["mode"] == mode
         assert answer["verification"]["context_hash"] == "same-context"
+    assert results["verifier"] == shared
+    assert "mode_content" not in results["verifier"]
+    service.verify_result.assert_not_called()
 
 
 def test_full_pipeline_keeps_failed_mode_non_savable_without_legacy_fallback():
-    question = SimpleNamespace(stem="Question", subject="math")
+    question = SimpleNamespace(
+        stem="Question",
+        subject="math",
+        ai_processing_status=None,
+        save=MagicMock(),
+    )
     service = common_ai_service.AIReviewService(
         component_factory=lambda component_type: MagicMock()
     )
@@ -1320,6 +1455,7 @@ def test_full_pipeline_keeps_failed_mode_non_savable_without_legacy_fallback():
     assert results["errors"] == {"answer_b": "arbitration_provider_failure"}
     assert results["answer_b"] == {
         "error": "arbitration_provider_failure",
+        "provider": service._task_route("mode_b_answer")[0],
         "model": service._task_route("mode_b_answer")[1],
         "generated_at": results["answer_b"]["generated_at"],
     }
@@ -1367,21 +1503,29 @@ def test_full_v2_keeps_failed_mode_partial_without_raw_solver_fallback():
     service.solve_mode_b.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    ("model", "expected_model"),
-    [
-        (None, "qwen3.7-plus"),
-        ("qwen3-vl-plus", "qwen3-vl-plus"),
-        ("unsupported-model", "qwen3.7-flash"),
-    ],
-)
-def test_arbitrated_full_pipeline_preserves_mode_model_metadata(model, expected_model):
-    question = SimpleNamespace(stem="Question", subject="math")
+@pytest.mark.parametrize("entrypoint", ["process_question_full", "process_question_full_v2"])
+@pytest.mark.parametrize("model", [None, "qwen3-vl-plus", "unsupported-model"])
+def test_arbitrated_full_pipeline_uses_actual_mode_route_audit_metadata(
+    entrypoint, model
+):
+    question = SimpleNamespace(
+        stem="Question",
+        subject="math",
+        ai_processing_status=None,
+        save=MagicMock(),
+    )
     service = common_ai_service.AIReviewService(
         component_factory=lambda component_type: MagicMock()
     )
     service._get_question_image_urls = MagicMock(return_value=[])
     service.analyze_knowledge = MagicMock(return_value={"knowledge_points": []})
+    service.probe_and_norm = MagicMock(
+        return_value={"normalized_text": "Question", "topic_tags_top3": []}
+    )
+    service.analyze_knowledge_points = MagicMock(
+        return_value={"knowledge_points": []}
+    )
+    service.vision_extraction = MagicMock(return_value={})
     service.solve_mode_with_arbitration = MagicMock(
         side_effect=lambda _question, *, mode, **_kwargs: _arbitration_outcome(
             mode, None
@@ -1389,14 +1533,77 @@ def test_arbitrated_full_pipeline_preserves_mode_model_metadata(model, expected_
     )
 
     with patch.object(ExamQuestion.objects, "get", return_value=question):
-        results = service.process_question_full("question-id", model=model)
+        results = getattr(service, entrypoint)("question-id", model=model)
 
     assert [results[f"answer_{mode.lower()}"]["model"] for mode in "ABC"] == [
-        expected_model,
-        expected_model,
-        expected_model,
+        service._task_route("mode_a_answer")[1],
+        service._task_route("mode_b_answer")[1],
+        service._task_route("mode_c_answer")[1],
+    ]
+    assert [results[f"answer_{mode.lower()}"]["provider"] for mode in "ABC"] == [
+        service._task_route("mode_a_answer")[0],
+        service._task_route("mode_b_answer")[0],
+        service._task_route("mode_c_answer")[0],
     ]
     assert all(
         call.kwargs["model"] == model
         for call in service.solve_mode_with_arbitration.call_args_list
     )
+
+
+@pytest.mark.django_db
+def test_shared_verifier_save_reuses_hash_matched_cache_and_failure_preserves_old_value():
+    from apps.review import tasks
+
+    question = _make_question()
+    context = QuestionContextBuilder.build(
+        question,
+        normalized_text=question.stem,
+        vision_result={},
+    )
+    context_hash = question_context_hash(context)
+    shared = {
+        'context_hash': context_hash,
+        'independent_answer': '2',
+        'reference_answer_valid': True,
+        'reference_analysis_valid': None,
+        'reference_issues': [],
+        'key_facts': ['1 + 1 equals 2.'],
+        'confidence': 0.96,
+    }
+    saver = common_ai_service.AIReviewService(
+        component_factory=lambda component_type: MagicMock()
+    )
+    saver.save_results_to_question(
+        str(question.id), {'verifier': shared, 'errors': {}}
+    )
+    question.refresh_from_db()
+    assert question.ai_verifier_result == shared
+
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service._task_route.return_value = ('qwen', 'configured-model')
+    service.solve_mode_with_arbitration.return_value = ArbitrationOutcome(
+        answer={'mode': 'A', 'final_answer': '2'},
+        verification={'status': 'accepted', 'context_hash': context_hash},
+        shared_verifier_result=shared,
+    )
+    with (
+        patch.object(tasks, 'create_ai_review_service', return_value=service),
+        patch.object(tasks.cache, 'set'),
+    ):
+        result = tasks.single_mode_ai_process_question.run(str(question.id), 'A')
+    assert result['status'] == 'complete'
+    assert service.solve_mode_with_arbitration.call_args.kwargs[
+        'cached_verification'
+    ] == shared
+
+    question.refresh_from_db()
+    question.ai_verifier_result = shared
+    question.save(update_fields=['ai_verifier_result'])
+    saver.save_results_to_question(
+        str(question.id),
+        {'verifier': {'error': 'legacy verifier failed'}, 'errors': {'verifier': 'failed'}},
+    )
+    question.refresh_from_db()
+    assert question.ai_verifier_result == shared

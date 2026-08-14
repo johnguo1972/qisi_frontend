@@ -204,7 +204,7 @@ class DeepSeekFinalReviewComponent(QuestionAIComponent):
             ),
             "independent_result_json": _json_text(
                 {
-                    "candidate": "independent verifier",
+                    "candidate": "candidate B",
                     "content": independent_candidate
                     if independent_candidate is not _DROP
                     else {},

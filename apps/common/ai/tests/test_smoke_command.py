@@ -393,7 +393,7 @@ def test_deepseek_final_review_task_is_supported_with_anonymous_candidates():
         {"step": 2, "content": "完成计算"},
         {"step": 3, "content": "核对结果"},
     ]
-    assert independent_candidate["candidate"] == "independent verifier"
+    assert independent_candidate["candidate"] == "candidate B"
     assert independent_candidate["content"]["key_facts"] == [
         "一加一等于二"
     ]

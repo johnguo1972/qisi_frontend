@@ -242,3 +242,47 @@ def test_validator_orders_and_deduplicates_issues_without_mutating_inputs():
     )
     assert result == original_result
     assert CHOICE_CONTEXT == original_context
+
+
+def test_mode_b_rejects_reviewer_a_d_c_answer_field_contradiction():
+    result = _mode_b()
+    result["questions"][0].update(
+        correct_option="A",
+        correct_answer="D",
+        reference_answer="C",
+    )
+
+    validation = VALIDATOR.validate(
+        "B", result, trusted_answer="C", context=CHOICE_CONTEXT
+    )
+
+    assert validation.valid is False
+    assert "mode_b_answer_conflict" in validation.issues
+
+
+def test_mode_b_accepts_consistent_option_keys_and_ignores_explanatory_reference_text():
+    result = _mode_b()
+    result["questions"][0]["reference_answer"] = "C follows from the stated rule."
+
+    validation = VALIDATOR.validate(
+        "B", result, trusted_answer="C", context=CHOICE_CONTEXT
+    )
+
+    assert validation.valid is True
+
+
+def test_mode_c_checks_exact_option_key_reference_but_not_explanatory_text():
+    conflicting = _mode_c()
+    conflicting["questions"][0]["reference_answer"] = "D"
+    explanatory = _mode_c()
+    explanatory["questions"][0]["reference_answer"] = "D is a distractor; C is correct."
+
+    conflict = VALIDATOR.validate(
+        "C", conflicting, trusted_answer="C", context=CHOICE_CONTEXT
+    )
+    valid = VALIDATOR.validate(
+        "C", explanatory, trusted_answer="C", context=CHOICE_CONTEXT
+    )
+
+    assert "mode_c_answer_conflict" in conflict.issues
+    assert valid.valid is True
