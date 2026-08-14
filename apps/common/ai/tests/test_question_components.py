@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import FrozenInstanceError
 from importlib import import_module
 import json
@@ -12,9 +13,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from apps.common.ai.types import AIResult
 from apps.common.ai.exceptions import AIResponseError
+from apps.common.ai.schemas import ModeBQuestionResponse
 from apps.common.exceptions import AIRequestError
 
 
@@ -198,6 +201,14 @@ def _mode_answer_response(task_key):
     }
 
 
+def _strict_mode_b_response():
+    response = _mode_answer_response("mode_b_answer")
+    for question in response["questions"]:
+        question["correct_answer"] = question["correct_option"]
+        question["explanation"] = question["analysis"]
+    return response
+
+
 def _valid_probe_payload(**overrides):
     payload = {
         "subject": "math",
@@ -258,6 +269,43 @@ def test_question_component_retries_schema_invalid_response_contract_once():
     )
 
     assert result["subject"] == "math"
+    assert len(client.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "question_patch",
+    [
+        {"correct_answer": "A"},
+        {"reference_answer": "A"},
+        {"reference_answer": "two"},
+        {"options": {"A": "  one  ", "B": "\uff4f\uff4e\uff45", "C": "three", "D": "four"}},
+    ],
+)
+def test_mode_b_question_schema_rejects_local_semantic_contract_violations(
+    question_patch,
+):
+    question = _strict_mode_b_response()["questions"][0]
+    question.update(question_patch)
+
+    with pytest.raises(ValidationError):
+        ModeBQuestionResponse.model_validate(question)
+
+
+def test_mode_b_component_retries_correct_answer_conflict_then_accepts_valid_response():
+    invalid = _strict_mode_b_response()
+    for question in invalid["questions"]:
+        question["correct_answer"] = "A"
+    valid = _strict_mode_b_response()
+    client = SequencedAIClient(
+        [json.dumps(invalid, ensure_ascii=False), json.dumps(valid, ensure_ascii=False)]
+    )
+    components = _components()
+
+    result = components.ModeBAnswerComponent(
+        client, prompt_registry=RetryPromptRegistry(1)
+    ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert result["questions"][0]["correct_answer"] == "C"
     assert len(client.calls) == 2
 
 
@@ -2336,7 +2384,7 @@ def test_mode_b_accepts_only_explicit_abcd_legacy_correct_answer_alias():
             "question": f"第{index}步？",
             "options": {"A": "1", "B": "2", "C": "3", "D": "4"},
             "correct_answer": "B",
-            "reference_answer": "数值2",
+            "reference_answer": "2",
             "explanation": "计算说明",
         }
         for index in range(1, 4)
@@ -2361,7 +2409,7 @@ def test_mode_b_accepts_only_explicit_abcd_legacy_correct_answer_alias():
 
     assert result["questions"][0]["correct_option"] == "B"
     assert result["questions"][0]["correct_answer"] == "B"
-    assert result["questions"][0]["reference_answer"] == "数值2"
+    assert result["questions"][0]["reference_answer"] == "2"
 
 
 def test_service_close_does_not_close_injected_client():

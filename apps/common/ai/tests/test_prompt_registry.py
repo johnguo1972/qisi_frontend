@@ -109,8 +109,36 @@ def test_default_registry_preserves_prompt_constraints(provider_env):
     )
     assert "questions 数量只能是 3 或 4" in system
     assert "correct_option、reference_answer、analysis" in system
+    assert "Unicode NFKC" in system
+    assert "correct_option 与 correct_answer" in system
+    assert "options[correct_option]" in system
     assert "final_answer, summary" in system
     assert "已知 x=1，求 x+1" in user
+
+    for task_key, variables in (
+        (
+            "deepseek_independent_verify",
+            {
+                "question_context_json": "{}",
+                "target_mode": "B",
+                "mode_schema_json": "{}",
+            },
+        ),
+        (
+            "deepseek_final_review",
+            {
+                "question_context_json": "{}",
+                "target_mode": "B",
+                "qwen_result_json": "{}",
+                "independent_result_json": "{}",
+                "conflicts_json": "[]",
+                "mode_schema_json": "{}",
+            },
+        ),
+    ):
+        system, _ = registry.render(task_key, **variables)
+        assert "Unicode NFKC" in system
+        assert "options[correct_option]" in system
 
     system, user = registry.render(
         "vision_question_parse",

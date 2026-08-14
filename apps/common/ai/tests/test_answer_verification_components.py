@@ -691,6 +691,50 @@ def test_nested_mode_contract_retries_then_accepts_target_mode_content(
         ("DeepSeekFinalReviewComponent", "deepseek_final_review", _final_response),
     ],
 )
+def test_nested_mode_b_semantic_contract_retries_then_accepts_valid_content(
+    component_name, task_key, response_factory
+):
+    invalid_content = _strict_mode_b_content()
+    for question in invalid_content["questions"]:
+        question["reference_answer"] = "two"
+    client = SequencedRecordingAIClient(
+        [
+            response_factory(mode_content=invalid_content),
+            response_factory(mode_content=_strict_mode_b_content()),
+        ]
+    )
+    components = _components()
+
+    result = getattr(components, component_name)(client).run(_question(target_mode="B"))
+
+    assert result["mode_content"]["mode"] == "B"
+    assert client.calls == [task_key, task_key]
+
+
+def test_mode_b_schema_json_describes_the_local_answer_contract():
+    components = _components()
+    variables = components.DeepSeekIndependentVerifierComponent(
+        RecordingAIClient({})
+    ).prompt_variables(_question(target_mode="B"))
+    schema = json.loads(variables["mode_schema_json"])
+    properties = schema["$defs"]["ModeBQuestionResponse"]["properties"]
+
+    assert "NFKC" in properties["options"]["description"]
+    assert "correct_answer" in properties["correct_option"]["description"]
+    assert "options[correct_option]" in properties["reference_answer"]["description"]
+
+
+@pytest.mark.parametrize(
+    ("component_name", "task_key", "response_factory"),
+    [
+        (
+            "DeepSeekIndependentVerifierComponent",
+            "deepseek_independent_verify",
+            _independent_response,
+        ),
+        ("DeepSeekFinalReviewComponent", "deepseek_final_review", _final_response),
+    ],
+)
 def test_nested_mode_contract_fails_after_exactly_two_invalid_results(
     component_name, task_key, response_factory
 ):

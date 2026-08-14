@@ -124,21 +124,19 @@ def normalize_mode_answer_payload(mode: str, result: dict) -> dict:
                             question["options"] = {
                                 label: normalized_options[label] for label in "ABCD"
                             }
-                correct_answer = question.get("correct_option")
-                if not correct_answer:
-                    legacy_answer = question.get("correct_answer")
-                    correct_answer = (
-                        legacy_answer
-                        if legacy_answer in ("A", "B", "C", "D")
-                        else ""
-                    )
+                correct_option = question.get("correct_option")
+                correct_answer = question.get("correct_answer")
+                if not correct_option and correct_answer in ("A", "B", "C", "D"):
+                    correct_option = correct_answer
+                if not correct_answer and correct_option in ("A", "B", "C", "D"):
+                    correct_answer = correct_option
                 explanation = (
                     question.get("analysis")
                     or question.get("explanation")
                     or ""
                 )
-                question["correct_answer"] = correct_answer
-                question["correct_option"] = correct_answer
+                question["correct_answer"] = correct_answer or ""
+                question["correct_option"] = correct_option or ""
                 question["explanation"] = explanation
                 question["analysis"] = explanation
                 normalized_questions.append(question)
