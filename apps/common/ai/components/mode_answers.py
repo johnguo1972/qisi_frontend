@@ -19,6 +19,9 @@ from .base import QuestionAIComponent, QuestionInput, to_plain_data
 _MODE_A_STEP_NUMBER_PATTERN = re.compile(
     r"(?:(?:步骤|step)\s*)?([1-9]\d*)", re.IGNORECASE
 )
+_MODE_A_NONPOSITIVE_OR_NONINTEGER_STEP_PATTERN = re.compile(
+    r"(?:(?:步骤|step)\s*)?[+-]?\d+(?:\.\d+)?", re.IGNORECASE
+)
 
 
 def _knowledge_refs(question: QuestionInput) -> str:
@@ -74,16 +77,24 @@ class ModeAAnswerComponent(_ModeAnswerComponent):
         steps = normalized.get("steps")
         if isinstance(steps, list):
             normalized_steps = []
-            for item in steps:
+            for step_position, item in enumerate(steps, start=1):
                 if not isinstance(item, dict):
                     normalized_steps.append(item)
                     continue
                 step = dict(item)
                 step_number = step.get("step")
+                step_text = ""
                 if isinstance(step_number, str):
                     match = _MODE_A_STEP_NUMBER_PATTERN.fullmatch(step_number)
                     if match is not None:
                         step["step"] = int(match.group(1))
+                    elif _MODE_A_NONPOSITIVE_OR_NONINTEGER_STEP_PATTERN.fullmatch(
+                        step_number
+                    ):
+                        step["step"] = None
+                    elif has_visible_text(step_number):
+                        step["step"] = step_position
+                        step_text = step_number
                 elif isinstance(step_number, int) and step_number <= 0:
                     step["step"] = None
                 content = step.get("content")
@@ -94,7 +105,7 @@ class ModeAAnswerComponent(_ModeAnswerComponent):
                     isinstance(content, str) and not has_visible_text(content)
                 )
                 if content_missing:
-                    for fallback in (description, reason, reasoning):
+                    for fallback in (description, reason, reasoning, step_text):
                         if isinstance(fallback, str) and has_visible_text(fallback):
                             step["content"] = fallback
                             break

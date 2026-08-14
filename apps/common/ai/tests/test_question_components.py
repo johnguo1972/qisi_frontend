@@ -1180,7 +1180,7 @@ def test_mode_a_normalizes_explicit_positive_step_numbers(raw_step, expected_ste
 
 @pytest.mark.parametrize(
     "raw_step",
-    ["0", "步骤0", "Step 0", "1.0", "Step 1 of 2", "first step", 0, -1],
+    ["0", "步骤0", "Step 0", "-1", "", " \t\u200b\n", None, 0, -1, {}],
 )
 def test_mode_a_rejects_ambiguous_or_nonpositive_step_numbers(raw_step):
     """Mode A leaves invalid step identifiers for schema rejection."""
@@ -1206,6 +1206,64 @@ def test_mode_a_rejects_ambiguous_or_nonpositive_step_numbers(raw_step):
         components.ModeAAnswerComponent(
             client, prompt_registry=StaticPromptRegistry()
         ).run(components.QuestionInput(stem="solve x+1=2"))
+
+
+@pytest.mark.parametrize(
+    ("step_patch", "expected_content"),
+    [
+        ({"step": "identify the known conditions"}, "identify the known conditions"),
+        (
+            {
+                "step": "compare the options",
+                "reasoning": "use the equation relation",
+            },
+            "use the equation relation",
+        ),
+        (
+            {
+                "step": "lowest-priority explanation",
+                "content": "canonical content",
+                "description": "legacy description",
+                "reason": "legacy reason",
+                "reasoning": "legacy reasoning",
+            },
+            "canonical content",
+        ),
+    ],
+)
+def test_mode_a_uses_visible_unparsed_step_text_as_last_content_fallback(
+    step_patch, expected_content
+):
+    """Visible explanatory step text is retained after numbered normalization fails."""
+    components = _components()
+    steps = [
+        {"step": 1, "content": "first step"},
+        step_patch,
+        {"step": 3, "content": "third step"},
+    ]
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(
+                {
+                    "mode": "A",
+                    "steps": steps,
+                    "final_answer": "2",
+                    "summary": "completed",
+                }
+            )
+        }
+    )
+
+    result = components.ModeAAnswerComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["steps"][1]["step"] == 2
+    assert result["steps"][1]["content"] == expected_content
+    assert "reason" not in result["steps"][1]
+    assert "reasoning" not in result["steps"][1]
 
 
 @pytest.mark.parametrize(

@@ -300,6 +300,19 @@ def test_mode_prompts_treat_reference_material_as_untrusted_and_never_request_hi
     assert "权威完整题目上下文" not in rendered
 
 
+def test_mode_a_prompt_requires_positive_integer_step_content_objects(provider_env):
+    system, _ = PromptRegistry(AIConfig.load()).render(
+        "mode_a_answer",
+        question_context_json='{"stem":"题目"}',
+        normalized_text="题目",
+        vision_json="{}",
+        knowledge_refs="无",
+    )
+
+    assert '{"step":1,"content":"..."}' in system
+    assert "step 必须为正整数" in system
+
+
 def test_question_probe_prompt_requests_complete_canonical_taxonomy(provider_env):
     system, _ = PromptRegistry(AIConfig.load()).render(
         "question_probe",
