@@ -313,6 +313,24 @@ def test_mode_a_prompt_requires_positive_integer_step_content_objects(provider_e
     assert "step 必须为正整数" in system
 
 
+@pytest.mark.parametrize("task_key", ["mode_a_answer", "mode_b_answer", "mode_c_answer"])
+def test_mode_prompts_require_nonempty_context_options_to_be_used(
+    provider_env, task_key
+):
+    system, _ = PromptRegistry(AIConfig.load()).render(
+        task_key,
+        question_context_json=(
+            '{"stem":"题目","options":[{"label":"A","content":"甲"}]}'
+        ),
+        normalized_text="题目\n\n完整选项：\nA: 甲",
+        vision_json="{}",
+        knowledge_refs="无",
+    )
+
+    assert "完整选项非空时" in system
+    assert "不得报告缺少选项" in system
+
+
 def test_question_probe_prompt_requests_complete_canonical_taxonomy(provider_env):
     system, _ = PromptRegistry(AIConfig.load()).render(
         "question_probe",

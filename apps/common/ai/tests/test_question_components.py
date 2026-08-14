@@ -178,6 +178,63 @@ def test_question_input_is_immutable_including_collection_fields():
     assert question.image_urls == ("https://example.test/one.png",)
 
 
+@pytest.mark.parametrize(
+    "component_name",
+    ["ModeAAnswerComponent", "ModeBAnswerComponent", "ModeCAnswerComponent"],
+)
+def test_mode_answer_prompt_variables_append_canonical_options_to_probe_text(
+    component_name,
+):
+    """Mode prompts retain complete canonical options when probe text has only a stem."""
+    components = _components()
+    question = components.QuestionInput(
+        stem="fallback stem",
+        options=[
+            {"label": "C", "content": "third option"},
+            {"label": "A", "content": "first option"},
+            {"label": "B", "content": "second option"},
+        ],
+        metadata={"normalized_text": "probe stem only"},
+    )
+
+    variables = getattr(components, component_name)(
+        RecordingAIClient({}), prompt_registry=StaticPromptRegistry()
+    ).prompt_variables(question)
+
+    assert variables["normalized_text"] == (
+        "probe stem only\n\n完整选项：\n"
+        "A: first option\nB: second option\nC: third option"
+    )
+    assert json.loads(variables["question_context_json"])["options"] == [
+        {"label": "A", "content": "first option"},
+        {"label": "B", "content": "second option"},
+        {"label": "C", "content": "third option"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "component_name",
+    ["ModeAAnswerComponent", "ModeBAnswerComponent", "ModeCAnswerComponent"],
+)
+def test_mode_answer_prompt_variables_do_not_invent_options_when_absent(
+    component_name,
+):
+    """Mode prompts keep probe text unchanged when the current question has no options."""
+    components = _components()
+    question = components.QuestionInput(
+        stem="fallback stem",
+        metadata={"normalized_text": "probe stem only"},
+    )
+
+    variables = getattr(components, component_name)(
+        RecordingAIClient({}), prompt_registry=StaticPromptRegistry()
+    ).prompt_variables(question)
+
+    assert variables["normalized_text"] == "probe stem only"
+    assert "完整选项" not in variables["normalized_text"]
+    assert json.loads(variables["question_context_json"])["options"] == []
+
+
 def test_probe_routes_fixed_task_and_normalizes_taxonomy_with_multiple_images():
     components = _components()
     client = RecordingAIClient(

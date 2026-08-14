@@ -48,15 +48,23 @@ class _ModeAnswerComponent(QuestionAIComponent):
         from apps.common.ai.question_context import question_context_payload
 
         vision = question.metadata.get("vision_result", {})
+        context = question_context_payload(question)
+        normalized_text = question.metadata.get("normalized_text") or question.stem
+        options = context["options"]
+        if options:
+            normalized_text = "{}\n\n完整选项：\n{}".format(
+                normalized_text,
+                "\n".join(
+                    f"{option['label']}: {option['content']}" for option in options
+                ),
+            )
         return {
             "question_context_json": json.dumps(
-                question_context_payload(question),
+                context,
                 ensure_ascii=False,
                 sort_keys=True,
             ),
-            "normalized_text": question.metadata.get(
-                "normalized_text", question.stem
-            ),
+            "normalized_text": normalized_text,
             "vision_json": json.dumps(
                 to_plain_data(vision), ensure_ascii=False
             ),
