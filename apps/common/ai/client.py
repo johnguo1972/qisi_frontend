@@ -102,20 +102,41 @@ class AIClient:
                 user=user,
                 images=images,
                 trace_id=trace_id,
+                max_attempts=None,
             )
         finally:
             system = ""
             user = ""
             images = ()
             trace_id = None
+        return _result_from_outcome(outcome)
 
-        if outcome is None:
-            raise AIRequestError("AI provider request failed")
-        if outcome.failure is not None:
-            _raise_failure(outcome.failure)
-        if outcome.result is None:
-            raise AIResponseError("AI response is missing")
-        return outcome.result
+    def complete_once(
+        self,
+        task_key: str,
+        *,
+        system: str,
+        user: str,
+        images: Sequence[str] = (),
+        trace_id: str | None = None,
+    ) -> AIResult:
+        """Execute exactly one HTTP attempt for a component-owned budget."""
+        outcome: _Outcome | None = None
+        try:
+            outcome = self._execute(
+                task_key,
+                system=system,
+                user=user,
+                images=images,
+                trace_id=trace_id,
+                max_attempts=1,
+            )
+        finally:
+            system = ""
+            user = ""
+            images = ()
+            trace_id = None
+        return _result_from_outcome(outcome)
 
     def _execute(
         self,
@@ -125,6 +146,7 @@ class AIClient:
         user: str,
         images: Sequence[str],
         trace_id: str | None,
+        max_attempts: int | None,
     ) -> _Outcome:
         try:
             task = self._config.get_task_config(task_key)
@@ -157,6 +179,7 @@ class AIClient:
                 payload=payload,
                 log_fields=log_fields,
                 started=time.perf_counter(),
+                max_attempts=max_attempts,
             )
         except AIConfigError as error:
             return _Outcome(
@@ -185,8 +208,9 @@ class AIClient:
         payload: dict[str, Any],
         log_fields: dict[str, str | None],
         started: float,
+        max_attempts: int | None,
     ) -> _Outcome:
-        attempts = task.retry_count + 1
+        attempts = task.retry_count + 1 if max_attempts is None else max_attempts
 
         for attempt_index in range(attempts):
             response: httpx.Response | None = None
@@ -374,6 +398,16 @@ def _outcome_from_response(
             raw_response=raw_response,
         )
     )
+
+
+def _result_from_outcome(outcome: _Outcome | None) -> AIResult:
+    if outcome is None:
+        raise AIRequestError("AI provider request failed")
+    if outcome.failure is not None:
+        _raise_failure(outcome.failure)
+    if outcome.result is None:
+        raise AIResponseError("AI response is missing")
+    return outcome.result
 
 
 def _raise_failure(failure: _Failure) -> None:

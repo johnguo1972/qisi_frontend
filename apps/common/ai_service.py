@@ -123,19 +123,58 @@ class _LegacyComponentClient:
         images=(),
         trace_id: str | None = None,
     ) -> AIResult:
+        return self._complete(
+            task_key,
+            system=system,
+            user=user,
+            images=images,
+            trace_id=trace_id,
+            single_attempt=False,
+        )
+
+    def complete_once(
+        self,
+        task_key: str,
+        *,
+        system: str,
+        user: str,
+        images=(),
+        trace_id: str | None = None,
+    ) -> AIResult:
+        return self._complete(
+            task_key,
+            system=system,
+            user=user,
+            images=images,
+            trace_id=trace_id,
+            single_attempt=True,
+        )
+
+    def _complete(
+        self,
+        task_key: str,
+        *,
+        system: str,
+        user: str,
+        images=(),
+        trace_id: str | None = None,
+        single_attempt: bool,
+    ) -> AIResult:
         if images:
+            kwargs = {"task_key": task_key}
+            if single_attempt:
+                kwargs["single_attempt"] = True
             content = self._service._call_ai_multimodal(
                 system,
                 user,
                 list(images),
-                task_key=task_key,
+                **kwargs,
             )
         else:
-            content = self._service._call_ai(
-                system,
-                user,
-                task_key=task_key,
-            )
+            kwargs = {"task_key": task_key}
+            if single_attempt:
+                kwargs["single_attempt"] = True
+            content = self._service._call_ai(system, user, **kwargs)
         provider, model = self._service._task_route(task_key)
         return AIResult(
             content=content,
@@ -214,11 +253,20 @@ class AIReviewService:
 
     def _call_ai(self, system_prompt: str, user_prompt: str,
                  model: str = None, max_tokens: int = 4000,
-                 default_model: str = None, *, task_key: str | None = None) -> str:
+                 default_model: str = None, *, task_key: str | None = None,
+                 single_attempt: bool = False) -> str:
         """Legacy mock hook delegating to the single configured ``AIClient``."""
         if not task_key:
             raise AIRequestError("Configured AI task key is required")
-        return self._provider_client().complete(
+        client = self._provider_client()
+        complete = (
+            getattr(client, "complete_once", None)
+            if single_attempt
+            else client.complete
+        )
+        if not callable(complete):
+            complete = client.complete
+        return complete(
             task_key, system=system_prompt, user=user_prompt
         ).content
 
@@ -226,11 +274,20 @@ class AIReviewService:
                             image_urls: list, model: str = None,
                             max_tokens: int = 8000,
                             default_model: str = None, *,
-                            task_key: str | None = None) -> str:
+                            task_key: str | None = None,
+                            single_attempt: bool = False) -> str:
         """Legacy multimodal mock hook delegating to configured ``AIClient``."""
         if not task_key:
             raise AIRequestError("Configured AI task key is required")
-        return self._provider_client().complete(
+        client = self._provider_client()
+        complete = (
+            getattr(client, "complete_once", None)
+            if single_attempt
+            else client.complete
+        )
+        if not callable(complete):
+            complete = client.complete
+        return complete(
             task_key,
             system=system_prompt,
             user=user_text,

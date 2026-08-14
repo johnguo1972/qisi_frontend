@@ -320,6 +320,31 @@ def test_complete_retries_connection_and_read_timeouts(monkeypatch, error_type):
     assert sleeps == [0.5]
 
 
+def test_complete_once_never_uses_the_configured_network_retry_budget(monkeypatch):
+    attempts: list[int] = []
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(len(attempts) + 1)
+        return httpx.Response(503, request=request, text="private-body")
+
+    client = _client(
+        monkeypatch,
+        handler,
+        config=_config(
+            retry_count=3,
+            retry_backoff_seconds=(0.125, 0.25, 0.5),
+        ),
+        sleeper=sleeps.append,
+    )
+
+    with pytest.raises(AIRequestError, match="503"):
+        client.complete_once("question_probe", system="system", user="user")
+
+    assert attempts == [1]
+    assert sleeps == []
+
+
 @pytest.mark.parametrize("status_code", [401, 403])
 def test_complete_does_not_retry_authentication_failures(monkeypatch, status_code):
     attempts: list[int] = []

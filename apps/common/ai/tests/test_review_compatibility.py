@@ -181,6 +181,25 @@ def test_shared_factory_builds_the_compatibility_facade():
     assert isinstance(service, common_ai_service.AIReviewService)
 
 
+def test_legacy_component_client_exposes_single_attempt_provider_path():
+    service = MagicMock()
+    service._call_ai.return_value = '{"subject":"math"}'
+    service._task_route.return_value = ("qwen", "configured-model")
+    client = common_ai_service._LegacyComponentClient(service)
+
+    result = client.complete_once(
+        "question_probe", system="system", user="user"
+    )
+
+    assert result.content == '{"subject":"math"}'
+    service._call_ai.assert_called_once_with(
+        "system",
+        "user",
+        task_key="question_probe",
+        single_attempt=True,
+    )
+
+
 @pytest.mark.django_db
 def test_probe_pipeline_runs_only_probe_and_knowledge_then_persists_attributes():
     """Probe-only processing must not generate vision or any answer mode."""

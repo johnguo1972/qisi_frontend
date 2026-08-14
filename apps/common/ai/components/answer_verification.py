@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Mapping
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from apps.common.ai.exceptions import AIResponseError
 from apps.common.ai.question_context import question_context_payload
@@ -167,6 +167,25 @@ def _normalize_mode_content(result: dict) -> dict:
     return result
 
 
+def _validate_mode_content(
+    result: dict, question: QuestionInput
+) -> dict:
+    target_mode = _target_mode(question)
+    try:
+        validated = _MODE_SCHEMAS[target_mode].model_validate(
+            result.get("mode_content")
+        )
+    except ValidationError:
+        raise AIResponseError(
+            f"Verification mode_content failed target mode {target_mode} validation"
+        ) from None
+    checked = dict(result)
+    checked["mode_content"] = validated.model_dump(
+        by_alias=True, exclude_none=True
+    )
+    return checked
+
+
 class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
     """Solve independently, without any candidate or conflict information."""
 
@@ -207,9 +226,11 @@ class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
 
     def run(self, question: QuestionInput) -> dict:
         safe_question = _safe_question_input(question)
-        result = super().run(safe_question)
-        answer_available = _has_reference_answer(safe_question)
-        analysis_available = _has_reference_analysis(safe_question)
+        return super().run(safe_question)
+
+    def validate_result(self, result: dict, question: QuestionInput) -> dict:
+        answer_available = _has_reference_answer(question)
+        analysis_available = _has_reference_analysis(question)
         if ("reference_answer_valid" in result) != answer_available:
             raise AIResponseError(
                 "Independent verification reference-answer flag mismatches context"
@@ -218,7 +239,7 @@ class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
             raise AIResponseError(
                 "Independent verification reference-analysis flag mismatches context"
             )
-        return result
+        return _validate_mode_content(result, question)
 
 
 class DeepSeekFinalReviewComponent(QuestionAIComponent):
@@ -229,6 +250,9 @@ class DeepSeekFinalReviewComponent(QuestionAIComponent):
 
     def normalize(self, result: dict) -> dict:
         return _normalize_mode_content(_normalize_confidence(result))
+
+    def validate_result(self, result: dict, question: QuestionInput) -> dict:
+        return _validate_mode_content(result, question)
 
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
         target_mode = _target_mode(question)

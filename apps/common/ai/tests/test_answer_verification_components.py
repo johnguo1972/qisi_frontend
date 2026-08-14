@@ -55,6 +55,24 @@ class RecordingAIClient:
         )
 
 
+class SequencedRecordingAIClient:
+    """Legacy-shaped fake proving post-parse failures share the task budget."""
+
+    def __init__(self, responses: list[dict]) -> None:
+        self._responses = iter(responses)
+        self.calls: list[str] = []
+
+    def complete(self, task_key, **_kwargs):
+        self.calls.append(task_key)
+        return AIResult(
+            content=json.dumps(next(self._responses), ensure_ascii=False),
+            provider="deepseek",
+            model="deepseek-v4-pro",
+            latency_ms=1,
+            raw_response={"choices": []},
+        )
+
+
 def _components():
     return importlib.import_module("apps.common.ai.components")
 
@@ -93,6 +111,37 @@ def _question(**metadata):
     )
 
 
+def _strict_mode_a_content():
+    return {
+        "mode": "A",
+        "steps": [
+            {"step": 1, "content": "read the condition"},
+            {"step": 2, "content": "compare the options"},
+            {"step": 3, "content": "verify option C"},
+        ],
+        "final_answer": "C",
+        "summary": "option C is correct",
+    }
+
+
+def _strict_mode_b_content():
+    question = {
+        "question": "Which option follows?",
+        "options": {"A": "one", "B": "two", "C": "three", "D": "four"},
+        "correct_option": "C",
+        "reference_answer": "three",
+        "analysis": "C matches the condition.",
+        "correct_answer": "C",
+        "explanation": "C matches the condition.",
+    }
+    return {
+        "mode": "B",
+        "questions": [dict(question) for _ in range(3)],
+        "final_answer": "C",
+        "summary": "option C is correct",
+    }
+
+
 def _independent_response(**overrides):
     payload = {
         "independent_answer": "C",
@@ -102,7 +151,7 @@ def _independent_response(**overrides):
         "reference_analysis_valid": True,
         "reference_issues": [],
         "confidence": 0.93,
-        "mode_content": {"mode": "A", "final_answer": "C"},
+        "mode_content": _strict_mode_a_content(),
     }
     payload.update(overrides)
     return payload
@@ -114,7 +163,7 @@ def _final_response(**overrides):
         "qwen_content_valid": True,
         "candidate_issues": [],
         "confidence": 0.95,
-        "mode_content": {"mode": "A", "final_answer": "C"},
+        "mode_content": _strict_mode_a_content(),
     }
     payload.update(overrides)
     return payload
@@ -129,6 +178,7 @@ def _legacy_mode_b_content():
             {"label": "A", "content": "one"},
             {"label": "C", "content": "three"},
         ],
+        "reference_answer": "three",
         "correct_answer": "C",
         "explanation": "C matches the stated condition.",
     }
@@ -247,10 +297,10 @@ def test_shared_mode_content_normalizer_does_not_mutate_nested_b_payload():
 
 
 @pytest.mark.parametrize("mode_content", [{"mode": "Z", "steps": []}, {"steps": []}])
-def test_verification_components_leave_unrecognized_mode_content_for_strict_validation(
+def test_verification_components_reject_unrecognized_mode_content_inside_retry_budget(
     mode_content,
 ):
-    """Do not repair unknown or missing modes before downstream mode-schema checks."""
+    """Unknown or missing nested modes consume only the shared stage budget."""
     components = _components()
     client = RecordingAIClient(
         {
@@ -260,11 +310,12 @@ def test_verification_components_leave_unrecognized_mode_content_for_strict_vali
         }
     )
 
-    result = components.DeepSeekIndependentVerifierComponent(client).run(_question())
+    with pytest.raises(AIResponseError, match="mode_content"):
+        components.DeepSeekIndependentVerifierComponent(client).run(_question())
 
-    assert result["mode_content"] == mode_content
-    with pytest.raises(ValidationError):
-        _schemas().ModeAResponse.model_validate(result["mode_content"])
+    assert [call["task_key"] for call in client.calls] == [
+        "deepseek_independent_verify"
+    ] * 2
 
 
 @pytest.mark.parametrize(
@@ -559,6 +610,128 @@ def test_reference_flags_must_be_null_exactly_when_reference_material_is_absent(
         components.DeepSeekIndependentVerifierComponent(without_reference).run(
             QuestionInput(stem="Solve this.", metadata={"target_mode": "A"})
         )
+
+
+def test_independent_reference_flag_contract_retries_then_accepts_second_result():
+    components = _components()
+    client = SequencedRecordingAIClient(
+        [
+            _independent_response(
+                reference_answer_valid=None,
+                mode_content=_strict_mode_a_content(),
+            ),
+            _independent_response(mode_content=_strict_mode_a_content()),
+        ]
+    )
+
+    result = components.DeepSeekIndependentVerifierComponent(client).run(_question())
+
+    assert result["reference_answer_valid"] is True
+    assert client.calls == ["deepseek_independent_verify"] * 2
+
+
+def test_independent_reference_flag_contract_fails_after_exactly_two_results():
+    components = _components()
+    client = SequencedRecordingAIClient(
+        [
+            _independent_response(
+                reference_answer_valid=None,
+                mode_content=_strict_mode_a_content(),
+            ),
+            _independent_response(
+                reference_answer_valid=None,
+                mode_content=_strict_mode_a_content(),
+            ),
+            _independent_response(mode_content=_strict_mode_a_content()),
+        ]
+    )
+
+    with pytest.raises(AIResponseError, match="reference-answer flag"):
+        components.DeepSeekIndependentVerifierComponent(client).run(_question())
+
+    assert client.calls == ["deepseek_independent_verify"] * 2
+
+
+@pytest.mark.parametrize(
+    ("component_name", "task_key", "response_factory"),
+    [
+        (
+            "DeepSeekIndependentVerifierComponent",
+            "deepseek_independent_verify",
+            _independent_response,
+        ),
+        ("DeepSeekFinalReviewComponent", "deepseek_final_review", _final_response),
+    ],
+)
+def test_nested_mode_contract_retries_then_accepts_target_mode_content(
+    component_name, task_key, response_factory
+):
+    components = _components()
+    client = SequencedRecordingAIClient(
+        [
+            response_factory(mode_content=_strict_mode_b_content()),
+            response_factory(mode_content=_strict_mode_a_content()),
+        ]
+    )
+
+    result = getattr(components, component_name)(client).run(_question())
+
+    assert result["mode_content"]["mode"] == "A"
+    assert client.calls == [task_key, task_key]
+
+
+@pytest.mark.parametrize(
+    ("component_name", "task_key", "response_factory"),
+    [
+        (
+            "DeepSeekIndependentVerifierComponent",
+            "deepseek_independent_verify",
+            _independent_response,
+        ),
+        ("DeepSeekFinalReviewComponent", "deepseek_final_review", _final_response),
+    ],
+)
+def test_nested_mode_contract_fails_after_exactly_two_invalid_results(
+    component_name, task_key, response_factory
+):
+    components = _components()
+    client = SequencedRecordingAIClient(
+        [
+            response_factory(mode_content=_strict_mode_b_content()),
+            response_factory(mode_content=_strict_mode_b_content()),
+            response_factory(mode_content=_strict_mode_a_content()),
+        ]
+    )
+
+    with pytest.raises(AIResponseError, match="mode_content"):
+        getattr(components, component_name)(client).run(_question())
+
+    assert client.calls == [task_key, task_key]
+
+
+@pytest.mark.parametrize(
+    ("component_name", "task_key", "response_factory"),
+    [
+        (
+            "DeepSeekIndependentVerifierComponent",
+            "deepseek_independent_verify",
+            _independent_response,
+        ),
+        ("DeepSeekFinalReviewComponent", "deepseek_final_review", _final_response),
+    ],
+)
+def test_verification_components_reject_unknown_target_mode_without_calling_provider(
+    component_name, task_key, response_factory
+):
+    components = _components()
+    client = SequencedRecordingAIClient(
+        [response_factory(mode_content=_strict_mode_a_content())]
+    )
+
+    with pytest.raises(ValueError, match="target_mode"):
+        getattr(components, component_name)(client).run(_question(target_mode="Z"))
+
+    assert client.calls == []
 
 
 class CandidateModel(BaseModel):

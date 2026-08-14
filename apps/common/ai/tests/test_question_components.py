@@ -106,6 +106,32 @@ class SequencedAIClient:
         )
 
 
+class OnceOnlySequencedAIClient:
+    """Production-shaped fake that forbids the retrying client entrypoint."""
+
+    def __init__(self, responses) -> None:
+        self._responses = iter(responses)
+        self.once_calls: list[str] = []
+        self.complete_calls = 0
+
+    def complete(self, *_args, **_kwargs):
+        self.complete_calls += 1
+        raise AssertionError("structured components must use complete_once")
+
+    def complete_once(self, task_key, **_kwargs) -> AIResult:
+        self.once_calls.append(task_key)
+        response = next(self._responses)
+        if isinstance(response, Exception):
+            raise response
+        return AIResult(
+            content=response,
+            provider="qwen",
+            model="configured-model",
+            latency_ms=1,
+            raw_response={"choices": []},
+        )
+
+
 class PromptOptionsManager:
     """Related-manager shaped source used to prove prompts never leak its repr."""
 
@@ -248,19 +274,54 @@ def test_question_component_raises_after_exhausting_response_contract_retries():
     assert len(client.calls) == 2
 
 
-def test_question_component_does_not_retry_provider_request_errors():
-    """Catch transport errors being reclassified as repairable response contracts."""
+def test_question_component_shares_budget_for_request_error_then_valid_response():
+    """Legacy fakes without complete_once still use one combined component budget."""
     client = SequencedAIClient(
         [AIRequestError("provider unavailable"), json.dumps(_valid_probe_payload())]
     )
     components = _components()
 
-    with pytest.raises(AIRequestError, match="provider unavailable"):
+    result = components.QuestionProbeComponent(
+        client, prompt_registry=RetryPromptRegistry(1)
+    ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert result["subject"] == "math"
+    assert len(client.calls) == 2
+
+
+def test_question_component_uses_single_attempt_entrypoint_for_combined_budget():
+    client = OnceOnlySequencedAIClient(
+        [AIRequestError("provider unavailable"), json.dumps(_valid_probe_payload())]
+    )
+    components = _components()
+
+    result = components.QuestionProbeComponent(
+        client, prompt_registry=RetryPromptRegistry(1)
+    ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert result["subject"] == "math"
+    assert client.once_calls == ["question_probe", "question_probe"]
+    assert client.complete_calls == 0
+
+
+def test_request_error_then_invalid_response_exhausts_two_attempts_without_third():
+    client = OnceOnlySequencedAIClient(
+        [
+            AIRequestError("provider unavailable"),
+            "not valid JSON",
+            json.dumps(_valid_probe_payload()),
+            json.dumps(_valid_probe_payload()),
+        ]
+    )
+    components = _components()
+
+    with pytest.raises(AIResponseError):
         components.QuestionProbeComponent(
             client, prompt_registry=RetryPromptRegistry(1)
         ).run(components.QuestionInput(stem="solve x+1=2"))
 
-    assert len(client.calls) == 1
+    assert client.once_calls == ["question_probe", "question_probe"]
+    assert client.complete_calls == 0
 
 
 def test_question_component_does_not_retry_when_response_retry_count_is_zero():
