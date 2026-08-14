@@ -343,7 +343,7 @@ def test_mode_b_prompt_requires_labeled_option_object(provider_env):
     assert '{"A":"...","B":"...","C":"...","D":"..."}' in system
 
 
-def test_independent_verifier_prompt_requires_reference_issue_array(provider_env):
+def test_independent_verifier_prompt_requires_array_fields(provider_env):
     system, _ = PromptRegistry(AIConfig.load()).render(
         "deepseek_independent_verify",
         question_context_json='{"stem":"题目"}',
@@ -353,6 +353,7 @@ def test_independent_verifier_prompt_requires_reference_issue_array(provider_env
 
     assert "reference_issues 必须为数组" in system
     assert "无问题时输出 []" in system
+    assert "key_facts 必须为数组" in system
 
 
 @pytest.mark.parametrize(

@@ -209,6 +209,48 @@ def test_independent_stage_rejects_nonlist_nonstring_reference_issues(
 
 
 @pytest.mark.parametrize(
+    ("key_facts", "expected_key_facts"),
+    [
+        ("The cart is in equilibrium.", ["The cart is in equilibrium."]),
+        ("  The cart is in equilibrium.  ", ["The cart is in equilibrium."]),
+        (["existing fact"], ["existing fact"]),
+    ],
+)
+def test_independent_stage_normalizes_only_visible_key_fact_strings(
+    key_facts, expected_key_facts
+):
+    """Accept the known scalar form while preserving an already structured list."""
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "deepseek_independent_verify": _independent_response(
+                key_facts=key_facts
+            )
+        }
+    )
+
+    result = components.DeepSeekIndependentVerifierComponent(client).run(_question())
+
+    assert result["key_facts"] == expected_key_facts
+
+
+@pytest.mark.parametrize("key_facts", [None, "", " \t\n", "\u200b", {}, 0, True])
+def test_independent_stage_rejects_nonvisible_or_nonlist_key_facts(key_facts):
+    """Leave unknown scalar and container forms to strict schema validation."""
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "deepseek_independent_verify": _independent_response(
+                key_facts=key_facts
+            )
+        }
+    )
+
+    with pytest.raises(AIResponseError):
+        components.DeepSeekIndependentVerifierComponent(client).run(_question())
+
+
+@pytest.mark.parametrize(
     ("confidence", "expected_confidence"),
     [
         ("0", 0.0),

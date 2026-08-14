@@ -164,6 +164,9 @@ class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
 
     def normalize(self, result: dict) -> dict:
         _normalize_confidence(result)
+        key_facts = result.get("key_facts")
+        if isinstance(key_facts, str) and has_visible_text(key_facts):
+            result["key_facts"] = [key_facts.strip()]
         if "reference_issues" not in result:
             return result
 
