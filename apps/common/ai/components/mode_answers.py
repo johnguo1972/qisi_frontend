@@ -144,6 +144,32 @@ class ModeBAnswerComponent(_ModeAnswerComponent):
                     normalized_questions.append(item)
                     continue
                 question = dict(item)
+                raw_options = question.get("options")
+                if isinstance(raw_options, list):
+                    normalized_options: dict[str, str] = {}
+                    for option in raw_options:
+                        if not isinstance(option, dict):
+                            break
+                        label = option.get("label")
+                        content = option.get("content")
+                        if (
+                            not isinstance(label, str)
+                            or not isinstance(content, str)
+                            or not has_visible_text(content)
+                        ):
+                            break
+                        label = label.strip().upper()
+                        if (
+                            label not in {"A", "B", "C", "D"}
+                            or label in normalized_options
+                        ):
+                            break
+                        normalized_options[label] = content
+                    else:
+                        if set(normalized_options) == {"A", "B", "C", "D"}:
+                            question["options"] = {
+                                label: normalized_options[label] for label in "ABCD"
+                            }
                 correct_answer = question.get("correct_option")
                 if not correct_answer:
                     legacy_answer = question.get("correct_answer")

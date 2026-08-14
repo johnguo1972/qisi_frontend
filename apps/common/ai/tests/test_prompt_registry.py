@@ -331,6 +331,18 @@ def test_mode_prompts_require_nonempty_context_options_to_be_used(
     assert "不得报告缺少选项" in system
 
 
+def test_mode_b_prompt_requires_labeled_option_object(provider_env):
+    system, _ = PromptRegistry(AIConfig.load()).render(
+        "mode_b_answer",
+        question_context_json='{"stem":"题目"}',
+        normalized_text="题目",
+        vision_json="{}",
+        knowledge_refs="无",
+    )
+
+    assert '{"A":"...","B":"...","C":"...","D":"..."}' in system
+
+
 def test_question_probe_prompt_requests_complete_canonical_taxonomy(provider_env):
     system, _ = PromptRegistry(AIConfig.load()).render(
         "question_probe",

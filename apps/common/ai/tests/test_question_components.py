@@ -235,6 +235,113 @@ def test_mode_answer_prompt_variables_do_not_invent_options_when_absent(
     assert json.loads(variables["question_context_json"])["options"] == []
 
 
+@pytest.mark.parametrize(
+    ("raw_options", "expected_options"),
+    [
+        (
+            [
+                {"label": " d ", "content": "four"},
+                {"label": "B", "content": "two"},
+                {"label": " a", "content": "one"},
+                {"label": "C ", "content": "three"},
+            ],
+            {"A": "one", "B": "two", "C": "three", "D": "four"},
+        ),
+        (
+            {"A": "one", "B": "two", "C": "three", "D": "four"},
+            {"A": "one", "B": "two", "C": "three", "D": "four"},
+        ),
+    ],
+)
+def test_mode_b_normalizes_only_complete_labeled_option_lists(
+    raw_options, expected_options
+):
+    """Mode B converts complete A-D lists while preserving existing option maps."""
+    components = _components()
+    question = {
+        "question": "Which option follows?",
+        "options": raw_options,
+        "correct_option": "A",
+        "reference_answer": "one",
+        "analysis": "A matches the condition",
+    }
+    client = RecordingAIClient(
+        {
+            "mode_b_answer": json.dumps(
+                {
+                    "mode": "B",
+                    "questions": [dict(question) for _ in range(3)],
+                    "final_answer": "A",
+                    "summary": "option A is correct",
+                }
+            )
+        }
+    )
+
+    result = components.ModeBAnswerComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(components.QuestionInput(stem="Which option follows?"))
+
+    assert result["questions"][0]["options"] == expected_options
+
+
+@pytest.mark.parametrize(
+    "raw_options",
+    [
+        [
+            {"label": "A", "content": "one"},
+            {"label": "a", "content": "another one"},
+            {"label": "C", "content": "three"},
+            {"label": "D", "content": "four"},
+        ],
+        [
+            {"label": "A", "content": "one"},
+            {"label": "B", "content": "two"},
+            {"label": "C", "content": "three"},
+        ],
+        [
+            {"label": "A", "content": "one"},
+            {"label": "B", "content": "two"},
+            {"label": "C", "content": "three"},
+            {"label": "E", "content": "five"},
+        ],
+        [
+            {"label": "A", "content": "one"},
+            {"label": "B", "content": " \u200b\n"},
+            {"label": "C", "content": "three"},
+            {"label": "D", "content": "four"},
+        ],
+    ],
+)
+def test_mode_b_rejects_incomplete_or_invalid_labeled_option_lists(raw_options):
+    """Mode B leaves malformed option lists for strict schema rejection."""
+    components = _components()
+    question = {
+        "question": "Which option follows?",
+        "options": raw_options,
+        "correct_option": "A",
+        "reference_answer": "one",
+        "analysis": "A matches the condition",
+    }
+    client = RecordingAIClient(
+        {
+            "mode_b_answer": json.dumps(
+                {
+                    "mode": "B",
+                    "questions": [dict(question) for _ in range(3)],
+                    "final_answer": "A",
+                    "summary": "option A is correct",
+                }
+            )
+        }
+    )
+
+    with pytest.raises(AIResponseError):
+        components.ModeBAnswerComponent(
+            client, prompt_registry=StaticPromptRegistry()
+        ).run(components.QuestionInput(stem="Which option follows?"))
+
+
 def test_probe_routes_fixed_task_and_normalizes_taxonomy_with_multiple_images():
     components = _components()
     client = RecordingAIClient(
