@@ -75,18 +75,16 @@ class ModeAAnswerComponent(_ModeAnswerComponent):
                 step = dict(item)
                 content = step.get("content")
                 description = step.get("description")
-                if (
-                    (
-                        content is None
-                        or (
-                            isinstance(content, str)
-                            and not has_visible_text(content)
-                        )
-                    )
-                    and isinstance(description, str)
-                    and has_visible_text(description)
-                ):
-                    step["content"] = description
+                reason = step.get("reason")
+                content_missing = content is None or (
+                    isinstance(content, str) and not has_visible_text(content)
+                )
+                if content_missing:
+                    for fallback in (description, reason):
+                        if isinstance(fallback, str) and has_visible_text(fallback):
+                            step["content"] = fallback
+                            break
+                step.pop("reason", None)
                 normalized_steps.append(step)
             normalized["steps"] = normalized_steps
         missing = normalized.get("missing_conditions")

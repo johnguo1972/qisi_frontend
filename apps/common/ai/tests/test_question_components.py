@@ -51,6 +51,13 @@ class RecordingAIClient:
         )
 
 
+class StaticPromptRegistry:
+    """Prompt boundary substitute for component-only response tests."""
+
+    def render(self, _task_key, **_variables):
+        return "system", "user"
+
+
 class PromptOptionsManager:
     """Related-manager shaped source used to prove prompts never leak its repr."""
 
@@ -1029,6 +1036,59 @@ def test_mode_a_normalizes_legacy_step_descriptions_without_overriding_content(
     )
 
     assert [step["content"] for step in result["steps"]] == expected_contents
+
+
+@pytest.mark.parametrize(
+    ("step_patch", "expected_content"),
+    [
+        ({"reason": "derive the equation"}, "derive the equation"),
+        ({"content": None, "reason": "isolate x"}, "isolate x"),
+        ({"content": " \t\u200b\n", "reason": "check the result"}, "check the result"),
+        (
+            {
+                "content": "canonical content",
+                "description": "legacy description",
+                "reason": "qwen reason",
+            },
+            "canonical content",
+        ),
+        (
+            {"description": "legacy description", "reason": "qwen reason"},
+            "legacy description",
+        ),
+    ],
+)
+def test_mode_a_normalizes_qwen_step_reason_with_stable_content_priority(
+    step_patch, expected_content
+):
+    """Mode A accepts Qwen's reason alias without exposing it in the response."""
+    components = _components()
+    steps = [
+        {"step": index, "content": f"existing content {index}"}
+        for index in range(1, 4)
+    ]
+    steps[1] = {"step": 2, **step_patch}
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(
+                {
+                    "mode": "A",
+                    "steps": steps,
+                    "final_answer": "2",
+                    "summary": "completed",
+                }
+            )
+        }
+    )
+
+    result = components.ModeAAnswerComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["steps"][1]["content"] == expected_content
+    assert "reason" not in result["steps"][1]
 
 
 @pytest.mark.parametrize(
