@@ -36,8 +36,15 @@ class _ModeAnswerComponent(QuestionAIComponent):
     mode: str
 
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
+        from apps.common.ai.question_context import question_context_payload
+
         vision = question.metadata.get("vision_result", {})
         return {
+            "question_context_json": json.dumps(
+                question_context_payload(question),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
             "normalized_text": question.metadata.get(
                 "normalized_text", question.stem
             ),

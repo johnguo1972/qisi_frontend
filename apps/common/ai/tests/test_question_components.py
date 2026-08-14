@@ -51,9 +51,70 @@ class RecordingAIClient:
         )
 
 
+class PromptOptionsManager:
+    """Related-manager shaped source used to prove prompts never leak its repr."""
+
+    def __init__(self):
+        self.rows = [
+            SimpleNamespace(option_label="D", content="four", sort_order=3),
+            SimpleNamespace(option_label="B", content="two", sort_order=1),
+            SimpleNamespace(option_label="A", content="one", sort_order=0),
+            SimpleNamespace(option_label="C", content="three", sort_order=2),
+        ]
+
+    def all(self):
+        return self
+
+    def order_by(self, *_fields):
+        return self.rows
+
+    def __repr__(self):  # pragma: no cover - detects accidental serialization
+        return "<PromptOptionsManager>"
+
+
 def _components():
     """Import inside tests so the missing feature is a RED assertion failure."""
     return import_module("apps.common.ai.components")
+
+
+def _mode_answer_response(task_key):
+    if task_key == "mode_a_answer":
+        return {
+            "mode": "A",
+            "steps": [
+                {"step": 1, "content": "read the condition"},
+                {"step": 2, "content": "compare options"},
+                {"step": 3, "content": "verify C"},
+            ],
+            "final_answer": "C",
+            "summary": "option C is correct",
+        }
+    if task_key == "mode_b_answer":
+        question = {
+            "question": "Which option follows?",
+            "options": {"A": "one", "B": "two", "C": "three", "D": "four"},
+            "correct_option": "C",
+            "reference_answer": "three",
+            "analysis": "C matches the condition",
+        }
+        return {
+            "mode": "B",
+            "questions": [dict(question) for _ in range(3)],
+            "final_answer": "C",
+            "summary": "option C is correct",
+        }
+    question = {
+        "question": "Which option follows?",
+        "reference_answer": "C",
+        "key_points": ["compare all options"],
+        "followup_hint": "use the given condition",
+    }
+    return {
+        "mode": "C",
+        "questions": [dict(question) for _ in range(3)],
+        "final_answer": "C",
+        "summary": "option C is correct",
+    }
 
 
 def _valid_probe_payload(**overrides):
@@ -1059,6 +1120,65 @@ def test_mode_components_route_fixed_tasks_and_preserve_contracts(
         for key, value in expected.items():
             if key != "mode":
                 assert first_question[key] == value
+
+
+@pytest.mark.parametrize(
+    ("component_name", "task_key"),
+    [
+        ("ModeAAnswerComponent", "mode_a_answer"),
+        ("ModeBAnswerComponent", "mode_b_answer"),
+        ("ModeCAnswerComponent", "mode_c_answer"),
+    ],
+)
+def test_mode_prompts_include_complete_authoritative_question_context(
+    component_name, task_key
+):
+    """Catch solvers receiving only legacy text instead of complete answer facts."""
+    context = import_module("apps.common.ai.question_context")
+    options = PromptOptionsManager()
+    source_question = SimpleNamespace(
+        stem="Which option is correct?",
+        options=options,
+        answer="C",
+        analysis="Existing analysis explains the third option.",
+        solution="Existing solution substitutes the values.",
+        question_type="single_choice",
+        subject="physics",
+        difficulty="0.75",
+        material="A material passage",
+        tables=[],
+        subquestions=[],
+    )
+    question = context.QuestionContextBuilder.build(
+        source_question,
+        normalized_text="normalized option question",
+        vision_result={"figure_present": True},
+        knowledge_refs="kinematics",
+        target_mode=task_key.split("_")[1].upper(),
+    )
+    client = RecordingAIClient(
+        {task_key: json.dumps(_mode_answer_response(task_key), ensure_ascii=False)}
+    )
+
+    getattr(_components(), component_name)(client).run(question)
+
+    user_prompt = client.calls[0]["user"]
+    context_json = user_prompt.split("）：\n", 1)[1].split(
+        "\n规范化题干：", 1
+    )[0]
+    captured_context = json.loads(context_json)
+    assert captured_context["stem"] == "Which option is correct?"
+    assert captured_context["options"] == [
+        {"label": "A", "content": "one"},
+        {"label": "B", "content": "two"},
+        {"label": "C", "content": "three"},
+        {"label": "D", "content": "four"},
+    ]
+    assert captured_context["reference_answer"] == "C"
+    assert captured_context["reference_analysis"] == (
+        "Existing analysis explains the third option."
+    )
+    assert "PromptOptionsManager" not in user_prompt
 
 
 def test_knowledge_vision_and_verifier_use_their_fixed_configured_tasks():
