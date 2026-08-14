@@ -191,8 +191,8 @@ parser 旧 prompt 文件中的唯一非提示数据 `QUESTION_TYPE_LABELS` 已�
 
 ## 8. 受控冒烟命令与历史状态
 
-- 已实现 `python manage.py ai_smoke_test --provider qwen --live`、兼容默认的 `--provider deepseek --live`，以及显式 `--task deepseek_independent_verify` / `--task deepseek_final_review`。`--task` 只接受固定 allowlist；任意 cfg key 和 provider/task 不匹配会在配置加载和 HTTP 客户端构造前拒绝。默认 Qwen 仍路由 `question_probe`，默认 DeepSeek 仍路由 `variant_verify_deepseek`。
-- `--live` 是强制显式开关；缺少该开关时，在加载配置和构造 AI 客户端之前以非零退出码拒绝执行。成功输出仅包含 provider、cfg 配置模型、task 名、`status=ok`、耗时和 `schema=valid`；失败仅包含 provider、安全 task 名、固定类别、可选 HTTP 状态和退出码。提示词、消息、参考答案/解析、完整响应、响应正文、URL、Key、请求头及隐藏推理一律不输出。
+- 已实现 `python manage.py ai_smoke_test --provider qwen --live`、兼容默认的 `--provider deepseek --live`，以及显式 `--task deepseek_independent_verify` / `--task deepseek_final_review`。parser 将 task 当普通字符串接收，再由 `handle()` 的固定 allowlist 校验；因此任意 cfg key 和 provider/task 不匹配会在配置加载和 HTTP 客户端构造前拒绝，且非法原值不会被 argparse 回显。默认 Qwen 仍路由 `question_probe`，默认 DeepSeek 仍路由 `variant_verify_deepseek`。
+- `--live` 是强制显式开关；缺少该开关时，在加载配置和构造 AI 客户端之前以非零退出码拒绝执行。DeepSeek 独立验证和最终复核只有在顶层响应 Schema、目标 A/B/C 实际模式 Schema、公共字段投影及 `ModeContentValidator` 的可信答案一致性检查全部通过后，才输出 `schema=valid`；空模式内容、错误模式结构、缺字段或最终答案冲突均按安全响应错误失败。成功输出仅包含 provider、cfg 配置模型、task 名、`status=ok`、耗时和 `schema=valid`；失败仅包含 provider、安全 task 名、固定类别、可选 HTTP 状态和退出码。提示词、消息、参考答案/解析、完整响应、响应正文、URL、Key、请求头及隐藏推理一律不输出。
 - 真实失败按配置、网络/超时、HTTP provider 状态、Schema/响应和未知错误分别给出固定安全类别，不拼接原始异常或 provider 响应正文。命令单元测试使用注入客户端完成零联网验证，覆盖固定 task 路由、严格 Schema 夹具、provider/task 隔离、任意 task 拒绝、成功/失败摘要白名单、退出码、客户端清理和 traceback 脱敏。
 - 下列 2026-08-03 记录属于旧版默认 task 的历史证据；它们不替代当前代码、当前凭据和当前网络下重新执行的 live smoke，也不等同于题目 API 或浏览器 E2E。
 - 本地实现证据：Task11 命令定向测试 15 项通过，本轮最终相关回归 723 项通过，Django `check` 为 0 issue；这些是组件和命令的模拟/本地证据，不等同于供应商调用成功。

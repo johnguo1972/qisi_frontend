@@ -7,13 +7,15 @@ import re
 import sys
 
 from django.core.management.base import BaseCommand, CommandError
+from pydantic import ValidationError
 
+from apps.common.ai.answer_validation import ModeContentValidator
 from apps.common.ai.client import AIClient
-from apps.common.ai.components.base import QuestionInput
 from apps.common.ai.components.answer_verification import (
     DeepSeekFinalReviewComponent,
     DeepSeekIndependentVerifierComponent,
 )
+from apps.common.ai.components.base import QuestionInput
 from apps.common.ai.components.question_probe import QuestionProbeComponent
 from apps.common.ai.components.result_verifier import ResultVerifierComponent
 from apps.common.ai.config import load_ai_config
@@ -23,6 +25,8 @@ from apps.common.ai.exceptions import (
     AIResponseError,
 )
 from apps.common.ai.prompt_registry import PromptRegistry
+from apps.common.ai.question_context import question_context_payload
+from apps.common.ai.schemas import ModeAResponse, ModeBResponse, ModeCResponse
 from apps.common.ai.types import AIResult
 from apps.common.exceptions import AIRequestError
 
@@ -34,10 +38,14 @@ _TASK_PROVIDERS = {
     "deepseek_independent_verify": "deepseek",
     "deepseek_final_review": "deepseek",
 }
-_SUPPORTED_TASKS = tuple(_TASK_PROVIDERS)
 _DEFAULT_TASKS = {
     "qwen": "question_probe",
     "deepseek": "variant_verify_deepseek",
+}
+_MODE_SCHEMAS = {
+    "A": ModeAResponse,
+    "B": ModeBResponse,
+    "C": ModeCResponse,
 }
 _HTTP_FAILURE_PATTERN = re.compile(
     r"AI provider request failed with HTTP (?P<status>[1-5][0-9]{2})"
@@ -96,9 +104,8 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--task",
-            choices=_SUPPORTED_TASKS,
             required=False,
-            help="Run one fixed, provider-compatible smoke task",
+            help="Run one allowlisted, provider-compatible smoke task",
         )
 
     def handle(self, *args, **options) -> None:
@@ -180,6 +187,7 @@ class Command(BaseCommand):
         question = None
         original: dict[str, str] | None = None
         candidate: dict[str, str] | None = None
+        parsed_result: dict[str, object] | None = None
         result: AIResult | None = None
         try:
             config = self.config_loader()
@@ -209,7 +217,10 @@ class Command(BaseCommand):
                     if task_key == "deepseek_independent_verify"
                     else DeepSeekFinalReviewComponent
                 )
-                component_type(recorder, registry).run(question)
+                parsed_result = component_type(recorder, registry).run(question)
+                _validate_deepseek_mode_content(
+                    task_key, question, parsed_result
+                )
 
             result = recorder.last_result
             if (
@@ -234,8 +245,11 @@ class Command(BaseCommand):
                 original.clear()
             if candidate is not None:
                 candidate.clear()
+            if parsed_result is not None:
+                parsed_result.clear()
             original = None
             candidate = None
+            parsed_result = None
             registry = None
             if recorder is not None:
                 recorder.clear()
@@ -354,6 +368,44 @@ def _deepseek_question(task_key: str) -> QuestionInput:
         solution="把两个单位相加。",
         metadata=metadata,
     )
+
+
+def _validate_deepseek_mode_content(
+    task_key: str,
+    question: QuestionInput,
+    parsed_result: dict[str, object],
+) -> None:
+    target_mode = question.metadata.get("target_mode", "")
+    mode = target_mode.strip().upper() if isinstance(target_mode, str) else ""
+    schema = _MODE_SCHEMAS.get(mode)
+    trusted_field = (
+        "independent_answer"
+        if task_key == "deepseek_independent_verify"
+        else "trusted_answer"
+    )
+    if schema is None:
+        raise AIResponseError("AI smoke target mode is invalid")
+    try:
+        validated = schema.model_validate(parsed_result.get("mode_content"))
+    except ValidationError:
+        raise AIResponseError(
+            "AI smoke mode content failed schema validation"
+        ) from None
+    public_content = validated.model_dump(
+        by_alias=True,
+        exclude_none=True,
+        include=set(schema.model_fields),
+    )
+    validation = ModeContentValidator().validate(
+        mode,
+        public_content,
+        trusted_answer=parsed_result.get(trusted_field),
+        context=question_context_payload(question),
+    )
+    if not validation.valid:
+        raise AIResponseError(
+            "AI smoke mode content failed deterministic validation"
+        ) from None
 
 
 def _close_client(client) -> bool:
