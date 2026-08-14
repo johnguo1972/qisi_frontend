@@ -10,6 +10,12 @@ from django.core.cache import cache
 
 LOCK_TTL_SECONDS = 4200
 LOCK_KEY_PREFIX = 'ai-mode-lock:'
+COMPARE_AND_DELETE_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+""".strip()
 
 
 @dataclass(frozen=True)
@@ -55,15 +61,29 @@ def _stable_unknown_owner_id(key: str, value) -> str:
 def release_single_mode_ai_task_lock(
     question_id: str, mode: str, task_id: str | None
 ) -> bool:
-    """Delete a mode lock only while ``task_id`` is still its recorded owner."""
+    """Atomically delete a Redis mode lock only for its exact serialized owner."""
     if not task_id:
         return False
     key = _lock_key(str(question_id), mode)
-    current = cache.get(key)
-    if _owner_task_id(current) != str(task_id):
+    owner_value = json.dumps(
+        {'task_id': str(task_id)}, separators=(',', ':')
+    )
+    try:
+        redis_key = cache.make_and_validate_key(key)
+        cache_client = cache._cache
+        redis_client = cache_client.get_client(redis_key, write=True)
+        serialized_owner = cache_client._serializer.dumps(owner_value)
+        deleted = redis_client.eval(
+            COMPARE_AND_DELETE_LUA,
+            1,
+            redis_key,
+            serialized_owner,
+        )
+    except Exception:
+        # Ownership cannot be proven atomically on this backend. Fail closed:
+        # TTL expiry is safer than deleting a lock that may have a new owner.
         return False
-    cache.delete(key)
-    return True
+    return bool(deleted)
 
 
 def dispatch_single_mode_ai_task(

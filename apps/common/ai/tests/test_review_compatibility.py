@@ -841,7 +841,11 @@ def test_single_mode_task_releases_its_owned_lock_on_every_terminal_path(
     question = _make_question()
     task_id = f'owner-{expected_status}-{type(error).__name__}'
     lock_key = f'ai-mode-lock:{question.id}:A'
-    tasks.cache.set(lock_key, json.dumps({'task_id': task_id}), timeout=4200)
+    tasks.cache.set(
+        lock_key,
+        json.dumps({'task_id': task_id}, separators=(',', ':')),
+        timeout=4200,
+    )
     service = MagicMock()
     service._get_question_image_urls.return_value = []
     service._task_route.return_value = ('qwen', 'configured-model')
@@ -885,6 +889,39 @@ def test_single_mode_task_never_releases_a_newer_lock_owner():
     assert result['status'] == 'failed'
     assert tasks.cache.get(lock_key) == newer_owner
     tasks.cache.delete(lock_key)
+
+
+@pytest.mark.django_db
+def test_single_mode_task_releases_lock_even_when_service_close_fails():
+    from apps.review import tasks
+
+    question = _make_question()
+    task_id = 'close-failure-owner'
+    lock_key = f'ai-mode-lock:{question.id}:A'
+    tasks.cache.set(
+        lock_key,
+        json.dumps({'task_id': task_id}, separators=(',', ':')),
+        timeout=4200,
+    )
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service._task_route.return_value = ('qwen', 'configured-model')
+    service.solve_mode_with_arbitration.return_value = ArbitrationOutcome(
+        answer={'mode': 'A', 'final_answer': '2'},
+        verification={'status': 'accepted'},
+        shared_verifier_result=None,
+    )
+    service.close.side_effect = RuntimeError('close failed')
+
+    with (
+        patch.object(tasks, 'create_ai_review_service', return_value=service),
+        pytest.raises(RuntimeError, match='close failed'),
+    ):
+        tasks.single_mode_ai_process_question.apply(
+            args=(str(question.id), 'A'), task_id=task_id
+        ).get()
+
+    assert tasks.cache.get(lock_key) is None
 
 
 @pytest.mark.django_db

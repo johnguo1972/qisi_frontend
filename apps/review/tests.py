@@ -945,13 +945,15 @@ class SingleModeDispatchTest(TestCase):
     def test_enqueue_failure_releases_only_its_own_lock(self):
         dispatch = self._dispatch_module()
         task_uuid = 'new-task'
-        own_value = json.dumps({'task_id': task_uuid})
 
         with (
             patch.object(dispatch.uuid, 'uuid4', return_value=task_uuid),
             patch.object(dispatch.cache, 'add', return_value=True),
-            patch.object(dispatch.cache, 'get', return_value=own_value),
-            patch.object(dispatch.cache, 'delete') as cache_delete,
+            patch.object(
+                dispatch,
+                'release_single_mode_ai_task_lock',
+                return_value=True,
+            ) as release_lock,
             patch(
                 'apps.review.tasks.single_mode_ai_process_question.apply_async',
                 side_effect=RuntimeError('broker unavailable'),
@@ -960,22 +962,93 @@ class SingleModeDispatchTest(TestCase):
         ):
             dispatch.dispatch_single_mode_ai_task('question-3', 'C', None)
 
-        cache_delete.assert_called_once_with('ai-mode-lock:question-3:C')
+        release_lock.assert_called_once_with('question-3', 'C', task_uuid)
 
-        newer_value = json.dumps({'task_id': 'newer-task'})
-        with (
-            patch.object(dispatch.cache, 'add', return_value=True),
-            patch.object(dispatch.cache, 'get', return_value=newer_value),
-            patch.object(dispatch.cache, 'delete') as cache_delete,
-            patch(
-                'apps.review.tasks.single_mode_ai_process_question.apply_async',
-                side_effect=RuntimeError('broker unavailable'),
-            ),
-            self.assertRaisesRegex(RuntimeError, 'broker unavailable'),
-        ):
-            dispatch.dispatch_single_mode_ai_task('question-3', 'C', None)
+    def _atomic_cache(self, owner_value, *, takeover_value=None):
+        class Serializer:
+            def dumps(self, value):
+                return b'encoded:' + value.encode('utf-8')
 
-        cache_delete.assert_not_called()
+        serializer = Serializer()
+        redis_key = ':1:ai-mode-lock:question-atomic:A'
+
+        class Client:
+            def __init__(self):
+                self.store = {redis_key: serializer.dumps(owner_value)}
+                self.eval_calls = []
+
+            def eval(self, script, key_count, key, expected):
+                self.eval_calls.append((script, key_count, key, expected))
+                if takeover_value is not None:
+                    self.store[key] = serializer.dumps(takeover_value)
+                if self.store.get(key) == expected:
+                    del self.store[key]
+                    return 1
+                return 0
+
+        client = Client()
+        backend = MagicMock()
+        backend.make_and_validate_key.side_effect = (
+            lambda key: f':1:{key}'
+        )
+        backend._cache = MagicMock()
+        backend._cache._serializer = serializer
+        backend._cache.get_client.return_value = client
+        return backend, client, redis_key
+
+    def test_atomic_release_deletes_exact_owned_value_with_one_eval(self):
+        dispatch = self._dispatch_module()
+        owner = json.dumps({'task_id': 'owned'}, separators=(',', ':'))
+        backend, client, redis_key = self._atomic_cache(owner)
+
+        with patch.object(dispatch, 'cache', backend):
+            released = dispatch.release_single_mode_ai_task_lock(
+                'question-atomic', 'A', 'owned'
+            )
+
+        self.assertTrue(released)
+        self.assertNotIn(redis_key, client.store)
+        self.assertEqual(len(client.eval_calls), 1)
+        _, key_count, key, expected = client.eval_calls[0]
+        self.assertEqual(key_count, 1)
+        self.assertEqual(key, redis_key)
+        self.assertEqual(expected, b'encoded:' + owner.encode('utf-8'))
+        backend.delete.assert_not_called()
+
+    def test_atomic_release_cannot_delete_owner_that_took_over_before_eval(self):
+        dispatch = self._dispatch_module()
+        old_owner = json.dumps({'task_id': 'old'}, separators=(',', ':'))
+        new_owner = json.dumps({'task_id': 'new'}, separators=(',', ':'))
+        backend, client, redis_key = self._atomic_cache(
+            old_owner, takeover_value=new_owner
+        )
+
+        with patch.object(dispatch, 'cache', backend):
+            released = dispatch.release_single_mode_ai_task_lock(
+                'question-atomic', 'A', 'old'
+            )
+
+        self.assertFalse(released)
+        self.assertEqual(
+            client.store[redis_key],
+            backend._cache._serializer.dumps(new_owner),
+        )
+        self.assertEqual(len(client.eval_calls), 1)
+        backend.delete.assert_not_called()
+
+    def test_atomic_release_fails_closed_on_unsupported_cache_backend(self):
+        dispatch = self._dispatch_module()
+        backend = MagicMock()
+        backend.make_and_validate_key.return_value = ':1:lock'
+        backend._cache = object()
+
+        with patch.object(dispatch, 'cache', backend):
+            released = dispatch.release_single_mode_ai_task_lock(
+                'question-atomic', 'A', 'old'
+            )
+
+        self.assertFalse(released)
+        backend.delete.assert_not_called()
 
     def test_malformed_duplicate_owner_is_stable_and_never_deleted(self):
         dispatch = self._dispatch_module()

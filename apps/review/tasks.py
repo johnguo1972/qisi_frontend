@@ -358,9 +358,11 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         set_progress('failed', 'failed', '处理失败', error='processing_failed')
         return {'status': 'failed', 'error': 'processing_failed'}
     finally:
-        if service is not None:
-            service.close()
-        if normalized_mode in ('A', 'B', 'C'):
-            release_single_mode_ai_task_lock(
-                str(question_id), normalized_mode, task_id
-            )
+        try:
+            if service is not None:
+                service.close()
+        finally:
+            if normalized_mode in ('A', 'B', 'C'):
+                release_single_mode_ai_task_lock(
+                    str(question_id), normalized_mode, task_id
+                )
