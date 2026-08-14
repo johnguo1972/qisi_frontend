@@ -15,6 +15,7 @@ import pytest
 
 from apps.common.ai.types import AIResult
 from apps.common.ai.exceptions import AIResponseError
+from apps.common.exceptions import AIRequestError
 
 
 class RecordingAIClient:
@@ -56,6 +57,53 @@ class StaticPromptRegistry:
 
     def render(self, _task_key, **_variables):
         return "system", "user"
+
+
+class RetryPromptRegistry(StaticPromptRegistry):
+    """Component-test prompt registry with an explicit response retry budget."""
+
+    def __init__(self, retry_count: int) -> None:
+        self.retry_count = retry_count
+
+    def get_retry_count(self, _task_key):
+        return self.retry_count
+
+
+class SequencedAIClient:
+    """Provider-boundary fake for proving component response-retry behavior."""
+
+    def __init__(self, responses) -> None:
+        self._responses = iter(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def complete(
+        self,
+        task_key: str,
+        *,
+        system: str,
+        user: str,
+        images=(),
+        trace_id=None,
+    ) -> AIResult:
+        self.calls.append(
+            {
+                "task_key": task_key,
+                "system": system,
+                "user": user,
+                "images": tuple(images),
+                "trace_id": trace_id,
+            }
+        )
+        response = next(self._responses)
+        if isinstance(response, Exception):
+            raise response
+        return AIResult(
+            content=response,
+            provider="qwen",
+            model="configured-model",
+            latency_ms=1,
+            raw_response={"choices": []},
+        )
 
 
 class PromptOptionsManager:
@@ -154,6 +202,95 @@ def _probe_content_with_raw_string_values(payload, replacements):
     for marker, raw_value in markers.items():
         content = content.replace(json.dumps(marker), f'"{raw_value}"')
     return content
+
+
+def _run_probe_with_responses(responses, prompt_registry):
+    components = _components()
+    client = SequencedAIClient(responses)
+    result = components.QuestionProbeComponent(
+        client, prompt_registry=prompt_registry
+    ).run(components.QuestionInput(stem="solve x+1=2"))
+    return result, client
+
+
+def test_question_component_retries_invalid_json_response_contract_once():
+    """Catch missing component-level retries after a successful malformed response."""
+    result, client = _run_probe_with_responses(
+        ["not valid JSON", json.dumps(_valid_probe_payload())],
+        RetryPromptRegistry(1),
+    )
+
+    assert result["subject"] == "math"
+    assert len(client.calls) == 2
+
+
+def test_question_component_retries_schema_invalid_response_contract_once():
+    """Catch missing component-level retries after a parsed but invalid response."""
+    result, client = _run_probe_with_responses(
+        [json.dumps({"subject": "math"}), json.dumps(_valid_probe_payload())],
+        RetryPromptRegistry(1),
+    )
+
+    assert result["subject"] == "math"
+    assert len(client.calls) == 2
+
+
+def test_question_component_raises_after_exhausting_response_contract_retries():
+    """Catch an invalid response being accepted or retried beyond its budget."""
+    client = SequencedAIClient(["not valid JSON", "still not valid JSON"])
+    components = _components()
+
+    with pytest.raises(AIResponseError):
+        components.QuestionProbeComponent(
+            client, prompt_registry=RetryPromptRegistry(1)
+        ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert len(client.calls) == 2
+
+
+def test_question_component_does_not_retry_provider_request_errors():
+    """Catch transport errors being reclassified as repairable response contracts."""
+    client = SequencedAIClient(
+        [AIRequestError("provider unavailable"), json.dumps(_valid_probe_payload())]
+    )
+    components = _components()
+
+    with pytest.raises(AIRequestError, match="provider unavailable"):
+        components.QuestionProbeComponent(
+            client, prompt_registry=RetryPromptRegistry(1)
+        ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert len(client.calls) == 1
+
+
+def test_question_component_does_not_retry_when_response_retry_count_is_zero():
+    """Catch a zero response-retry budget still issuing an extra provider call."""
+    client = SequencedAIClient(
+        ["not valid JSON", json.dumps(_valid_probe_payload())]
+    )
+    components = _components()
+
+    with pytest.raises(AIResponseError):
+        components.QuestionProbeComponent(
+            client, prompt_registry=RetryPromptRegistry(0)
+        ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert len(client.calls) == 1
+
+
+def test_question_component_defaults_to_zero_retries_for_legacy_prompt_fakes():
+    """Keep existing prompt-registry test doubles compatible without hidden retries."""
+    client = SequencedAIClient(
+        ["not valid JSON", json.dumps(_valid_probe_payload())]
+    )
+    components = _components()
+
+    with pytest.raises(AIResponseError):
+        components.QuestionProbeComponent(
+            client, prompt_registry=StaticPromptRegistry()
+        ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert len(client.calls) == 1
 
 
 def test_question_input_is_immutable_including_collection_fields():

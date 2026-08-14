@@ -81,6 +81,13 @@ def test_prompt_registry_renders_system_and_user_without_placeholders(registry):
     assert "{figure_facts}" not in user
 
 
+def test_prompt_registry_exposes_loaded_task_retry_count(registry):
+    assert registry.get_retry_count("mode_a_answer") == 3
+
+    with pytest.raises(AIPromptError, match="Unknown AI task"):
+        registry.get_retry_count("missing-task")
+
+
 def test_config_rejects_declared_variables_that_do_not_match_templates(
     tmp_path, provider_env
 ):

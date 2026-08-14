@@ -99,26 +99,46 @@ class QuestionAIComponent(ABC):
             self.task_key, **self.prompt_variables(question)
         )
         trace_id = question.metadata.get("trace_id")
-        result = self._ai_client.complete(
-            self.task_key,
-            system=system,
-            user=user,
-            images=question.image_urls,
-            trace_id=str(trace_id) if trace_id is not None else None,
-        )
-        parsed = ResponseParser.parse_json(result.content)
-        if not isinstance(parsed, dict):
-            raise AIResponseError("AI question component response must be an object")
-        normalized = self.normalize(dict(parsed))
-        if self.response_schema is None:
-            return normalized
-        try:
-            validated = self.response_schema.model_validate(normalized)
-        except ValidationError:
-            raise AIResponseError(
-                f"AI response failed {self.task_key} schema validation"
-            ) from None
-        return validated.model_dump(by_alias=True, exclude_none=True)
+        retry_count = self._response_retry_count()
+        for attempt in range(retry_count + 1):
+            result = self._ai_client.complete(
+                self.task_key,
+                system=system,
+                user=user,
+                images=question.image_urls,
+                trace_id=str(trace_id) if trace_id is not None else None,
+            )
+            try:
+                parsed = ResponseParser.parse_json(result.content)
+                if not isinstance(parsed, dict):
+                    raise AIResponseError(
+                        "AI question component response must be an object"
+                    )
+            except AIResponseError:
+                if attempt == retry_count:
+                    raise
+                continue
+
+            normalized = self.normalize(dict(parsed))
+            if self.response_schema is None:
+                return normalized
+            try:
+                validated = self.response_schema.model_validate(normalized)
+            except ValidationError:
+                if attempt == retry_count:
+                    raise AIResponseError(
+                        f"AI response failed {self.task_key} schema validation"
+                    ) from None
+                continue
+            return validated.model_dump(by_alias=True, exclude_none=True)
+
+        raise RuntimeError("AI response retry loop exhausted unexpectedly")
+
+    def _response_retry_count(self) -> int:
+        get_retry_count = getattr(self._prompt_registry, "get_retry_count", None)
+        if not callable(get_retry_count):
+            return 0
+        return get_retry_count(self.task_key)
 
     @abstractmethod
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
