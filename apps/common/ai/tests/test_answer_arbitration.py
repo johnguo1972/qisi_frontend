@@ -909,6 +909,63 @@ def test_incomplete_or_subjective_context_cannot_take_the_qwen_only_fast_path(
     _assert_counts(calls, 1, 1, 0)
 
 
+@pytest.mark.parametrize(
+    "question_type",
+    ["computation", "fill_blank", "future_constructed_response"],
+)
+def test_only_allowlisted_objective_types_can_take_the_qwen_only_fast_path(
+    question_type,
+):
+    context = QuestionInput(
+        stem="Compute the requested value.",
+        answer="2",
+        solution="Apply the stated operation.",
+        metadata={
+            "question_type": question_type,
+            "reference_analysis": "Apply the stated operation.",
+        },
+    )
+    calls = _Calls(
+        _qwen(answer="2"),
+        _independent(
+            answer="2",
+            mode_content=_mode_content("A", "2"),
+        ),
+        _final(answer="2"),
+    )
+
+    _arbitrator(calls).process("A", context)
+
+    _assert_counts(calls, 1, 1, 0)
+
+
+@pytest.mark.parametrize("question_type", ["true_false", "judgment", "判断题"])
+def test_complete_true_false_aliases_keep_the_approved_qwen_fast_path(
+    question_type,
+):
+    context = QuestionInput(
+        stem="The statement is true or false.",
+        answer="true",
+        solution="The statement follows directly from the given fact.",
+        metadata={
+            "question_type": question_type,
+            "reference_analysis": "The statement follows directly.",
+        },
+    )
+    calls = _Calls(
+        _qwen(answer="true"),
+        _independent(
+            answer="true",
+            mode_content=_mode_content("A", "true"),
+        ),
+        _final(answer="true"),
+    )
+
+    _arbitrator(calls).process("A", context)
+
+    _assert_counts(calls, 1, 0, 0)
+
+
 @pytest.mark.parametrize("confidence", [0.01, -0.1, 1.1, "high", True, None])
 def test_explicit_low_or_invalid_qwen_confidence_forces_independent_verification(
     confidence,

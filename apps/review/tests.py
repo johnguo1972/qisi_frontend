@@ -405,6 +405,8 @@ class AIProcessFullPipelineTest(TestCase):
     def test_process_question_full_v2_routes_all_steps_through_components(self):
         """The legacy v2 pipeline keeps its shape while using components."""
         from apps.common.ai.components import (
+            DeepSeekFinalReviewComponent,
+            DeepSeekIndependentVerifierComponent,
             KnowledgeAnalysisComponent,
             ModeAAnswerComponent,
             ModeBAnswerComponent,
@@ -471,11 +473,40 @@ class AIProcessFullPipelineTest(TestCase):
             },
         }
         created_types = []
+        mode_components = {
+            'A': ModeAAnswerComponent,
+            'B': ModeBAnswerComponent,
+            'C': ModeCAnswerComponent,
+        }
 
         def component_factory(component_type):
             created_types.append(component_type)
             component = MagicMock()
-            component.run.return_value = responses[component_type]
+            if component_type is DeepSeekIndependentVerifierComponent:
+                component.run.side_effect = lambda question: {
+                    'independent_answer': '5',
+                    'independent_reasoning_summary': '代入后结果为 5。',
+                    'reference_answer_valid': True,
+                    'reference_analysis_valid': None,
+                    'reference_issues': [],
+                    'key_facts': ['代入计算'],
+                    'confidence': 0.95,
+                    'mode_content': responses[
+                        mode_components[question.metadata['target_mode']]
+                    ],
+                }
+            elif component_type is DeepSeekFinalReviewComponent:
+                component.run.side_effect = lambda question: {
+                    'trusted_answer': '5',
+                    'qwen_content_valid': True,
+                    'candidate_issues': [],
+                    'confidence': 0.95,
+                    'mode_content': responses[
+                        mode_components[question.metadata['target_mode']]
+                    ],
+                }
+            else:
+                component.run.return_value = responses[component_type]
             return component
 
         service = AIReviewService(component_factory=component_factory)
@@ -498,15 +529,18 @@ class AIProcessFullPipelineTest(TestCase):
                 KnowledgeAnalysisComponent,
                 VisionExtractionComponent,
                 ModeAAnswerComponent,
+                DeepSeekIndependentVerifierComponent,
                 ModeBAnswerComponent,
+                DeepSeekFinalReviewComponent,
                 ModeCAnswerComponent,
+                DeepSeekFinalReviewComponent,
             ],
         )
         self.assertEqual(
             set(results),
             {
                 'probe', 'knowledge', 'vision', 'answer_a', 'answer_b',
-                'answer_c', 'errors', 'image_count',
+                'answer_c', 'verifier', 'errors', 'image_count',
             },
         )
         self.assertEqual(results['image_count'], 2)
@@ -514,7 +548,7 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(results['answer_a']['mode'], 'A')
         self.assertEqual(results['answer_b']['mode'], 'B')
         self.assertEqual(results['answer_c']['mode'], 'C')
-        self.assertNotIn('verifier', results)
+        self.assertEqual(results['verifier']['independent_answer'], '5')
 
         self.question.refresh_from_db()
         self.assertEqual(self.question.ai_processing_status, 'success')
@@ -523,6 +557,8 @@ class AIProcessFullPipelineTest(TestCase):
     def test_process_question_full_v2_normalizes_mixed_probe_tokens_and_saves(self):
         """Tight slash+whitespace boundaries reach v2 and persistence cleanly."""
         from apps.common.ai.components import (
+            DeepSeekFinalReviewComponent,
+            DeepSeekIndependentVerifierComponent,
             KnowledgeAnalysisComponent,
             ModeAAnswerComponent,
             ModeBAnswerComponent,
@@ -622,12 +658,41 @@ class AIProcessFullPipelineTest(TestCase):
             ResultVerifierComponent: {'pass': True},
         }
         registry = PromptRegistry()
+        mode_components = {
+            'A': ModeAAnswerComponent,
+            'B': ModeBAnswerComponent,
+            'C': ModeCAnswerComponent,
+        }
 
         def component_factory(component_type):
             if component_type is QuestionProbeComponent:
                 return QuestionProbeComponent(_ProbeResponseClient(), registry)
             component = MagicMock()
-            component.run.return_value = responses[component_type]
+            if component_type is DeepSeekIndependentVerifierComponent:
+                component.run.side_effect = lambda question: {
+                    'independent_answer': '2',
+                    'independent_reasoning_summary': '方程的解为 2。',
+                    'reference_answer_valid': True,
+                    'reference_analysis_valid': None,
+                    'reference_issues': [],
+                    'key_facts': ['两边减一'],
+                    'confidence': 0.95,
+                    'mode_content': responses[
+                        mode_components[question.metadata['target_mode']]
+                    ],
+                }
+            elif component_type is DeepSeekFinalReviewComponent:
+                component.run.side_effect = lambda question: {
+                    'trusted_answer': '2',
+                    'qwen_content_valid': True,
+                    'candidate_issues': [],
+                    'confidence': 0.95,
+                    'mode_content': responses[
+                        mode_components[question.metadata['target_mode']]
+                    ],
+                }
+            else:
+                component.run.return_value = responses[component_type]
             return component
 
         service = AIReviewService(component_factory=component_factory)
@@ -743,7 +808,44 @@ class AIProcessFullPipelineTest(TestCase):
                 'retry_needed': False,
                 'retry_reason': '',
             },
-            'deepseek_independent_verify': {'invalid': True},
+            'deepseek_independent_verify': {
+                'independent_answer': '2',
+                'independent_reasoning_summary': '方程的解为 2。',
+                'reference_answer_valid': True,
+                'reference_analysis_valid': None,
+                'reference_issues': [],
+                'key_facts': ['两边减一'],
+                'confidence': 0.95,
+                'mode_content': {
+                    'mode': 'A',
+                    'steps': [
+                        {'step': 1, 'content': '列式'},
+                        {'step': 2, 'content': '求解'},
+                        {'step': 3, 'content': '验算'},
+                    ],
+                    'final_answer': '2',
+                    'summary': '完成',
+                },
+            },
+            'deepseek_final_review': {
+                'trusted_answer': '2',
+                'qwen_content_valid': True,
+                'candidate_issues': [],
+                'confidence': 0.95,
+                'mode_content': {
+                    'mode': 'C',
+                    'questions': [
+                        {
+                            'question': '等式两边如何变化？',
+                            'reference_answer': '两边同时减一',
+                            'key_points': ['等式性质'],
+                            'followup_hint': '保持等式成立',
+                        }
+                    ] * 3,
+                    'final_answer': '2',
+                    'summary': '开放引导',
+                },
+            },
         }
 
         class _ConfiguredResponseClient:

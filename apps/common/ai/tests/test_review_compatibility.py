@@ -129,10 +129,39 @@ def _component_responses():
 
 def _real_facade_with_components():
     responses = _component_responses()
+    mode_components = {
+        "A": ModeAAnswerComponent,
+        "B": ModeBAnswerComponent,
+        "C": ModeCAnswerComponent,
+    }
 
     def component_factory(component_type):
         component = MagicMock()
-        component.run.return_value = responses[component_type]
+        if component_type is DeepSeekIndependentVerifierComponent:
+            component.run.side_effect = lambda question: {
+                "independent_answer": "2",
+                "independent_reasoning_summary": "The addition gives 2.",
+                "reference_answer_valid": True,
+                "reference_analysis_valid": None,
+                "reference_issues": [],
+                "key_facts": ["1 + 1 equals 2."],
+                "confidence": 0.95,
+                "mode_content": deepcopy(
+                    responses[mode_components[question.metadata["target_mode"]]]
+                ),
+            }
+        elif component_type is DeepSeekFinalReviewComponent:
+            component.run.side_effect = lambda question: {
+                "trusted_answer": "2",
+                "qwen_content_valid": True,
+                "candidate_issues": [],
+                "confidence": 0.95,
+                "mode_content": deepcopy(
+                    responses[mode_components[question.metadata["target_mode"]]]
+                ),
+            }
+        else:
+            component.run.return_value = responses[component_type]
         return component
 
     service = common_ai_service.AIReviewService(

@@ -14,6 +14,11 @@ import re
 import unicodedata
 
 from apps.common.exceptions import AIRequestError
+from apps.common.status import (
+    QT_MULTIPLE_CHOICE,
+    QT_SINGLE_CHOICE,
+    QT_TRUE_FALSE,
+)
 
 from .answer_validation import AnswerNormalizer, ModeContentValidator
 from .components.base import QuestionInput
@@ -102,22 +107,10 @@ def _visible_text_values(value: object):
 
 
 _CHOICE_TYPES = frozenset(
-    {"single_choice", "multiple_choice", "单选题", "多选题"}
+    {QT_SINGLE_CHOICE, QT_MULTIPLE_CHOICE, "单选题", "多选题"}
 )
-_SUBJECTIVE_TYPES = frozenset(
-    {
-        "essay",
-        "short_answer",
-        "free_response",
-        "open_response",
-        "subjective",
-        "proof",
-        "unknown",
-        "简答题",
-        "作文题",
-        "证明题",
-        "主观题",
-    }
+_OBJECTIVE_TYPES = _CHOICE_TYPES | frozenset(
+    {QT_TRUE_FALSE, "judgement", "judgment", "判断题"}
 )
 _VISUAL_MARKERS = (
     "as shown in the figure",
@@ -717,7 +710,7 @@ class ModeAnswerArbitrator:
             issues.append("incomplete_question_context")
         if kind in _CHOICE_TYPES and not _complete_choice_options(payload):
             issues.append("incomplete_choice_options")
-        if kind in _SUBJECTIVE_TYPES or not kind:
+        if kind not in _OBJECTIVE_TYPES:
             issues.append("subjective_answer_requires_verification")
         if _missing_conditions(qwen):
             issues.append("missing_conditions_reported")
