@@ -1018,6 +1018,19 @@ class AIQueueExecutionTaskTest(TestCase):
         release.assert_called_once_with(str(item.id))
 
 
+class AIQueueCeleryDispatchTest(TestCase):
+    def test_dispatch_enqueues_reserved_item_on_ai_batch_queue(self):
+        from apps.review.ai_queue import dispatch_queued_ai_items
+
+        with (
+            patch('apps.review.ai_queue.reserve_queued_item_ids', return_value=['item-1']),
+            patch('apps.review.tasks.execute_ai_job_item.apply_async') as enqueue,
+        ):
+            dispatch_queued_ai_items(limit=1)
+
+        enqueue.assert_called_once_with(args=('item-1',), queue='ai.batch')
+
+
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
 

@@ -103,3 +103,13 @@ def reserve_queued_item_ids(*, limit: int | None = None) -> list[str]:
             item.save(update_fields=['status'])
             reserved.append(str(item.id))
     return reserved
+
+
+def dispatch_queued_ai_items(*, limit: int | None = None) -> int:
+    """Send reserved durable items to the dedicated Celery AI queue."""
+    from .tasks import execute_ai_job_item
+
+    item_ids = reserve_queued_item_ids(limit=limit)
+    for item_id in item_ids:
+        execute_ai_job_item.apply_async(args=(item_id,), queue='ai.batch')
+    return len(item_ids)
