@@ -1055,6 +1055,24 @@ class AIQueueCeleryDispatchTest(TestCase):
         release.assert_called_once_with(str(item.id))
 
 
+class AIQueueBatchApiTest(TestCase):
+    def test_batch_api_creates_durable_job_and_triggers_dispatch(self):
+        teacher = UserAccount.objects.create(mobile='13900009005', display_name='API Teacher', role_type='teacher')
+        grant_user_role(teacher, 'teacher')
+        paper = ExamPaper.objects.create(title='API Paper', subject='physics')
+        question = ExamQuestion.objects.create(paper=paper, stem='API stem', answer='A', question_type='single_choice')
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {generate_tokens(teacher, 'teacher')['access_token']}")
+
+        with patch('apps.review.views.dispatch_queued_ai_items.delay') as dispatch:
+            response = client.post(reverse('batch-ai-process'), {'question_ids': [str(question.id)]}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['data']['accepted'], 1)
+        self.assertIn('job_id', response.json()['data'])
+        dispatch.assert_called_once_with()
+
+
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
 

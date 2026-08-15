@@ -21,6 +21,8 @@ from .serializers import (
 )
 from .services.question_edit_service import update_question
 from .ai_mode_dispatch import dispatch_single_mode_ai_task
+from .tasks import dispatch_queued_ai_items_task as dispatch_queued_ai_items
+from .models import AIProcessingJob, AIQueueCapacityExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -331,13 +333,27 @@ def batch_ai_process(request):
 
     model = request.data.get('model')
 
-    task = batch_ai_process_questions.delay(question_ids, model)
+    try:
+        created = AIProcessingJob.create_for_questions(
+            creator=request.user,
+            question_ids=question_ids,
+            source=AIProcessingJob.Source.BATCH,
+            model=model,
+        )
+    except AIQueueCapacityExceeded:
+        return Response(
+            {'success': False, 'error': 'ai_queue_capacity_exceeded'}, status=429
+        )
+    dispatch_queued_ai_items.delay()
 
     return Response({
         'success': True,
         'data': {
-            'task_id': task.id,
+            'job_id': str(created.job.id) if created.job else None,
+            'task_id': str(created.job.id) if created.job else None,
             'total': len(question_ids),
+            'accepted': created.accepted_count,
+            'deduplicated': created.duplicate_question_ids,
             'status': 'pending',
         }
     })

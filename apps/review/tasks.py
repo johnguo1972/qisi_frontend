@@ -31,6 +31,12 @@ STEP_LABELS = {
 }
 
 
+@shared_task
+def dispatch_queued_ai_items_task():
+    from .ai_queue import dispatch_queued_ai_items
+    return dispatch_queued_ai_items()
+
+
 @shared_task(bind=True, max_retries=0)
 def execute_ai_job_item(self, item_id: str):
     """Execute one durable queue item using the unchanged full AI pipeline."""
