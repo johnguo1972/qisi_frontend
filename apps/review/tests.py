@@ -926,6 +926,22 @@ class AIProcessingJobModelTest(TestCase):
             )
 
 
+class AIQueueSchedulerTest(TestCase):
+    def test_redis_lease_pool_enforces_limit_and_owner_aware_release(self):
+        from apps.review.ai_queue import RedisLeasePool
+
+        pool = RedisLeasePool('test-question', limit=2, ttl_seconds=60)
+        with patch.object(pool, '_eval', side_effect=[1, 1, 0, 0, 1, 0]) as eval_call:
+            self.assertTrue(pool.acquire('first'))
+            self.assertTrue(pool.acquire('second'))
+            self.assertFalse(pool.acquire('third'))
+            self.assertFalse(pool.release('old-first'))
+            self.assertTrue(pool.release('first'))
+            self.assertFalse(pool.release('first'))
+
+        self.assertEqual(eval_call.call_count, 6)
+
+
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
 
