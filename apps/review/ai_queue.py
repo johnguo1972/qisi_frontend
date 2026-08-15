@@ -6,7 +6,9 @@ import time
 from collections import deque
 from typing import Iterable
 
+from django.conf import settings
 from django.core.cache import cache
+from django.db import transaction
 
 
 _ACQUIRE_LUA = """
@@ -71,3 +73,33 @@ def select_fair_item_ids(
         if not progressed:
             break
     return selected
+
+
+def reserve_queued_item_ids(*, limit: int | None = None) -> list[str]:
+    """Atomically reserve a fair set of queued items for later Celery enqueue."""
+    from .models import AIProcessingJob, AIProcessingJobItem
+
+    capacity = limit if limit is not None else int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 16))
+    jobs = list(AIProcessingJob.objects.filter(
+        status__in=(AIProcessingJob.Status.QUEUED, AIProcessingJob.Status.RUNNING),
+        cancel_requested=False,
+    ).order_by('created_at')[:3])
+    candidates = select_fair_item_ids(
+        [
+            (str(job.id), job.items.filter(status=AIProcessingJobItem.Status.QUEUED)
+             .order_by('created_at').values_list('id', flat=True))
+            for job in jobs
+        ],
+        limit=capacity,
+    )
+    pool = RedisLeasePool('question', limit=capacity, ttl_seconds=4200)
+    reserved: list[str] = []
+    with transaction.atomic():
+        for item_id in candidates:
+            item = AIProcessingJobItem.objects.select_for_update().get(id=item_id)
+            if item.status != AIProcessingJobItem.Status.QUEUED or not pool.acquire(str(item.id)):
+                continue
+            item.status = AIProcessingJobItem.Status.DISPATCHED
+            item.save(update_fields=['status'])
+            reserved.append(str(item.id))
+    return reserved

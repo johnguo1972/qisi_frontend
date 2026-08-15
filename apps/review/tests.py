@@ -957,6 +957,39 @@ class AIQueueSchedulerTest(TestCase):
         self.assertEqual(sum(item.startswith('b-') for item in selected), 5)
         self.assertEqual(sum(item.startswith('c-') for item in selected), 5)
 
+    @override_settings(AI_QUEUE_CAPACITY=10)
+    def test_reserve_queued_items_marks_fair_items_dispatched_and_skips_cancelled_job(self):
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.ai_queue import reserve_queued_item_ids
+
+        teacher = UserAccount.objects.create(
+            mobile='13900009002', display_name='Dispatch Teacher', role_type='teacher',
+        )
+        paper = ExamPaper.objects.create(title='Dispatch Queue Paper', subject='physics')
+        questions = [
+            ExamQuestion.objects.create(paper=paper, stem=f'Dispatch {i}', answer='A', question_type='single_choice')
+            for i in range(4)
+        ]
+        job = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[question.id for question in questions[:3]], source='batch', model=None,
+        ).job
+        cancelled = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[questions[3].id], source='batch', model=None,
+        ).job
+        cancelled.cancel_requested = True
+        cancelled.save(update_fields=['cancel_requested'])
+
+        with patch('apps.review.ai_queue.RedisLeasePool.acquire', return_value=True):
+            reserved = reserve_queued_item_ids(limit=3)
+
+        self.assertEqual(len(reserved), 3)
+        self.assertEqual(
+            AIProcessingJobItem.objects.filter(job=job, status='dispatched').count(), 3,
+        )
+        self.assertEqual(
+            AIProcessingJobItem.objects.filter(job=cancelled, status='queued').count(), 1,
+        )
+
 
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
