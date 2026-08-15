@@ -12,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
+from apps.accounts.roles import has_user_role
 
 from .models import Course, CourseMaterial, CourseTree, CourseQuestionLink, VariantTask
 from .serializers import (
@@ -147,9 +148,45 @@ def _recognize_course_material_image(image_path, crop_region):
 # 权限辅助函数
 # ============================================================
 
+def _course_stage(grade_level):
+    """将课程年级统一归类为教师配置使用的学段名称。"""
+    value = (grade_level or '').strip()
+    if value in {'小学', '初中', '高中'}:
+        return value
+    if value.startswith('高'):
+        return '高中'
+    if value.endswith('年级'):
+        chinese_numbers = {
+            '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+            '六': 6, '七': 7, '八': 8, '九': 9,
+        }
+        try:
+            number = chinese_numbers.get(value[:-2])
+            if number is None:
+                number = int(value[:-2])
+        except ValueError:
+            return None
+        if 1 <= number <= 6:
+            return '小学'
+        if 7 <= number <= 9:
+            return '初中'
+    return None
+
+
+def _can_access_shared_course(course, user):
+    """课程对同学段、同学科教师开放协作；管理员全量访问。"""
+    if has_user_role(user, 'admin'):
+        return True
+    return (
+        user.role_type == 'teacher'
+        and user.subject == course.subject
+        and _course_stage(course.grade_level) in (user.stages or [])
+    )
+
+
 def _check_course_owner(course, user):
-    """验证用户是否为课程创建者（老师）"""
-    if course.teacher != user:
+    """验证用户是否可以协作操作课程。"""
+    if not _can_access_shared_course(course, user):
         raise PermissionDenied('您没有权限操作此课程')
 
 
@@ -170,10 +207,19 @@ def _get_course_or_404(course_id):
 def course_list_or_create(request):
     """课程列表（GET）和创建（POST）"""
     if request.method == 'GET':
-        courses = Course.objects.filter(
-            teacher=request.user,
-            is_deleted=False
-        ).order_by('-created_at')
+        if has_user_role(request.user, 'admin'):
+            courses = Course.objects.filter(is_deleted=False).order_by('-created_at')
+        else:
+            stages = request.user.stages or []
+            grade_levels = [
+                grade for grade in Course.objects.values_list('grade_level', flat=True).distinct()
+                if _course_stage(grade) in stages
+            ]
+            courses = Course.objects.filter(
+                is_deleted=False,
+                subject=request.user.subject,
+                grade_level__in=grade_levels,
+            ).order_by('-created_at')
         serializer = CourseSerializer(courses, many=True, context={'request': request})
         return Response({'success': True, 'data': serializer.data})
 

@@ -37,7 +37,11 @@ def batch_ai_process_questions(self, question_ids, model=None):
     def process_one(q_id):
         """Process a single question, return (q_id, success, error_msg)."""
         try:
-            results = service.process_question_full(q_id, model=model)
+            # Batch processing must use the same current pipeline as manual
+            # single-mode processing: probe, vision, A/B/C arbitration, and
+            # DeepSeek verification.  The legacy entry point can silently
+            # leave one mode absent after a partial result.
+            results = service.process_question_full_v2(q_id, model=model)
             service.save_results_to_question(q_id, results)
             has_errors = bool(results.get('errors'))
             return (q_id, not has_errors,

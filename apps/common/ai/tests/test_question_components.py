@@ -272,6 +272,25 @@ def test_question_component_retries_schema_invalid_response_contract_once():
     assert len(client.calls) == 2
 
 
+def test_mode_answer_retries_a_control_character_corrupted_response():
+    invalid = _mode_answer_response("mode_a_answer")
+    invalid["summary"] = "bad\times"
+    client = SequencedAIClient(
+        [
+            json.dumps(invalid, ensure_ascii=False) + ' {"partial":',
+            json.dumps(_mode_answer_response("mode_a_answer"), ensure_ascii=False),
+        ]
+    )
+    components = _components()
+
+    result = components.ModeAAnswerComponent(
+        client, prompt_registry=RetryPromptRegistry(1)
+    ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert result["summary"] == "option C is correct"
+    assert len(client.calls) == 2
+
+
 @pytest.mark.parametrize(
     "question_patch",
     [
@@ -1143,7 +1162,7 @@ def test_probe_preserves_internal_mixed_pair_and_latex_content():
         components.QuestionInput(stem="solve x+1=2")
     )
 
-    assert "\\" + "\t" in parsed_value
+    assert r"\tlation" in parsed_value
     assert r"\frac{1}{2}" in parsed_value
     assert result["question_type"] == parsed_value
     assert result["question_style"] == parsed_value
@@ -2497,6 +2516,40 @@ def test_service_arbitration_uses_one_injected_factory_for_qwen_and_deepseek():
     ):
         assert expected in rendered
     assert "<PromptOptionsManager>" not in rendered
+
+
+def test_service_retries_full_mode_arbitration_once_after_provider_failure():
+    from apps.common.ai.answer_arbitration import ArbitrationOutcome, ArbitrationProviderError
+    from apps.common.ai_service import AIReviewService
+
+    service = AIReviewService(component_factory=lambda _component_type: MagicMock())
+    question = SimpleNamespace(
+        stem="Which value is correct?",
+        options=None,
+        answer="C",
+        analysis="Reference analysis",
+        solution="Reference solution",
+        question_type="single_choice",
+        subject="math",
+        difficulty=2,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    recovered = ArbitrationOutcome(
+        answer=_mode_answer_response("mode_a_answer"),
+        verification={"context_hash": "same-context"},
+        shared_verifier_result=None,
+    )
+
+    with patch(
+        "apps.common.ai_service.ModeAnswerArbitrator.process",
+        side_effect=[ArbitrationProviderError(), recovered],
+    ) as process:
+        outcome = service.solve_mode_with_arbitration(question, mode="A")
+
+    assert outcome.answer["final_answer"] == "C"
+    assert process.call_count == 2
 
 
 def test_service_reuses_only_shared_verification_while_routing_all_mode_components():

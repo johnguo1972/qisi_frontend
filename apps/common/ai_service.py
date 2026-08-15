@@ -51,6 +51,7 @@ _SHARED_VERIFIER_FIELDS = (
     "key_facts",
     "confidence",
 )
+_MODE_ARBITRATION_ATTEMPTS = 2
 
 
 def _project_schema_value(value):
@@ -620,25 +621,38 @@ class AIReviewService:
             independent_verify=independent_verify,
             final_review=final_review,
         )
-        outcome = arbitrator.process(
-            normalized_mode,
-            context,
-            cached_verification=cached_verification,
-        )
-        try:
-            validated_answer = _MODE_RESPONSE_SCHEMAS[
-                normalized_mode
-            ].model_validate(outcome.answer)
-        except ValidationError:
-            raise ArbitrationProviderError() from None
-        public_answer = _project_schema_value(validated_answer)
-        verification = deepcopy(outcome.verification)
-        public_answer["verification"] = verification
-        return ArbitrationOutcome(
-            answer=public_answer,
-            verification=verification,
-            shared_verifier_result=deepcopy(outcome.shared_verifier_result),
-        )
+        for attempt in range(_MODE_ARBITRATION_ATTEMPTS):
+            try:
+                outcome = arbitrator.process(
+                    normalized_mode,
+                    context,
+                    cached_verification=cached_verification,
+                )
+                try:
+                    validated_answer = _MODE_RESPONSE_SCHEMAS[
+                        normalized_mode
+                    ].model_validate(outcome.answer)
+                except ValidationError:
+                    raise ArbitrationProviderError() from None
+                public_answer = _project_schema_value(validated_answer)
+                verification = deepcopy(outcome.verification)
+                public_answer["verification"] = verification
+                return ArbitrationOutcome(
+                    answer=public_answer,
+                    verification=verification,
+                    shared_verifier_result=deepcopy(
+                        outcome.shared_verifier_result
+                    ),
+                )
+            except ArbitrationProviderError:
+                if attempt + 1 >= _MODE_ARBITRATION_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "AI mode arbitration provider failure; retrying once",
+                    extra={"mode": normalized_mode, "attempt": attempt + 1},
+                )
+
+        raise RuntimeError("AI mode arbitration retry loop exhausted")
 
     def solve_mode_a(self, question, image_urls: list, normalized_text: str,
                      vision_result: dict, knowledge_refs: str,

@@ -400,7 +400,7 @@ def test_batch_task_uses_injected_facade_and_preserves_result_and_progress():
 
     question = _make_question()
     facade = MagicMock()
-    facade.process_question_full.return_value = {
+    facade.process_question_full_v2.return_value = {
         "knowledge": {"knowledge_points": []},
         "answer_a": {"mode": "A"},
         "answer_b": {"mode": "B"},
@@ -433,11 +433,11 @@ def test_batch_task_uses_injected_facade_and_preserves_result_and_progress():
         "errors": {},
     }
     service_factory.assert_called_once_with()
-    facade.process_question_full.assert_called_once_with(
+    facade.process_question_full_v2.assert_called_once_with(
         str(question.id), model=None
     )
     facade.save_results_to_question.assert_called_once_with(
-        str(question.id), facade.process_question_full.return_value
+        str(question.id), facade.process_question_full_v2.return_value
     )
     assert writes[0][1] == {
         "current": 0,

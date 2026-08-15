@@ -169,6 +169,20 @@ def test_default_registry_preserves_prompt_constraints(provider_env):
     assert "## 变式要求" in user
 
 
+def test_mode_answer_prompts_require_json_safe_latex_escaping(provider_env):
+    registry = PromptRegistry(AIConfig.load())
+    variables = {
+        "question_context_json": "{}",
+        "normalized_text": "x=1",
+        "vision_json": "{}",
+        "knowledge_refs": "",
+    }
+
+    for task_key in ("mode_a_answer", "mode_b_answer", "mode_c_answer"):
+        system, _ = registry.render(task_key, **variables)
+        assert "double backslash" in system
+
+
 def test_default_registry_renders_every_declared_task(provider_env):
     registry = PromptRegistry(AIConfig.load())
     values = {

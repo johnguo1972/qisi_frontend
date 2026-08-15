@@ -12,6 +12,7 @@ from apps.common.ai.schemas import (
     ModeCResponse,
     has_visible_text,
 )
+from apps.common.ai.exceptions import AIResponseError
 
 from .base import QuestionAIComponent, QuestionInput, to_plain_data
 
@@ -22,6 +23,7 @@ _MODE_A_STEP_NUMBER_PATTERN = re.compile(
 _MODE_A_NONPOSITIVE_OR_NONINTEGER_STEP_PATTERN = re.compile(
     r"(?:(?:步骤|step)\s*)?[+-]?\d+(?:\.\d+)?", re.IGNORECASE
 )
+_CORRUPTED_LATEX_CONTROL_PATTERN = re.compile(r"[\x08\x09\x0c\x0e\x0f][A-Za-z]{2,}")
 
 
 def _knowledge_refs(question: QuestionInput) -> str:
@@ -144,6 +146,16 @@ def normalize_mode_answer_payload(mode: str, result: dict) -> dict:
     return normalized
 
 
+def _contains_corrupted_latex_control(value: object) -> bool:
+    if isinstance(value, str):
+        return _CORRUPTED_LATEX_CONTROL_PATTERN.search(value) is not None
+    if isinstance(value, dict):
+        return any(_contains_corrupted_latex_control(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_corrupted_latex_control(item) for item in value)
+    return False
+
+
 class _ModeAnswerComponent(QuestionAIComponent):
     mode: str
 
@@ -173,6 +185,13 @@ class _ModeAnswerComponent(QuestionAIComponent):
             ),
             "knowledge_refs": _knowledge_refs(question),
         }
+
+    def validate_result(self, result: dict, question: QuestionInput) -> dict:
+        if _contains_corrupted_latex_control(result):
+            raise AIResponseError(
+                "AI mode answer contains corrupted LaTeX control characters"
+            )
+        return result
 
 
 class ModeAAnswerComponent(_ModeAnswerComponent):

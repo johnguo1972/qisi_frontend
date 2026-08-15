@@ -28,6 +28,14 @@ def test_response_parser_repairs_fenced_json():
     assert parsed == {"answer": "D"}
 
 
+def test_response_parser_preserves_single_escaped_latex_commands():
+    parsed = ResponseParser.parse_json(
+        r'{"answer":"$\\frac{2}{3} \\times t$"}'
+    )
+
+    assert parsed == {"answer": r"$\frac{2}{3} \times t$"}
+
+
 def test_response_parser_preserves_array_top_level():
     parsed = ResponseParser.parse_json(
         '说明：\n```json\n[{"answer":"A",}, {"answer":"B"}]\n```'

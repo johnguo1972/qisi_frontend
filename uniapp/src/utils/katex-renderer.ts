@@ -10,6 +10,11 @@
 
 let katexPromise: Promise<any> | null = null
 
+/** Detect JSON-escape damage such as `\\f` becoming form-feed plus `rac`. */
+export function hasCorruptedLatexControl(text: string): boolean {
+  return /[\u0008\u0009\u000c\u000e\u000f][A-Za-z]{2,}/.test(text)
+}
+
 function loadKatex(): Promise<any> {
   if (katexPromise) return katexPromise
   katexPromise = new Promise((resolve) => {
@@ -116,6 +121,9 @@ function simpleLatexRender(text: string): string {
  * - \n → <br/>
  */
 export async function renderWithKatex(text: string): Promise<string> {
+  if (hasCorruptedLatexControl(text)) {
+    return '<span style="color:#e74c3c">检测到公式转义异常，请重新处理该模式答案。</span>'
+  }
   // 1. Empty check
   if (!text || text.trim() === '') {
     return '<span style="color:#999">(无内容)</span>'

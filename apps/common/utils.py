@@ -45,8 +45,12 @@ def repair_json_string(raw: str) -> str:
                 nc = s[i + 1]
                 # Standard valid JSON escapes
                 if nc in valid_escapes:
-                    fixed.append(ch)
-                    i += 1
+                    # Keep an already-valid escape pair intact.  Advancing by
+                    # one makes the second slash in `\\\\frac` get processed
+                    # again as `\\f` (a JSON form-feed escape), corrupting the
+                    # LaTeX command into a control character plus `rac`.
+                    fixed.append(ch + nc)
+                    i += 2
                     continue
                 # \uXXXX
                 if nc == 'u' and i + 5 < len(s):
