@@ -394,71 +394,24 @@ def test_probe_endpoint_returns_not_found_without_dispatching():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_batch_task_uses_injected_facade_and_preserves_result_and_progress():
-    """Batch callers must not construct a provider client outside the facade."""
+def test_batch_task_creates_durable_job_without_local_thread_pool():
+    """Legacy callers delegate scheduling to the durable review queue."""
     from apps.common import batch_tasks
 
     question = _make_question()
-    facade = MagicMock()
-    facade.process_question_full_v2.return_value = {
-        "knowledge": {"knowledge_points": []},
-        "answer_a": {"mode": "A"},
-        "answer_b": {"mode": "B"},
-        "answer_c": {"mode": "C"},
-        "errors": {},
-    }
-    writes = []
-
-    with (
-        patch.object(
-            batch_tasks,
-            "create_ai_review_service",
-            return_value=facade,
-        ) as service_factory,
-        patch.object(batch_tasks.cache, "get", return_value=None),
-        patch.object(
-            batch_tasks.cache,
-            "set",
-            side_effect=lambda key, value, timeout: writes.append(
-                (key, json.loads(value), timeout)
-            ),
-        ),
-    ):
-        result = batch_tasks.batch_ai_process_questions.run([str(question.id)])
-
-    assert result == {
-        "status": "completed",
-        "success_count": 1,
-        "error_count": 0,
-        "errors": {},
-    }
-    service_factory.assert_called_once_with()
-    facade.process_question_full_v2.assert_called_once_with(
-        str(question.id), model=None
+    teacher = UserAccount.objects.create(
+        mobile="13900009998", display_name="Legacy adapter", role_type="teacher"
     )
-    facade.save_results_to_question.assert_called_once_with(
-        str(question.id), facade.process_question_full_v2.return_value
-    )
-    assert writes[0][1] == {
-        "current": 0,
-        "total": 1,
-        "status": "running",
-        "current_question": None,
-        "success_count": 0,
-        "error_count": 0,
-        "errors": {},
-    }
-    assert writes[-1][1] == {
-        "current": 1,
-        "total": 1,
-        "status": "completed",
-        "current_question": None,
-        "success_count": 1,
-        "error_count": 0,
-        "errors": {},
-    }
-    assert all(timeout == 3600 for _, _, timeout in writes)
-    facade.close.assert_called_once_with()
+
+    with patch.object(batch_tasks.dispatch_queued_ai_items, "delay") as dispatch:
+        result = batch_tasks.batch_ai_process_questions.run(
+            [str(question.id)], creator_id=str(teacher.id)
+        )
+
+    assert result["status"] == "pending"
+    assert result["accepted"] == 1
+    assert result["job_id"]
+    dispatch.assert_called_once_with()
 
 
 @pytest.mark.django_db

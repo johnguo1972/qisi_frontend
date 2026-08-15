@@ -1170,6 +1170,32 @@ class AIQueueJobApiTest(TestCase):
         dispatch.assert_called_once_with()
 
 
+class LegacyBatchQueueAdapterTest(TestCase):
+    def test_legacy_batch_task_creates_durable_job_without_thread_pool(self):
+        from apps.common.batch_tasks import batch_ai_process_questions
+        from apps.review.models import AIProcessingJobItem
+
+        teacher = UserAccount.objects.create(
+            mobile='13900009008', display_name='Legacy Queue Teacher', role_type='teacher',
+        )
+        paper = ExamPaper.objects.create(title='Legacy Queue Paper', subject='physics')
+        question = ExamQuestion.objects.create(
+            paper=paper, stem='Legacy queue stem', answer='A', question_type='single_choice',
+        )
+
+        with patch('apps.common.batch_tasks.dispatch_queued_ai_items.delay') as dispatch:
+            result = batch_ai_process_questions.run(
+                [str(question.id)], creator_id=str(teacher.id),
+            )
+
+        self.assertEqual(result['status'], 'pending')
+        self.assertEqual(result['accepted'], 1)
+        self.assertTrue(
+            AIProcessingJobItem.objects.filter(question=question, status='queued').exists(),
+        )
+        dispatch.assert_called_once_with()
+
+
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
 
