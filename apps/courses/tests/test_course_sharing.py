@@ -44,6 +44,19 @@ class CourseSharingTests(TestCase):
         self.assertEqual([item["id"] for item in response.data["data"]], [str(self.course.id)])
         _check_course_owner(self.course, self.peer)
 
+    def test_creator_can_list_and_edit_own_course_without_profile_scope(self):
+        self.owner.subject = None
+        self.owner.stages = None
+        self.owner.save(update_fields=["subject", "stages"])
+        request = APIRequestFactory().get("/api/v1/courses/")
+        force_authenticate(request, user=self.owner)
+
+        response = course_list_or_create(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["id"] for item in response.data["data"]], [str(self.course.id)])
+        _check_course_owner(self.course, self.owner)
+
     def test_teacher_with_different_subject_cannot_access_shared_course(self):
         with self.assertRaisesMessage(Exception, "您没有权限操作此课程"):
             _check_course_owner(self.course, self.other_subject)

@@ -29,7 +29,7 @@
           <view class="header-actions">
             <button class="btn-action" size="mini" @click="showAddPanel">+ 新增习题</button>
             <button class="btn-action" size="mini" type="warning" @click="goAssignMission">布置作业</button>
-            <button class="btn-action" size="mini" type="primary" @click="batchAiProcess" :disabled="selectedIds.length === 0">批量AI处理</button>
+            <button class="btn-action" size="mini" type="primary" @click="batchAiProcess" :disabled="selectedIds.length === 0 || batchAiProcessing" :loading="batchAiProcessing">{{ batchAiProcessing ? `AI ${batchAiProgress.completed}/${batchAiProgress.total}` : '批量AI处理' }}</button>
             <button class="btn-action" size="mini" type="success" @click="batchGenerateVariant" :disabled="!canBatchGenerateVariant">批量生成变式题</button>
             <button class="btn-action refresh-action" size="mini" @click="refreshQuestions" :loading="loading">刷新</button>
             <button class="btn-action" size="mini" type="warning" @click="showGenerateMission">生成任务</button>
@@ -271,6 +271,7 @@ import { treeApi, courseQuestionApi, variantApi, materialApi } from '@/api/cours
 import { aiProcessQuestion, getAiTaskStatus } from '@/api/questions'
 import { importJsonPackage as importJsonPackageApi } from '@/api/questions'
 import QuestionAIControls from '@/components/QuestionAIControls.vue'
+import { runSequentially } from '@/utils/ai-process-queue'
 
 // ============================================================
 // Course info
@@ -804,7 +805,16 @@ async function importFromBank() {
 // ============================================================
 // AI processing (polling pattern from bank.vue)
 // ============================================================
-const batchAiPollTimers: Array<{ taskId: string; timer: ReturnType<typeof setInterval> }> = []
+type AiProcessStatus = 'complete' | 'partial' | 'failed' | 'skipped'
+type BatchAiPoll = {
+  taskId: string
+  timer: ReturnType<typeof setInterval>
+  resolve: (status: AiProcessStatus) => void
+}
+
+const batchAiPollTimers: BatchAiPoll[] = []
+const batchAiProcessing = ref(false)
+const batchAiProgress = ref({ completed: 0, total: 0, failed: 0 })
 
 function handleAiProcess(questionId: string) {
   selectedAiQuestionId.value = questionId
@@ -821,54 +831,76 @@ function handleAiCompleted() {
   closeAiControls()
 }
 
-async function startBatchAiProcess(questionId: string) {
-  uni.showToast({ title: `已开始AI处理（题${questionId}），可继续其他操作`, icon: 'none', duration: 2000 })
+function finishBatchAiPoll(taskId: string, status: AiProcessStatus) {
+  const idx = batchAiPollTimers.findIndex(t => t.taskId === taskId)
+  if (idx < 0) return
+  const [poll] = batchAiPollTimers.splice(idx, 1)
+  clearInterval(poll.timer)
+  poll.resolve(status)
+}
+
+async function startBatchAiProcess(questionId: string, silent = false): Promise<AiProcessStatus> {
+  if (!silent) {
+    uni.showToast({ title: `已开始AI处理（题${questionId}），可继续其他操作`, icon: 'none', duration: 2000 })
+  }
   try {
     const res: any = await aiProcessQuestion(questionId)
     const taskId = res.data?.task_id
     if (!taskId) throw new Error('No task ID')
-    const timer = setInterval(async () => {
-      try {
-        const statusRes: any = await getAiTaskStatus(taskId)
-        if (statusRes.success === false || !statusRes.data) {
-          clearInterval(timer)
-          const idx = batchAiPollTimers.findIndex(t => t.taskId === taskId)
-          if (idx >= 0) batchAiPollTimers.splice(idx, 1)
-          uni.showToast({ title: `任务进度已失效（题${questionId}），请重新AI处理`, icon: 'none' })
-          loadQuestions()
-          return
-        }
-        const data = statusRes.data
-        if (data.status === 'complete' || data.status === 'failed' || data.status === 'partial' || data.status === 'skipped') {
-          clearInterval(timer)
-          const idx = batchAiPollTimers.findIndex(t => t.taskId === taskId)
-          if (idx >= 0) batchAiPollTimers.splice(idx, 1)
-          if (data.status === 'complete') {
-            uni.showToast({ title: `AI处理完成（题${questionId}）`, icon: 'success' })
-          } else if (data.status === 'partial') {
-            uni.showToast({ title: `AI处理完成，部分步骤失败（题${questionId}）`, icon: 'none' })
-          } else if (data.status === 'skipped') {
-            uni.showToast({ title: `AI处理已跳过，题目可能不存在（题${questionId}）`, icon: 'none' })
-          } else {
-            uni.showToast({ title: data.error || `AI处理失败（题${questionId}）`, icon: 'none' })
+    return await new Promise((resolve) => {
+      const timer = setInterval(async () => {
+        try {
+          const statusRes: any = await getAiTaskStatus(taskId)
+          if (statusRes.success === false || !statusRes.data) {
+            finishBatchAiPoll(taskId, 'failed')
+            if (!silent) uni.showToast({ title: `任务进度已失效（题${questionId}），请重新AI处理`, icon: 'none' })
+            loadQuestions()
+            return
           }
-          loadQuestions()
-        }
-      } catch (e) { /* silent */ }
-    }, 2000)
-    batchAiPollTimers.push({ taskId, timer })
+          const data = statusRes.data
+          const status = data.status as AiProcessStatus
+          if (status === 'complete' || status === 'failed' || status === 'partial' || status === 'skipped') {
+            finishBatchAiPoll(taskId, status)
+            if (!silent) {
+              if (status === 'complete') uni.showToast({ title: `AI处理完成（题${questionId}）`, icon: 'success' })
+              else if (status === 'partial') uni.showToast({ title: `AI处理完成，部分步骤失败（题${questionId}）`, icon: 'none' })
+              else if (status === 'skipped') uni.showToast({ title: `AI处理已跳过，题目可能不存在（题${questionId}）`, icon: 'none' })
+              else uni.showToast({ title: data.error || `AI处理失败（题${questionId}）`, icon: 'none' })
+            }
+            loadQuestions()
+          }
+        } catch (e) { /* keep polling until the task reaches a terminal state */ }
+      }, 2000)
+      batchAiPollTimers.push({ taskId, timer, resolve })
+    })
   } catch (e: any) {
-    uni.showToast({ title: e?.message || '启动失败', icon: 'none' })
+    if (!silent) uni.showToast({ title: e?.message || '启动失败', icon: 'none' })
+    return 'failed'
   }
 }
 
 async function batchAiProcess() {
   const ids = [...selectedIds.value]
   if (ids.length === 0) return
-  for (const id of ids) {
-    startBatchAiProcess(id)
+  batchAiProcessing.value = true
+  batchAiProgress.value = { completed: 0, total: ids.length, failed: 0 }
+  try {
+    await runSequentially(ids, async (questionId) => {
+      const status = await startBatchAiProcess(questionId, true)
+      batchAiProgress.value.completed += 1
+      if (status !== 'complete') batchAiProgress.value.failed += 1
+      return status
+    })
+  } finally {
+    batchAiProcessing.value = false
+    loadQuestions()
+    const { completed, failed } = batchAiProgress.value
+    uni.showToast({
+      title: failed ? `AI处理完成：${completed - failed}题成功，${failed}题未完成` : `AI处理完成：${completed}题成功`,
+      icon: 'none',
+      duration: 3000,
+    })
   }
-  uni.showToast({ title: `已启动 ${ids.length} 题AI处理`, icon: 'none' })
 }
 
 // ============================================================

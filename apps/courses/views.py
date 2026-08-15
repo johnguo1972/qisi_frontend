@@ -177,6 +177,8 @@ def _can_access_shared_course(course, user):
     """课程对同学段、同学科教师开放协作；管理员全量访问。"""
     if has_user_role(user, 'admin'):
         return True
+    if course.teacher_id == user.id:
+        return True
     return (
         user.role_type == 'teacher'
         and user.subject == course.subject
@@ -215,10 +217,12 @@ def course_list_or_create(request):
                 grade for grade in Course.objects.values_list('grade_level', flat=True).distinct()
                 if _course_stage(grade) in stages
             ]
-            courses = Course.objects.filter(
-                is_deleted=False,
-                subject=request.user.subject,
-                grade_level__in=grade_levels,
+            courses = Course.objects.filter(is_deleted=False).filter(
+                db_models.Q(teacher=request.user)
+                | db_models.Q(
+                    subject=request.user.subject,
+                    grade_level__in=grade_levels,
+                )
             ).order_by('-created_at')
         serializer = CourseSerializer(courses, many=True, context={'request': request})
         return Response({'success': True, 'data': serializer.data})
