@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from datetime import timedelta
 from typing import Iterable
 
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
+from django.utils import timezone
 
 
 _ACQUIRE_LUA = """
@@ -126,3 +128,39 @@ def dispatch_queued_ai_items(*, limit: int | None = None) -> int:
                 ttl_seconds=4200,
             ).release(str(item_id))
     return dispatched
+
+
+def recover_stale_ai_items(*, now=None, timeout_seconds: int = 4200) -> int:
+    """Return items abandoned by a lost worker to the durable queue.
+
+    A running item remains authoritative in PostgreSQL.  Only items whose
+    running lease is older than its maximum lifetime are reclaimed; completed
+    and recently running work is never touched.
+    """
+    from .models import AIProcessingJobItem
+
+    now = now or timezone.now()
+    cutoff = now - timedelta(seconds=timeout_seconds)
+    pool = RedisLeasePool(
+        'question',
+        limit=int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 16)),
+        ttl_seconds=4200,
+    )
+    recovered: list[str] = []
+    with transaction.atomic():
+        stale_items = list(
+            AIProcessingJobItem.objects.select_for_update(skip_locked=True).filter(
+                status=AIProcessingJobItem.Status.RUNNING,
+                started_at__lt=cutoff,
+            )
+        )
+        for item in stale_items:
+            item.status = AIProcessingJobItem.Status.QUEUED
+            item.celery_task_id = None
+            item.error_code = 'worker_lost'
+            item.started_at = None
+            item.save(update_fields=['status', 'celery_task_id', 'error_code', 'started_at'])
+            recovered.append(str(item.id))
+    for item_id in recovered:
+        pool.release(item_id)
+    return len(recovered)

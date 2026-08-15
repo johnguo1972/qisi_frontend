@@ -1085,6 +1085,38 @@ class AIQueueCelerySettingsTest(TestCase):
             'ai.batch',
         )
 
+    def test_recovery_requeues_expired_running_item_and_dispatches(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.tasks import recover_and_dispatch_ai_items
+
+        teacher = UserAccount.objects.create(
+            mobile='13900009006', display_name='Recovery Teacher', role_type='teacher',
+        )
+        paper = ExamPaper.objects.create(title='Recovery Paper', subject='physics')
+        question = ExamQuestion.objects.create(
+            paper=paper, stem='Recovery stem', answer='A', question_type='single_choice',
+        )
+        item = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[question.id], source='batch', model=None,
+        ).job.items.get()
+        item.status = AIProcessingJobItem.Status.RUNNING
+        item.started_at = timezone.now() - timedelta(seconds=4201)
+        item.save(update_fields=['status', 'started_at'])
+
+        with (
+            patch('apps.review.tasks.dispatch_queued_ai_items') as dispatch,
+            patch('apps.review.ai_queue.RedisLeasePool.release', return_value=True),
+        ):
+            self.assertEqual(recover_and_dispatch_ai_items.run(), 1)
+
+        item.refresh_from_db()
+        self.assertEqual(item.status, AIProcessingJobItem.Status.QUEUED)
+        self.assertEqual(item.error_code, 'worker_lost')
+        dispatch.assert_called_once_with()
+
 
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""

@@ -109,6 +109,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.parser.tasks.periodic_stale_task_check',
         'schedule': 300.0,  # 5 minutes
     },
+    'ai-queue-recovery': {
+        'task': 'apps.review.tasks.recover_and_dispatch_ai_items',
+        'schedule': 5.0,
+    },
 }
 
 CACHES = {

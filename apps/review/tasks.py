@@ -14,6 +14,7 @@ from apps.common.ai.question_context import (
 )
 from apps.parser.models import ExamQuestion
 from .ai_mode_dispatch import release_single_mode_ai_task_lock
+from .ai_queue import dispatch_queued_ai_items, recover_stale_ai_items
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,15 @@ STEP_LABELS = {
 
 @shared_task
 def dispatch_queued_ai_items_task():
-    from .ai_queue import dispatch_queued_ai_items
     return dispatch_queued_ai_items()
+
+
+@shared_task
+def recover_and_dispatch_ai_items():
+    """Recover only expired lost-worker items, then fill available slots."""
+    recovered = recover_stale_ai_items()
+    dispatch_queued_ai_items()
+    return recovered
 
 
 @shared_task(bind=True, max_retries=0)
