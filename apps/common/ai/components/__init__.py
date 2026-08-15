@@ -1,6 +1,10 @@
 """Public question-oriented AI component API."""
 
 from .base import QuestionComponentFactory, QuestionInput
+from .answer_verification import (
+    DeepSeekFinalReviewComponent,
+    DeepSeekIndependentVerifierComponent,
+)
 from .guidance import GuidanceComponent, GuidanceContext
 from .mode_answers import (
     ModeAAnswerComponent,
@@ -18,6 +22,8 @@ from .variant_generator import VariantGeneratorComponent
 
 __all__ = [
     "KnowledgeAnalysisComponent",
+    "DeepSeekFinalReviewComponent",
+    "DeepSeekIndependentVerifierComponent",
     "GuidanceComponent",
     "GuidanceContext",
     "ModeAAnswerComponent",

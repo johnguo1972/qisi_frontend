@@ -7,8 +7,14 @@ import re
 import sys
 
 from django.core.management.base import BaseCommand, CommandError
+from pydantic import ValidationError
 
+from apps.common.ai.answer_validation import ModeContentValidator
 from apps.common.ai.client import AIClient
+from apps.common.ai.components.answer_verification import (
+    DeepSeekFinalReviewComponent,
+    DeepSeekIndependentVerifierComponent,
+)
 from apps.common.ai.components.base import QuestionInput
 from apps.common.ai.components.question_probe import QuestionProbeComponent
 from apps.common.ai.components.result_verifier import ResultVerifierComponent
@@ -19,11 +25,28 @@ from apps.common.ai.exceptions import (
     AIResponseError,
 )
 from apps.common.ai.prompt_registry import PromptRegistry
+from apps.common.ai.question_context import question_context_payload
+from apps.common.ai.schemas import ModeAResponse, ModeBResponse, ModeCResponse
 from apps.common.ai.types import AIResult
 from apps.common.exceptions import AIRequestError
 
 
 _SUPPORTED_PROVIDERS = ("qwen", "deepseek")
+_TASK_PROVIDERS = {
+    "question_probe": "qwen",
+    "variant_verify_deepseek": "deepseek",
+    "deepseek_independent_verify": "deepseek",
+    "deepseek_final_review": "deepseek",
+}
+_DEFAULT_TASKS = {
+    "qwen": "question_probe",
+    "deepseek": "variant_verify_deepseek",
+}
+_MODE_SCHEMAS = {
+    "A": ModeAResponse,
+    "B": ModeBResponse,
+    "C": ModeCResponse,
+}
 _HTTP_FAILURE_PATTERN = re.compile(
     r"AI provider request failed with HTTP (?P<status>[1-5][0-9]{2})"
 )
@@ -33,6 +56,7 @@ _HTTP_FAILURE_PATTERN = re.compile(
 class _SmokeSuccess:
     provider: str
     model: str
+    task: str
     latency_ms: int
 
 
@@ -78,13 +102,41 @@ class Command(BaseCommand):
             action="store_true",
             help="Explicitly authorize one real provider request",
         )
+        parser.add_argument(
+            "--task",
+            required=False,
+            help="Run one allowlisted, provider-compatible smoke task",
+        )
 
     def handle(self, *args, **options) -> None:
         provider = options["provider"]
+        requested_task = options.get("task")
+        if requested_task is not None and requested_task not in _TASK_PROVIDERS:
+            raise CommandError(
+                _failure_summary(
+                    provider,
+                    "invalid",
+                    _SmokeFailure(category="task_not_allowed", returncode=1),
+                ),
+                returncode=1,
+            )
+        task_key = requested_task or _DEFAULT_TASKS[provider]
+        if _TASK_PROVIDERS[task_key] != provider:
+            raise CommandError(
+                _failure_summary(
+                    provider,
+                    task_key,
+                    _SmokeFailure(
+                        category="provider_task_mismatch", returncode=1
+                    ),
+                ),
+                returncode=1,
+            )
         if not options.get("live", False):
             raise CommandError(
                 _failure_summary(
                     provider,
+                    task_key,
                     _SmokeFailure(category="live_required", returncode=1),
                 ),
                 returncode=1,
@@ -93,19 +145,20 @@ class Command(BaseCommand):
         success: _SmokeSuccess | None = None
         failure: _SmokeFailure | None = None
         try:
-            success = self._run_live(provider)
+            success = self._run_live(provider, task_key)
         except Exception as error:
             failure = _classify_failure(error)
 
         if failure is not None:
             raise CommandError(
-                _failure_summary(provider, failure),
+                _failure_summary(provider, task_key, failure),
                 returncode=failure.returncode,
             ) from None
         if success is None:
             raise CommandError(
                 _failure_summary(
                     provider,
+                    task_key,
                     _SmokeFailure(category="unknown", returncode=6),
                 ),
                 returncode=6,
@@ -116,6 +169,7 @@ class Command(BaseCommand):
                 (
                     f"provider={success.provider}",
                     f"model={success.model}",
+                    f"task={success.task}",
                     "status=ok",
                     f"latency_ms={success.latency_ms}",
                     "schema=valid",
@@ -123,8 +177,8 @@ class Command(BaseCommand):
             )
         )
 
-    def _run_live(self, provider: str) -> _SmokeSuccess:
-        task_key = ""
+    def _run_live(self, provider: str, task_key: str | None = None) -> _SmokeSuccess:
+        task_key = task_key or _DEFAULT_TASKS[provider]
         config = None
         task = None
         client = None
@@ -133,13 +187,9 @@ class Command(BaseCommand):
         question = None
         original: dict[str, str] | None = None
         candidate: dict[str, str] | None = None
+        parsed_result: dict[str, object] | None = None
         result: AIResult | None = None
         try:
-            task_key = (
-                "question_probe"
-                if provider == "qwen"
-                else "variant_verify_deepseek"
-            )
             config = self.config_loader()
             task = config.get_task_config(task_key)
             registry = self.prompt_registry_factory(config)
@@ -152,13 +202,24 @@ class Command(BaseCommand):
                     metadata={"ocr_confidence": "smoke"},
                 )
                 QuestionProbeComponent(recorder, registry).run(question)
-            else:
+            elif task_key == "variant_verify_deepseek":
                 original = {"stem": "计算 1+1。", "answer": "2"}
                 candidate = {"stem": "计算 2+1。", "answer": "3"}
                 ResultVerifierComponent(recorder, registry).verify(
                     "variant_verify_deepseek",
                     original,
                     candidate,
+                )
+            else:
+                question = _deepseek_question(task_key)
+                component_type = (
+                    DeepSeekIndependentVerifierComponent
+                    if task_key == "deepseek_independent_verify"
+                    else DeepSeekFinalReviewComponent
+                )
+                parsed_result = component_type(recorder, registry).run(question)
+                _validate_deepseek_mode_content(
+                    task_key, question, parsed_result
                 )
 
             result = recorder.last_result
@@ -173,6 +234,7 @@ class Command(BaseCommand):
             return _SmokeSuccess(
                 provider=provider,
                 model=task.model,
+                task=task_key,
                 latency_ms=result.latency_ms,
             )
         finally:
@@ -183,8 +245,11 @@ class Command(BaseCommand):
                 original.clear()
             if candidate is not None:
                 candidate.clear()
+            if parsed_result is not None:
+                parsed_result.clear()
             original = None
             candidate = None
+            parsed_result = None
             registry = None
             if recorder is not None:
                 recorder.clear()
@@ -221,15 +286,126 @@ def _classify_failure(error: Exception) -> _SmokeFailure:
     return _SmokeFailure(category="unknown", returncode=6)
 
 
-def _failure_summary(provider: str, failure: _SmokeFailure) -> str:
+def _failure_summary(
+    provider: str, task_key: str, failure: _SmokeFailure
+) -> str:
     fields = (
         f"provider={provider}",
+        f"task={task_key}",
         "status=error",
         f"category={failure.category}",
     )
     if failure.http_status is not None:
         fields += (f"http_status={failure.http_status}",)
     return " ".join(fields)
+
+
+def _deepseek_question(task_key: str) -> QuestionInput:
+    metadata: dict[str, object] = {
+        "reference_analysis": "利用加法定义。",
+        "question_type": "calculation",
+        "subject": "math",
+        "difficulty": "L1",
+        "material": "",
+        "tables": [],
+        "subquestions": [],
+        "normalized_text": "计算 1+1 的结果。",
+        "vision_result": {"figure_present": False},
+        "knowledge_refs": ["整数加法"],
+        "target_mode": "A",
+    }
+    if task_key == "deepseek_final_review":
+        metadata.update(
+            {
+                "qwen_result": {
+                    "provider": "qwen",
+                    "answer": "2",
+                    "mode_content": {
+                        "mode": "A",
+                        "steps": [
+                            {"step": 1, "content": "识别加法"},
+                            {"step": 2, "content": "完成计算"},
+                            {"step": 3, "content": "核对结果"},
+                        ],
+                        "final_answer": "2",
+                        "summary": "计算完成",
+                        "missing_conditions": [],
+                    },
+                },
+                "independent_result": {
+                    "provider": "deepseek",
+                    "independent_answer": "2",
+                    "independent_reasoning_summary": "一加一等于二。",
+                    "key_facts": ["一加一等于二"],
+                    "reference_answer_valid": False,
+                    "reference_analysis_valid": True,
+                    "reference_issues": ["参考答案不是规范数值答案"],
+                    "confidence": 0.99,
+                    "mode_content": {
+                        "mode": "A",
+                        "steps": [
+                            {"step": 1, "content": "识别加法"},
+                            {"step": 2, "content": "完成计算"},
+                            {"step": 3, "content": "核对结果"},
+                        ],
+                        "final_answer": "2",
+                        "summary": "计算完成",
+                        "missing_conditions": [],
+                    },
+                },
+                "conflicts": ["smoke_fixture_conflict"],
+            }
+        )
+    return QuestionInput(
+        stem="计算 1+1 的结果。",
+        options=[
+            {"label": "A", "content": "1"},
+            {"label": "B", "content": "2"},
+            {"label": "C", "content": "3"},
+            {"label": "D", "content": "4"},
+        ],
+        answer="unique-reference-answer-must-not-leak",
+        solution="把两个单位相加。",
+        metadata=metadata,
+    )
+
+
+def _validate_deepseek_mode_content(
+    task_key: str,
+    question: QuestionInput,
+    parsed_result: dict[str, object],
+) -> None:
+    target_mode = question.metadata.get("target_mode", "")
+    mode = target_mode.strip().upper() if isinstance(target_mode, str) else ""
+    schema = _MODE_SCHEMAS.get(mode)
+    trusted_field = (
+        "independent_answer"
+        if task_key == "deepseek_independent_verify"
+        else "trusted_answer"
+    )
+    if schema is None:
+        raise AIResponseError("AI smoke target mode is invalid")
+    try:
+        validated = schema.model_validate(parsed_result.get("mode_content"))
+    except ValidationError:
+        raise AIResponseError(
+            "AI smoke mode content failed schema validation"
+        ) from None
+    public_content = validated.model_dump(
+        by_alias=True,
+        exclude_none=True,
+        include=set(schema.model_fields),
+    )
+    validation = ModeContentValidator().validate(
+        mode,
+        public_content,
+        trusted_answer=parsed_result.get(trusted_field),
+        context=question_context_payload(question),
+    )
+    if not validation.valid:
+        raise AIResponseError(
+            "AI smoke mode content failed deterministic validation"
+        ) from None
 
 
 def _close_client(client) -> bool:

@@ -34,6 +34,8 @@
 | `mode_a_answer` | Qwen | `qwen3.7-plus` | `ModeAAnswerComponent.run` | A 模式步骤/答案严格 Schema |
 | `mode_b_answer` | Qwen | `qwen3.7-plus` | `ModeBAnswerComponent.run` | B 模式问题、A-D 选项和答案严格 Schema |
 | `mode_c_answer` | Qwen | `qwen3.7-plus` | `ModeCAnswerComponent.run` | C 模式开放问题和追问严格 Schema |
+| `deepseek_independent_verify` | DeepSeek | `deepseek-v4-pro` | `DeepSeekIndependentVerifierComponent.run` | 独立答案、参考资料有效性、关键事实和模式内容严格 Schema |
+| `deepseek_final_review` | DeepSeek | `deepseek-v4-pro` | `DeepSeekFinalReviewComponent.run` | 匿名候选最终仲裁和完整模式内容严格 Schema |
 | `result_verify` | Qwen | `qwen3.7-flash` | `ResultVerifierComponent.run` | 通用结果校验 Schema |
 | `vision_fact_extract` | Qwen | `qwen3-vl-plus` | `VisionParserComponent.extract_facts` | 图像事实对象解析 |
 | `vision_page_parse` | Qwen | `qwen3-vl-plus` | `VisionParserComponent.parse_page` | 整页题目对象解析与审计字段 |
@@ -58,9 +60,9 @@
 | --- | --- | --- |
 | `一键全部 AI 处理` | `question_probe`、知识分析、视觉事实提取、A/B/C 以及 DeepSeek 校验 | 无；该操作只在用户明确点击后执行完整链路 |
 | `AI 探查` | `question_probe`、知识分析及其属性持久化 | 视觉事实提取、A/B/C 和 DeepSeek 校验 |
-| `A 模式` | 仅 `mode_a_answer` | 探查、知识分析、视觉事实提取、B/C 和 DeepSeek 校验 |
-| `B 模式` | 仅 `mode_b_answer` | 探查、知识分析、视觉事实提取、A/C 和 DeepSeek 校验 |
-| `C 模式` | 仅 `mode_c_answer` | 探查、知识分析、视觉事实提取、A/B 和 DeepSeek 校验 |
+| `A 模式` | `mode_a_answer` 及该结果必需的统一验证/仲裁 | 探查、知识分析、视觉事实提取和 B/C 生成 |
+| `B 模式` | `mode_b_answer` 及该结果必需的统一验证/仲裁 | 探查、知识分析、视觉事实提取和 A/C 生成 |
+| `C 模式` | `mode_c_answer` 及该结果必需的统一验证/仲裁 | 探查、知识分析、视觉事实提取和 A/B 生成 |
 
 - 后端手动入口为：
   - `POST /api/v1/review/question/<question_id>/ai-process/`：一键全部 AI 处理；
@@ -127,6 +129,46 @@
 - 错误策略：生成/校验响应均经严格 Schema；Celery 仍 `max_retries=2`、30 秒指数退避；任务失败写固定状态和脱敏错误。
 - 持久化：保持 `VariantTask.generator_result`、`verifier_result`、`generated_question`、`status`、`error_message`、`completed_at`；成功后继续创建 `ExamQuestion`、`QuestionOption` 和可选 `CourseQuestionLink`。
 
+### 4.8 review：A/B/C 答案生成、独立验证与仲裁（2026-08-15）
+
+#### 手动入口和完整上下文
+
+- A、B、C 三个按钮及“一键全部 AI 处理”仍是唯一生成入口；创建、导入、解析、保存、页面加载和轮询都不会自动创建任务。单模式入口只生成所点模式，一键入口才显式编排全部模式。
+- 每次生成使用同一份不可变题目上下文：题干、按 A/B/C/D 标签和保存顺序稳定整理的选项、题图 URL、表格、材料、子问题、题型、学科、难度、规范化题干、视觉事实、知识点，以及题库已有答案、已有解析和解答。图片、表格或读图事实不会在验证阶段被省略；没有的字段以安全空值表达，不猜测条件。
+- A/B/C 首次生成分别调用 cfg 中的 `mode_a_answer`、`mode_b_answer`、`mode_c_answer`，统一使用 Qwen `qwen3.7-plus`。A 输出 3–5 步、最终答案和总结；B 输出按顺序的递进问题、严格 A/B/C/D 选项、正确选项、参考答案、解析、最终答案和总结；C 输出开放问题、参考答案、关键点、追问提示、最终答案和总结。
+
+#### 快速路径和两阶段 DeepSeek
+
+- Qwen 结果先经过确定性的答案整理、题目完整性预检和模式内容校验。答案整理明确覆盖选择题选项键与判断题真/假别名；其它题型只做可见文本整理，不宣称数值、单位或自由文本在语义上等价。模式内容校验检查现有 Schema 必填字段、顶层 `final_answer` 一致性，以及代码明确识别的 `missing_conditions` 和选项缺失声明。
+- 快速路径采用明确客观题型 allowlist，只包含 `single_choice`、`multiple_choice`、`true_false` 及代码支持的中英文别名。选择题还必须至少有两个非空选项，标签必须是互异的单字母且内容互异；`computation`、`fill_blank`、其它自由作答题和所有未知/未来题型，即使 Qwen 答案与参考答案文本相同，也必须进入独立验证。Qwen 显式报告缺失条件、置信度低于阈值或格式非法时同样不能走快速路径。题面标明依赖图片/图表时，还必须存在题图 URL 或可用的视觉事实。
+- 有有效参考答案且 Qwen 答案与其严格一致、模式内容完整有效、预检没有风险时才走快速路径，不调用 DeepSeek；没有显式置信度时不会伪造 `1.0`。共享缓存中已有同一 `context_hash` 的有效独立验证摘要时可复用验证结论，但仍重新生成并校验当前模式内容。
+- 需要验证时，第一阶段固定调用 `deepseek_independent_verify`。它收到上述完整题目上下文，包括题库已有答案与解析，但明确不接收 Qwen 结果、候选冲突或其它候选来源信息；因此必须独立求解，再返回答案、简洁理由摘要、关键事实、参考答案/解析有效性、置信度和当前模式内容。
+- 参考答案或解析不存在时，对应 DeepSeek 有效性字段允许缺失并按 `null` 处理；参考资料存在时则必须返回显式布尔值，否则安全失败。若 DeepSeek 声明参考答案有效但其独立答案与参考答案不一致，会记录稳定冲突并强制最终复核，不能把矛盾声明当成支持证据。
+- 只有发生答案冲突、DeepSeek 低置信度、参考答案/解析有效性矛盾、模式内容失败、缺失条件、非法选项，或答案虽一致但关键事实不能按当前确定性规则精确覆盖时，才调用第二阶段 `deepseek_final_review`。第二阶段收到完整题目上下文、完整候选 A、完整候选 B、冲突清单和目标模式 Schema；候选来源被匿名化，不以 provider 名称影响判断。
+- 仲裁先使用确定性答案门和内容门，再按 `Qwen / DeepSeek / 参考答案` 的严格相等关系选择路径。关键事实门采取保守策略：无法结构化确认等价就升级最终复核，不以语义猜测直接接受。最终复核仍失败、Schema 无效或可信答案与模式内容不一致时，整个模式生成失败关闭，不把未验证候选当成成功。
+- Mode B 会逐项检查 Schema 中明确承载答案的 `correct_option`、`correct_answer`、`reference_answer` 等字段及顶层 `final_answer`：选项键统一标准化后必须彼此一致并与可信答案一致。自由文本解释不会被误当作选项键。Mode C 仅对明确的选项键答案做同类检查，不扩张到说明性文字。
+
+#### 复用、公开输出与持久化
+
+- `context_hash` 由题干、稳定排序选项、图片/视觉事实、表格和其它题目属性、已有答案及解析共同生成。题面、选项、图片事实、答案或解析变化都会使旧验证失效。
+- `ai_verifier_result` 在单模式和两个完整手动流程中都只保存与模式无关的 DeepSeek 共享摘要：`context_hash`、独立答案、nullable 参考有效性、问题清单、关键事实和置信度。A 的步骤、B 的选择题、C 的开放问题等 `mode_content` 不进入共享缓存；旧 `ResultVerifierComponent` 的结果也不会覆盖它。完整流程存在任一模式错误时保留旧共享摘要。
+- 对外和落库结果严格投影到既有 A/B/C 公共字段及安全 `verification` 摘要。仲裁接受候选后会复制结果，并把顶层 `final_answer` 写成与 `verification.trusted_answer` 相同的规范值，例如 `c` 写回为 `C`，不修改原候选对象。隐藏思维链、`reasoning_content`、provider 原始响应、请求消息、提示词、响应正文、URL、Key 和请求头均不返回、不落入模式答案，也不出现在命令错误或进度错误中。
+- 单模式任务只有在生成、验证和仲裁全部成功后，才在一个 `transaction.atomic()` 内锁定题目行。写入前会基于锁定后的最新题干、选项、参考答案、解析及视觉上下文重建 `context_hash`；任何变化都以 `question_context_changed` 失败关闭，并保留旧模式答案、共享摘要、处理时间和状态。哈希一致时才同时写入所选 `ai_answer_a/b/c`、可安全共享的 `ai_verifier_result`、处理时间和成功状态。
+- 模式答案中的 `provider`/`model` 审计字段来自实际 `mode_a_answer`、`mode_b_answer`、`mode_c_answer` task 路由；只为兼容保留但未改变执行路由的 `model` 入参不会伪造审计模型。
+
+#### 超时、并发、API 和页面安全
+
+- 每次 Qwen/DeepSeek HTTP 请求的 cfg 超时为 300 秒；单模式 Celery 软超时为 3800 秒、硬超时为 3900 秒。`question_id + mode` 使用 4200 秒锁，重复点击返回已有 task ID，不重复调用模型，不同模式可独立手动触发。
+- 锁值包含任务所有者。正常完成、已处理失败、软超时或异常都在 `finally` 中主动释放，但只能通过原子 compare-and-delete 删除当前所有者自己的锁；所有者不匹配或后端不支持原子删除时保持锁到 TTL，绝不误删新任务的锁。
+- 单模式 API 保持原成功 envelope，并返回真实 `task_id`、运行状态、模式和是否去重；非法模式、无权限和题目不存在仍按原契约处理。前端仅在用户点击后收集这些 task ID，并轮询到 `complete`、`partial`、`failed` 或 `skipped` 后停止，成功后刷新题目列表；每个按钮只显示自己的处理中状态。
+- review 下的完整、探查、单模式、确认/编辑以及批量 AI 入口统一要求已认证的教师会话；学生、家长和仅管理员角色返回 403 且不会调度任务或修改 AI 数据，具备教师角色的管理员按教师会话策略允许访问。
+- 页面打开、刷新和 `onShow` 不会发起生成或恢复旧轮询。`onHide`、`onUnload` 和组件卸载都会停止轮询并递增页面请求代次；任何在页面隐藏前启动、隐藏后才返回的提交、状态查询或刷新响应都会因代次不匹配被丢弃，旧请求也不能清除新请求的状态。
+
+#### 配置边界
+
+- provider、task、模型、提示词、思考参数、重试和超时路由只来自 `config/ai_config.cfg`；连接地址和凭据只由应用从 `.env` 指定的环境变量加载。业务代码、测试、日志和本文均不保存实际凭据或主机秘密。
+- A/B/C 提示词把已有答案、解析和详解明确标为“待验证参考资料，可能错误”，要求先依据题面重新求解再核对；提示词只要求符合公共 Schema 的简洁步骤/说明，不请求 `reasoning_process`、思维链或隐藏推理。
+
 ## 5. 兼容契约
 
 - UniApp/REST URL、请求参数、权限和响应 envelope 不因 AI 内部替换而改变。
@@ -149,16 +191,17 @@ parser 旧 prompt 文件中的唯一非提示数据 `QUESTION_TYPE_LABELS` 已�
 
 - 删除前保护套件：562 项通过。
 - Task10 新增入口采用 RED -> GREEN：先复现缺 task key/旧私有调用失败，再通过公共组件修复；路由、Schema、权限、crop、envelope 和安全失败边界均有自动化测试。
-- 最终集中修复后完整相关套件：723 项通过；`python manage.py check` 为 0 issue；Python compile/关键模块 import 通过；`git diff --check` 通过。
+- 最终集中修复后两组不重叠的相关套件共 769 项通过：纯 AI 677 项，review/DB 92 项；客观题型 allowlist 文件窄测 73 项、八项安全回归窄测和 prompt registry 均已包含在前述总数中。`python manage.py check` 为 0 issue，`git diff --check` 通过。
 - 静态扫描结果：`apps/config` 中 Qwen 3.6 为 0 匹配；生产 Python 内嵌提示词为 0 匹配；已删除模块 import 为 0 匹配；`httpx.Client` 仅存在于公共客户端（以及测试），Key/兼容 URL 字样仅存在于 cfg 引用和测试夹具。
 - 上述是本地单元/模拟/数据库契约验证；真实供应商证据另见 Task11，不能用本地测试替代。
 
-## 8. Task11 受控冒烟命令状态（2026-08-03）
+## 8. 受控冒烟命令与历史状态
 
-- 已实现 `python manage.py ai_smoke_test --provider qwen --live` 与 `python manage.py ai_smoke_test --provider deepseek --live`。命令仅通过公共题目探查组件或 DeepSeek 结果校验组件调用 cfg 中的固定 task，不包含独立提示词、URL、Key、模型、超时、HTTP 或回退路由。
-- `--live` 是强制显式开关；缺少该开关时，在加载配置和构造 AI 客户端之前以非零退出码拒绝执行。成功输出仅包含 provider、cfg 配置模型、`status=ok`、耗时和 `schema=valid`；失败仅输出固定类别与退出码，不输出请求、响应或异常原文。
-- 命令单元测试使用注入客户端完成零联网验证，覆盖 Qwen/DeepSeek task 隔离、严格 Schema、摘要白名单、配置/传输或超时/HTTP/响应分类、退出码、客户端清理和 traceback 脱敏。
-- 本地实现证据：Task11 命令定向测试 15 项通过，本轮最终相关回归 723 项通过，Django `check` 为 0 issue；这些是组件和命令的模拟/本地证据，不等同于供应商调用成功。
+- 已实现 `python manage.py ai_smoke_test --provider qwen --live`、兼容默认的 `--provider deepseek --live`，以及显式 `--task deepseek_independent_verify` / `--task deepseek_final_review`。parser 将 task 当普通字符串接收，再由 `handle()` 的固定 allowlist 校验；因此任意 cfg key 和 provider/task 不匹配会在配置加载和 HTTP 客户端构造前拒绝，且非法原值不会被 argparse 回显。默认 Qwen 仍路由 `question_probe`，默认 DeepSeek 仍路由 `variant_verify_deepseek`。
+- `--live` 是强制显式开关；缺少该开关时，在加载配置和构造 AI 客户端之前以非零退出码拒绝执行。DeepSeek 独立验证和最终复核只有在顶层响应 Schema、目标 A/B/C 实际模式 Schema、公共字段投影及 `ModeContentValidator` 的可信答案一致性检查全部通过后，才输出 `schema=valid`；空模式内容、错误模式结构、缺字段或最终答案冲突均按安全响应错误失败。成功输出仅包含 provider、cfg 配置模型、task 名、`status=ok`、耗时和 `schema=valid`；失败仅包含 provider、安全 task 名、固定类别、可选 HTTP 状态和退出码。提示词、消息、参考答案/解析、完整响应、响应正文、URL、Key、请求头及隐藏推理一律不输出。
+- 真实失败按配置、网络/超时、HTTP provider 状态、Schema/响应和未知错误分别给出固定安全类别，不拼接原始异常或 provider 响应正文。命令单元测试使用注入客户端完成零联网验证，覆盖固定 task 路由、严格 Schema 夹具、provider/task 隔离、任意 task 拒绝、成功/失败摘要白名单、退出码、客户端清理和 traceback 脱敏。
+- 下列 2026-08-03 记录属于旧版默认 task 的历史证据；它们不替代当前代码、当前凭据和当前网络下重新执行的 live smoke，也不等同于题目 API 或浏览器 E2E。
+- 本地实现证据：Task11 命令定向测试 15 项通过，本轮最终相关回归 769 项通过，Django `check` 为 0 issue；这些是组件和命令的模拟/本地证据，不等同于供应商调用成功。
 - 历史受限证据：首次 Qwen `--live` 的输出在上下文切换时被截断，结果不可恢复；首次 DeepSeek `--live` 返回安全分类 HTTP 401，且没有回退到 Qwen。上述历史记录不曾被记作成功。
 - 2026-08-03 用户明确批准追加一次 Qwen 真实调用，并明确 DeepSeek 使用与 Qwen 相同的阿里 API URL/Key；本地 `.env` 已只在未提交状态下完成对应映射，不在本文记录任何 URL 或 Key 值。
 - Qwen 追加真实冒烟成功：`provider=qwen model=qwen3.7-flash status=ok latency_ms=16191 schema=valid`。

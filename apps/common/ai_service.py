@@ -1,9 +1,11 @@
 """Backward-compatible facade for the shared question AI components."""
+from copy import deepcopy
 import logging
 import time
 import os
 import threading
 from django.conf import settings
+from pydantic import BaseModel, ValidationError
 from apps.common.exceptions import AIRequestError
 from apps.common.ai.client import AIClient
 from apps.common.ai.config import load_ai_config
@@ -11,6 +13,8 @@ from apps.common.ai.exceptions import AIConfigError, AIPromptError, AIResponseEr
 from apps.common.ai.prompt_registry import PromptRegistry
 from apps.common.ai.types import AIResult
 from apps.common.ai.components import (
+    DeepSeekFinalReviewComponent,
+    DeepSeekIndependentVerifierComponent,
     KnowledgeAnalysisComponent,
     ModeAAnswerComponent,
     ModeBAnswerComponent,
@@ -21,8 +25,87 @@ from apps.common.ai.components import (
     ResultVerifierComponent,
     VisionExtractionComponent,
 )
+from apps.common.ai.answer_arbitration import (
+    ArbitrationError,
+    ArbitrationOutcome,
+    ArbitrationProviderError,
+    ModeAnswerArbitrator,
+)
+from apps.common.ai.question_context import QuestionContextBuilder
+from apps.common.ai.schemas import ModeAResponse, ModeBResponse, ModeCResponse
 
 logger = logging.getLogger(__name__)
+
+
+_MODE_RESPONSE_SCHEMAS = {
+    "A": ModeAResponse,
+    "B": ModeBResponse,
+    "C": ModeCResponse,
+}
+_SHARED_VERIFIER_FIELDS = (
+    "context_hash",
+    "independent_answer",
+    "reference_answer_valid",
+    "reference_analysis_valid",
+    "reference_issues",
+    "key_facts",
+    "confidence",
+)
+
+
+def _project_schema_value(value):
+    """Project validated mode output to declared public schema fields only."""
+    if isinstance(value, BaseModel):
+        projected = {}
+        for field_name, field in type(value).model_fields.items():
+            output_name = field.serialization_alias or field.alias or field_name
+            projected[output_name] = _project_schema_value(
+                getattr(value, field_name)
+            )
+        return projected
+    if isinstance(value, dict):
+        return {
+            str(key): _project_schema_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_project_schema_value(item) for item in value]
+    return value
+
+
+def _safe_shared_verifier_result(value) -> dict | None:
+    """Return only the reusable DeepSeek audit fields, never mode content."""
+    if not isinstance(value, dict):
+        return None
+    if not all(field in value for field in _SHARED_VERIFIER_FIELDS):
+        return None
+    if not all(
+        isinstance(value[field], str) and bool(value[field].strip())
+        for field in ("context_hash", "independent_answer")
+    ):
+        return None
+    for field in ("reference_answer_valid", "reference_analysis_valid"):
+        flag = value[field]
+        if flag is not None and not isinstance(flag, bool):
+            return None
+    issues = value["reference_issues"]
+    facts = value["key_facts"]
+    confidence = value["confidence"]
+    if (
+        not isinstance(issues, (list, tuple))
+        or not all(isinstance(item, str) for item in issues)
+        or not isinstance(facts, (list, tuple))
+        or not facts
+        or not all(isinstance(item, str) and bool(item.strip()) for item in facts)
+        or isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not 0 <= confidence <= 1
+    ):
+        return None
+    return {
+        field: deepcopy(value[field])
+        for field in _SHARED_VERIFIER_FIELDS
+    }
 
 
 class _LegacyComponentClient:
@@ -40,19 +123,58 @@ class _LegacyComponentClient:
         images=(),
         trace_id: str | None = None,
     ) -> AIResult:
+        return self._complete(
+            task_key,
+            system=system,
+            user=user,
+            images=images,
+            trace_id=trace_id,
+            single_attempt=False,
+        )
+
+    def complete_once(
+        self,
+        task_key: str,
+        *,
+        system: str,
+        user: str,
+        images=(),
+        trace_id: str | None = None,
+    ) -> AIResult:
+        return self._complete(
+            task_key,
+            system=system,
+            user=user,
+            images=images,
+            trace_id=trace_id,
+            single_attempt=True,
+        )
+
+    def _complete(
+        self,
+        task_key: str,
+        *,
+        system: str,
+        user: str,
+        images=(),
+        trace_id: str | None = None,
+        single_attempt: bool,
+    ) -> AIResult:
         if images:
+            kwargs = {"task_key": task_key}
+            if single_attempt:
+                kwargs["single_attempt"] = True
             content = self._service._call_ai_multimodal(
                 system,
                 user,
                 list(images),
-                task_key=task_key,
+                **kwargs,
             )
         else:
-            content = self._service._call_ai(
-                system,
-                user,
-                task_key=task_key,
-            )
+            kwargs = {"task_key": task_key}
+            if single_attempt:
+                kwargs["single_attempt"] = True
+            content = self._service._call_ai(system, user, **kwargs)
         provider, model = self._service._task_route(task_key)
         return AIResult(
             content=content,
@@ -131,11 +253,20 @@ class AIReviewService:
 
     def _call_ai(self, system_prompt: str, user_prompt: str,
                  model: str = None, max_tokens: int = 4000,
-                 default_model: str = None, *, task_key: str | None = None) -> str:
+                 default_model: str = None, *, task_key: str | None = None,
+                 single_attempt: bool = False) -> str:
         """Legacy mock hook delegating to the single configured ``AIClient``."""
         if not task_key:
             raise AIRequestError("Configured AI task key is required")
-        return self._provider_client().complete(
+        client = self._provider_client()
+        complete = (
+            getattr(client, "complete_once", None)
+            if single_attempt
+            else client.complete
+        )
+        if not callable(complete):
+            complete = client.complete
+        return complete(
             task_key, system=system_prompt, user=user_prompt
         ).content
 
@@ -143,11 +274,20 @@ class AIReviewService:
                             image_urls: list, model: str = None,
                             max_tokens: int = 8000,
                             default_model: str = None, *,
-                            task_key: str | None = None) -> str:
+                            task_key: str | None = None,
+                            single_attempt: bool = False) -> str:
         """Legacy multimodal mock hook delegating to configured ``AIClient``."""
         if not task_key:
             raise AIRequestError("Configured AI task key is required")
-        return self._provider_client().complete(
+        client = self._provider_client()
+        complete = (
+            getattr(client, "complete_once", None)
+            if single_attempt
+            else client.complete
+        )
+        if not callable(complete):
+            complete = client.complete
+        return complete(
             task_key,
             system=system_prompt,
             user=user_text,
@@ -329,67 +469,60 @@ class AIReviewService:
             }
 
         knowledge_ref = results.get('knowledge')
+        image_urls = self._get_question_image_urls(question)
+        normalized_text = getattr(question, "stem", "") or ""
+        knowledge_refs = (
+            knowledge_ref.get("knowledge_points", [])
+            if isinstance(knowledge_ref, dict)
+            else []
+        )
+        shared_verification = None
 
-        # Step 2: A mode
-        try:
-            answer_a = self.generate_answer_a(question, knowledge_ref, model=model)
-            if not isinstance(answer_a, dict):
-                raise AIRequestError(f"AI returned non-dict response for answer_a: {type(answer_a).__name__}")
-            answer_a['mode'] = 'A'
-            answer_a['model'] = self._get_model(model)
-            answer_a['generated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
-            answer_a['confirmed'] = False
-            answer_a['confirmed_at'] = None
-            answer_a['edited_content'] = None
-            answer_a['error'] = None
-            results['answer_a'] = answer_a
-        except AIRequestError as e:
-            errors['answer_a'] = str(e)
-            results['answer_a'] = {
-                'error': str(e), 'model': self._get_model(model),
-                'generated_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-            }
+        for mode in "ABC":
+            answer_key = f"answer_{mode.lower()}"
+            try:
+                outcome = self.solve_mode_with_arbitration(
+                    question,
+                    mode=mode,
+                    image_urls=image_urls,
+                    normalized_text=normalized_text,
+                    vision_result={},
+                    knowledge_refs=knowledge_refs,
+                    cached_verification=shared_verification,
+                    model=model,
+                )
+                answer = dict(outcome.answer)
+                answer['mode'] = mode
+                route_provider, route_model = self._task_route(
+                    f"mode_{mode.lower()}_answer"
+                )
+                answer['provider'] = route_provider
+                answer['model'] = route_model
+                answer['generated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
+                answer['confirmed'] = False
+                answer['confirmed_at'] = None
+                answer['edited_content'] = None
+                answer['error'] = None
+                results[answer_key] = answer
+                if outcome.shared_verifier_result is not None:
+                    shared_verification = _safe_shared_verifier_result(
+                        outcome.shared_verifier_result
+                    )
+            except (AIRequestError, ArbitrationError) as error:
+                errors[answer_key] = str(error)
+                results[answer_key] = {
+                    'error': str(error),
+                    'provider': self._task_route(
+                        f"mode_{mode.lower()}_answer"
+                    )[0],
+                    'model': self._task_route(
+                        f"mode_{mode.lower()}_answer"
+                    )[1],
+                    'generated_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                }
 
-        # Step 3: B mode
-        try:
-            answer_b = self.generate_answer_b(question, knowledge_ref, model=model)
-            if not isinstance(answer_b, dict):
-                raise AIRequestError(f"AI returned non-dict response for answer_b: {type(answer_b).__name__}")
-            answer_b['mode'] = 'B'
-            answer_b['model'] = self._get_model(model)
-            answer_b['generated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
-            answer_b['confirmed'] = False
-            answer_b['confirmed_at'] = None
-            answer_b['edited_content'] = None
-            answer_b['error'] = None
-            results['answer_b'] = answer_b
-        except AIRequestError as e:
-            errors['answer_b'] = str(e)
-            results['answer_b'] = {
-                'error': str(e), 'model': self._get_model(model),
-                'generated_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-            }
-
-        # Step 4: C mode
-        try:
-            answer_c = self.generate_answer_c(question, knowledge_ref, model=model)
-            if not isinstance(answer_c, dict):
-                raise AIRequestError(f"AI returned non-dict response for answer_c: {type(answer_c).__name__}")
-            answer_c['mode'] = 'C'
-            answer_c['model'] = self._get_model(model)
-            answer_c['generated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
-            answer_c['confirmed'] = False
-            answer_c['confirmed_at'] = None
-            answer_c['edited_content'] = None
-            answer_c['error'] = None
-            results['answer_c'] = answer_c
-        except AIRequestError as e:
-            errors['answer_c'] = str(e)
-            results['answer_c'] = {
-                'error': str(e), 'model': self._get_model(model),
-                'generated_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-            }
-
+        if shared_verification is not None and not errors:
+            results['verifier'] = deepcopy(shared_verification)
         results['errors'] = errors
         return results
 
@@ -408,6 +541,103 @@ class AIReviewService:
         )
         return self._run_component(
             self._component(VisionExtractionComponent), question_input
+        )
+
+    def solve_mode_with_arbitration(
+        self,
+        question,
+        *,
+        mode,
+        image_urls=(),
+        normalized_text="",
+        vision_result=None,
+        knowledge_refs="",
+        cached_verification=None,
+        model=None,
+    ) -> ArbitrationOutcome:
+        """Generate and verify one mode against one complete question context.
+
+        ``model`` remains a compatibility argument: the configured task route
+        continues to select the provider model, while callers may retain the
+        existing supported override as result metadata.  DeepSeek stages always
+        use their own fixed task keys.
+        """
+        normalized_mode = mode.strip().upper() if isinstance(mode, str) else ""
+        component_types = {
+            "A": ModeAAnswerComponent,
+            "B": ModeBAnswerComponent,
+            "C": ModeCAnswerComponent,
+        }
+        component_type = component_types.get(normalized_mode)
+        if component_type is None:
+            raise ArbitrationProviderError()
+
+        # Preserve the legacy supported/unsupported override behavior without
+        # allowing a Qwen choice to leak into either fixed DeepSeek route.
+        self._get_model(model)
+        context = QuestionContextBuilder.build(
+            question,
+            image_urls=image_urls,
+            normalized_text=normalized_text,
+            vision_result=vision_result,
+            knowledge_refs=knowledge_refs,
+            target_mode=normalized_mode,
+        )
+        generator = self._component(component_type)
+
+        def generate(_mode, question_input):
+            return self._run_component(generator, question_input)
+
+        def independent_verify(_mode, question_input):
+            return self._run_component(
+                self._component(DeepSeekIndependentVerifierComponent),
+                question_input,
+            )
+
+        def final_review(
+            _mode, question_input, qwen_result, independent_result, conflicts
+        ):
+            review_input = QuestionInput(
+                stem=question_input.stem,
+                options=question_input.options,
+                answer=question_input.answer,
+                solution=question_input.solution,
+                image_urls=question_input.image_urls,
+                metadata={
+                    **dict(question_input.metadata),
+                    "target_mode": normalized_mode,
+                    "qwen_result": qwen_result,
+                    "independent_result": independent_result,
+                    "conflicts": list(conflicts),
+                },
+            )
+            return self._run_component(
+                self._component(DeepSeekFinalReviewComponent), review_input
+            )
+
+        arbitrator = ModeAnswerArbitrator(
+            generate=generate,
+            independent_verify=independent_verify,
+            final_review=final_review,
+        )
+        outcome = arbitrator.process(
+            normalized_mode,
+            context,
+            cached_verification=cached_verification,
+        )
+        try:
+            validated_answer = _MODE_RESPONSE_SCHEMAS[
+                normalized_mode
+            ].model_validate(outcome.answer)
+        except ValidationError:
+            raise ArbitrationProviderError() from None
+        public_answer = _project_schema_value(validated_answer)
+        verification = deepcopy(outcome.verification)
+        public_answer["verification"] = verification
+        return ArbitrationOutcome(
+            answer=public_answer,
+            verification=verification,
+            shared_verifier_result=deepcopy(outcome.shared_verifier_result),
         )
 
     def solve_mode_a(self, question, image_urls: list, normalized_text: str,
@@ -566,49 +796,38 @@ class AIReviewService:
         if results.get('probe', {}).get('topic_tags_top3'):
             knowledge_refs = ", ".join(results['probe']['topic_tags_top3'])
 
-        # Step 3a: Solver A
-        try:
-            answer_a = self.solve_mode_a(
-                question, image_urls, normalized_text, vision_result,
-                knowledge_refs, model=model
-            )
-            results['answer_a'] = answer_a
-        except AIRequestError as e:
-            errors['answer_a'] = str(e)
-            results['answer_a'] = {'error': str(e)}
+        # Step 3: Solver A/B/C with independent verification and arbitration.
+        shared_verification = None
+        for mode in "ABC":
+            answer_key = f"answer_{mode.lower()}"
+            try:
+                outcome = self.solve_mode_with_arbitration(
+                    question,
+                    mode=mode,
+                    image_urls=image_urls,
+                    normalized_text=normalized_text,
+                    vision_result=vision_result,
+                    knowledge_refs=knowledge_refs,
+                    cached_verification=shared_verification,
+                    model=model,
+                )
+                answer = dict(outcome.answer)
+                route_provider, route_model = self._task_route(
+                    f"mode_{mode.lower()}_answer"
+                )
+                answer['provider'] = route_provider
+                answer['model'] = route_model
+                results[answer_key] = answer
+                if outcome.shared_verifier_result is not None:
+                    shared_verification = _safe_shared_verifier_result(
+                        outcome.shared_verifier_result
+                    )
+            except (AIRequestError, ArbitrationError) as error:
+                errors[answer_key] = str(error)
+                results[answer_key] = {'error': str(error)}
 
-        # Step 3b: Solver B
-        try:
-            answer_b = self.solve_mode_b(
-                question, image_urls, normalized_text, vision_result,
-                knowledge_refs, model=model
-            )
-            results['answer_b'] = answer_b
-        except AIRequestError as e:
-            errors['answer_b'] = str(e)
-            results['answer_b'] = {'error': str(e)}
-
-        # Step 3c: Solver C
-        try:
-            answer_c = self.solve_mode_c(
-                question, image_urls, normalized_text, vision_result,
-                knowledge_refs, model=model
-            )
-            results['answer_c'] = answer_c
-        except AIRequestError as e:
-            errors['answer_c'] = str(e)
-            results['answer_c'] = {'error': str(e)}
-
-        # Step 4: Verifier
-        try:
-            verifier = self.verify_result(
-                normalized_text, vision_result,
-                results.get('answer_a', {}), model=model
-            )
-            results['verifier'] = verifier
-        except AIRequestError as e:
-            errors['verifier'] = str(e)
-            results['verifier'] = {'error': str(e)}
+        if shared_verification is not None and not errors:
+            results['verifier'] = deepcopy(shared_verification)
 
         results['errors'] = errors
         results['image_count'] = len(image_urls)
@@ -691,9 +910,15 @@ class AIReviewService:
         if 'vision' in results:
             question.ai_vision_extract = results['vision']
 
-        # Save verifier result
-        if 'verifier' in results:
-            question.ai_verifier_result = results['verifier']
+        # Save only the shared DeepSeek verification cache. Legacy verifier
+        # envelopes and partial/failed runs must preserve the previous cache.
+        safe_verifier = (
+            _safe_shared_verifier_result(results.get('verifier'))
+            if not results.get('errors')
+            else None
+        )
+        if safe_verifier is not None:
+            question.ai_verifier_result = safe_verifier
 
         # Save A/B/C answers (existing logic)
         if 'answer_a' in results and not results['answer_a'].get('error'):

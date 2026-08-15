@@ -33,6 +33,12 @@ class PromptRegistry:
     def get_variables(self, task_key: str) -> tuple[str, ...]:
         return self._get_prompt(task_key).variables
 
+    def get_retry_count(self, task_key: str) -> int:
+        try:
+            return self._tasks[task_key].retry_count
+        except KeyError:
+            raise AIPromptError("Unknown AI task") from None
+
     def render(self, task_key: str, **variables: object) -> tuple[str, str]:
         prompt = self._get_prompt(task_key)
         expected = set(prompt.variables)

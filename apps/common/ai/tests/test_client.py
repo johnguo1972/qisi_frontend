@@ -86,6 +86,8 @@ def _config(
     provider: str = "qwen",
     model: str = "qwen3.7-flash",
     response_format: str | None = None,
+    enable_thinking: bool | None = None,
+    reasoning_effort: str | None = None,
     retry_count: int = 0,
     retry_backoff_seconds: tuple[float, ...] = (),
     api_key: str = TEST_SECRET,
@@ -102,6 +104,8 @@ def _config(
         retry_count=retry_count,
         retry_backoff_seconds=retry_backoff_seconds,
         response_format=response_format,
+        enable_thinking=enable_thinking,
+        reasoning_effort=reasoning_effort,
     )
     provider_config = AIProviderConfig(
         name=provider,
@@ -209,6 +213,8 @@ def test_complete_sends_text_payload_from_cached_config(monkeypatch):
     assert result.model == "qwen3.7-flash"
     assert result.latency_ms >= 0
     assert result.raw_response["id"] == "chatcmpl-test"
+    assert "enable_thinking" not in seen["payload"]
+    assert "reasoning_effort" not in seen["payload"]
 
 
 def test_complete_sends_openai_multimodal_image_url_payload(monkeypatch):
@@ -312,6 +318,31 @@ def test_complete_retries_connection_and_read_timeouts(monkeypatch, error_type):
     assert result.content == "ok"
     assert attempts == [1, 2]
     assert sleeps == [0.5]
+
+
+def test_complete_once_never_uses_the_configured_network_retry_budget(monkeypatch):
+    attempts: list[int] = []
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(len(attempts) + 1)
+        return httpx.Response(503, request=request, text="private-body")
+
+    client = _client(
+        monkeypatch,
+        handler,
+        config=_config(
+            retry_count=3,
+            retry_backoff_seconds=(0.125, 0.25, 0.5),
+        ),
+        sleeper=sleeps.append,
+    )
+
+    with pytest.raises(AIRequestError, match="503"):
+        client.complete_once("question_probe", system="system", user="user")
+
+    assert attempts == [1]
+    assert sleeps == []
 
 
 @pytest.mark.parametrize("status_code", [401, 403])
@@ -580,6 +611,8 @@ def test_deepseek_request_uses_its_configured_model_url_key_and_300s_timeout(
         task_key="variant_verify_deepseek",
         provider="deepseek",
         model="deepseek-v4-pro",
+        enable_thinking=True,
+        reasoning_effort="high",
     )
     result = _client(monkeypatch, handler, config=config).complete(
         "variant_verify_deepseek", system="verify", user="candidate"
@@ -588,6 +621,8 @@ def test_deepseek_request_uses_its_configured_model_url_key_and_300s_timeout(
     assert seen["url"] == "https://example.test/deepseek/chat/completions"
     assert seen["authorization"] == "Bearer test-secret"
     assert seen["payload"]["model"] == "deepseek-v4-pro"
+    assert seen["payload"]["enable_thinking"] is True
+    assert seen["payload"]["reasoning_effort"] == "high"
     assert seen["timeout"] == {
         "connect": 300.0,
         "read": 300.0,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import FrozenInstanceError
 from importlib import import_module
 import json
@@ -12,9 +13,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from apps.common.ai.types import AIResult
 from apps.common.ai.exceptions import AIResponseError
+from apps.common.ai.schemas import ModeBQuestionResponse
+from apps.common.exceptions import AIRequestError
 
 
 class RecordingAIClient:
@@ -51,9 +55,158 @@ class RecordingAIClient:
         )
 
 
+class StaticPromptRegistry:
+    """Prompt boundary substitute for component-only response tests."""
+
+    def render(self, _task_key, **_variables):
+        return "system", "user"
+
+
+class RetryPromptRegistry(StaticPromptRegistry):
+    """Component-test prompt registry with an explicit response retry budget."""
+
+    def __init__(self, retry_count: int) -> None:
+        self.retry_count = retry_count
+
+    def get_retry_count(self, _task_key):
+        return self.retry_count
+
+
+class SequencedAIClient:
+    """Provider-boundary fake for proving component response-retry behavior."""
+
+    def __init__(self, responses) -> None:
+        self._responses = iter(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def complete(
+        self,
+        task_key: str,
+        *,
+        system: str,
+        user: str,
+        images=(),
+        trace_id=None,
+    ) -> AIResult:
+        self.calls.append(
+            {
+                "task_key": task_key,
+                "system": system,
+                "user": user,
+                "images": tuple(images),
+                "trace_id": trace_id,
+            }
+        )
+        response = next(self._responses)
+        if isinstance(response, Exception):
+            raise response
+        return AIResult(
+            content=response,
+            provider="qwen",
+            model="configured-model",
+            latency_ms=1,
+            raw_response={"choices": []},
+        )
+
+
+class OnceOnlySequencedAIClient:
+    """Production-shaped fake that forbids the retrying client entrypoint."""
+
+    def __init__(self, responses) -> None:
+        self._responses = iter(responses)
+        self.once_calls: list[str] = []
+        self.complete_calls = 0
+
+    def complete(self, *_args, **_kwargs):
+        self.complete_calls += 1
+        raise AssertionError("structured components must use complete_once")
+
+    def complete_once(self, task_key, **_kwargs) -> AIResult:
+        self.once_calls.append(task_key)
+        response = next(self._responses)
+        if isinstance(response, Exception):
+            raise response
+        return AIResult(
+            content=response,
+            provider="qwen",
+            model="configured-model",
+            latency_ms=1,
+            raw_response={"choices": []},
+        )
+
+
+class PromptOptionsManager:
+    """Related-manager shaped source used to prove prompts never leak its repr."""
+
+    def __init__(self):
+        self.rows = [
+            SimpleNamespace(option_label="D", content="four", sort_order=3),
+            SimpleNamespace(option_label="B", content="two", sort_order=1),
+            SimpleNamespace(option_label="A", content="one", sort_order=0),
+            SimpleNamespace(option_label="C", content="three", sort_order=2),
+        ]
+
+    def all(self):
+        return self
+
+    def order_by(self, *_fields):
+        return self.rows
+
+    def __repr__(self):  # pragma: no cover - detects accidental serialization
+        return "<PromptOptionsManager>"
+
+
 def _components():
     """Import inside tests so the missing feature is a RED assertion failure."""
     return import_module("apps.common.ai.components")
+
+
+def _mode_answer_response(task_key):
+    if task_key == "mode_a_answer":
+        return {
+            "mode": "A",
+            "steps": [
+                {"step": 1, "content": "read the condition"},
+                {"step": 2, "content": "compare options"},
+                {"step": 3, "content": "verify C"},
+            ],
+            "final_answer": "C",
+            "summary": "option C is correct",
+        }
+    if task_key == "mode_b_answer":
+        question = {
+            "question": "Which option follows?",
+            "options": {"A": "one", "B": "two", "C": "three", "D": "four"},
+            "correct_option": "C",
+            "reference_answer": "three",
+            "analysis": "C matches the condition",
+        }
+        return {
+            "mode": "B",
+            "questions": [dict(question) for _ in range(3)],
+            "final_answer": "C",
+            "summary": "option C is correct",
+        }
+    question = {
+        "question": "Which option follows?",
+        "reference_answer": "C",
+        "key_points": ["compare all options"],
+        "followup_hint": "use the given condition",
+    }
+    return {
+        "mode": "C",
+        "questions": [dict(question) for _ in range(3)],
+        "final_answer": "C",
+        "summary": "option C is correct",
+    }
+
+
+def _strict_mode_b_response():
+    response = _mode_answer_response("mode_b_answer")
+    for question in response["questions"]:
+        question["correct_answer"] = question["correct_option"]
+        question["explanation"] = question["analysis"]
+    return response
 
 
 def _valid_probe_payload(**overrides):
@@ -88,6 +241,167 @@ def _probe_content_with_raw_string_values(payload, replacements):
     return content
 
 
+def _run_probe_with_responses(responses, prompt_registry):
+    components = _components()
+    client = SequencedAIClient(responses)
+    result = components.QuestionProbeComponent(
+        client, prompt_registry=prompt_registry
+    ).run(components.QuestionInput(stem="solve x+1=2"))
+    return result, client
+
+
+def test_question_component_retries_invalid_json_response_contract_once():
+    """Catch missing component-level retries after a successful malformed response."""
+    result, client = _run_probe_with_responses(
+        ["not valid JSON", json.dumps(_valid_probe_payload())],
+        RetryPromptRegistry(1),
+    )
+
+    assert result["subject"] == "math"
+    assert len(client.calls) == 2
+
+
+def test_question_component_retries_schema_invalid_response_contract_once():
+    """Catch missing component-level retries after a parsed but invalid response."""
+    result, client = _run_probe_with_responses(
+        [json.dumps({"subject": "math"}), json.dumps(_valid_probe_payload())],
+        RetryPromptRegistry(1),
+    )
+
+    assert result["subject"] == "math"
+    assert len(client.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "question_patch",
+    [
+        {"correct_answer": "A"},
+        {"reference_answer": "A"},
+        {"reference_answer": "two"},
+        {"options": {"A": "  one  ", "B": "\uff4f\uff4e\uff45", "C": "three", "D": "four"}},
+    ],
+)
+def test_mode_b_question_schema_rejects_local_semantic_contract_violations(
+    question_patch,
+):
+    question = _strict_mode_b_response()["questions"][0]
+    question.update(question_patch)
+
+    with pytest.raises(ValidationError):
+        ModeBQuestionResponse.model_validate(question)
+
+
+def test_mode_b_component_retries_correct_answer_conflict_then_accepts_valid_response():
+    invalid = _strict_mode_b_response()
+    for question in invalid["questions"]:
+        question["correct_answer"] = "A"
+    valid = _strict_mode_b_response()
+    client = SequencedAIClient(
+        [json.dumps(invalid, ensure_ascii=False), json.dumps(valid, ensure_ascii=False)]
+    )
+    components = _components()
+
+    result = components.ModeBAnswerComponent(
+        client, prompt_registry=RetryPromptRegistry(1)
+    ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert result["questions"][0]["correct_answer"] == "C"
+    assert len(client.calls) == 2
+
+
+def test_question_component_raises_after_exhausting_response_contract_retries():
+    """Catch an invalid response being accepted or retried beyond its budget."""
+    client = SequencedAIClient(["not valid JSON", "still not valid JSON"])
+    components = _components()
+
+    with pytest.raises(AIResponseError):
+        components.QuestionProbeComponent(
+            client, prompt_registry=RetryPromptRegistry(1)
+        ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert len(client.calls) == 2
+
+
+def test_question_component_shares_budget_for_request_error_then_valid_response():
+    """Legacy fakes without complete_once still use one combined component budget."""
+    client = SequencedAIClient(
+        [AIRequestError("provider unavailable"), json.dumps(_valid_probe_payload())]
+    )
+    components = _components()
+
+    result = components.QuestionProbeComponent(
+        client, prompt_registry=RetryPromptRegistry(1)
+    ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert result["subject"] == "math"
+    assert len(client.calls) == 2
+
+
+def test_question_component_uses_single_attempt_entrypoint_for_combined_budget():
+    client = OnceOnlySequencedAIClient(
+        [AIRequestError("provider unavailable"), json.dumps(_valid_probe_payload())]
+    )
+    components = _components()
+
+    result = components.QuestionProbeComponent(
+        client, prompt_registry=RetryPromptRegistry(1)
+    ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert result["subject"] == "math"
+    assert client.once_calls == ["question_probe", "question_probe"]
+    assert client.complete_calls == 0
+
+
+def test_request_error_then_invalid_response_exhausts_two_attempts_without_third():
+    client = OnceOnlySequencedAIClient(
+        [
+            AIRequestError("provider unavailable"),
+            "not valid JSON",
+            json.dumps(_valid_probe_payload()),
+            json.dumps(_valid_probe_payload()),
+        ]
+    )
+    components = _components()
+
+    with pytest.raises(AIResponseError):
+        components.QuestionProbeComponent(
+            client, prompt_registry=RetryPromptRegistry(1)
+        ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert client.once_calls == ["question_probe", "question_probe"]
+    assert client.complete_calls == 0
+
+
+def test_question_component_does_not_retry_when_response_retry_count_is_zero():
+    """Catch a zero response-retry budget still issuing an extra provider call."""
+    client = SequencedAIClient(
+        ["not valid JSON", json.dumps(_valid_probe_payload())]
+    )
+    components = _components()
+
+    with pytest.raises(AIResponseError):
+        components.QuestionProbeComponent(
+            client, prompt_registry=RetryPromptRegistry(0)
+        ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert len(client.calls) == 1
+
+
+def test_question_component_defaults_to_zero_retries_for_legacy_prompt_fakes():
+    """Keep existing prompt-registry test doubles compatible without hidden retries."""
+    client = SequencedAIClient(
+        ["not valid JSON", json.dumps(_valid_probe_payload())]
+    )
+    components = _components()
+
+    with pytest.raises(AIResponseError):
+        components.QuestionProbeComponent(
+            client, prompt_registry=StaticPromptRegistry()
+        ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert len(client.calls) == 1
+
+
 def test_question_input_is_immutable_including_collection_fields():
     components = _components()
     question = components.QuestionInput(
@@ -108,6 +422,170 @@ def test_question_input_is_immutable_including_collection_fields():
     with pytest.raises(TypeError):
         question.metadata["source"]["page"] = 2
     assert question.image_urls == ("https://example.test/one.png",)
+
+
+@pytest.mark.parametrize(
+    "component_name",
+    ["ModeAAnswerComponent", "ModeBAnswerComponent", "ModeCAnswerComponent"],
+)
+def test_mode_answer_prompt_variables_append_canonical_options_to_probe_text(
+    component_name,
+):
+    """Mode prompts retain complete canonical options when probe text has only a stem."""
+    components = _components()
+    question = components.QuestionInput(
+        stem="fallback stem",
+        options=[
+            {"label": "C", "content": "third option"},
+            {"label": "A", "content": "first option"},
+            {"label": "B", "content": "second option"},
+        ],
+        metadata={"normalized_text": "probe stem only"},
+    )
+
+    variables = getattr(components, component_name)(
+        RecordingAIClient({}), prompt_registry=StaticPromptRegistry()
+    ).prompt_variables(question)
+
+    assert variables["normalized_text"] == (
+        "probe stem only\n\n完整选项：\n"
+        "A: first option\nB: second option\nC: third option"
+    )
+    assert json.loads(variables["question_context_json"])["options"] == [
+        {"label": "A", "content": "first option"},
+        {"label": "B", "content": "second option"},
+        {"label": "C", "content": "third option"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "component_name",
+    ["ModeAAnswerComponent", "ModeBAnswerComponent", "ModeCAnswerComponent"],
+)
+def test_mode_answer_prompt_variables_do_not_invent_options_when_absent(
+    component_name,
+):
+    """Mode prompts keep probe text unchanged when the current question has no options."""
+    components = _components()
+    question = components.QuestionInput(
+        stem="fallback stem",
+        metadata={"normalized_text": "probe stem only"},
+    )
+
+    variables = getattr(components, component_name)(
+        RecordingAIClient({}), prompt_registry=StaticPromptRegistry()
+    ).prompt_variables(question)
+
+    assert variables["normalized_text"] == "probe stem only"
+    assert "完整选项" not in variables["normalized_text"]
+    assert json.loads(variables["question_context_json"])["options"] == []
+
+
+@pytest.mark.parametrize(
+    ("raw_options", "expected_options"),
+    [
+        (
+            [
+                {"label": " d ", "content": "four"},
+                {"label": "B", "content": "two"},
+                {"label": " a", "content": "one"},
+                {"label": "C ", "content": "three"},
+            ],
+            {"A": "one", "B": "two", "C": "three", "D": "four"},
+        ),
+        (
+            {"A": "one", "B": "two", "C": "three", "D": "four"},
+            {"A": "one", "B": "two", "C": "three", "D": "four"},
+        ),
+    ],
+)
+def test_mode_b_normalizes_only_complete_labeled_option_lists(
+    raw_options, expected_options
+):
+    """Mode B converts complete A-D lists while preserving existing option maps."""
+    components = _components()
+    question = {
+        "question": "Which option follows?",
+        "options": raw_options,
+        "correct_option": "A",
+        "reference_answer": "one",
+        "analysis": "A matches the condition",
+    }
+    client = RecordingAIClient(
+        {
+            "mode_b_answer": json.dumps(
+                {
+                    "mode": "B",
+                    "questions": [dict(question) for _ in range(3)],
+                    "final_answer": "A",
+                    "summary": "option A is correct",
+                }
+            )
+        }
+    )
+
+    result = components.ModeBAnswerComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(components.QuestionInput(stem="Which option follows?"))
+
+    assert result["questions"][0]["options"] == expected_options
+
+
+@pytest.mark.parametrize(
+    "raw_options",
+    [
+        [
+            {"label": "A", "content": "one"},
+            {"label": "a", "content": "another one"},
+            {"label": "C", "content": "three"},
+            {"label": "D", "content": "four"},
+        ],
+        [
+            {"label": "A", "content": "one"},
+            {"label": "B", "content": "two"},
+            {"label": "C", "content": "three"},
+        ],
+        [
+            {"label": "A", "content": "one"},
+            {"label": "B", "content": "two"},
+            {"label": "C", "content": "three"},
+            {"label": "E", "content": "five"},
+        ],
+        [
+            {"label": "A", "content": "one"},
+            {"label": "B", "content": " \u200b\n"},
+            {"label": "C", "content": "three"},
+            {"label": "D", "content": "four"},
+        ],
+    ],
+)
+def test_mode_b_rejects_incomplete_or_invalid_labeled_option_lists(raw_options):
+    """Mode B leaves malformed option lists for strict schema rejection."""
+    components = _components()
+    question = {
+        "question": "Which option follows?",
+        "options": raw_options,
+        "correct_option": "A",
+        "reference_answer": "one",
+        "analysis": "A matches the condition",
+    }
+    client = RecordingAIClient(
+        {
+            "mode_b_answer": json.dumps(
+                {
+                    "mode": "B",
+                    "questions": [dict(question) for _ in range(3)],
+                    "final_answer": "A",
+                    "summary": "option A is correct",
+                }
+            )
+        }
+    )
+
+    with pytest.raises(AIResponseError):
+        components.ModeBAnswerComponent(
+            client, prompt_registry=StaticPromptRegistry()
+        ).run(components.QuestionInput(stem="Which option follows?"))
 
 
 def test_probe_routes_fixed_task_and_normalizes_taxonomy_with_multiple_images():
@@ -971,6 +1449,234 @@ def test_mode_a_normalizes_legacy_step_descriptions_without_overriding_content(
 
 
 @pytest.mark.parametrize(
+    ("step_patch", "expected_content"),
+    [
+        ({"reason": "derive the equation"}, "derive the equation"),
+        ({"content": None, "reason": "isolate x"}, "isolate x"),
+        ({"content": " \t\u200b\n", "reason": "check the result"}, "check the result"),
+        (
+            {
+                "content": "canonical content",
+                "description": "legacy description",
+                "reason": "qwen reason",
+            },
+            "canonical content",
+        ),
+        (
+            {"description": "legacy description", "reason": "qwen reason"},
+            "legacy description",
+        ),
+    ],
+)
+def test_mode_a_normalizes_qwen_step_reason_with_stable_content_priority(
+    step_patch, expected_content
+):
+    """Mode A accepts Qwen's reason alias without exposing it in the response."""
+    components = _components()
+    steps = [
+        {"step": index, "content": f"existing content {index}"}
+        for index in range(1, 4)
+    ]
+    steps[1] = {"step": 2, **step_patch}
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(
+                {
+                    "mode": "A",
+                    "steps": steps,
+                    "final_answer": "2",
+                    "summary": "completed",
+                }
+            )
+        }
+    )
+
+    result = components.ModeAAnswerComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["steps"][1]["content"] == expected_content
+    assert "reason" not in result["steps"][1]
+
+
+@pytest.mark.parametrize(
+    ("step_patch", "expected_content"),
+    [
+        ({"reasoning": "derive the equation"}, "derive the equation"),
+        (
+            {"reason": "visible reason", "reasoning": "hidden fallback"},
+            "visible reason",
+        ),
+        (
+            {"content": "canonical content", "reasoning": "hidden fallback"},
+            "canonical content",
+        ),
+    ],
+)
+def test_mode_a_normalizes_reasoning_step_fallback_without_leaking_alias(
+    step_patch, expected_content
+):
+    """Mode A supports Qwen's lowest-priority reasoning step alias."""
+    components = _components()
+    steps = [
+        {"step": index, "content": f"existing content {index}"}
+        for index in range(1, 4)
+    ]
+    steps[1] = {"step": 2, **step_patch}
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(
+                {
+                    "mode": "A",
+                    "steps": steps,
+                    "final_answer": "2",
+                    "summary": "completed",
+                }
+            )
+        }
+    )
+
+    result = components.ModeAAnswerComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["steps"][1]["content"] == expected_content
+    assert "reasoning" not in result["steps"][1]
+
+
+@pytest.mark.parametrize(
+    ("raw_step", "expected_step"),
+    [
+        ("1", 1),
+        ("步骤1", 1),
+        ("Step 1", 1),
+        ("sTeP 2", 2),
+        (3, 3),
+    ],
+)
+def test_mode_a_normalizes_explicit_positive_step_numbers(raw_step, expected_step):
+    """Mode A converts only explicit positive step-number text to integers."""
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(
+                {
+                    "mode": "A",
+                    "steps": [
+                        {"step": raw_step, "content": "first step"},
+                        {"step": 2, "content": "second step"},
+                        {"step": 3, "content": "third step"},
+                    ],
+                    "final_answer": "2",
+                    "summary": "completed",
+                }
+            )
+        }
+    )
+
+    result = components.ModeAAnswerComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["steps"][0]["step"] == expected_step
+    assert isinstance(result["steps"][0]["step"], int)
+
+
+@pytest.mark.parametrize(
+    "raw_step",
+    ["0", "步骤0", "Step 0", "-1", "", " \t\u200b\n", None, 0, -1, {}],
+)
+def test_mode_a_rejects_ambiguous_or_nonpositive_step_numbers(raw_step):
+    """Mode A leaves invalid step identifiers for schema rejection."""
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(
+                {
+                    "mode": "A",
+                    "steps": [
+                        {"step": raw_step, "content": "first step"},
+                        {"step": 2, "content": "second step"},
+                        {"step": 3, "content": "third step"},
+                    ],
+                    "final_answer": "2",
+                    "summary": "completed",
+                }
+            )
+        }
+    )
+
+    with pytest.raises(AIResponseError):
+        components.ModeAAnswerComponent(
+            client, prompt_registry=StaticPromptRegistry()
+        ).run(components.QuestionInput(stem="solve x+1=2"))
+
+
+@pytest.mark.parametrize(
+    ("step_patch", "expected_content"),
+    [
+        ({"step": "identify the known conditions"}, "identify the known conditions"),
+        (
+            {
+                "step": "compare the options",
+                "reasoning": "use the equation relation",
+            },
+            "use the equation relation",
+        ),
+        (
+            {
+                "step": "lowest-priority explanation",
+                "content": "canonical content",
+                "description": "legacy description",
+                "reason": "legacy reason",
+                "reasoning": "legacy reasoning",
+            },
+            "canonical content",
+        ),
+    ],
+)
+def test_mode_a_uses_visible_unparsed_step_text_as_last_content_fallback(
+    step_patch, expected_content
+):
+    """Visible explanatory step text is retained after numbered normalization fails."""
+    components = _components()
+    steps = [
+        {"step": 1, "content": "first step"},
+        step_patch,
+        {"step": 3, "content": "third step"},
+    ]
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(
+                {
+                    "mode": "A",
+                    "steps": steps,
+                    "final_answer": "2",
+                    "summary": "completed",
+                }
+            )
+        }
+    )
+
+    result = components.ModeAAnswerComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(stem="solve x+1=2")
+    )
+
+    assert result["steps"][1]["step"] == 2
+    assert result["steps"][1]["content"] == expected_content
+    assert "reason" not in result["steps"][1]
+    assert "reasoning" not in result["steps"][1]
+
+
+@pytest.mark.parametrize(
     ("component_name", "task_key", "content", "expected"),
     [
         (
@@ -1059,6 +1765,65 @@ def test_mode_components_route_fixed_tasks_and_preserve_contracts(
         for key, value in expected.items():
             if key != "mode":
                 assert first_question[key] == value
+
+
+@pytest.mark.parametrize(
+    ("component_name", "task_key"),
+    [
+        ("ModeAAnswerComponent", "mode_a_answer"),
+        ("ModeBAnswerComponent", "mode_b_answer"),
+        ("ModeCAnswerComponent", "mode_c_answer"),
+    ],
+)
+def test_mode_prompts_include_complete_authoritative_question_context(
+    component_name, task_key
+):
+    """Catch solvers receiving only legacy text instead of complete answer facts."""
+    context = import_module("apps.common.ai.question_context")
+    options = PromptOptionsManager()
+    source_question = SimpleNamespace(
+        stem="Which option is correct?",
+        options=options,
+        answer="C",
+        analysis="Existing analysis explains the third option.",
+        solution="Existing solution substitutes the values.",
+        question_type="single_choice",
+        subject="physics",
+        difficulty="0.75",
+        material="A material passage",
+        tables=[],
+        subquestions=[],
+    )
+    question = context.QuestionContextBuilder.build(
+        source_question,
+        normalized_text="normalized option question",
+        vision_result={"figure_present": True},
+        knowledge_refs="kinematics",
+        target_mode=task_key.split("_")[1].upper(),
+    )
+    client = RecordingAIClient(
+        {task_key: json.dumps(_mode_answer_response(task_key), ensure_ascii=False)}
+    )
+
+    getattr(_components(), component_name)(client).run(question)
+
+    user_prompt = client.calls[0]["user"]
+    context_json = user_prompt.split("）：\n", 1)[1].split(
+        "\n规范化题干：", 1
+    )[0]
+    captured_context = json.loads(context_json)
+    assert captured_context["stem"] == "Which option is correct?"
+    assert captured_context["options"] == [
+        {"label": "A", "content": "one"},
+        {"label": "B", "content": "two"},
+        {"label": "C", "content": "three"},
+        {"label": "D", "content": "four"},
+    ]
+    assert captured_context["reference_answer"] == "C"
+    assert captured_context["reference_analysis"] == (
+        "Existing analysis explains the third option."
+    )
+    assert "PromptOptionsManager" not in user_prompt
 
 
 def test_knowledge_vision_and_verifier_use_their_fixed_configured_tasks():
@@ -1619,7 +2384,7 @@ def test_mode_b_accepts_only_explicit_abcd_legacy_correct_answer_alias():
             "question": f"第{index}步？",
             "options": {"A": "1", "B": "2", "C": "3", "D": "4"},
             "correct_answer": "B",
-            "reference_answer": "数值2",
+            "reference_answer": "2",
             "explanation": "计算说明",
         }
         for index in range(1, 4)
@@ -1644,7 +2409,7 @@ def test_mode_b_accepts_only_explicit_abcd_legacy_correct_answer_alias():
 
     assert result["questions"][0]["correct_option"] == "B"
     assert result["questions"][0]["correct_answer"] == "B"
-    assert result["questions"][0]["reference_answer"] == "数值2"
+    assert result["questions"][0]["reference_answer"] == "2"
 
 
 def test_service_close_does_not_close_injected_client():
@@ -1656,3 +2421,241 @@ def test_service_close_does_not_close_injected_client():
     service.close()
 
     borrowed_client.close.assert_not_called()
+
+
+def test_service_arbitration_uses_one_injected_factory_for_qwen_and_deepseek():
+    from apps.common.ai.components import QuestionComponentFactory
+    from apps.common.ai_service import AIReviewService
+
+    qwen = _mode_answer_response("mode_a_answer") | {"final_answer": "B"}
+    independent = {
+        "independent_answer": "C",
+        "independent_reasoning_summary": "The reference answer follows from the data.",
+        "key_facts": ["three is the required value"],
+        "reference_answer_valid": True,
+        "reference_analysis_valid": False,
+        "reference_issues": ["analysis needs review"],
+        "confidence": 0.95,
+        "mode_content": _mode_answer_response("mode_a_answer"),
+    }
+    final = {
+        "trusted_answer": "C",
+        "qwen_content_valid": False,
+        "candidate_issues": ["candidate answer conflicts with the reference"],
+        "confidence": 0.99,
+        "mode_content": _mode_answer_response("mode_a_answer"),
+    }
+    client = RecordingAIClient(
+        {
+            "mode_a_answer": json.dumps(qwen),
+            "deepseek_independent_verify": json.dumps(independent),
+            "deepseek_final_review": json.dumps(final),
+        }
+    )
+    factory = QuestionComponentFactory(client)
+    service = AIReviewService(component_factory=factory)
+    question = SimpleNamespace(
+        stem="Which value is correct?",
+        options=PromptOptionsManager(),
+        answer="C",
+        analysis="Reference analysis",
+        solution="Reference solution",
+        question_type="single_choice",
+        subject="math",
+        difficulty=2,
+        material="Read the material",
+        tables=[{"rows": [["x", "3"]]}],
+        subquestions=[{"stem": "Subquestion one"}],
+    )
+
+    outcome = service.solve_mode_with_arbitration(
+        question,
+        mode="A",
+        image_urls=("https://cdn.example.test/q.png",),
+        normalized_text="Normalized stem",
+        vision_result={"figure_present": True},
+        knowledge_refs="linear equations",
+    )
+
+    assert outcome.answer["final_answer"] == "C"
+    assert outcome.answer["verification"]["selected_content_provider"] == (
+        "deepseek_final_review"
+    )
+    assert [call["task_key"] for call in client.calls] == [
+        "mode_a_answer",
+        "deepseek_independent_verify",
+        "deepseek_final_review",
+    ]
+    rendered = "\n".join(str(call["user"]) for call in client.calls)
+    for expected in (
+        "Which value is correct?",
+        "Reference analysis",
+        "Reference solution",
+        "Normalized stem",
+        "linear equations",
+        "https://cdn.example.test/q.png",
+    ):
+        assert expected in rendered
+    assert "<PromptOptionsManager>" not in rendered
+
+
+def test_service_reuses_only_shared_verification_while_routing_all_mode_components():
+    from apps.common.ai.components import (
+        DeepSeekFinalReviewComponent,
+        DeepSeekIndependentVerifierComponent,
+        ModeAAnswerComponent,
+        ModeBAnswerComponent,
+        ModeCAnswerComponent,
+    )
+    from apps.common.ai_service import AIReviewService
+
+    mode_components = {
+        ModeAAnswerComponent: "mode_a_answer",
+        ModeBAnswerComponent: "mode_b_answer",
+        ModeCAnswerComponent: "mode_c_answer",
+    }
+    factory_calls = []
+    run_calls = []
+
+    def complete_mode_content(task_key):
+        content = _mode_answer_response(task_key)
+        content["reasoning_content"] = "private chain"
+        content["raw_response"] = {"provider": "private raw"}
+        content["provider_payload"] = {"request_id": "private request"}
+        content["verification"] = {"provider": "candidate supplied"}
+        if task_key == "mode_a_answer":
+            content["steps"][0]["raw_response"] = "nested private raw"
+        if task_key == "mode_b_answer":
+            content["questions"] = [
+                {
+                    **question,
+                    "correct_answer": question["correct_option"],
+                    "explanation": question["analysis"],
+                    "reasoning_content": "nested private chain",
+                }
+                for question in content["questions"]
+            ]
+        if task_key == "mode_c_answer":
+            content["questions"][0]["provider_payload"] = {
+                "request_id": "nested private request"
+            }
+        return content
+
+    class Component:
+        def __init__(self, component_type):
+            self.component_type = component_type
+
+        def run(self, question_input):
+            run_calls.append((self.component_type, question_input))
+            if self.component_type in mode_components:
+                return complete_mode_content(
+                    mode_components[self.component_type]
+                ) | {"final_answer": "B"}
+            if self.component_type is DeepSeekIndependentVerifierComponent:
+                return {
+                    "independent_answer": "C",
+                    "independent_reasoning_summary": "C follows from the data.",
+                    "key_facts": ["three is the required value"],
+                    "reference_answer_valid": True,
+                    "reference_analysis_valid": False,
+                    "reference_issues": ["analysis needs review"],
+                    "confidence": 0.95,
+                    "mode_content": complete_mode_content("mode_a_answer"),
+                }
+            target_mode = question_input.metadata["target_mode"]
+            return {
+                "trusted_answer": "C",
+                "qwen_content_valid": False,
+                "candidate_issues": ["candidate answer conflicts with reference"],
+                "confidence": 0.99,
+                "mode_content": complete_mode_content(
+                    f"mode_{target_mode.lower()}_answer"
+                ),
+            }
+
+    def factory(component_type):
+        factory_calls.append(component_type)
+        return Component(component_type)
+
+    service = AIReviewService(component_factory=factory)
+    question = SimpleNamespace(
+        stem="Which value is correct?",
+        options=PromptOptionsManager(),
+        answer="C",
+        analysis="Reference analysis",
+        solution="Reference solution",
+        question_type="single_choice",
+        subject="math",
+        difficulty=2,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    shared = None
+    outcomes = []
+
+    for mode in "ABC":
+        outcome = service.solve_mode_with_arbitration(
+            question,
+            mode=mode,
+            cached_verification=shared,
+        )
+        outcomes.append(outcome)
+        shared = outcome.shared_verifier_result or shared
+
+    assert [component_type for component_type, _context in run_calls] == [
+        ModeAAnswerComponent,
+        DeepSeekIndependentVerifierComponent,
+        DeepSeekFinalReviewComponent,
+        ModeBAnswerComponent,
+        DeepSeekFinalReviewComponent,
+        ModeCAnswerComponent,
+        DeepSeekFinalReviewComponent,
+    ]
+    assert factory_calls == [component_type for component_type, _context in run_calls]
+    assert [outcome.answer["mode"] for outcome in outcomes] == ["A", "B", "C"]
+    assert all(
+        outcome.answer["verification"]["selected_content_provider"]
+        == "deepseek_final_review"
+        for outcome in outcomes
+    )
+    assert "independent_verification_cached" in (
+        outcomes[1].answer["verification"]["warnings"]
+    )
+    assert "independent_verification_cached" in (
+        outcomes[2].answer["verification"]["warnings"]
+    )
+    expected_keys = {
+        "A": {"mode", "steps", "final_answer", "summary", "missing_conditions"},
+        "B": {"mode", "questions", "final_answer", "summary"},
+        "C": {"mode", "questions", "final_answer", "summary"},
+    }
+    for mode, outcome in zip("ABC", outcomes):
+        assert set(outcome.answer) == expected_keys[mode] | {"verification"}
+        serialized = json.dumps(outcome.answer, ensure_ascii=False)
+        for forbidden in (
+            "reasoning_content",
+            "raw_response",
+            "provider_payload",
+            "private chain",
+            "private raw",
+            "private request",
+            "candidate supplied",
+        ):
+            assert forbidden not in serialized
+    assert set(outcomes[0].answer["steps"][0]) == {"step", "content"}
+    assert set(outcomes[1].answer["questions"][0]) == {
+        "question",
+        "options",
+        "correct_option",
+        "reference_answer",
+        "analysis",
+        "correct_answer",
+        "explanation",
+    }
+    assert set(outcomes[2].answer["questions"][0]) == {
+        "question",
+        "reference_answer",
+        "key_points",
+        "followup_hint",
+    }

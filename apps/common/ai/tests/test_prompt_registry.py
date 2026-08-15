@@ -81,6 +81,13 @@ def test_prompt_registry_renders_system_and_user_without_placeholders(registry):
     assert "{figure_facts}" not in user
 
 
+def test_prompt_registry_exposes_loaded_task_retry_count(registry):
+    assert registry.get_retry_count("mode_a_answer") == 3
+
+    with pytest.raises(AIPromptError, match="Unknown AI task"):
+        registry.get_retry_count("missing-task")
+
+
 def test_config_rejects_declared_variables_that_do_not_match_templates(
     tmp_path, provider_env
 ):
@@ -95,14 +102,43 @@ def test_default_registry_preserves_prompt_constraints(provider_env):
 
     system, user = registry.render(
         "mode_b_answer",
+        question_context_json='{"stem":"已知 x=1，求 x+1"}',
         normalized_text="已知 x=1，求 x+1",
         vision_json="{}",
         knowledge_refs="一元一次方程",
     )
     assert "questions 数量只能是 3 或 4" in system
     assert "correct_option、reference_answer、analysis" in system
+    assert "Unicode NFKC" in system
+    assert "correct_option 与 correct_answer" in system
+    assert "options[correct_option]" in system
     assert "final_answer, summary" in system
     assert "已知 x=1，求 x+1" in user
+
+    for task_key, variables in (
+        (
+            "deepseek_independent_verify",
+            {
+                "question_context_json": "{}",
+                "target_mode": "B",
+                "mode_schema_json": "{}",
+            },
+        ),
+        (
+            "deepseek_final_review",
+            {
+                "question_context_json": "{}",
+                "target_mode": "B",
+                "qwen_result_json": "{}",
+                "independent_result_json": "{}",
+                "conflicts_json": "[]",
+                "mode_schema_json": "{}",
+            },
+        ),
+    ):
+        system, _ = registry.render(task_key, **variables)
+        assert "Unicode NFKC" in system
+        assert "options[correct_option]" in system
 
     system, user = registry.render(
         "vision_question_parse",
@@ -139,6 +175,12 @@ def test_default_registry_renders_every_declared_task(provider_env):
         "ocr_text": "题目",
         "has_figure": True,
         "ocr_confidence": "high",
+        "question_context_json": '{"stem":"题目"}',
+        "target_mode": "A",
+        "mode_schema_json": '{}',
+        "qwen_result_json": '{}',
+        "independent_result_json": '{}',
+        "conflicts_json": '[]',
         "normalized_text": "题目",
         "vision_json": "{}",
         "knowledge_refs": "无",
@@ -187,6 +229,7 @@ def test_default_registry_renders_every_declared_task(provider_env):
         (
             "mode_a_answer",
             {
+                "question_context_json": '{"stem":"题目"}',
                 "normalized_text": "题目",
                 "vision_json": "{}",
                 "knowledge_refs": "",
@@ -197,6 +240,7 @@ def test_default_registry_renders_every_declared_task(provider_env):
         (
             "mode_b_answer",
             {
+                "question_context_json": '{"stem":"题目"}',
                 "normalized_text": "题目",
                 "vision_json": "{}",
                 "knowledge_refs": "",
@@ -207,6 +251,7 @@ def test_default_registry_renders_every_declared_task(provider_env):
         (
             "mode_c_answer",
             {
+                "question_context_json": '{"stem":"题目"}',
                 "normalized_text": "题目",
                 "vision_json": "{}",
                 "knowledge_refs": "",
@@ -266,6 +311,116 @@ def test_registry_defaults_do_not_make_missing_variables_optional(provider_env):
 
     with pytest.raises(AIPromptError, match="subject_hint"):
         registry.render("knowledge_analysis", normalized_text="题目")
+
+
+@pytest.mark.parametrize("task_key", ["mode_a_answer", "mode_b_answer", "mode_c_answer"])
+def test_mode_prompts_treat_reference_material_as_untrusted_and_never_request_hidden_reasoning(
+    provider_env, task_key
+):
+    system, user = PromptRegistry(AIConfig.load()).render(
+        task_key,
+        question_context_json=(
+            '{"stem":"题目","reference_answer":"A",'
+            '"reference_analysis":"资料解析"}'
+        ),
+        normalized_text="题目",
+        vision_json="{}",
+        knowledge_refs="无",
+    )
+
+    rendered = f"{system}\n{user}"
+    assert "待验证参考资料，可能错误" in rendered
+    assert "先依据题面重新求解再核对" in rendered
+    assert "reasoning_process" not in rendered
+    assert "权威完整题目上下文" not in rendered
+
+
+def test_mode_a_prompt_requires_positive_integer_step_content_objects(provider_env):
+    system, _ = PromptRegistry(AIConfig.load()).render(
+        "mode_a_answer",
+        question_context_json='{"stem":"题目"}',
+        normalized_text="题目",
+        vision_json="{}",
+        knowledge_refs="无",
+    )
+
+    assert '{"step":1,"content":"..."}' in system
+    assert "step 必须为正整数" in system
+
+
+@pytest.mark.parametrize("task_key", ["mode_a_answer", "mode_b_answer", "mode_c_answer"])
+def test_mode_prompts_require_nonempty_context_options_to_be_used(
+    provider_env, task_key
+):
+    system, _ = PromptRegistry(AIConfig.load()).render(
+        task_key,
+        question_context_json=(
+            '{"stem":"题目","options":[{"label":"A","content":"甲"}]}'
+        ),
+        normalized_text="题目\n\n完整选项：\nA: 甲",
+        vision_json="{}",
+        knowledge_refs="无",
+    )
+
+    assert "完整选项非空时" in system
+    assert "不得报告缺少选项" in system
+
+
+def test_mode_b_prompt_requires_labeled_option_object(provider_env):
+    system, _ = PromptRegistry(AIConfig.load()).render(
+        "mode_b_answer",
+        question_context_json='{"stem":"题目"}',
+        normalized_text="题目",
+        vision_json="{}",
+        knowledge_refs="无",
+    )
+
+    assert '{"A":"...","B":"...","C":"...","D":"..."}' in system
+
+
+def test_independent_verifier_prompt_requires_array_fields(provider_env):
+    system, _ = PromptRegistry(AIConfig.load()).render(
+        "deepseek_independent_verify",
+        question_context_json='{"stem":"题目"}',
+        target_mode="A",
+        mode_schema_json="{}",
+    )
+
+    assert "reference_issues 必须为数组" in system
+    assert "无问题时输出 []" in system
+    assert "key_facts 必须为数组" in system
+
+
+@pytest.mark.parametrize(
+    ("task_key", "variables"),
+    [
+        (
+            "deepseek_independent_verify",
+            {
+                "question_context_json": '{"stem":"题目"}',
+                "target_mode": "A",
+                "mode_schema_json": "{}",
+            },
+        ),
+        (
+            "deepseek_final_review",
+            {
+                "question_context_json": '{"stem":"题目"}',
+                "target_mode": "A",
+                "qwen_result_json": "{}",
+                "independent_result_json": "{}",
+                "conflicts_json": "[]",
+                "mode_schema_json": "{}",
+            },
+        ),
+    ],
+)
+def test_deepseek_verification_prompts_require_numeric_confidence(
+    provider_env, task_key, variables
+):
+    system, _ = PromptRegistry(AIConfig.load()).render(task_key, **variables)
+
+    assert "confidence 必须为 number，不得为字符串" in system
 
 
 def test_question_probe_prompt_requests_complete_canonical_taxonomy(provider_env):

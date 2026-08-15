@@ -1,12 +1,18 @@
 """Integration tests for AI review service and batch processing."""
 import json
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
 from django.core.cache import cache
+from django.urls import reverse
+from rest_framework.test import APIClient
 
 from apps.parser.models import ExamQuestion, ExamPaper
 from apps.common.exceptions import AIRequestError
 from apps.common.ai_service import AIReviewService
+from apps.accounts.models import UserAccount
+from apps.accounts.roles import grant_user_role
+from apps.accounts.services import generate_tokens
 
 
 def _make_qs_mock(items):
@@ -343,19 +349,18 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertIsNone(self.question.difficulty)
 
     @patch.object(AIReviewService, 'analyze_knowledge')
-    @patch.object(AIReviewService, 'generate_answer_a')
-    @patch.object(AIReviewService, 'generate_answer_b')
-    @patch.object(AIReviewService, 'generate_answer_c')
+    @patch.object(AIReviewService, 'solve_mode_with_arbitration')
     def test_process_question_full_all_success(
-            self, mock_c, mock_b, mock_a, mock_knowledge):
+            self, mock_arbitrate, mock_knowledge):
         mock_knowledge.return_value = {
             'knowledge_points': [{'id': 1, 'module': '函数'}],
             'grade_term': {'label': '高一'},
             'solving_methods': ['代入法']
         }
-        mock_a.return_value = {'mode': 'A', 'final_answer': '5'}
-        mock_b.return_value = {'mode': 'B', 'final_answer': '5'}
-        mock_c.return_value = {'mode': 'C', 'final_answer': '5'}
+        mock_arbitrate.side_effect = lambda question, *, mode, **kwargs: MagicMock(
+            answer={'mode': mode, 'final_answer': '5'},
+            shared_verifier_result=None,
+        )
 
         with patch('apps.knowledge.models.KnowledgePoint.objects.filter') as mock_filter:
             mock_filter.return_value = _make_qs_mock([])
@@ -377,15 +382,14 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(results['answer_c']['mode'], 'C')
 
     @patch.object(AIReviewService, 'analyze_knowledge')
-    @patch.object(AIReviewService, 'generate_answer_a')
-    @patch.object(AIReviewService, 'generate_answer_b')
-    @patch.object(AIReviewService, 'generate_answer_c')
+    @patch.object(AIReviewService, 'solve_mode_with_arbitration')
     def test_process_question_full_knowledge_failure(
-            self, mock_c, mock_b, mock_a, mock_knowledge):
+            self, mock_arbitrate, mock_knowledge):
         mock_knowledge.side_effect = AIRequestError('API timeout')
-        mock_a.return_value = {'mode': 'A', 'final_answer': '5'}
-        mock_b.return_value = {'mode': 'B', 'final_answer': '5'}
-        mock_c.return_value = {'mode': 'C', 'final_answer': '5'}
+        mock_arbitrate.side_effect = lambda question, *, mode, **kwargs: MagicMock(
+            answer={'mode': mode, 'final_answer': '5'},
+            shared_verifier_result=None,
+        )
 
         with patch('apps.parser.models.QuestionImage.objects.filter') as mock_img:
             mock_img.return_value = _make_qs_mock([])
@@ -401,12 +405,13 @@ class AIProcessFullPipelineTest(TestCase):
     def test_process_question_full_v2_routes_all_steps_through_components(self):
         """The legacy v2 pipeline keeps its shape while using components."""
         from apps.common.ai.components import (
+            DeepSeekFinalReviewComponent,
+            DeepSeekIndependentVerifierComponent,
             KnowledgeAnalysisComponent,
             ModeAAnswerComponent,
             ModeBAnswerComponent,
             ModeCAnswerComponent,
             QuestionProbeComponent,
-            ResultVerifierComponent,
             VisionExtractionComponent,
         )
 
@@ -426,28 +431,88 @@ class AIProcessFullPipelineTest(TestCase):
                 'entities': [],
             },
             ModeAAnswerComponent: {
-                'mode': 'A', 'steps': [1, 2, 3], 'final_answer': '5',
+                'mode': 'A',
+                'steps': [
+                    {'step': 1, 'content': '列式'},
+                    {'step': 2, 'content': '求解'},
+                    {'step': 3, 'content': '验算'},
+                ],
+                'final_answer': '5',
                 'summary': '完成',
             },
             ModeBAnswerComponent: {
-                'mode': 'B', 'questions': [], 'final_answer': '5',
+                'mode': 'B',
+                'questions': [
+                    {
+                        'question': f'第{index}步应选择什么？',
+                        'options': {'A': '2', 'B': '3', 'C': '4', 'D': '5'},
+                        'correct_option': 'D',
+                        'correct_answer': 'D',
+                        'reference_answer': '5',
+                        'analysis': '代入计算',
+                        'explanation': '代入计算',
+                    }
+                    for index in range(1, 4)
+                ],
+                'final_answer': '5',
+                'summary': '完成',
             },
             ModeCAnswerComponent: {
-                'mode': 'C', 'questions': [], 'final_answer': '5',
-            },
-            ResultVerifierComponent: {
-                'pass': True, 'issues': [], 'retry_needed': False,
+                'mode': 'C',
+                'questions': [
+                    {
+                        'question': f'第{index}步如何思考？',
+                        'reference_answer': '代入计算',
+                        'key_points': ['函数求值'],
+                        'followup_hint': '检查代入值',
+                    }
+                    for index in range(1, 4)
+                ],
+                'final_answer': '5',
+                'summary': '完成',
             },
         }
         created_types = []
+        mode_components = {
+            'A': ModeAAnswerComponent,
+            'B': ModeBAnswerComponent,
+            'C': ModeCAnswerComponent,
+        }
 
         def component_factory(component_type):
             created_types.append(component_type)
             component = MagicMock()
-            component.run.return_value = responses[component_type]
+            if component_type is DeepSeekIndependentVerifierComponent:
+                component.run.side_effect = lambda question: {
+                    'independent_answer': '5',
+                    'independent_reasoning_summary': '代入后结果为 5。',
+                    'reference_answer_valid': True,
+                    'reference_analysis_valid': None,
+                    'reference_issues': [],
+                    'key_facts': ['代入计算'],
+                    'confidence': 0.95,
+                    'mode_content': responses[
+                        mode_components[question.metadata['target_mode']]
+                    ],
+                }
+            elif component_type is DeepSeekFinalReviewComponent:
+                component.run.side_effect = lambda question: {
+                    'trusted_answer': '5',
+                    'qwen_content_valid': True,
+                    'candidate_issues': [],
+                    'confidence': 0.95,
+                    'mode_content': responses[
+                        mode_components[question.metadata['target_mode']]
+                    ],
+                }
+            else:
+                component.run.return_value = responses[component_type]
             return component
 
         service = AIReviewService(component_factory=component_factory)
+        self.question.answer = '5'
+        self.question.question_type = 'calculation'
+        self.question.save(update_fields=['answer', 'question_type'])
         image_urls = [
             'https://example.test/one.png',
             'https://example.test/two.png',
@@ -464,9 +529,11 @@ class AIProcessFullPipelineTest(TestCase):
                 KnowledgeAnalysisComponent,
                 VisionExtractionComponent,
                 ModeAAnswerComponent,
+                DeepSeekIndependentVerifierComponent,
                 ModeBAnswerComponent,
+                DeepSeekFinalReviewComponent,
                 ModeCAnswerComponent,
-                ResultVerifierComponent,
+                DeepSeekFinalReviewComponent,
             ],
         )
         self.assertEqual(
@@ -481,7 +548,7 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(results['answer_a']['mode'], 'A')
         self.assertEqual(results['answer_b']['mode'], 'B')
         self.assertEqual(results['answer_c']['mode'], 'C')
-        self.assertTrue(results['verifier']['pass'])
+        self.assertEqual(results['verifier']['independent_answer'], '5')
 
         self.question.refresh_from_db()
         self.assertEqual(self.question.ai_processing_status, 'success')
@@ -490,6 +557,8 @@ class AIProcessFullPipelineTest(TestCase):
     def test_process_question_full_v2_normalizes_mixed_probe_tokens_and_saves(self):
         """Tight slash+whitespace boundaries reach v2 and persistence cleanly."""
         from apps.common.ai.components import (
+            DeepSeekFinalReviewComponent,
+            DeepSeekIndependentVerifierComponent,
             KnowledgeAnalysisComponent,
             ModeAAnswerComponent,
             ModeBAnswerComponent,
@@ -545,21 +614,91 @@ class AIProcessFullPipelineTest(TestCase):
         responses = {
             KnowledgeAnalysisComponent: {'knowledge_points': []},
             VisionExtractionComponent: {'figure_present': False},
-            ModeAAnswerComponent: {'mode': 'A', 'final_answer': '2'},
-            ModeBAnswerComponent: {'mode': 'B', 'final_answer': '2'},
-            ModeCAnswerComponent: {'mode': 'C', 'final_answer': '2'},
+            ModeAAnswerComponent: {
+                'mode': 'A',
+                'steps': [
+                    {'step': 1, 'content': '列式'},
+                    {'step': 2, 'content': '求解'},
+                    {'step': 3, 'content': '验算'},
+                ],
+                'final_answer': '2',
+                'summary': '完成',
+            },
+            ModeBAnswerComponent: {
+                'mode': 'B',
+                'questions': [
+                    {
+                        'question': f'第{index}步应选择什么？',
+                        'options': {'A': '1', 'B': '2', 'C': '3', 'D': '4'},
+                        'correct_option': 'B',
+                        'correct_answer': 'B',
+                        'reference_answer': '2',
+                        'analysis': '两边减一',
+                        'explanation': '两边减一',
+                    }
+                    for index in range(1, 4)
+                ],
+                'final_answer': '2',
+                'summary': '完成',
+            },
+            ModeCAnswerComponent: {
+                'mode': 'C',
+                'questions': [
+                    {
+                        'question': f'第{index}步如何思考？',
+                        'reference_answer': '两边减一',
+                        'key_points': ['等式性质'],
+                        'followup_hint': '保持等式成立',
+                    }
+                    for index in range(1, 4)
+                ],
+                'final_answer': '2',
+                'summary': '完成',
+            },
             ResultVerifierComponent: {'pass': True},
         }
         registry = PromptRegistry()
+        mode_components = {
+            'A': ModeAAnswerComponent,
+            'B': ModeBAnswerComponent,
+            'C': ModeCAnswerComponent,
+        }
 
         def component_factory(component_type):
             if component_type is QuestionProbeComponent:
                 return QuestionProbeComponent(_ProbeResponseClient(), registry)
             component = MagicMock()
-            component.run.return_value = responses[component_type]
+            if component_type is DeepSeekIndependentVerifierComponent:
+                component.run.side_effect = lambda question: {
+                    'independent_answer': '2',
+                    'independent_reasoning_summary': '方程的解为 2。',
+                    'reference_answer_valid': True,
+                    'reference_analysis_valid': None,
+                    'reference_issues': [],
+                    'key_facts': ['两边减一'],
+                    'confidence': 0.95,
+                    'mode_content': responses[
+                        mode_components[question.metadata['target_mode']]
+                    ],
+                }
+            elif component_type is DeepSeekFinalReviewComponent:
+                component.run.side_effect = lambda question: {
+                    'trusted_answer': '2',
+                    'qwen_content_valid': True,
+                    'candidate_issues': [],
+                    'confidence': 0.95,
+                    'mode_content': responses[
+                        mode_components[question.metadata['target_mode']]
+                    ],
+                }
+            else:
+                component.run.return_value = responses[component_type]
             return component
 
         service = AIReviewService(component_factory=component_factory)
+        self.question.answer = '2'
+        self.question.question_type = 'calculation'
+        self.question.save(update_fields=['answer', 'question_type'])
         with patch.object(service, '_get_question_image_urls', return_value=[]):
             results = service.process_question_full_v2(self.question.id)
 
@@ -669,6 +808,44 @@ class AIProcessFullPipelineTest(TestCase):
                 'retry_needed': False,
                 'retry_reason': '',
             },
+            'deepseek_independent_verify': {
+                'independent_answer': '2',
+                'independent_reasoning_summary': '方程的解为 2。',
+                'reference_answer_valid': True,
+                'reference_analysis_valid': None,
+                'reference_issues': [],
+                'key_facts': ['两边减一'],
+                'confidence': 0.95,
+                'mode_content': {
+                    'mode': 'A',
+                    'steps': [
+                        {'step': 1, 'content': '列式'},
+                        {'step': 2, 'content': '求解'},
+                        {'step': 3, 'content': '验算'},
+                    ],
+                    'final_answer': '2',
+                    'summary': '完成',
+                },
+            },
+            'deepseek_final_review': {
+                'trusted_answer': '2',
+                'qwen_content_valid': True,
+                'candidate_issues': [],
+                'confidence': 0.95,
+                'mode_content': {
+                    'mode': 'C',
+                    'questions': [
+                        {
+                            'question': '等式两边如何变化？',
+                            'reference_answer': '两边同时减一',
+                            'key_points': ['等式性质'],
+                            'followup_hint': '保持等式成立',
+                        }
+                    ] * 3,
+                    'final_answer': '2',
+                    'summary': '开放引导',
+                },
+            },
         }
 
         class _ConfiguredResponseClient:
@@ -687,6 +864,9 @@ class AIProcessFullPipelineTest(TestCase):
             _ConfiguredResponseClient(), PromptRegistry()
         )
         service = AIReviewService(component_factory=component_factory)
+        self.question.answer = '2'
+        self.question.question_type = 'calculation'
+        self.question.save(update_fields=['answer', 'question_type'])
         with patch.object(service, '_get_question_image_urls', return_value=[]):
             results = service.process_question_full_v2(self.question.id)
 
@@ -799,3 +979,454 @@ class BatchTaskTest(TestCase):
     def test_batch_cancel_flag_stops_processing(self):
         result = self._run_batch_task(self.question_ids, cancel=True)
         self.assertEqual(result['status'], 'cancelled')
+
+
+class SingleModeDispatchTest(TestCase):
+    """Manual A/B/C dispatch must be idempotent and owner-aware."""
+
+    def _dispatch_module(self):
+        try:
+            from apps.review import ai_mode_dispatch
+        except ModuleNotFoundError:
+            self.fail('apps.review.ai_mode_dispatch is required')
+        return ai_mode_dispatch
+
+    def test_dispatch_first_call_uses_generated_id_and_4200_second_lock(self):
+        dispatch = self._dispatch_module()
+        task_uuid = '12345678-1234-5678-1234-567812345678'
+
+        with (
+            patch.object(dispatch.uuid, 'uuid4', return_value=task_uuid),
+            patch.object(dispatch.cache, 'add', return_value=True) as cache_add,
+            patch(
+                'apps.review.tasks.single_mode_ai_process_question.apply_async'
+            ) as apply_async,
+        ):
+            result = dispatch.dispatch_single_mode_ai_task(
+                'question-1', 'b', 'qwen3-vl-plus'
+            )
+
+        self.assertEqual(
+            result,
+            dispatch.ModeTaskDispatch(
+                task_id=task_uuid, status='pending', created=True
+            ),
+        )
+        lock_value = cache_add.call_args.args[1]
+        self.assertEqual(json.loads(lock_value)['task_id'], task_uuid)
+        cache_add.assert_called_once_with(
+            'ai-mode-lock:question-1:B', lock_value, timeout=4200
+        )
+        apply_async.assert_called_once_with(
+            args=('question-1', 'B'),
+            kwargs={'model': 'qwen3-vl-plus'},
+            task_id=task_uuid,
+        )
+
+    def test_dispatch_duplicate_returns_stored_id_without_enqueue(self):
+        dispatch = self._dispatch_module()
+        owner = json.dumps({'task_id': 'existing-task'})
+
+        with (
+            patch.object(dispatch.cache, 'add', return_value=False),
+            patch.object(dispatch.cache, 'get', return_value=owner),
+            patch(
+                'apps.review.tasks.single_mode_ai_process_question.apply_async'
+            ) as apply_async,
+        ):
+            result = dispatch.dispatch_single_mode_ai_task(
+                'question-2', 'A', None
+            )
+
+        self.assertEqual(result.task_id, 'existing-task')
+        self.assertEqual(result.status, 'running')
+        self.assertFalse(result.created)
+        apply_async.assert_not_called()
+
+    def test_enqueue_failure_releases_only_its_own_lock(self):
+        dispatch = self._dispatch_module()
+        task_uuid = 'new-task'
+
+        with (
+            patch.object(dispatch.uuid, 'uuid4', return_value=task_uuid),
+            patch.object(dispatch.cache, 'add', return_value=True),
+            patch.object(
+                dispatch,
+                'release_single_mode_ai_task_lock',
+                return_value=True,
+            ) as release_lock,
+            patch(
+                'apps.review.tasks.single_mode_ai_process_question.apply_async',
+                side_effect=RuntimeError('broker unavailable'),
+            ),
+            self.assertRaisesRegex(RuntimeError, 'broker unavailable'),
+        ):
+            dispatch.dispatch_single_mode_ai_task('question-3', 'C', None)
+
+        release_lock.assert_called_once_with('question-3', 'C', task_uuid)
+
+    def _atomic_cache(self, owner_value, *, takeover_value=None):
+        class Serializer:
+            def dumps(self, value):
+                return b'encoded:' + value.encode('utf-8')
+
+        serializer = Serializer()
+        redis_key = ':1:ai-mode-lock:question-atomic:A'
+
+        class Client:
+            def __init__(self):
+                self.store = {redis_key: serializer.dumps(owner_value)}
+                self.eval_calls = []
+
+            def eval(self, script, key_count, key, expected):
+                self.eval_calls.append((script, key_count, key, expected))
+                if takeover_value is not None:
+                    self.store[key] = serializer.dumps(takeover_value)
+                if self.store.get(key) == expected:
+                    del self.store[key]
+                    return 1
+                return 0
+
+        client = Client()
+        backend = MagicMock()
+        backend.make_and_validate_key.side_effect = (
+            lambda key: f':1:{key}'
+        )
+        backend._cache = MagicMock()
+        backend._cache._serializer = serializer
+        backend._cache.get_client.return_value = client
+        return backend, client, redis_key
+
+    def test_atomic_release_deletes_exact_owned_value_with_one_eval(self):
+        dispatch = self._dispatch_module()
+        owner = json.dumps({'task_id': 'owned'}, separators=(',', ':'))
+        backend, client, redis_key = self._atomic_cache(owner)
+
+        with patch.object(dispatch, 'cache', backend):
+            released = dispatch.release_single_mode_ai_task_lock(
+                'question-atomic', 'A', 'owned'
+            )
+
+        self.assertTrue(released)
+        self.assertNotIn(redis_key, client.store)
+        self.assertEqual(len(client.eval_calls), 1)
+        _, key_count, key, expected = client.eval_calls[0]
+        self.assertEqual(key_count, 1)
+        self.assertEqual(key, redis_key)
+        self.assertEqual(expected, b'encoded:' + owner.encode('utf-8'))
+        backend.delete.assert_not_called()
+
+    def test_atomic_release_cannot_delete_owner_that_took_over_before_eval(self):
+        dispatch = self._dispatch_module()
+        old_owner = json.dumps({'task_id': 'old'}, separators=(',', ':'))
+        new_owner = json.dumps({'task_id': 'new'}, separators=(',', ':'))
+        backend, client, redis_key = self._atomic_cache(
+            old_owner, takeover_value=new_owner
+        )
+
+        with patch.object(dispatch, 'cache', backend):
+            released = dispatch.release_single_mode_ai_task_lock(
+                'question-atomic', 'A', 'old'
+            )
+
+        self.assertFalse(released)
+        self.assertEqual(
+            client.store[redis_key],
+            backend._cache._serializer.dumps(new_owner),
+        )
+        self.assertEqual(len(client.eval_calls), 1)
+        backend.delete.assert_not_called()
+
+    def test_atomic_release_fails_closed_on_unsupported_cache_backend(self):
+        dispatch = self._dispatch_module()
+        backend = MagicMock()
+        backend.make_and_validate_key.return_value = ':1:lock'
+        backend._cache = object()
+
+        with patch.object(dispatch, 'cache', backend):
+            released = dispatch.release_single_mode_ai_task_lock(
+                'question-atomic', 'A', 'old'
+            )
+
+        self.assertFalse(released)
+        backend.delete.assert_not_called()
+
+    def test_malformed_duplicate_owner_is_stable_and_never_deleted(self):
+        dispatch = self._dispatch_module()
+
+        with (
+            patch.object(dispatch.cache, 'add', return_value=False),
+            patch.object(dispatch.cache, 'get', return_value='not-json'),
+            patch.object(dispatch.cache, 'delete') as cache_delete,
+            patch(
+                'apps.review.tasks.single_mode_ai_process_question.apply_async'
+            ) as apply_async,
+        ):
+            first = dispatch.dispatch_single_mode_ai_task('question-4', 'A', None)
+            second = dispatch.dispatch_single_mode_ai_task('question-4', 'a', None)
+
+        self.assertEqual(first.task_id, second.task_id)
+        self.assertFalse(first.created)
+        cache_delete.assert_not_called()
+        apply_async.assert_not_called()
+
+
+class SingleModeDispatchViewTest(TestCase):
+    def setUp(self):
+        self.paper = ExamPaper.objects.create(title='Dispatch paper', subject='math')
+        self.question = ExamQuestion.objects.create(
+            paper=self.paper,
+            stem='1 + 1 = ?',
+            answer='2',
+            question_type='calculation',
+        )
+        self.client = APIClient()
+        self.teacher = UserAccount.objects.create(
+            mobile='13900008201',
+            display_name='Dispatch Teacher',
+            role_type='teacher',
+        )
+        grant_user_role(self.teacher, 'teacher')
+        access = generate_tokens(self.teacher, 'teacher')['access_token']
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
+
+    def test_view_returns_dispatcher_envelope_and_duplicate_flag(self):
+        from apps.review.ai_mode_dispatch import ModeTaskDispatch
+
+        with patch(
+            'apps.review.views.dispatch_single_mode_ai_task',
+            return_value=ModeTaskDispatch(
+                task_id='same-task', status='running', created=False
+            ),
+        ) as dispatch:
+            response = self.client.post(
+                reverse(
+                    'ai-process-single-mode', args=[self.question.id, 'b']
+                ),
+                {'model': 'qwen3-vl-plus'},
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            'success': True,
+            'data': {
+                'task_id': 'same-task',
+                'status': 'running',
+                'mode': 'B',
+                'deduplicated': True,
+            },
+        })
+        dispatch.assert_called_once_with(
+            str(self.question.id), 'B', 'qwen3-vl-plus'
+        )
+
+    def test_invalid_or_missing_target_never_dispatches(self):
+        with patch(
+            'apps.review.views.dispatch_single_mode_ai_task'
+        ) as dispatch:
+            invalid = self.client.post(
+                reverse(
+                    'ai-process-single-mode', args=[self.question.id, 'D']
+                ),
+                {},
+                format='json',
+            )
+            missing = self.client.post(
+                reverse(
+                    'ai-process-single-mode', args=['12345678-1234-5678-1234-567812345678', 'A']
+                ),
+                {},
+                format='json',
+            )
+
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.json()['code'], 4001)
+        self.assertEqual(missing.status_code, 404)
+        dispatch.assert_not_called()
+
+    def test_unauthenticated_request_never_dispatches(self):
+        anonymous_client = APIClient()
+        with patch(
+            'apps.review.views.dispatch_single_mode_ai_task'
+        ) as dispatch:
+            response = anonymous_client.post(
+                reverse(
+                    'ai-process-single-mode', args=[self.question.id, 'A']
+                ),
+                {},
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 401)
+        dispatch.assert_not_called()
+
+
+class TeacherAIEndpointPermissionTest(TestCase):
+    """Teacher AI endpoints must honor the independently authenticated role."""
+
+    def setUp(self):
+        self.paper = ExamPaper.objects.create(
+            title='Teacher permission paper', subject='math'
+        )
+        self.question = ExamQuestion.objects.create(
+            paper=self.paper,
+            stem='1 + 1 = ?',
+            answer='2',
+            question_type='calculation',
+        )
+
+    def _client(self, *, legacy_role, active_role, grants):
+        user = UserAccount.objects.create(
+            mobile=f'139{UserAccount.objects.count():08d}',
+            display_name=f'{active_role} session',
+            role_type=legacy_role,
+        )
+        for role in grants:
+            grant_user_role(user, role)
+        access = generate_tokens(user, active_role)['access_token']
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
+        return client
+
+    def _teacher_ai_requests(self, client):
+        question_id = self.question.id
+        return (
+            client.post(reverse('ai-process-question', args=[question_id]), {}, format='json'),
+            client.post(reverse('ai-process-probe', args=[question_id]), {}, format='json'),
+            client.get(reverse('single-ai-task-status', args=['permission-task'])),
+            client.post(
+                reverse('ai-process-single-mode', args=[question_id, 'A']),
+                {},
+                format='json',
+            ),
+            client.post(
+                reverse('ai-confirm-answer', args=[question_id, 'A']),
+                {},
+                format='json',
+            ),
+            client.patch(
+                reverse('ai-update-answer', args=[question_id, 'A']),
+                {'edited_content': {'final_answer': '2'}},
+                format='json',
+            ),
+            client.post(
+                reverse('ai-update-knowledge', args=[question_id]),
+                {'knowledge_data': {'difficulty': 'L1'}},
+                format='json',
+            ),
+            client.get(reverse('ai-question-status', args=[question_id])),
+            client.post(
+                reverse('batch-ai-process'),
+                {'question_ids': [str(question_id)]},
+                format='json',
+            ),
+            client.get(reverse('batch-task-status', args=['permission-task'])),
+            client.post(reverse('batch-task-cancel', args=['permission-task']), {}, format='json'),
+            client.get(reverse('ai-task-status', args=['permission-task'])),
+        )
+
+    def test_student_parent_and_admin_sessions_are_forbidden_before_side_effects(self):
+        from apps.review.ai_mode_dispatch import ModeTaskDispatch
+
+        with (
+            patch(
+                'apps.review.tasks.single_ai_process_question.delay',
+                return_value=SimpleNamespace(id='full-task'),
+            ) as full,
+            patch(
+                'apps.review.tasks.single_probe_ai_process_question.delay',
+                return_value=SimpleNamespace(id='probe-task'),
+            ) as probe,
+            patch(
+                'apps.review.views.dispatch_single_mode_ai_task',
+                return_value=ModeTaskDispatch(
+                    task_id='mode-task', status='pending', created=True
+                ),
+            ) as single_mode,
+            patch('apps.review.views.confirm_ai_answer', return_value={}) as confirm,
+            patch('apps.review.views.update_ai_answer', return_value={}) as update_answer,
+            patch(
+                'apps.review.views.update_knowledge_enrichment', return_value={}
+            ) as update_knowledge,
+            patch(
+                'apps.review.views.batch_ai_process_questions.delay',
+                return_value=SimpleNamespace(id='batch-task'),
+            ) as batch,
+            patch('apps.review.views.cache.set') as cache_set,
+        ):
+            for role in ('student', 'parent', 'admin'):
+                with self.subTest(role=role):
+                    client = self._client(
+                        legacy_role=role,
+                        active_role=role,
+                        grants=(role,),
+                    )
+                    responses = self._teacher_ai_requests(client)
+                    self.assertTrue(responses)
+                    self.assertTrue(all(response.status_code == 403 for response in responses))
+
+        for side_effect in (
+            full, probe, single_mode, confirm, update_answer,
+            update_knowledge, batch, cache_set,
+        ):
+            side_effect.assert_not_called()
+
+    def test_teacher_session_retains_success_and_validation_behavior(self):
+        teacher = self._client(
+            legacy_role='teacher', active_role='teacher', grants=('teacher',)
+        )
+        task = SimpleNamespace(id='teacher-task')
+        with patch(
+            'apps.review.tasks.single_ai_process_question.delay', return_value=task
+        ) as dispatch:
+            success = teacher.post(
+                reverse('ai-process-question', args=[self.question.id]),
+                {},
+                format='json',
+            )
+        invalid = teacher.post(
+            reverse('ai-process-single-mode', args=[self.question.id, 'D']),
+            {},
+            format='json',
+        )
+
+        self.assertEqual(success.status_code, 200)
+        self.assertEqual(success.json()['data']['task_id'], 'teacher-task')
+        self.assertEqual(invalid.status_code, 400)
+        dispatch.assert_called_once_with(str(self.question.id), model=None)
+
+    def test_multi_role_account_requires_teacher_active_session(self):
+        user = UserAccount.objects.create(
+            mobile='13900008299',
+            display_name='Admin Teacher',
+            role_type='admin',
+        )
+        grant_user_role(user, 'admin')
+        grant_user_role(user, 'teacher')
+        task = SimpleNamespace(id='multi-role-task')
+
+        with patch(
+            'apps.review.tasks.single_ai_process_question.delay', return_value=task
+        ) as dispatch:
+            admin_client = APIClient()
+            admin_access = generate_tokens(user, 'admin')['access_token']
+            admin_client.credentials(HTTP_AUTHORIZATION=f'Bearer {admin_access}')
+            denied = admin_client.post(
+                reverse('ai-process-question', args=[self.question.id]),
+                {},
+                format='json',
+            )
+
+            teacher_client = APIClient()
+            teacher_access = generate_tokens(user, 'teacher')['access_token']
+            teacher_client.credentials(HTTP_AUTHORIZATION=f'Bearer {teacher_access}')
+            allowed = teacher_client.post(
+                reverse('ai-process-question', args=[self.question.id]),
+                {},
+                format='json',
+            )
+
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(allowed.status_code, 200)
+        dispatch.assert_called_once_with(str(self.question.id), model=None)

@@ -1,6 +1,7 @@
 """DRF views for review API."""
 import json
 import logging
+import uuid
 from rest_framework import generics, status as http_status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -13,13 +14,19 @@ from django.db.models import IntegerField, Case, When, Value, CharField, F
 from apps.parser.models import ExamQuestion, ExamPage
 from apps.papers.models import ExamPaper
 from apps.common.batch_tasks import batch_ai_process_questions
+from apps.accounts.permissions import IsTeacherSession
 from .serializers import (
     QuestionDetailSerializer, QuestionUpdateSerializer,
     QuestionListSerializer, PaperReviewSerializer, QuestionImageListSerializer
 )
 from .services.question_edit_service import update_question
+from .ai_mode_dispatch import dispatch_single_mode_ai_task
 
 logger = logging.getLogger(__name__)
+
+
+def make_trace_id():
+    return str(uuid.uuid4())
 
 
 @api_view(['GET'])
@@ -161,6 +168,7 @@ from .serializers import AIStatusSerializer, AIProcessRequestSerializer
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def ai_process_question(request, question_id):
     """Start async AI processing (knowledge + A/B/C) for a single question via Celery."""
     try:
@@ -182,6 +190,7 @@ def ai_process_question(request, question_id):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def ai_process_probe(request, question_id):
     """Start probe-only attribute extraction for one question via Celery."""
     try:
@@ -203,6 +212,7 @@ def ai_process_probe(request, question_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def single_ai_task_status(request, task_id):
     """Get async single AI task progress."""
 
@@ -223,6 +233,7 @@ def single_ai_task_status(request, task_id):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def ai_process_single_mode(request, question_id, mode):
     """Start async AI processing for a single mode (A/B/C) via Celery."""
     mode = mode.upper()
@@ -240,16 +251,21 @@ def ai_process_single_mode(request, question_id, mode):
     serializer.is_valid(raise_exception=True)
     model = serializer.validated_data.get('model')
 
-    from .tasks import single_mode_ai_process_question
-    task = single_mode_ai_process_question.delay(question_id, mode, model=model)
+    dispatch = dispatch_single_mode_ai_task(str(question_id), mode, model)
 
     return Response({
         'success': True,
-        'data': {'task_id': task.id, 'status': 'pending', 'mode': mode},
+        'data': {
+            'task_id': dispatch.task_id,
+            'status': dispatch.status,
+            'mode': mode,
+            'deduplicated': not dispatch.created,
+        },
     })
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def ai_confirm_answer(request, question_id, mode):
     """Confirm an AI answer for a given mode (A/B/C)."""
     try:
@@ -260,6 +276,7 @@ def ai_confirm_answer(request, question_id, mode):
 
 
 @api_view(['PATCH', 'PUT'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def ai_update_answer(request, question_id, mode):
     """Edit an AI answer content."""
     edited_content = request.data.get('edited_content')
@@ -274,6 +291,7 @@ def ai_update_answer(request, question_id, mode):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def ai_update_knowledge(request, question_id):
     """Edit knowledge enrichment data."""
     updated_data = request.data.get('knowledge_data')
@@ -288,6 +306,7 @@ def ai_update_knowledge(request, question_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def ai_question_status(request, question_id):
     """Get AI processing status for a question."""
     try:
@@ -303,6 +322,7 @@ def ai_question_status(request, question_id):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def batch_ai_process(request):
     """Start batch AI processing for selected questions."""
     question_ids = request.data.get('question_ids', [])
@@ -324,6 +344,7 @@ def batch_ai_process(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def batch_task_status(request, task_id):
     """Get batch task progress."""
     progress_data = cache.get(f'batch_progress:{task_id}')
@@ -335,6 +356,7 @@ def batch_task_status(request, task_id):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def batch_task_cancel(request, task_id):
     """Cancel a running batch task."""
     cache.set(f'batch_cancel:{task_id}', '1', timeout=60)
@@ -467,6 +489,7 @@ def update_question_image_layout(request, question_id, image_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
 def ai_task_status(request, task_id):
     """Get AI task progress status."""
 

@@ -2,10 +2,17 @@
 import json
 import logging
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from django.core.cache import cache
+from django.db import transaction
 from django.utils import timezone
 from apps.common.ai_service import AIReviewService, create_ai_review_service
+from apps.common.ai.question_context import (
+    QuestionContextBuilder,
+    question_context_hash,
+)
 from apps.parser.models import ExamQuestion
+from .ai_mode_dispatch import release_single_mode_ai_task_lock
 
 logger = logging.getLogger(__name__)
 
@@ -204,14 +211,17 @@ def single_probe_ai_process_question(self, question_id, model=None):
         service.close()
 
 
-@shared_task(bind=True, max_retries=0)
+@shared_task(
+    bind=True,
+    max_retries=0,
+    soft_time_limit=3800,
+    time_limit=3900,
+)
 def single_mode_ai_process_question(self, question_id, mode, model=None):
-    """AI processing for a single mode (A/B/C only), reusing existing probe/vision results.
-
-    Args:
-        mode: 'A', 'B', or 'C'
-    """
+    """Arbitrate and atomically persist one manually requested A/B/C mode."""
     task_id = self.request.id
+    normalized_mode = mode.strip().upper() if isinstance(mode, str) else ''
+    service = None
 
     def set_progress(status, step, label, result=None, error=None):
         cache.set(f'{PROGRESS_KEY_PREFIX}{task_id}', json.dumps({
@@ -223,18 +233,23 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
             'error': error,
         }), timeout=3600)
 
-    set_progress('running', 'starting', STEP_LABELS['starting'])
-
     try:
-        question = ExamQuestion.objects.get(id=question_id)
-    except ExamQuestion.DoesNotExist:
-        return _skip_missing_question(set_progress, question_id)
-    except Exception:
-        raise
+        set_progress('running', 'starting', STEP_LABELS['starting'])
+        if normalized_mode not in ('A', 'B', 'C'):
+            set_progress(
+                'failed', 'failed', '处理失败', error='invalid_mode'
+            )
+            return {'status': 'failed', 'error': 'invalid_mode'}
 
-    service = create_ai_review_service()
+        try:
+            question = ExamQuestion.objects.get(id=question_id)
+        except ExamQuestion.DoesNotExist:
+            return _skip_missing_question(set_progress, question_id)
+        except Exception:
+            raise
 
-    try:
+        service = create_ai_review_service()
+
         # Load existing probe/vision results from DB to avoid redundant API calls
         probe_result = question.ai_probe_result or {}
         vision_result = question.ai_vision_extract or {}
@@ -248,35 +263,25 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         # Get image URLs
         image_urls = service._get_question_image_urls(question)
 
-        # Generate only the requested mode
-        mode_key = f'ai_answer_{mode.lower()}'
-        if mode == 'A':
-            answer = service.solve_mode_a(
-                question, image_urls, normalized_text, vision_result,
-                knowledge_refs, model=model
-            )
-        elif mode == 'B':
-            answer = service.solve_mode_b(
-                question, image_urls, normalized_text, vision_result,
-                knowledge_refs, model=model
-            )
-        elif mode == 'C':
-            answer = service.solve_mode_c(
-                question, image_urls, normalized_text, vision_result,
-                knowledge_refs, model=model
-            )
-        else:
-            set_progress('failed', 'failed', f'未知模式: {mode}', error=f'Unknown mode: {mode}')
-            service.close()
-            return {'status': 'failed', 'error': f'Unknown mode: {mode}'}
-
-        # Save result
-        answer['mode'] = mode
-        answer['model'] = (
-            service._get_model(model)
-            if model is not None
-            else service._task_route(f'mode_{mode.lower()}_answer')[1]
+        outcome = service.solve_mode_with_arbitration(
+            question,
+            mode=normalized_mode,
+            image_urls=image_urls,
+            normalized_text=normalized_text,
+            vision_result=vision_result,
+            knowledge_refs=knowledge_refs,
+            cached_verification=question.ai_verifier_result,
+            model=model,
         )
+
+        mode_key = f'ai_answer_{normalized_mode.lower()}'
+        answer = dict(outcome.answer)
+        answer['mode'] = normalized_mode
+        route_provider, route_model = service._task_route(
+            f'mode_{normalized_mode.lower()}_answer'
+        )
+        answer['provider'] = route_provider
+        answer['model'] = route_model
         processed_at = timezone.now()
         answer['generated_at'] = processed_at.strftime('%Y-%m-%dT%H:%M:%S')
         answer['confirmed'] = False
@@ -284,16 +289,47 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         answer['edited_content'] = None
         answer['error'] = None
 
-        # Update DB field
-        setattr(question, mode_key, answer)
-        question.ai_processed_at = processed_at
-        question.ai_processing_status = 'success'
-        question.save()
+        update_fields = [mode_key, 'ai_processed_at', 'ai_processing_status']
+        with transaction.atomic():
+            locked_question = (
+                ExamQuestion.objects.select_for_update().get(id=question_id)
+            )
+            locked_probe = locked_question.ai_probe_result or {}
+            locked_vision = locked_question.ai_vision_extract or {}
+            locked_normalized_text = locked_probe.get(
+                'normalized_text', locked_question.stem or ''
+            )
+            locked_knowledge_refs = ''
+            if locked_probe.get('topic_tags_top3'):
+                locked_knowledge_refs = ', '.join(
+                    locked_probe['topic_tags_top3']
+                )
+            locked_context = QuestionContextBuilder.build(
+                locked_question,
+                image_urls=service._get_question_image_urls(locked_question),
+                normalized_text=locked_normalized_text,
+                vision_result=locked_vision,
+                knowledge_refs=locked_knowledge_refs,
+                target_mode=normalized_mode,
+            )
+            if question_context_hash(locked_context) != outcome.verification.get(
+                'context_hash'
+            ):
+                raise RuntimeError('question_context_changed')
+            setattr(locked_question, mode_key, answer)
+            if outcome.shared_verifier_result is not None:
+                locked_question.ai_verifier_result = dict(
+                    outcome.shared_verifier_result
+                )
+                update_fields.append('ai_verifier_result')
+            locked_question.ai_processed_at = processed_at
+            locked_question.ai_processing_status = 'success'
+            locked_question.save(update_fields=update_fields)
 
         logger.info(
             '[AI RESULT] single mode complete',
             extra={
-                'mode': mode,
+                'mode': normalized_mode,
                 'question_id': str(question_id),
                 'status': 'complete',
             },
@@ -309,28 +345,48 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
                     },
                 )
 
-        set_progress('complete', '处理完成', f'{mode}模式处理完成', result={
-            'mode': mode,
+        set_progress('complete', '处理完成', f'{normalized_mode}模式处理完成', result={
+            'mode': normalized_mode,
             'image_count': len(image_urls),
         })
 
         response = {
             'status': 'complete',
             'question_id': question_id,
-            'mode': mode,
+            'mode': normalized_mode,
         }
-        service.close()
         return response
 
-    except Exception as e:
-        service.close()
+    except SoftTimeLimitExceeded:
+        logger.error(
+            'AI single mode processing timed out',
+            extra={
+                'question_id': str(question_id),
+                'mode': normalized_mode,
+                'status': 'failed',
+            },
+        )
+        set_progress('failed', 'failed', '处理超时', error='processing_timeout')
+        return {'status': 'failed', 'error': 'processing_timeout'}
+    except Exception:
+        if service is None:
+            raise
         logger.error(
             'AI single mode processing failed',
             extra={
                 'question_id': str(question_id),
-                'mode': mode,
+                'mode': normalized_mode,
                 'status': 'failed',
             },
         )
-        set_progress('failed', 'failed', '处理失败', error=str(e))
-        return {'status': 'failed', 'error': str(e)}
+        set_progress('failed', 'failed', '处理失败', error='processing_failed')
+        return {'status': 'failed', 'error': 'processing_failed'}
+    finally:
+        try:
+            if service is not None:
+                service.close()
+        finally:
+            if normalized_mode in ('A', 'B', 'C'):
+                release_single_mode_ai_task_lock(
+                    str(question_id), normalized_mode, task_id
+                )

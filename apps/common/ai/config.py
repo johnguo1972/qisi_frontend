@@ -38,6 +38,8 @@ TASK_PROVIDER_SCHEMA = {
     "teacher_guidance_evaluate": "qwen",
     "variant_generate": "qwen",
     "variant_verify_deepseek": "deepseek",
+    "deepseek_independent_verify": "deepseek",
+    "deepseek_final_review": "deepseek",
     "photo_recognize": "qwen",
     "course_material_recognize": "qwen",
 }
@@ -76,6 +78,8 @@ class AITaskConfig:
     retry_count: int
     retry_backoff_seconds: tuple[float, ...]
     response_format: str | None
+    enable_thinking: bool | None = None
+    reasoning_effort: str | None = None
 
 
 class AIConfig:
@@ -421,7 +425,7 @@ def _load_task(
             "retry_count",
             "retry_backoff_seconds",
         },
-        {"response_format"},
+        {"response_format", "enable_thinking", "reasoning_effort"},
     )
     provider = parser.get(section, "provider").strip()
     if provider not in SUPPORTED_PROVIDERS:
@@ -461,6 +465,20 @@ def _load_task(
             "Option retry_backoff_seconds cannot contain negative values"
         )
     response_format = parser.get(section, "response_format", fallback="").strip() or None
+    enable_thinking = (
+        _parse_bool_option(parser, section, "enable_thinking", fallback=False)
+        if parser.has_option(section, "enable_thinking")
+        else None
+    )
+    reasoning_effort = (
+        parser.get(section, "reasoning_effort").strip()
+        if parser.has_option(section, "reasoning_effort")
+        else None
+    )
+    if reasoning_effort not in {None, "low", "medium", "high"}:
+        raise AIConfigError(
+            "Option reasoning_effort must be low, medium, or high"
+        )
 
     return AITaskConfig(
         key=key,
@@ -474,6 +492,8 @@ def _load_task(
         retry_count=retry_count,
         retry_backoff_seconds=retry_backoff_seconds,
         response_format=response_format,
+        enable_thinking=enable_thinking,
+        reasoning_effort=reasoning_effort,
     )
 
 

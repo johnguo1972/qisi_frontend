@@ -151,12 +151,49 @@ class ModeBOptionsResponse(_StrictResponseModel):
 
 class ModeBQuestionResponse(_StrictResponseModel):
     question: NonBlankStr
-    options: ModeBOptionsResponse
-    correct_option: Literal["A", "B", "C", "D"]
-    reference_answer: NonBlankStr
+    options: ModeBOptionsResponse = Field(
+        description=(
+            "A-D option texts; values must remain distinct after Unicode NFKC "
+            "normalization and whitespace folding."
+        )
+    )
+    correct_option: Literal["A", "B", "C", "D"] = Field(
+        description="Must equal correct_answer."
+    )
+    reference_answer: NonBlankStr = Field(
+        description=(
+            "Must be correct_option itself or the exact normalized text at "
+            "options[correct_option]."
+        )
+    )
     analysis: NonBlankStr
     correct_answer: Literal["A", "B", "C", "D"]
     explanation: NonBlankStr
+
+    @staticmethod
+    def _canonical_option_text(value: str) -> str:
+        return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", value)).strip()
+
+    @model_validator(mode="after")
+    def require_locally_consistent_answer(self):
+        options = self.options.model_dump()
+        canonical_options = {
+            label: self._canonical_option_text(value)
+            for label, value in options.items()
+        }
+        if len(set(canonical_options.values())) != 4:
+            raise ValueError("Mode B option texts must be distinct")
+        if self.correct_option != self.correct_answer:
+            raise ValueError("Mode B answer keys must agree")
+
+        reference = self._canonical_option_text(self.reference_answer)
+        reference_key = reference.upper()
+        if len(reference_key) == 1 and reference_key in {"A", "B", "C", "D"}:
+            if reference_key != self.correct_option:
+                raise ValueError("Mode B reference answer key must agree")
+        elif reference != canonical_options[self.correct_option]:
+            raise ValueError("Mode B reference answer text must match its option")
+        return self
 
 
 class ModeBResponse(_StrictResponseModel):
@@ -194,6 +231,33 @@ class ResultVerifierResponse(_StrictResponseModel):
         if self.retry_needed and not self.retry_reason.strip():
             raise ValueError("retry reason is required when retry is needed")
         return self
+
+
+class IndependentVerificationResponse(_StrictResponseModel):
+    """Structured output from the independent answer-verification stage."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+    independent_answer: NonBlankStr
+    independent_reasoning_summary: NonBlankStr
+    key_facts: list[NonBlankStr]
+    reference_answer_valid: bool | None
+    reference_analysis_valid: bool | None
+    reference_issues: list[str]
+    confidence: float = Field(ge=0, le=1)
+    mode_content: dict[str, Any]
+
+
+class FinalReviewResponse(_StrictResponseModel):
+    """Structured output from the escalated final-answer review stage."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+    trusted_answer: NonBlankStr
+    qwen_content_valid: bool
+    candidate_issues: list[NonBlankStr]
+    confidence: float = Field(ge=0, le=1)
+    mode_content: dict[str, Any]
 
 
 _COURSE_IMAGE_SECURITY_MAX_INPUT_LENGTH = 4096
