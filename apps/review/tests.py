@@ -1073,6 +1073,19 @@ class AIQueueBatchApiTest(TestCase):
         dispatch.assert_called_once_with()
 
 
+class AIQueueCelerySettingsTest(TestCase):
+    def test_ai_queue_routes_and_reliability_settings_are_explicit(self):
+        from django.conf import settings
+
+        self.assertEqual(settings.CELERY_WORKER_PREFETCH_MULTIPLIER, 1)
+        self.assertTrue(settings.CELERY_TASK_ACKS_LATE)
+        self.assertTrue(settings.CELERY_TASK_REJECT_ON_WORKER_LOST)
+        self.assertEqual(
+            settings.CELERY_TASK_ROUTES['apps.review.tasks.execute_ai_job_item']['queue'],
+            'ai.batch',
+        )
+
+
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
 
