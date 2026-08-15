@@ -941,6 +941,22 @@ class AIQueueSchedulerTest(TestCase):
 
         self.assertEqual(eval_call.call_count, 6)
 
+    def test_fair_item_selection_gives_each_three_jobs_four_baseline_slots(self):
+        from apps.review.ai_queue import select_fair_item_ids
+
+        jobs = [
+            ('job-a', [f'a-{n}' for n in range(10)]),
+            ('job-b', [f'b-{n}' for n in range(10)]),
+            ('job-c', [f'c-{n}' for n in range(10)]),
+        ]
+
+        selected = select_fair_item_ids(jobs, limit=16)
+
+        self.assertEqual(len(selected), 16)
+        self.assertEqual(sum(item.startswith('a-') for item in selected), 6)
+        self.assertEqual(sum(item.startswith('b-') for item in selected), 5)
+        self.assertEqual(sum(item.startswith('c-') for item in selected), 5)
+
 
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""

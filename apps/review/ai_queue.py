@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import time
+from collections import deque
+from typing import Iterable
 
 from django.core.cache import cache
 
@@ -45,3 +47,27 @@ class RedisLeasePool:
 
     def release(self, owner: str) -> bool:
         return bool(self._eval(_RELEASE_LUA, owner))
+
+
+def select_fair_item_ids(
+    job_items: Iterable[tuple[str, Iterable[str]]], *, limit: int
+) -> list[str]:
+    """Select queued item IDs with four baseline slots then round-robin extras."""
+    queues = [(job_id, deque(item_ids)) for job_id, item_ids in job_items]
+    selected: list[str] = []
+    for _job_id, items in queues:
+        for _ in range(min(4, len(items), limit - len(selected))):
+            selected.append(items.popleft())
+        if len(selected) == limit:
+            return selected
+    while len(selected) < limit:
+        progressed = False
+        for _job_id, items in queues:
+            if items:
+                selected.append(items.popleft())
+                progressed = True
+                if len(selected) == limit:
+                    return selected
+        if not progressed:
+            break
+    return selected
