@@ -2,7 +2,7 @@
 import json
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.core.cache import cache
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -876,6 +876,54 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(results['answer_c']['final_answer'], '2')
         self.question.refresh_from_db()
         self.assertEqual(self.question.ai_processing_status, 'failed')
+
+
+class AIProcessingJobModelTest(TestCase):
+    """Durable queue records enforce capacity and per-question de-duplication."""
+
+    def setUp(self):
+        self.teacher = UserAccount.objects.create(
+            mobile='13900009001', display_name='Queue Teacher', role_type='teacher',
+        )
+        self.paper = ExamPaper.objects.create(title='Queue Paper', subject='physics')
+        self.questions = [
+            ExamQuestion.objects.create(
+                paper=self.paper,
+                stem=f'Queue question {index}',
+                answer='A',
+                question_type='single_choice',
+            )
+            for index in range(3)
+        ]
+
+    @override_settings(AI_QUEUE_CAPACITY=2)
+    def test_job_creation_deduplicates_active_question_and_rejects_capacity_overflow(self):
+        from apps.review.models import AIProcessingJob, AIQueueCapacityExceeded
+
+        first = AIProcessingJob.create_for_questions(
+            creator=self.teacher,
+            question_ids=[self.questions[0].id, self.questions[1].id],
+            source='batch',
+            model=None,
+        )
+
+        self.assertEqual(first.accepted_count, 2)
+        duplicate = AIProcessingJob.create_for_questions(
+            creator=self.teacher,
+            question_ids=[self.questions[0].id],
+            source='batch',
+            model=None,
+        )
+        self.assertEqual(duplicate.accepted_count, 0)
+        self.assertEqual(duplicate.duplicate_question_ids, [str(self.questions[0].id)])
+
+        with self.assertRaises(AIQueueCapacityExceeded):
+            AIProcessingJob.create_for_questions(
+                creator=self.teacher,
+                question_ids=[self.questions[2].id],
+                source='batch',
+                model=None,
+            )
 
 
 class BatchTaskTest(TestCase):
