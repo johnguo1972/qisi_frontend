@@ -1118,6 +1118,58 @@ class AIQueueCelerySettingsTest(TestCase):
         dispatch.assert_called_once_with()
 
 
+class AIQueueJobApiTest(TestCase):
+    def setUp(self):
+        self.teacher = UserAccount.objects.create(
+            mobile='13900009007', display_name='Job API Teacher', role_type='teacher',
+        )
+        grant_user_role(self.teacher, 'teacher')
+        self.paper = ExamPaper.objects.create(title='Job API Paper', subject='physics')
+        self.questions = [
+            ExamQuestion.objects.create(
+                paper=self.paper, stem=f'Job API {index}', answer='A',
+                question_type='single_choice',
+            )
+            for index in range(2)
+        ]
+        self.client = APIClient()
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {generate_tokens(self.teacher, 'teacher')['access_token']}",
+        )
+
+    def test_status_and_cancel_use_durable_job_items(self):
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+
+        job = AIProcessingJob.create_for_questions(
+            creator=self.teacher,
+            question_ids=[question.id for question in self.questions],
+            source='batch', model=None,
+        ).job
+        item = job.items.order_by('created_at').first()
+        item.status = AIProcessingJobItem.Status.DISPATCHED
+        item.save(update_fields=['status'])
+
+        status = self.client.get(reverse('ai-job-status', args=[job.id]))
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.data['data']['total'], 2)
+        self.assertEqual(status.data['data']['queued'], 1)
+        self.assertEqual(status.data['data']['dispatched'], 1)
+
+        legacy_status = self.client.get(reverse('batch-task-status', args=[job.id]))
+        self.assertEqual(legacy_status.status_code, 200)
+        self.assertEqual(legacy_status.data['data']['total'], 2)
+        self.assertEqual(legacy_status.data['data']['status'], 'running')
+
+        with patch('apps.review.views.dispatch_queued_ai_items.delay') as dispatch:
+            cancelled = self.client.post(reverse('ai-job-cancel', args=[job.id]))
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.data['data']['cancelled'], 2)
+        self.assertEqual(
+            job.items.filter(status=AIProcessingJobItem.Status.CANCELLED).count(), 2,
+        )
+        dispatch.assert_called_once_with()
+
+
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
 
