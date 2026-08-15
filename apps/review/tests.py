@@ -1030,6 +1030,30 @@ class AIQueueCeleryDispatchTest(TestCase):
 
         enqueue.assert_called_once_with(args=('item-1',), queue='ai.batch')
 
+    def test_dispatch_failure_requeues_item_and_releases_lease(self):
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.ai_queue import dispatch_queued_ai_items
+
+        teacher = UserAccount.objects.create(mobile='13900009004', display_name='Broker Teacher', role_type='teacher')
+        paper = ExamPaper.objects.create(title='Broker Paper', subject='physics')
+        question = ExamQuestion.objects.create(paper=paper, stem='Broker stem', answer='A', question_type='single_choice')
+        item = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[question.id], source='batch', model=None,
+        ).job.items.get()
+        item.status = AIProcessingJobItem.Status.DISPATCHED
+        item.save(update_fields=['status'])
+
+        with (
+            patch('apps.review.ai_queue.reserve_queued_item_ids', return_value=[str(item.id)]),
+            patch('apps.review.tasks.execute_ai_job_item.apply_async', side_effect=RuntimeError('broker down')),
+            patch('apps.review.ai_queue.RedisLeasePool.release', return_value=True) as release,
+        ):
+            self.assertEqual(dispatch_queued_ai_items(limit=1), 0)
+
+        item.refresh_from_db()
+        self.assertEqual(item.status, AIProcessingJobItem.Status.QUEUED)
+        release.assert_called_once_with(str(item.id))
+
 
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""

@@ -107,9 +107,22 @@ def reserve_queued_item_ids(*, limit: int | None = None) -> list[str]:
 
 def dispatch_queued_ai_items(*, limit: int | None = None) -> int:
     """Send reserved durable items to the dedicated Celery AI queue."""
+    from .models import AIProcessingJobItem
     from .tasks import execute_ai_job_item
 
     item_ids = reserve_queued_item_ids(limit=limit)
+    dispatched = 0
     for item_id in item_ids:
-        execute_ai_job_item.apply_async(args=(item_id,), queue='ai.batch')
-    return len(item_ids)
+        try:
+            execute_ai_job_item.apply_async(args=(item_id,), queue='ai.batch')
+            dispatched += 1
+        except Exception:
+            AIProcessingJobItem.objects.filter(
+                id=item_id, status=AIProcessingJobItem.Status.DISPATCHED,
+            ).update(status=AIProcessingJobItem.Status.QUEUED)
+            RedisLeasePool(
+                'question',
+                limit=limit if limit is not None else int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 16)),
+                ttl_seconds=4200,
+            ).release(str(item_id))
+    return dispatched
