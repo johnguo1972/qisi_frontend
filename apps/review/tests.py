@@ -1694,10 +1694,7 @@ class TeacherAIEndpointPermissionTest(TestCase):
         teacher = self._client(
             legacy_role='teacher', active_role='teacher', grants=('teacher',)
         )
-        task = SimpleNamespace(id='teacher-task')
-        with patch(
-            'apps.review.tasks.single_ai_process_question.delay', return_value=task
-        ) as dispatch:
+        with patch('apps.review.views.dispatch_queued_ai_items.delay') as dispatch:
             success = teacher.post(
                 reverse('ai-process-question', args=[self.question.id]),
                 {},
@@ -1710,9 +1707,9 @@ class TeacherAIEndpointPermissionTest(TestCase):
         )
 
         self.assertEqual(success.status_code, 200)
-        self.assertEqual(success.json()['data']['task_id'], 'teacher-task')
+        self.assertTrue(success.json()['data']['task_id'])
         self.assertEqual(invalid.status_code, 400)
-        dispatch.assert_called_once_with(str(self.question.id), model=None)
+        dispatch.assert_called_once_with()
 
     def test_multi_role_account_requires_teacher_active_session(self):
         user = UserAccount.objects.create(

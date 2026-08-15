@@ -174,7 +174,7 @@ from .serializers import AIStatusSerializer, AIProcessRequestSerializer
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def ai_process_question(request, question_id):
-    """Start async AI processing (knowledge + A/B/C) for a single question via Celery."""
+    """Queue the complete manual AI pipeline through the durable scheduler."""
     try:
         ExamQuestion.objects.get(id=question_id)
     except ExamQuestion.DoesNotExist:
@@ -184,12 +184,23 @@ def ai_process_question(request, question_id):
     serializer.is_valid(raise_exception=True)
     model = serializer.validated_data.get('model')
 
-    from .tasks import single_ai_process_question
-    task = single_ai_process_question.delay(question_id, model=model)
+    try:
+        created = AIProcessingJob.create_for_questions(
+            creator=request.user,
+            question_ids=[question_id],
+            source=AIProcessingJob.Source.MANUAL,
+            model=model,
+        )
+    except AIQueueCapacityExceeded:
+        return Response({'success': False, 'error': 'ai_queue_capacity_exceeded'}, status=429)
+    dispatch_queued_ai_items.delay()
+    job_id = str(created.job.id) if created.job else None
 
     return Response({
         'success': True,
-        'data': {'task_id': task.id, 'status': 'pending'},
+        'data': {'task_id': job_id, 'job_id': job_id, 'status': 'pending',
+                 'accepted': created.accepted_count,
+                 'deduplicated': created.duplicate_question_ids},
     })
 
 
@@ -219,6 +230,19 @@ def ai_process_probe(request, question_id):
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def single_ai_task_status(request, task_id):
     """Get async single AI task progress."""
+
+    try:
+        durable_job = AIProcessingJob.objects.filter(id=uuid.UUID(str(task_id)), creator=request.user).first()
+    except ValueError:
+        durable_job = None
+    if durable_job:
+        summary = _ai_job_summary(durable_job)
+        return Response({'success': True, 'data': {
+            'status': 'complete' if summary['status'] == 'completed' else summary['status'],
+            'step': 'complete' if summary['status'] == 'completed' else 'starting',
+            'step_label': '任务已完成' if summary['status'] == 'completed' else '任务排队中...',
+            'result': summary, 'error': None,
+        }})
 
     progress_data = cache.get(f'single_ai_progress:{task_id}')
     if not progress_data:
