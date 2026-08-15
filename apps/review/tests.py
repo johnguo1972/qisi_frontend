@@ -991,6 +991,33 @@ class AIQueueSchedulerTest(TestCase):
         )
 
 
+class AIQueueExecutionTaskTest(TestCase):
+    def test_execute_item_runs_existing_full_pipeline_and_releases_lease(self):
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.tasks import execute_ai_job_item
+
+        teacher = UserAccount.objects.create(mobile='13900009003', display_name='Task Teacher', role_type='teacher')
+        paper = ExamPaper.objects.create(title='Task Paper', subject='physics')
+        question = ExamQuestion.objects.create(paper=paper, stem='Task stem', answer='A', question_type='single_choice')
+        item = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[question.id], source='batch', model=None,
+        ).job.items.get()
+        item.status = AIProcessingJobItem.Status.DISPATCHED
+        item.save(update_fields=['status'])
+
+        with (
+            patch('apps.review.tasks.AIReviewService.process_question_full_v2', return_value={'errors': {}}),
+            patch('apps.review.tasks.AIReviewService.save_results_to_question'),
+            patch('apps.review.ai_queue.RedisLeasePool.release', return_value=True) as release,
+        ):
+            result = execute_ai_job_item.run(str(item.id))
+
+        item.refresh_from_db()
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(item.status, AIProcessingJobItem.Status.SUCCEEDED)
+        release.assert_called_once_with(str(item.id))
+
+
 class BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
 
