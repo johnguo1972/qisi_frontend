@@ -19,6 +19,7 @@ from .config import AIConfig, AITaskConfig, load_ai_config
 from .exceptions import AIConfigError, AIResponseError
 from .response_parser import ResponseParser
 from .types import AIResult
+from .provider_limiter import provider_request_lease
 
 
 logger = logging.getLogger(__name__)
@@ -228,11 +229,12 @@ class AIClient:
                         ).as_dict()
                     },
                 )
-                response = self._client.send(
-                    request,
-                    auth=None,
-                    follow_redirects=False,
-                )
+                with provider_request_lease(task.provider):
+                    response = self._client.send(
+                        request,
+                        auth=None,
+                        follow_redirects=False,
+                    )
                 response.raise_for_status()
             except httpx.HTTPStatusError as error:
                 status_code = error.response.status_code
