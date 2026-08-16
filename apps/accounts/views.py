@@ -18,7 +18,8 @@ from .serializers import (
 )
 from .services import (
     verify_code, get_or_create_user, generate_tokens,
-    generate_verify_code, send_sms_code,
+    generate_verify_code, send_sms_code, ensure_fixed_test_account,
+    is_fixed_test_account_code,
 )
 
 
@@ -44,7 +45,8 @@ def login(request):
     mobile = serializer.validated_data['mobile']
     code = serializer.validated_data['verify_code']
 
-    if not verify_code(mobile, code):
+    fixed_test_login = is_fixed_test_account_code(mobile, code)
+    if not fixed_test_login and not verify_code(mobile, code):
         return Response({
             'code': 4001, 'message': '验证码错误或已过期', 'data': None, 'trace_id': make_trace_id()
         }, status=status.HTTP_400_BAD_REQUEST)
@@ -53,19 +55,22 @@ def login(request):
     if active_role not in VALID_ROLES:
         return role_error('INVALID_ROLE', 'Invalid role', status.HTTP_400_BAD_REQUEST)
 
-    user = UserAccount.objects.filter(mobile=mobile).first()
-    if user is None:
-        if active_role != 'student':
-            return role_error(
-                'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
-            )
-        user, _ = get_or_create_user(mobile, initial_role='student')
+    if fixed_test_login:
+        user = ensure_fixed_test_account(mobile)
     else:
-        if not has_user_role(user, active_role):
-            return role_error(
-                'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
-            )
-        user, _ = get_or_create_user(mobile, initial_role=active_role)
+        user = UserAccount.objects.filter(mobile=mobile).first()
+        if user is None:
+            if active_role != 'student':
+                return role_error(
+                    'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
+                )
+            user, _ = get_or_create_user(mobile, initial_role='student')
+        else:
+            if not has_user_role(user, active_role):
+                return role_error(
+                    'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
+                )
+            user, _ = get_or_create_user(mobile, initial_role=active_role)
 
     tokens = generate_tokens(user, active_role)
 

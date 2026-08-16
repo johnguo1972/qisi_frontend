@@ -1,11 +1,17 @@
 import pytest
 from django.core.cache import cache
 from django.core.management import call_command
+from django.test import override_settings
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
 from apps.accounts.models import UserAccount, WechatIdentity
-from apps.accounts.roles import grant_user_role, has_user_role, revoke_user_role
+from apps.accounts.roles import (
+    get_user_roles,
+    grant_user_role,
+    has_user_role,
+    revoke_user_role,
+)
 from apps.accounts.services import RoleNotGranted, generate_tokens
 
 
@@ -64,6 +70,41 @@ def _set_sms_code(user, code):
 
 def _authenticate(client, access_token):
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+
+@pytest.mark.django_db
+@override_settings(
+    TEST_LOGIN_ENABLED=True,
+    TEST_LOGIN_PHONE="15800010001",
+    TEST_LOGIN_CODE="651234",
+)
+def test_fixed_test_account_code_creates_and_grants_all_roles(api_client):
+    response = api_client.post(
+        "/api/v1/auth/login",
+        {"mobile": "15800010001", "verify_code": "651234", "role_type": "teacher"},
+    )
+
+    assert response.status_code == 200
+    user = UserAccount.objects.get(mobile="15800010001")
+    assert get_user_roles(user) == ["admin", "teacher", "parent", "student"]
+    assert response.data["data"]["user"]["active_role"] == "teacher"
+
+
+@pytest.mark.django_db
+@override_settings(
+    TEST_LOGIN_ENABLED=True,
+    TEST_LOGIN_PHONE="15800010001",
+    TEST_LOGIN_CODE="651234",
+)
+def test_fixed_test_account_rejects_an_incorrect_code(api_client):
+    response = api_client.post(
+        "/api/v1/auth/login",
+        {"mobile": "15800010001", "verify_code": "000000", "role_type": "student"},
+    )
+
+    assert response.status_code == 400
+    assert response.data["code"] == 4001
+    assert not UserAccount.objects.filter(mobile="15800010001").exists()
 
 
 @pytest.mark.django_db

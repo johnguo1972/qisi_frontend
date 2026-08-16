@@ -4,6 +4,7 @@ import random
 
 from django.core.cache import cache
 from django.db import transaction
+from django.conf import settings
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -11,6 +12,8 @@ from .models import UserAccount
 from .roles import grant_user_role, has_user_role
 
 logger = logging.getLogger(__name__)
+
+TEST_ACCOUNT_ROLES = ("admin", "teacher", "parent", "student")
 
 
 def generate_verify_code(mobile: str) -> str:
@@ -58,6 +61,26 @@ def verify_code(mobile: str, code: str) -> bool:
     """Verify the SMS code."""
     cached = cache.get(f"sms_code:{mobile}")
     return cached == code
+
+
+def is_fixed_test_account_code(mobile: str, code: str) -> bool:
+    """Return whether an explicitly enabled fixed test credential was used."""
+    return bool(
+        settings.TEST_LOGIN_ENABLED
+        and settings.TEST_LOGIN_PHONE
+        and settings.TEST_LOGIN_CODE
+        and mobile == settings.TEST_LOGIN_PHONE
+        and code == settings.TEST_LOGIN_CODE
+    )
+
+
+@transaction.atomic
+def ensure_fixed_test_account(mobile: str) -> UserAccount:
+    """Create the configured test user and idempotently grant every app role."""
+    user, _ = get_or_create_user(mobile, initial_role="student")
+    for role in TEST_ACCOUNT_ROLES:
+        grant_user_role(user, role)
+    return user
 
 
 class RoleNotGranted(Exception):

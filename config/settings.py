@@ -128,6 +128,11 @@ CACHES = {
 
 # Tencent Cloud SMS
 SMS_DEV_MODE = os.environ.get('SMS_DEV_MODE', '0').lower() in ('1', 'true', 'yes')
+# A local/test-only account may bypass the SMS cache. Keep this disabled by
+# default; deployments must opt in explicitly through their environment.
+TEST_LOGIN_ENABLED = os.environ.get('TEST_LOGIN_ENABLED', '0').lower() in ('1', 'true', 'yes')
+TEST_LOGIN_PHONE = os.environ.get('TEST_LOGIN_PHONE', '')
+TEST_LOGIN_CODE = os.environ.get('TEST_LOGIN_CODE', '')
 TENCENT_SMS_SECRET_ID = os.environ.get('TENCENT_SMS_SECRET_ID', '')
 TENCENT_SMS_SECRET_KEY = os.environ.get('TENCENT_SMS_SECRET_KEY', '')
 TENCENT_SMS_SDK_APP_ID = os.environ.get('TENCENT_SMS_SDK_APP_ID', '1400878428')
