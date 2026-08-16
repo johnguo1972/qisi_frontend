@@ -1169,6 +1169,30 @@ class AIQueueJobApiTest(TestCase):
         )
         dispatch.assert_called_once_with()
 
+    def test_retry_failed_creates_new_job_items_and_keeps_history(self):
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+
+        job = AIProcessingJob.create_for_questions(
+            creator=self.teacher, question_ids=[q.id for q in self.questions],
+            source='batch', model='qwen3.7-plus',
+        ).job
+        items = list(job.items.order_by('created_at'))
+        items[0].status = AIProcessingJobItem.Status.FAILED
+        items[0].error_code = 'processing_failed'
+        items[0].save(update_fields=['status', 'error_code'])
+        items[1].status = AIProcessingJobItem.Status.SUCCEEDED
+        items[1].save(update_fields=['status'])
+
+        with patch('apps.review.views.dispatch_queued_ai_items.delay') as dispatch:
+            response = self.client.post(reverse('ai-job-retry-failed', args=[job.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['data']['accepted'], 1)
+        self.assertNotEqual(response.data['data']['job_id'], str(job.id))
+        self.assertEqual(job.items.filter(status=AIProcessingJobItem.Status.FAILED).count(), 1)
+        self.assertEqual(AIProcessingJobItem.objects.filter(question=self.questions[0], status='queued').count(), 1)
+        dispatch.assert_called_once_with()
+
 
 class LegacyBatchQueueAdapterTest(TestCase):
     def test_legacy_batch_task_creates_durable_job_without_thread_pool(self):

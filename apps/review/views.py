@@ -446,6 +446,29 @@ def ai_job_cancel(request, job_id):
     return Response({'success': True, 'data': {'job_id': str(job.id), 'cancelled': cancelled}})
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
+def ai_job_retry_failed(request, job_id):
+    """Create a new durable job for failed/partial items without erasing history."""
+    job = _get_ai_job_for_request(request, job_id)
+    question_ids = list(job.items.filter(
+        status__in=(AIProcessingJobItem.Status.FAILED, AIProcessingJobItem.Status.PARTIAL),
+    ).values_list('question_id', flat=True))
+    try:
+        created = AIProcessingJob.create_for_questions(
+            creator=request.user, question_ids=question_ids,
+            source=AIProcessingJob.Source.MANUAL, model=job.model,
+        )
+    except AIQueueCapacityExceeded:
+        return Response({'success': False, 'error': 'ai_queue_capacity_exceeded'}, status=429)
+    dispatch_queued_ai_items.delay()
+    return Response({'success': True, 'data': {
+        'job_id': str(created.job.id) if created.job else None,
+        'accepted': created.accepted_count,
+        'deduplicated': created.duplicate_question_ids,
+    }})
+
+
 def _cancel_ai_job(job):
     with transaction.atomic():
         job = AIProcessingJob.objects.select_for_update().get(id=job.id)
