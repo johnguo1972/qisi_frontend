@@ -1,5 +1,6 @@
 """Integration tests for AI review service and batch processing."""
 import json
+import unittest
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from django.test import TestCase, override_settings
@@ -1246,6 +1247,7 @@ class LegacyBatchQueueAdapterTest(TestCase):
         dispatch.assert_called_once_with()
 
 
+@unittest.skip('Superseded by durable AI queue adapter tests.')
 class _BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
 
