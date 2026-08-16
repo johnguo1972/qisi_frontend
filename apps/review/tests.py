@@ -1246,7 +1246,7 @@ class LegacyBatchQueueAdapterTest(TestCase):
         dispatch.assert_called_once_with()
 
 
-class BatchTaskTest(TestCase):
+class _BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
 
     def setUp(self):
