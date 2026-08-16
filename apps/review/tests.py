@@ -1169,6 +1169,32 @@ class AIQueueJobApiTest(TestCase):
         )
         dispatch.assert_called_once_with()
 
+
+class AIQueueStatusCommandTest(TestCase):
+    def setUp(self):
+        self.teacher = UserAccount.objects.create(mobile='13900009010', display_name='Retry Teacher', role_type='teacher')
+        grant_user_role(self.teacher, 'teacher')
+        paper = ExamPaper.objects.create(title='Retry Paper', subject='physics')
+        self.questions = [ExamQuestion.objects.create(paper=paper, stem=f'Retry {i}', answer='A', question_type='single_choice') for i in range(2)]
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {generate_tokens(self.teacher, 'teacher')['access_token']}")
+
+    def test_status_command_reports_counts_without_question_content(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from apps.review.models import AIProcessingJob
+
+        teacher = UserAccount.objects.create(mobile='13900009009', display_name='Status Teacher', role_type='teacher')
+        paper = ExamPaper.objects.create(title='Sensitive title', subject='physics')
+        question = ExamQuestion.objects.create(paper=paper, stem='private question text', answer='A', question_type='single_choice')
+        AIProcessingJob.create_for_questions(creator=teacher, question_ids=[question.id], source='batch', model=None)
+        output = StringIO()
+        call_command('ai_queue_status', stdout=output)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload['capacity'], 10000)
+        self.assertEqual(payload['queued'], 1)
+        self.assertNotIn('private question text', output.getvalue())
+
     def test_retry_failed_creates_new_job_items_and_keeps_history(self):
         from apps.review.models import AIProcessingJob, AIProcessingJobItem
 
@@ -1743,11 +1769,7 @@ class TeacherAIEndpointPermissionTest(TestCase):
         )
         grant_user_role(user, 'admin')
         grant_user_role(user, 'teacher')
-        task = SimpleNamespace(id='multi-role-task')
-
-        with patch(
-            'apps.review.tasks.single_ai_process_question.delay', return_value=task
-        ) as dispatch:
+        with patch('apps.review.views.dispatch_queued_ai_items.delay') as dispatch:
             admin_client = APIClient()
             admin_access = generate_tokens(user, 'admin')['access_token']
             admin_client.credentials(HTTP_AUTHORIZATION=f'Bearer {admin_access}')
@@ -1768,4 +1790,4 @@ class TeacherAIEndpointPermissionTest(TestCase):
 
         self.assertEqual(denied.status_code, 403)
         self.assertEqual(allowed.status_code, 200)
-        dispatch.assert_called_once_with(str(self.question.id), model=None)
+        dispatch.assert_called_once_with()
