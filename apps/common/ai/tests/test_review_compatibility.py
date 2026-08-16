@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.core.management.base import CommandError
 from django.core.management import call_command
+from django.core.cache.backends.locmem import LocMemCache
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -37,6 +38,17 @@ from apps.common.ai.answer_arbitration import (
 from apps.common.ai.question_context import QuestionContextBuilder, question_context_hash
 from apps.parser.models import ExamPaper, ExamQuestion, QuestionOption
 from apps.knowledge.models import KnowledgePoint
+
+
+@pytest.fixture
+def mode_lock_cache(monkeypatch):
+    """Keep owner-lock tests independent of an external Redis instance."""
+    from apps.review import ai_mode_dispatch, tasks
+
+    cache = LocMemCache('mode-lock-tests', {})
+    monkeypatch.setattr(tasks, 'cache', cache)
+    monkeypatch.setattr(ai_mode_dispatch, 'cache', cache)
+    return cache
 
 
 def _make_question(*, stem="1 + 1 = ?"):
@@ -944,7 +956,7 @@ def test_single_mode_failure_preserves_old_mode_verifier_and_success_timestamp(
     ids=['success', 'handled_failure', 'soft_timeout', 'unexpected_exception'],
 )
 def test_single_mode_task_releases_its_owned_lock_on_every_terminal_path(
-    error, expected_status
+    error, expected_status, mode_lock_cache
 ):
     from celery.exceptions import SoftTimeLimitExceeded
     from apps.review import tasks
@@ -987,7 +999,7 @@ def test_single_mode_task_releases_its_owned_lock_on_every_terminal_path(
 
 
 @pytest.mark.django_db
-def test_single_mode_task_never_releases_a_newer_lock_owner():
+def test_single_mode_task_never_releases_a_newer_lock_owner(mode_lock_cache):
     from apps.review import tasks
 
     question = _make_question()
@@ -1009,7 +1021,7 @@ def test_single_mode_task_never_releases_a_newer_lock_owner():
 
 
 @pytest.mark.django_db
-def test_single_mode_task_releases_lock_even_when_service_close_fails():
+def test_single_mode_task_releases_lock_even_when_service_close_fails(mode_lock_cache):
     from apps.review import tasks
 
     question = _make_question()
