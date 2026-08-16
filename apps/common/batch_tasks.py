@@ -2,7 +2,7 @@
 import logging
 from celery import shared_task
 from apps.accounts.models import UserAccount
-from apps.common.ai_service import create_ai_review_service
+from apps.common.ai_service import AIReviewService, create_ai_review_service
 from apps.review.models import AIProcessingJob, AIQueueCapacityExceeded
 from apps.review.tasks import dispatch_queued_ai_items_task as dispatch_queued_ai_items
 
