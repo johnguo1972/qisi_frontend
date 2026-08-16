@@ -207,3 +207,10 @@ parser 旧 prompt 文件中的唯一非提示数据 `QUESTION_TYPE_LABELS` 已�
 - Qwen 追加真实冒烟成功：`provider=qwen model=qwen3.7-flash status=ok latency_ms=16191 schema=valid`。
 - DeepSeek 追加真实冒烟成功：`provider=deepseek model=deepseek-v4-pro status=ok latency_ms=6074 schema=valid`；调用仍使用独立 DeepSeek task，未回退到 Qwen。
 - Task11 当前结论：两个最小真实供应商调用均成功并通过各自 Schema；该证据只证明受控最小冒烟成功，不等同于所有业务场景的真实数据 E2E。
+## 持久化 AI 异步队列（2026-08-16）
+
+- 手工单题或批量 AI 处理先创建 PostgreSQL 作业和题目明细；Redis/Celery 仅承载短期投递与并发令牌，不能作为 10K 排队任务的唯一存储。
+- 默认上限：3 个活跃作业、16 条题目流水线、10,000 条持久化排队；超限返回 `ai_queue_capacity_exceeded`（HTTP 429）。
+- `ai.batch` 使用延迟确认和 `prefetch=1`；4 个 `--pool=threads --concurrency=4` worker 实例提供 16 路执行。Beat 每 5 秒回收超时运行项并继续投递。
+- Qwen / DeepSeek 分别限流；Redis 不可用时退化为本进程有界限制。查询、取消、重试接口分别为 `ai-jobs/<job_id>/`、`cancel/`、`retry-failed/`。
+- `python manage.py ai_queue_status` 只输出容量和状态计数，绝不输出题目、图片、提示词、响应、URL 或密钥。
