@@ -6,6 +6,7 @@ import threading
 import traceback
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 import httpx
 import pytest
@@ -28,6 +29,37 @@ TRACE_SYSTEM = "system-private-marker"
 TRACE_USER = "user-private-marker"
 TRACE_RAW_RESPONSE = "raw-response-private-marker"
 TRACE_NETWORK_DETAIL = "network-private-marker"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_provider_leases(monkeypatch):
+    @contextmanager
+    def no_op_provider_lease(_provider):
+        yield
+    monkeypatch.setattr(client_module, "provider_request_lease", no_op_provider_lease)
+
+
+def test_complete_once_releases_provider_lease_when_transport_times_out(monkeypatch):
+    events = []
+
+    @contextmanager
+    def recording_lease(provider):
+        events.append(('acquire', provider))
+        try:
+            yield
+        finally:
+            events.append(('release', provider))
+
+    def timeout(_request):
+        raise httpx.ReadTimeout('timeout')
+
+    monkeypatch.setattr(client_module, 'provider_request_lease', recording_lease)
+    with pytest.raises(AIRequestError):
+        AIClient(transport=httpx.MockTransport(timeout)).complete_once(
+            'question_probe', system='system', user='user',
+        )
+
+    assert events == [('acquire', 'qwen'), ('release', 'qwen')]
 
 
 class TrackingTransport(httpx.BaseTransport):
@@ -131,6 +163,10 @@ def _client(
         "load_ai_config",
         lambda: config or _config(),
     )
+    @contextmanager
+    def no_op_provider_lease(_provider):
+        yield
+    monkeypatch.setattr(client_module, "provider_request_lease", no_op_provider_lease)
     return AIClient(transport=httpx.MockTransport(handler), sleeper=sleeper)
 
 

@@ -84,10 +84,34 @@ CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
 CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', 'True').lower() == 'true'
 
+# Durable AI queue limits.  These values are deliberately independent from
+# Celery worker concurrency: three batch jobs may be active while at most
+# sixteen individual question pipelines are leased globally.
+AI_MAX_ACTIVE_JOBS = int(os.environ.get('AI_MAX_ACTIVE_JOBS', '3'))
+AI_GLOBAL_CONCURRENCY = int(os.environ.get('AI_GLOBAL_CONCURRENCY', '16'))
+AI_QUEUE_CAPACITY = int(os.environ.get('AI_QUEUE_CAPACITY', '10000'))
+AI_QWEN_CONCURRENCY = int(os.environ.get('AI_QWEN_CONCURRENCY', '16'))
+AI_DEEPSEEK_CONCURRENCY = int(os.environ.get('AI_DEEPSEEK_CONCURRENCY', '8'))
+
+# AI calls are long-running and must not be prefetched ahead of available
+# workers.  Late acknowledgement allows a lost worker to return its item to
+# the broker instead of silently dropping it.
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_TASK_ROUTES = {
+    'apps.review.tasks.execute_ai_job_item': {'queue': 'ai.batch'},
+    'apps.review.tasks.dispatch_queued_ai_items_task': {'queue': 'ai.batch'},
+}
+
 CELERY_BEAT_SCHEDULE = {
     'stale-task-check': {
         'task': 'apps.parser.tasks.periodic_stale_task_check',
         'schedule': 300.0,  # 5 minutes
+    },
+    'ai-queue-recovery': {
+        'task': 'apps.review.tasks.recover_and_dispatch_ai_items',
+        'schedule': 5.0,
     },
 }
 

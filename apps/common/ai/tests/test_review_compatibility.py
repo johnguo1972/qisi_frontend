@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.core.management.base import CommandError
 from django.core.management import call_command
+from django.core.cache.backends.locmem import LocMemCache
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -37,6 +38,17 @@ from apps.common.ai.answer_arbitration import (
 from apps.common.ai.question_context import QuestionContextBuilder, question_context_hash
 from apps.parser.models import ExamPaper, ExamQuestion, QuestionOption
 from apps.knowledge.models import KnowledgePoint
+
+
+@pytest.fixture
+def mode_lock_cache(monkeypatch):
+    """Keep owner-lock tests independent of an external Redis instance."""
+    from apps.review import ai_mode_dispatch, tasks
+
+    cache = LocMemCache('mode-lock-tests', {})
+    monkeypatch.setattr(tasks, 'cache', cache)
+    monkeypatch.setattr(ai_mode_dispatch, 'cache', cache)
+    return cache
 
 
 def _make_question(*, stem="1 + 1 = ?"):
@@ -394,71 +406,24 @@ def test_probe_endpoint_returns_not_found_without_dispatching():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_batch_task_uses_injected_facade_and_preserves_result_and_progress():
-    """Batch callers must not construct a provider client outside the facade."""
+def test_batch_task_creates_durable_job_without_local_thread_pool():
+    """Legacy callers delegate scheduling to the durable review queue."""
     from apps.common import batch_tasks
 
     question = _make_question()
-    facade = MagicMock()
-    facade.process_question_full_v2.return_value = {
-        "knowledge": {"knowledge_points": []},
-        "answer_a": {"mode": "A"},
-        "answer_b": {"mode": "B"},
-        "answer_c": {"mode": "C"},
-        "errors": {},
-    }
-    writes = []
-
-    with (
-        patch.object(
-            batch_tasks,
-            "create_ai_review_service",
-            return_value=facade,
-        ) as service_factory,
-        patch.object(batch_tasks.cache, "get", return_value=None),
-        patch.object(
-            batch_tasks.cache,
-            "set",
-            side_effect=lambda key, value, timeout: writes.append(
-                (key, json.loads(value), timeout)
-            ),
-        ),
-    ):
-        result = batch_tasks.batch_ai_process_questions.run([str(question.id)])
-
-    assert result == {
-        "status": "completed",
-        "success_count": 1,
-        "error_count": 0,
-        "errors": {},
-    }
-    service_factory.assert_called_once_with()
-    facade.process_question_full_v2.assert_called_once_with(
-        str(question.id), model=None
+    teacher = UserAccount.objects.create(
+        mobile="13900009998", display_name="Legacy adapter", role_type="teacher"
     )
-    facade.save_results_to_question.assert_called_once_with(
-        str(question.id), facade.process_question_full_v2.return_value
-    )
-    assert writes[0][1] == {
-        "current": 0,
-        "total": 1,
-        "status": "running",
-        "current_question": None,
-        "success_count": 0,
-        "error_count": 0,
-        "errors": {},
-    }
-    assert writes[-1][1] == {
-        "current": 1,
-        "total": 1,
-        "status": "completed",
-        "current_question": None,
-        "success_count": 1,
-        "error_count": 0,
-        "errors": {},
-    }
-    assert all(timeout == 3600 for _, _, timeout in writes)
-    facade.close.assert_called_once_with()
+
+    with patch.object(batch_tasks.dispatch_queued_ai_items, "delay") as dispatch:
+        result = batch_tasks.batch_ai_process_questions.run(
+            [str(question.id)], creator_id=str(teacher.id)
+        )
+
+    assert result["status"] == "pending"
+    assert result["accepted"] == 1
+    assert result["job_id"]
+    dispatch.assert_called_once_with()
 
 
 @pytest.mark.django_db
@@ -991,7 +956,7 @@ def test_single_mode_failure_preserves_old_mode_verifier_and_success_timestamp(
     ids=['success', 'handled_failure', 'soft_timeout', 'unexpected_exception'],
 )
 def test_single_mode_task_releases_its_owned_lock_on_every_terminal_path(
-    error, expected_status
+    error, expected_status, mode_lock_cache
 ):
     from celery.exceptions import SoftTimeLimitExceeded
     from apps.review import tasks
@@ -1034,7 +999,7 @@ def test_single_mode_task_releases_its_owned_lock_on_every_terminal_path(
 
 
 @pytest.mark.django_db
-def test_single_mode_task_never_releases_a_newer_lock_owner():
+def test_single_mode_task_never_releases_a_newer_lock_owner(mode_lock_cache):
     from apps.review import tasks
 
     question = _make_question()
@@ -1056,7 +1021,7 @@ def test_single_mode_task_never_releases_a_newer_lock_owner():
 
 
 @pytest.mark.django_db
-def test_single_mode_task_releases_lock_even_when_service_close_fails():
+def test_single_mode_task_releases_lock_even_when_service_close_fails(mode_lock_cache):
     from apps.review import tasks
 
     question = _make_question()

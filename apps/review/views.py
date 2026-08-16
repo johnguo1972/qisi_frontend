@@ -10,7 +10,9 @@ from rest_framework.exceptions import NotFound
 from celery.result import AsyncResult
 from django.core.cache import cache
 from django.db.models.functions import Cast
-from django.db.models import IntegerField, Case, When, Value, CharField, F
+from django.db import transaction
+from django.db.models import IntegerField, Case, When, Value, CharField, F, Count
+from django.utils import timezone
 from apps.parser.models import ExamQuestion, ExamPage
 from apps.papers.models import ExamPaper
 from apps.common.batch_tasks import batch_ai_process_questions
@@ -21,6 +23,8 @@ from .serializers import (
 )
 from .services.question_edit_service import update_question
 from .ai_mode_dispatch import dispatch_single_mode_ai_task
+from .tasks import dispatch_queued_ai_items_task as dispatch_queued_ai_items
+from .models import AIProcessingJob, AIProcessingJobItem, AIQueueCapacityExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +174,7 @@ from .serializers import AIStatusSerializer, AIProcessRequestSerializer
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def ai_process_question(request, question_id):
-    """Start async AI processing (knowledge + A/B/C) for a single question via Celery."""
+    """Queue the complete manual AI pipeline through the durable scheduler."""
     try:
         ExamQuestion.objects.get(id=question_id)
     except ExamQuestion.DoesNotExist:
@@ -180,12 +184,23 @@ def ai_process_question(request, question_id):
     serializer.is_valid(raise_exception=True)
     model = serializer.validated_data.get('model')
 
-    from .tasks import single_ai_process_question
-    task = single_ai_process_question.delay(question_id, model=model)
+    try:
+        created = AIProcessingJob.create_for_questions(
+            creator=request.user,
+            question_ids=[question_id],
+            source=AIProcessingJob.Source.MANUAL,
+            model=model,
+        )
+    except AIQueueCapacityExceeded:
+        return Response({'success': False, 'error': 'ai_queue_capacity_exceeded'}, status=429)
+    dispatch_queued_ai_items.delay()
+    job_id = str(created.job.id) if created.job else None
 
     return Response({
         'success': True,
-        'data': {'task_id': task.id, 'status': 'pending'},
+        'data': {'task_id': job_id, 'job_id': job_id, 'status': 'pending',
+                 'accepted': created.accepted_count,
+                 'deduplicated': created.duplicate_question_ids},
     })
 
 
@@ -215,6 +230,19 @@ def ai_process_probe(request, question_id):
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def single_ai_task_status(request, task_id):
     """Get async single AI task progress."""
+
+    try:
+        durable_job = AIProcessingJob.objects.filter(id=uuid.UUID(str(task_id)), creator=request.user).first()
+    except ValueError:
+        durable_job = None
+    if durable_job:
+        summary = _ai_job_summary(durable_job)
+        return Response({'success': True, 'data': {
+            'status': 'complete' if summary['status'] == 'completed' else summary['status'],
+            'step': 'complete' if summary['status'] == 'completed' else 'starting',
+            'step_label': '任务已完成' if summary['status'] == 'completed' else '任务排队中...',
+            'result': summary, 'error': None,
+        }})
 
     progress_data = cache.get(f'single_ai_progress:{task_id}')
     if not progress_data:
@@ -331,22 +359,160 @@ def batch_ai_process(request):
 
     model = request.data.get('model')
 
-    task = batch_ai_process_questions.delay(question_ids, model)
+    try:
+        created = AIProcessingJob.create_for_questions(
+            creator=request.user,
+            question_ids=question_ids,
+            source=AIProcessingJob.Source.BATCH,
+            model=model,
+        )
+    except AIQueueCapacityExceeded:
+        return Response(
+            {'success': False, 'error': 'ai_queue_capacity_exceeded'}, status=429
+        )
+    dispatch_queued_ai_items.delay()
 
     return Response({
         'success': True,
         'data': {
-            'task_id': task.id,
+            'job_id': str(created.job.id) if created.job else None,
+            'task_id': str(created.job.id) if created.job else None,
             'total': len(question_ids),
+            'accepted': created.accepted_count,
+            'deduplicated': created.duplicate_question_ids,
             'status': 'pending',
         }
     })
+
+
+def _get_ai_job_for_request(request, job_id):
+    """Jobs are private to the initiating teacher, even for shared questions."""
+    try:
+        return AIProcessingJob.objects.get(id=job_id, creator=request.user)
+    except AIProcessingJob.DoesNotExist:
+        raise NotFound('AI processing job not found')
+
+
+def _ai_job_summary(job):
+    counts = {
+        row['status']: row['count']
+        for row in job.items.values('status').annotate(count=Count('id'))
+    }
+    total = sum(counts.values())
+    terminal = sum(
+        counts.get(state, 0)
+        for state in (
+            AIProcessingJobItem.Status.SUCCEEDED,
+            AIProcessingJobItem.Status.PARTIAL,
+            AIProcessingJobItem.Status.FAILED,
+            AIProcessingJobItem.Status.CANCELLED,
+        )
+    )
+    if job.cancel_requested and terminal == total:
+        status = AIProcessingJob.Status.CANCELLED
+    elif terminal == total:
+        status = AIProcessingJob.Status.COMPLETED
+    elif counts.get(AIProcessingJobItem.Status.RUNNING) or counts.get(AIProcessingJobItem.Status.DISPATCHED):
+        status = AIProcessingJob.Status.RUNNING
+    else:
+        status = AIProcessingJob.Status.QUEUED
+    return {
+        'job_id': str(job.id),
+        'status': status,
+        'total': total,
+        'queued': counts.get(AIProcessingJobItem.Status.QUEUED, 0),
+        'dispatched': counts.get(AIProcessingJobItem.Status.DISPATCHED, 0),
+        'running': counts.get(AIProcessingJobItem.Status.RUNNING, 0),
+        'succeeded': counts.get(AIProcessingJobItem.Status.SUCCEEDED, 0),
+        'partial': counts.get(AIProcessingJobItem.Status.PARTIAL, 0),
+        'failed': counts.get(AIProcessingJobItem.Status.FAILED, 0),
+        'cancelled': counts.get(AIProcessingJobItem.Status.CANCELLED, 0),
+        'cancel_requested': job.cancel_requested,
+    }
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
+def ai_job_status(request, job_id):
+    return Response({'success': True, 'data': _ai_job_summary(_get_ai_job_for_request(request, job_id))})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
+def ai_job_cancel(request, job_id):
+    job = _get_ai_job_for_request(request, job_id)
+    cancelled = _cancel_ai_job(job)
+    dispatch_queued_ai_items.delay()
+    return Response({'success': True, 'data': {'job_id': str(job.id), 'cancelled': cancelled}})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
+def ai_job_retry_failed(request, job_id):
+    """Create a new durable job for failed/partial items without erasing history."""
+    job = _get_ai_job_for_request(request, job_id)
+    question_ids = list(job.items.filter(
+        status__in=(AIProcessingJobItem.Status.FAILED, AIProcessingJobItem.Status.PARTIAL),
+    ).values_list('question_id', flat=True))
+    try:
+        created = AIProcessingJob.create_for_questions(
+            creator=request.user, question_ids=question_ids,
+            source=AIProcessingJob.Source.MANUAL, model=job.model,
+        )
+    except AIQueueCapacityExceeded:
+        return Response({'success': False, 'error': 'ai_queue_capacity_exceeded'}, status=429)
+    dispatch_queued_ai_items.delay()
+    return Response({'success': True, 'data': {
+        'job_id': str(created.job.id) if created.job else None,
+        'accepted': created.accepted_count,
+        'deduplicated': created.duplicate_question_ids,
+    }})
+
+
+def _cancel_ai_job(job):
+    with transaction.atomic():
+        job = AIProcessingJob.objects.select_for_update().get(id=job.id)
+        job.cancel_requested = True
+        job.save(update_fields=['cancel_requested'])
+        cancelled = AIProcessingJobItem.objects.filter(
+            job=job,
+            status__in=(
+                AIProcessingJobItem.Status.QUEUED,
+                AIProcessingJobItem.Status.DISPATCHED,
+            ),
+        ).update(status=AIProcessingJobItem.Status.CANCELLED, finished_at=timezone.now())
+    return cancelled
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def batch_task_status(request, task_id):
     """Get batch task progress."""
+    try:
+        job_id = uuid.UUID(str(task_id))
+    except ValueError:
+        job_id = None
+    if job_id:
+        job = AIProcessingJob.objects.filter(id=job_id, creator=request.user).first()
+        if job:
+            summary = _ai_job_summary(job)
+            current = summary['succeeded'] + summary['partial'] + summary['failed'] + summary['cancelled']
+            legacy_status = {
+                AIProcessingJob.Status.QUEUED: 'pending',
+                AIProcessingJob.Status.RUNNING: 'running',
+                AIProcessingJob.Status.COMPLETED: 'completed',
+                AIProcessingJob.Status.CANCELLED: 'cancelled',
+            }[summary['status']]
+            return Response({'success': True, 'data': {
+                'current': current,
+                'total': summary['total'],
+                'status': legacy_status,
+                'current_question': None,
+                'success_count': summary['succeeded'],
+                'error_count': summary['partial'] + summary['failed'],
+                'errors': {},
+                'job_id': summary['job_id'],
+            }})
     progress_data = cache.get(f'batch_progress:{task_id}')
     if not progress_data:
         return Response({'success': False, 'error': 'Task not found'}, status=404)
@@ -359,6 +525,16 @@ def batch_task_status(request, task_id):
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def batch_task_cancel(request, task_id):
     """Cancel a running batch task."""
+    try:
+        job_id = uuid.UUID(str(task_id))
+    except ValueError:
+        job_id = None
+    if job_id:
+        job = AIProcessingJob.objects.filter(id=job_id, creator=request.user).first()
+        if job:
+            cancelled = _cancel_ai_job(job)
+            dispatch_queued_ai_items.delay()
+            return Response({'success': True, 'data': {'job_id': str(job.id), 'cancelled': cancelled}})
     cache.set(f'batch_cancel:{task_id}', '1', timeout=60)
     return Response({'success': True, 'message': 'Cancel requested'})
 

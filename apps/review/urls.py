@@ -22,6 +22,9 @@ urlpatterns = [
     path('review/question/<str:question_id>/ai-status/', views.ai_question_status, name='ai-question-status'),
     # Batch AI processing endpoints
     path('review/batch-ai-process/', views.batch_ai_process, name='batch-ai-process'),
+    path('review/ai-jobs/<uuid:job_id>/', views.ai_job_status, name='ai-job-status'),
+    path('review/ai-jobs/<uuid:job_id>/cancel/', views.ai_job_cancel, name='ai-job-cancel'),
+    path('review/ai-jobs/<uuid:job_id>/retry-failed/', views.ai_job_retry_failed, name='ai-job-retry-failed'),
     path('review/batch-task/<str:task_id>/status/', views.batch_task_status, name='batch-task-status'),
     path('review/batch-task/<str:task_id>/cancel/', views.batch_task_cancel, name='batch-task-cancel'),
     # JSON bbox crop & assets management REST APIs

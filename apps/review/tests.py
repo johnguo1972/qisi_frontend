@@ -1,8 +1,9 @@
 """Integration tests for AI review service and batch processing."""
 import json
+import unittest
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.core.cache import cache
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -878,7 +879,376 @@ class AIProcessFullPipelineTest(TestCase):
         self.assertEqual(self.question.ai_processing_status, 'failed')
 
 
-class BatchTaskTest(TestCase):
+class AIProcessingJobModelTest(TestCase):
+    """Durable queue records enforce capacity and per-question de-duplication."""
+
+    def setUp(self):
+        self.teacher = UserAccount.objects.create(
+            mobile='13900009001', display_name='Queue Teacher', role_type='teacher',
+        )
+        self.paper = ExamPaper.objects.create(title='Queue Paper', subject='physics')
+        self.questions = [
+            ExamQuestion.objects.create(
+                paper=self.paper,
+                stem=f'Queue question {index}',
+                answer='A',
+                question_type='single_choice',
+            )
+            for index in range(3)
+        ]
+
+    @override_settings(AI_QUEUE_CAPACITY=2)
+    def test_job_creation_deduplicates_active_question_and_rejects_capacity_overflow(self):
+        from apps.review.models import AIProcessingJob, AIQueueCapacityExceeded
+
+        first = AIProcessingJob.create_for_questions(
+            creator=self.teacher,
+            question_ids=[self.questions[0].id, self.questions[1].id],
+            source='batch',
+            model=None,
+        )
+
+        self.assertEqual(first.accepted_count, 2)
+        duplicate = AIProcessingJob.create_for_questions(
+            creator=self.teacher,
+            question_ids=[self.questions[0].id],
+            source='batch',
+            model=None,
+        )
+        self.assertEqual(duplicate.accepted_count, 0)
+        self.assertEqual(duplicate.duplicate_question_ids, [str(self.questions[0].id)])
+
+        with self.assertRaises(AIQueueCapacityExceeded):
+            AIProcessingJob.create_for_questions(
+                creator=self.teacher,
+                question_ids=[self.questions[2].id],
+                source='batch',
+                model=None,
+            )
+
+
+class AIQueueSchedulerTest(TestCase):
+    def test_redis_lease_pool_enforces_limit_and_owner_aware_release(self):
+        from apps.review.ai_queue import RedisLeasePool
+
+        pool = RedisLeasePool('test-question', limit=2, ttl_seconds=60)
+        with patch.object(pool, '_eval', side_effect=[1, 1, 0, 0, 1, 0]) as eval_call:
+            self.assertTrue(pool.acquire('first'))
+            self.assertTrue(pool.acquire('second'))
+            self.assertFalse(pool.acquire('third'))
+            self.assertFalse(pool.release('old-first'))
+            self.assertTrue(pool.release('first'))
+            self.assertFalse(pool.release('first'))
+
+        self.assertEqual(eval_call.call_count, 6)
+
+    def test_fair_item_selection_gives_each_three_jobs_four_baseline_slots(self):
+        from apps.review.ai_queue import select_fair_item_ids
+
+        jobs = [
+            ('job-a', [f'a-{n}' for n in range(10)]),
+            ('job-b', [f'b-{n}' for n in range(10)]),
+            ('job-c', [f'c-{n}' for n in range(10)]),
+        ]
+
+        selected = select_fair_item_ids(jobs, limit=16)
+
+        self.assertEqual(len(selected), 16)
+        self.assertEqual(sum(item.startswith('a-') for item in selected), 6)
+        self.assertEqual(sum(item.startswith('b-') for item in selected), 5)
+        self.assertEqual(sum(item.startswith('c-') for item in selected), 5)
+
+    @override_settings(AI_QUEUE_CAPACITY=10)
+    def test_reserve_queued_items_marks_fair_items_dispatched_and_skips_cancelled_job(self):
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.ai_queue import reserve_queued_item_ids
+
+        teacher = UserAccount.objects.create(
+            mobile='13900009002', display_name='Dispatch Teacher', role_type='teacher',
+        )
+        paper = ExamPaper.objects.create(title='Dispatch Queue Paper', subject='physics')
+        questions = [
+            ExamQuestion.objects.create(paper=paper, stem=f'Dispatch {i}', answer='A', question_type='single_choice')
+            for i in range(4)
+        ]
+        job = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[question.id for question in questions[:3]], source='batch', model=None,
+        ).job
+        cancelled = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[questions[3].id], source='batch', model=None,
+        ).job
+        cancelled.cancel_requested = True
+        cancelled.save(update_fields=['cancel_requested'])
+
+        with patch('apps.review.ai_queue.RedisLeasePool.acquire', return_value=True):
+            reserved = reserve_queued_item_ids(limit=3)
+
+        self.assertEqual(len(reserved), 3)
+        self.assertEqual(
+            AIProcessingJobItem.objects.filter(job=job, status='dispatched').count(), 3,
+        )
+        self.assertEqual(
+            AIProcessingJobItem.objects.filter(job=cancelled, status='queued').count(), 1,
+        )
+
+
+class AIQueueExecutionTaskTest(TestCase):
+    def test_execute_item_runs_existing_full_pipeline_and_releases_lease(self):
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.tasks import execute_ai_job_item
+
+        teacher = UserAccount.objects.create(mobile='13900009003', display_name='Task Teacher', role_type='teacher')
+        paper = ExamPaper.objects.create(title='Task Paper', subject='physics')
+        question = ExamQuestion.objects.create(paper=paper, stem='Task stem', answer='A', question_type='single_choice')
+        item = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[question.id], source='batch', model=None,
+        ).job.items.get()
+        item.status = AIProcessingJobItem.Status.DISPATCHED
+        item.save(update_fields=['status'])
+
+        with (
+            patch('apps.review.tasks.AIReviewService.process_question_full_v2', return_value={'errors': {}}),
+            patch('apps.review.tasks.AIReviewService.save_results_to_question'),
+            patch('apps.review.ai_queue.RedisLeasePool.release', return_value=True) as release,
+        ):
+            result = execute_ai_job_item.run(str(item.id))
+
+        item.refresh_from_db()
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(item.status, AIProcessingJobItem.Status.SUCCEEDED)
+        release.assert_called_once_with(str(item.id))
+
+
+class AIQueueCeleryDispatchTest(TestCase):
+    def test_dispatch_enqueues_reserved_item_on_ai_batch_queue(self):
+        from apps.review.ai_queue import dispatch_queued_ai_items
+
+        with (
+            patch('apps.review.ai_queue.reserve_queued_item_ids', return_value=['item-1']),
+            patch('apps.review.tasks.execute_ai_job_item.apply_async') as enqueue,
+        ):
+            dispatch_queued_ai_items(limit=1)
+
+        enqueue.assert_called_once_with(args=('item-1',), queue='ai.batch')
+
+    def test_dispatch_failure_requeues_item_and_releases_lease(self):
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.ai_queue import dispatch_queued_ai_items
+
+        teacher = UserAccount.objects.create(mobile='13900009004', display_name='Broker Teacher', role_type='teacher')
+        paper = ExamPaper.objects.create(title='Broker Paper', subject='physics')
+        question = ExamQuestion.objects.create(paper=paper, stem='Broker stem', answer='A', question_type='single_choice')
+        item = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[question.id], source='batch', model=None,
+        ).job.items.get()
+        item.status = AIProcessingJobItem.Status.DISPATCHED
+        item.save(update_fields=['status'])
+
+        with (
+            patch('apps.review.ai_queue.reserve_queued_item_ids', return_value=[str(item.id)]),
+            patch('apps.review.tasks.execute_ai_job_item.apply_async', side_effect=RuntimeError('broker down')),
+            patch('apps.review.ai_queue.RedisLeasePool.release', return_value=True) as release,
+        ):
+            self.assertEqual(dispatch_queued_ai_items(limit=1), 0)
+
+        item.refresh_from_db()
+        self.assertEqual(item.status, AIProcessingJobItem.Status.QUEUED)
+        release.assert_called_once_with(str(item.id))
+
+
+class AIQueueBatchApiTest(TestCase):
+    def test_batch_api_creates_durable_job_and_triggers_dispatch(self):
+        teacher = UserAccount.objects.create(mobile='13900009005', display_name='API Teacher', role_type='teacher')
+        grant_user_role(teacher, 'teacher')
+        paper = ExamPaper.objects.create(title='API Paper', subject='physics')
+        question = ExamQuestion.objects.create(paper=paper, stem='API stem', answer='A', question_type='single_choice')
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {generate_tokens(teacher, 'teacher')['access_token']}")
+
+        with patch('apps.review.views.dispatch_queued_ai_items.delay') as dispatch:
+            response = client.post(reverse('batch-ai-process'), {'question_ids': [str(question.id)]}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['data']['accepted'], 1)
+        self.assertIn('job_id', response.json()['data'])
+        dispatch.assert_called_once_with()
+
+
+class AIQueueCelerySettingsTest(TestCase):
+    def test_ai_queue_routes_and_reliability_settings_are_explicit(self):
+        from django.conf import settings
+
+        self.assertEqual(settings.CELERY_WORKER_PREFETCH_MULTIPLIER, 1)
+        self.assertTrue(settings.CELERY_TASK_ACKS_LATE)
+        self.assertTrue(settings.CELERY_TASK_REJECT_ON_WORKER_LOST)
+        self.assertEqual(
+            settings.CELERY_TASK_ROUTES['apps.review.tasks.execute_ai_job_item']['queue'],
+            'ai.batch',
+        )
+
+    def test_recovery_requeues_expired_running_item_and_dispatches(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.tasks import recover_and_dispatch_ai_items
+
+        teacher = UserAccount.objects.create(
+            mobile='13900009006', display_name='Recovery Teacher', role_type='teacher',
+        )
+        paper = ExamPaper.objects.create(title='Recovery Paper', subject='physics')
+        question = ExamQuestion.objects.create(
+            paper=paper, stem='Recovery stem', answer='A', question_type='single_choice',
+        )
+        item = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[question.id], source='batch', model=None,
+        ).job.items.get()
+        item.status = AIProcessingJobItem.Status.RUNNING
+        item.started_at = timezone.now() - timedelta(seconds=4201)
+        item.save(update_fields=['status', 'started_at'])
+
+        with (
+            patch('apps.review.tasks.dispatch_queued_ai_items') as dispatch,
+            patch('apps.review.ai_queue.RedisLeasePool.release', return_value=True),
+        ):
+            self.assertEqual(recover_and_dispatch_ai_items.run(), 1)
+
+        item.refresh_from_db()
+        self.assertEqual(item.status, AIProcessingJobItem.Status.QUEUED)
+        self.assertEqual(item.error_code, 'worker_lost')
+        dispatch.assert_called_once_with()
+
+
+class AIQueueJobApiTest(TestCase):
+    def setUp(self):
+        self.teacher = UserAccount.objects.create(
+            mobile='13900009007', display_name='Job API Teacher', role_type='teacher',
+        )
+        grant_user_role(self.teacher, 'teacher')
+        self.paper = ExamPaper.objects.create(title='Job API Paper', subject='physics')
+        self.questions = [
+            ExamQuestion.objects.create(
+                paper=self.paper, stem=f'Job API {index}', answer='A',
+                question_type='single_choice',
+            )
+            for index in range(2)
+        ]
+        self.client = APIClient()
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {generate_tokens(self.teacher, 'teacher')['access_token']}",
+        )
+
+    def test_status_and_cancel_use_durable_job_items(self):
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+
+        job = AIProcessingJob.create_for_questions(
+            creator=self.teacher,
+            question_ids=[question.id for question in self.questions],
+            source='batch', model=None,
+        ).job
+        item = job.items.order_by('created_at').first()
+        item.status = AIProcessingJobItem.Status.DISPATCHED
+        item.save(update_fields=['status'])
+
+        status = self.client.get(reverse('ai-job-status', args=[job.id]))
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.data['data']['total'], 2)
+        self.assertEqual(status.data['data']['queued'], 1)
+        self.assertEqual(status.data['data']['dispatched'], 1)
+
+        legacy_status = self.client.get(reverse('batch-task-status', args=[job.id]))
+        self.assertEqual(legacy_status.status_code, 200)
+        self.assertEqual(legacy_status.data['data']['total'], 2)
+        self.assertEqual(legacy_status.data['data']['status'], 'running')
+
+        with patch('apps.review.views.dispatch_queued_ai_items.delay') as dispatch:
+            cancelled = self.client.post(reverse('ai-job-cancel', args=[job.id]))
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.data['data']['cancelled'], 2)
+        self.assertEqual(
+            job.items.filter(status=AIProcessingJobItem.Status.CANCELLED).count(), 2,
+        )
+        dispatch.assert_called_once_with()
+
+
+class AIQueueStatusCommandTest(TestCase):
+    def setUp(self):
+        self.teacher = UserAccount.objects.create(mobile='13900009010', display_name='Retry Teacher', role_type='teacher')
+        grant_user_role(self.teacher, 'teacher')
+        paper = ExamPaper.objects.create(title='Retry Paper', subject='physics')
+        self.questions = [ExamQuestion.objects.create(paper=paper, stem=f'Retry {i}', answer='A', question_type='single_choice') for i in range(2)]
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {generate_tokens(self.teacher, 'teacher')['access_token']}")
+
+    def test_status_command_reports_counts_without_question_content(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from apps.review.models import AIProcessingJob
+
+        teacher = UserAccount.objects.create(mobile='13900009009', display_name='Status Teacher', role_type='teacher')
+        paper = ExamPaper.objects.create(title='Sensitive title', subject='physics')
+        question = ExamQuestion.objects.create(paper=paper, stem='private question text', answer='A', question_type='single_choice')
+        AIProcessingJob.create_for_questions(creator=teacher, question_ids=[question.id], source='batch', model=None)
+        output = StringIO()
+        call_command('ai_queue_status', stdout=output)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload['capacity'], 10000)
+        self.assertEqual(payload['queued'], 1)
+        self.assertNotIn('private question text', output.getvalue())
+
+    def test_retry_failed_creates_new_job_items_and_keeps_history(self):
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+
+        job = AIProcessingJob.create_for_questions(
+            creator=self.teacher, question_ids=[q.id for q in self.questions],
+            source='batch', model='qwen3.7-plus',
+        ).job
+        items = list(job.items.order_by('created_at'))
+        items[0].status = AIProcessingJobItem.Status.FAILED
+        items[0].error_code = 'processing_failed'
+        items[0].save(update_fields=['status', 'error_code'])
+        items[1].status = AIProcessingJobItem.Status.SUCCEEDED
+        items[1].save(update_fields=['status'])
+
+        with patch('apps.review.views.dispatch_queued_ai_items.delay') as dispatch:
+            response = self.client.post(reverse('ai-job-retry-failed', args=[job.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['data']['accepted'], 1)
+        self.assertNotEqual(response.data['data']['job_id'], str(job.id))
+        self.assertEqual(job.items.filter(status=AIProcessingJobItem.Status.FAILED).count(), 1)
+        self.assertEqual(AIProcessingJobItem.objects.filter(question=self.questions[0], status='queued').count(), 1)
+        dispatch.assert_called_once_with()
+
+
+class LegacyBatchQueueAdapterTest(TestCase):
+    def test_legacy_batch_task_creates_durable_job_without_thread_pool(self):
+        from apps.common.batch_tasks import batch_ai_process_questions
+        from apps.review.models import AIProcessingJobItem
+
+        teacher = UserAccount.objects.create(
+            mobile='13900009008', display_name='Legacy Queue Teacher', role_type='teacher',
+        )
+        paper = ExamPaper.objects.create(title='Legacy Queue Paper', subject='physics')
+        question = ExamQuestion.objects.create(
+            paper=paper, stem='Legacy queue stem', answer='A', question_type='single_choice',
+        )
+
+        with patch('apps.common.batch_tasks.dispatch_queued_ai_items.delay') as dispatch:
+            result = batch_ai_process_questions.run(
+                [str(question.id)], creator_id=str(teacher.id),
+            )
+
+        self.assertEqual(result['status'], 'pending')
+        self.assertEqual(result['accepted'], 1)
+        self.assertTrue(
+            AIProcessingJobItem.objects.filter(question=question, status='queued').exists(),
+        )
+        dispatch.assert_called_once_with()
+
+
+@unittest.skip('Superseded by durable AI queue adapter tests.')
+class _BatchTaskTest(TestCase):
     """Tests for Celery batch processing task."""
 
     def setUp(self):
@@ -1376,10 +1746,7 @@ class TeacherAIEndpointPermissionTest(TestCase):
         teacher = self._client(
             legacy_role='teacher', active_role='teacher', grants=('teacher',)
         )
-        task = SimpleNamespace(id='teacher-task')
-        with patch(
-            'apps.review.tasks.single_ai_process_question.delay', return_value=task
-        ) as dispatch:
+        with patch('apps.review.views.dispatch_queued_ai_items.delay') as dispatch:
             success = teacher.post(
                 reverse('ai-process-question', args=[self.question.id]),
                 {},
@@ -1392,9 +1759,9 @@ class TeacherAIEndpointPermissionTest(TestCase):
         )
 
         self.assertEqual(success.status_code, 200)
-        self.assertEqual(success.json()['data']['task_id'], 'teacher-task')
+        self.assertTrue(success.json()['data']['task_id'])
         self.assertEqual(invalid.status_code, 400)
-        dispatch.assert_called_once_with(str(self.question.id), model=None)
+        dispatch.assert_called_once_with()
 
     def test_multi_role_account_requires_teacher_active_session(self):
         user = UserAccount.objects.create(
@@ -1404,11 +1771,7 @@ class TeacherAIEndpointPermissionTest(TestCase):
         )
         grant_user_role(user, 'admin')
         grant_user_role(user, 'teacher')
-        task = SimpleNamespace(id='multi-role-task')
-
-        with patch(
-            'apps.review.tasks.single_ai_process_question.delay', return_value=task
-        ) as dispatch:
+        with patch('apps.review.views.dispatch_queued_ai_items.delay') as dispatch:
             admin_client = APIClient()
             admin_access = generate_tokens(user, 'admin')['access_token']
             admin_client.credentials(HTTP_AUTHORIZATION=f'Bearer {admin_access}')
@@ -1429,4 +1792,4 @@ class TeacherAIEndpointPermissionTest(TestCase):
 
         self.assertEqual(denied.status_code, 403)
         self.assertEqual(allowed.status_code, 200)
-        dispatch.assert_called_once_with(str(self.question.id), model=None)
+        dispatch.assert_called_once_with()

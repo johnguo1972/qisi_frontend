@@ -1,104 +1,48 @@
 """Celery tasks for batch AI processing of questions."""
 import logging
-import json
 from celery import shared_task
-from django.core.cache import cache
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from apps.accounts.models import UserAccount
 from apps.common.ai_service import AIReviewService, create_ai_review_service
+from apps.review.models import AIProcessingJob, AIQueueCapacityExceeded
+from apps.review.tasks import dispatch_queued_ai_items_task as dispatch_queued_ai_items
 
 logger = logging.getLogger(__name__)
 
+# Kept as public compatibility constants for student progress polling. New
+# durable batch jobs do not write these transient cache records.
 CANCEL_KEY_PREFIX = 'batch_cancel:'
 PROGRESS_KEY_PREFIX = 'batch_progress:'
-MAX_CONCURRENCY = 3
-
 
 @shared_task(bind=True, max_retries=0)
-def batch_ai_process_questions(self, question_ids, model=None):
-    """Batch AI processing for multiple questions with concurrency control.
+def batch_ai_process_questions(self, question_ids, model=None, creator_id=None):
+    """Compatibility adapter: persist a job instead of spawning local threads.
 
-    Args:
-        question_ids: list of question IDs to process
-        model: optional AI model override
+    New HTTP callers create jobs directly.  Legacy callers must provide their
+    initiating teacher ID so audit ownership and status polling remain intact.
     """
-    task_id = self.request.id
-    total = len(question_ids)
-    cache.set(f'{PROGRESS_KEY_PREFIX}{task_id}', json.dumps({
-        'current': 0, 'total': total, 'status': 'running',
-        'current_question': None, 'success_count': 0, 'error_count': 0,
-        'errors': {},
-    }), timeout=3600)
-
-    service = create_ai_review_service()
-    success_count = 0
-    error_count = 0
-    errors = {}
-
-    def process_one(q_id):
-        """Process a single question, return (q_id, success, error_msg)."""
-        try:
-            # Batch processing must use the same current pipeline as manual
-            # single-mode processing: probe, vision, A/B/C arbitration, and
-            # DeepSeek verification.  The legacy entry point can silently
-            # leave one mode absent after a partial result.
-            results = service.process_question_full_v2(q_id, model=model)
-            service.save_results_to_question(q_id, results)
-            has_errors = bool(results.get('errors'))
-            return (q_id, not has_errors,
-                    str(results.get('errors')) if has_errors else None)
-        except Exception as e:
-            return (q_id, False, str(e))
-
+    if not creator_id:
+        logger.warning('Legacy AI batch rejected without creator')
+        return {'status': 'failed', 'error': 'creator_required'}
     try:
-        with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as executor:
-            futures = {executor.submit(process_one, q_id): q_id for q_id in question_ids}
-            current = 0
+        creator = UserAccount.objects.get(id=creator_id)
+        created = AIProcessingJob.create_for_questions(
+            creator=creator,
+            question_ids=question_ids,
+            source=AIProcessingJob.Source.LEGACY,
+            model=model,
+        )
+    except UserAccount.DoesNotExist:
+        return {'status': 'failed', 'error': 'creator_not_found'}
+    except AIQueueCapacityExceeded:
+        return {'status': 'rejected', 'error': 'ai_queue_capacity_exceeded'}
 
-            for future in as_completed(futures):
-                if cache.get(f'{CANCEL_KEY_PREFIX}{task_id}'):
-                    logger.info(f'Batch task {task_id} cancelled at {current}/{total}')
-                    cache.set(f'{PROGRESS_KEY_PREFIX}{task_id}', json.dumps({
-                        'current': current, 'total': total, 'status': 'cancelled',
-                        'current_question': None, 'success_count': success_count,
-                        'error_count': error_count, 'errors': errors,
-                    }), timeout=3600)
-                    return {'status': 'cancelled', 'current': current, 'total': total}
-
-                q_id, success, error = future.result()
-                current += 1
-
-                if success:
-                    success_count += 1
-                else:
-                    error_count += 1
-                    errors[str(q_id)] = error or 'Unknown error'
-
-                cache.set(f'{PROGRESS_KEY_PREFIX}{task_id}', json.dumps({
-                    'current': current, 'total': total, 'status': 'running',
-                    'current_question': q_id, 'success_count': success_count,
-                    'error_count': error_count, 'errors': dict(errors),
-                }), timeout=3600)
-
-        cache.set(f'{PROGRESS_KEY_PREFIX}{task_id}', json.dumps({
-            'current': total, 'total': total, 'status': 'completed',
-            'current_question': None, 'success_count': success_count,
-            'error_count': error_count, 'errors': errors,
-        }), timeout=3600)
-
-        return {'status': 'completed', 'success_count': success_count,
-                'error_count': error_count, 'errors': errors}
-
-    except Exception as e:
-        logger.exception(f'Batch task {task_id} failed')
-        cache.set(f'{PROGRESS_KEY_PREFIX}{task_id}', json.dumps({
-            'current': current, 'total': total, 'status': 'failed',
-            'current_question': None, 'success_count': success_count,
-            'error_count': error_count, 'errors': errors,
-            'task_error': str(e),
-        }), timeout=3600)
-        return {'status': 'failed', 'error': str(e)}
-    finally:
-        service.close()
+    dispatch_queued_ai_items.delay()
+    return {
+        'status': 'pending',
+        'job_id': str(created.job.id) if created.job else None,
+        'accepted': created.accepted_count,
+        'deduplicated': created.duplicate_question_ids,
+    }
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)

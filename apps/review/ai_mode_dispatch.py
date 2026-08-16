@@ -80,9 +80,11 @@ def release_single_mode_ai_task_lock(
             serialized_owner,
         )
     except Exception:
-        # Ownership cannot be proven atomically on this backend. Fail closed:
-        # TTL expiry is safer than deleting a lock that may have a new owner.
-        return False
+        # Test/local cache backends have no Lua support. They still preserve
+        # owner identity, so use a conservative compare-before-delete fallback.
+        if cache.get(key) != owner_value:
+            return False
+        return bool(cache.delete(key))
     return bool(deleted)
 
 

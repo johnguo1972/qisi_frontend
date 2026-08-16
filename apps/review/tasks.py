@@ -2,6 +2,7 @@
 import json
 import logging
 from celery import shared_task
+from django.conf import settings
 from celery.exceptions import SoftTimeLimitExceeded
 from django.core.cache import cache
 from django.db import transaction
@@ -13,6 +14,7 @@ from apps.common.ai.question_context import (
 )
 from apps.parser.models import ExamQuestion
 from .ai_mode_dispatch import release_single_mode_ai_task_lock
+from .ai_queue import dispatch_queued_ai_items, recover_stale_ai_items
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,56 @@ STEP_LABELS = {
     'answer_c': '正在生成C模式答案...',
     'verifier': '正在校验...',
 }
+
+
+@shared_task
+def dispatch_queued_ai_items_task():
+    return dispatch_queued_ai_items()
+
+
+@shared_task
+def recover_and_dispatch_ai_items():
+    """Recover only expired lost-worker items, then fill available slots."""
+    recovered = recover_stale_ai_items()
+    dispatch_queued_ai_items()
+    return recovered
+
+
+@shared_task(bind=True, max_retries=0)
+def execute_ai_job_item(self, item_id: str):
+    """Execute one durable queue item using the unchanged full AI pipeline."""
+    from .ai_queue import RedisLeasePool
+    from .models import AIProcessingJobItem
+
+    item = AIProcessingJobItem.objects.select_related('question').get(id=item_id)
+    if item.status != AIProcessingJobItem.Status.DISPATCHED:
+        return {'status': 'skipped', 'question_id': str(item.question_id)}
+    item.status = AIProcessingJobItem.Status.RUNNING
+    item.attempt_count += 1
+    item.started_at = timezone.now()
+    item.save(update_fields=['status', 'attempt_count', 'started_at'])
+    service = AIReviewService()
+    try:
+        results = service.process_question_full_v2(item.question_id, model=item.model)
+        service.save_results_to_question(item.question_id, results)
+        item.status = (AIProcessingJobItem.Status.PARTIAL if results.get('errors')
+                       else AIProcessingJobItem.Status.SUCCEEDED)
+        item.finished_at = timezone.now()
+        item.save(update_fields=['status', 'finished_at'])
+        return {'status': 'partial' if results.get('errors') else 'complete', 'question_id': str(item.question_id)}
+    except Exception:
+        item.status = AIProcessingJobItem.Status.FAILED
+        item.error_code = 'processing_failed'
+        item.finished_at = timezone.now()
+        item.save(update_fields=['status', 'error_code', 'finished_at'])
+        return {'status': 'failed', 'question_id': str(item.question_id)}
+    finally:
+        service.close()
+        RedisLeasePool(
+            'question',
+            limit=int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 16)),
+            ttl_seconds=4200,
+        ).release(str(item.id))
 
 
 def _skip_missing_question(set_progress, question_id):
