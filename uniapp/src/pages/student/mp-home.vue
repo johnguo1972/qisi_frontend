@@ -20,7 +20,7 @@ import { scanCode, parseShortCode } from '@/utils/scan'
 
 const drawer = ref(false); const loading = ref(false); const missions = ref<any[]>([]); const classes = ref<any[]>([]); const classId = ref(''); const scope = ref('all')
 const userName = ref(uni.getStorageSync('userInfo')?.display_name || '同学')
-const isParent = ref(uni.getStorageSync('userInfo')?.role_type === 'parent')
+const isParent = ref(uni.getStorageSync('userInfo')?.active_role === 'parent')
 async function load() { loading.value = true; try { const r: any = await studentApi.home({ ...(classId.value ? { class_id: classId.value } : {}), scope: scope.value }, Date.now()); missions.value = r.data?.missions || []; classes.value = (r.data?.classes || []).map((c: any) => ({ id: c.id, label: c.name || c.class_name || c.label })) } finally { loading.value = false } }
 function inputCode() { uni.showModal({ title: '输入作业码', editable: true, placeholderText: '请输入6位作业码', success: r => { if (r.confirm && r.content) uni.navigateTo({ url: `/pages/student/scan-entry?code=${r.content}` }) } }) }
 async function goScan() { try { const r = await scanCode(); const code = parseShortCode(r.result); if (code) uni.navigateTo({ url: `/pages/student/scan-entry?code=${code}` }); else uni.showToast({ title: '无法识别作业二维码', icon: 'none' }) } catch (e: any) { uni.showToast({ title: e.message || '扫码已取消', icon: 'none' }) } }

@@ -38,6 +38,20 @@ def effective_student_user(request):
     return relation.student_user_id if relation else None
 
 
+def effective_student_home_user(request):
+    """Return the student represented by a student session or parent context.
+
+    The home page is also a valid entry point for a newly-created student
+    account that has not joined a class yet.  It must be able to return an
+    empty home state instead of turning that normal business state into 403.
+    Parent requests still require a validated, selected child context.
+    """
+    active_role = get_request_role(request)
+    if active_role == 'student' and has_user_role(request.user, 'student'):
+        return request.user
+    return effective_student_user(request)
+
+
 class IsStudentOrParentContext(permissions.BasePermission):
     """Allow students and parents with a valid selected child context."""
     def has_permission(self, request, view):
@@ -46,6 +60,18 @@ class IsStudentOrParentContext(permissions.BasePermission):
             return False
         # Existing student views use request.user throughout; scope them to the
         # validated child for this request without changing authentication data.
+        request._effective_student = student
+        request._user = student
+        return True
+
+
+class IsStudentOrParentHomeContext(permissions.BasePermission):
+    """Allow the home page for students and validated parent contexts."""
+
+    def has_permission(self, request, view):
+        student = effective_student_home_user(request)
+        if student is None:
+            return False
         request._effective_student = student
         request._user = student
         return True

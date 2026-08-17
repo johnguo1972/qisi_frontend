@@ -7,7 +7,7 @@ from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from apps.study.permissions import IsStudentOrParentContext
+from apps.study.permissions import IsStudentOrParentContext, IsStudentOrParentHomeContext
 from rest_framework.response import Response
 from apps.missions.models import LearningMission, MissionLevel, MissionQuestionRel
 from apps.study.models import StudentMissionProgress, StudentLevelProgress, AnswerAttempt
@@ -31,7 +31,7 @@ def _visible_mission_rels(level_or_mission, student_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsStudentOrParentContext])
+@permission_classes([IsAuthenticated, IsStudentOrParentHomeContext])
 def student_home(request):
     """S-01: Student home - task list.
 
@@ -40,16 +40,17 @@ def student_home(request):
         scope: date filter — 'today' (end_at covers today) or 'week' (end_at within 7 days)
     """
     from apps.institutions.models import ClassStudent
+    student = getattr(request, '_effective_student', request.user)
 
     # 获取学生所在的班级ID列表
     student_class_ids = set(
         ClassStudent.objects.filter(
-            student=request.user, status='active',
+            student=student, status='active',
         ).values_list('class_obj_id', flat=True)
     )
 
     classes = list(
-        ClassStudent.objects.filter(student=request.user, status='active')
+        ClassStudent.objects.filter(student=student, status='active')
         .select_related('class_obj')
         .values('class_obj_id', 'class_obj__class_name')
     )
@@ -68,7 +69,7 @@ def student_home(request):
     # 自动为缺失的任务创建进度记录
     existing_progress_ids = set(
         StudentMissionProgress.objects.filter(
-            student_user_id=request.user
+            student_user_id=student
         ).values_list('mission_id', flat=True)
     )
     to_create = []
@@ -76,7 +77,7 @@ def student_home(request):
         if mission.id not in existing_progress_ids:
             to_create.append(StudentMissionProgress(
                 mission=mission,
-                student_user_id=request.user,
+                student_user_id=student,
                 progress_status='not_started',
                 progress_percent=0,
             ))
@@ -85,7 +86,7 @@ def student_home(request):
 
     # 查询进度记录（现在一定包含了所有已发布的任务）
     progresses = StudentMissionProgress.objects.filter(
-        student_user_id=request.user
+        student_user_id=student
     ).select_related('mission', 'mission__class_obj')
 
     class_id = request.query_params.get('class_id')
@@ -116,15 +117,15 @@ def student_home(request):
         mission = p.mission
         class_obj = mission.class_obj
         level_count = mission.levels.count()
-        question_count = len(_visible_mission_rels(mission, request.user.id))
+        question_count = len(_visible_mission_rels(mission, student.id))
 
         # 实时计算各关卡进度，取平均值作为任务整体进度
         levels = mission.levels.all()
         total_progress = 0
         for lv in levels:
-            level_q_count = len(_visible_mission_rels(lv, request.user.id))
+            level_q_count = len(_visible_mission_rels(lv, student.id))
             correct_count = AnswerAttempt.objects.filter(
-                student_user_id=request.user,
+                student_user_id=student,
                 level=lv,
                 is_correct=True,
             ).values('question_id').distinct().count()

@@ -40,6 +40,7 @@
     { "path": "pages/student/variant-practice", "style": { "navigationBarTitleText": "同类题练习" } },
     { "path": "pages/student/export", "style": { "navigationBarTitleText": "导出 PDF" } },
     { "path": "pages/student/mp-home", "style": { "navigationBarTitleText": "今日任务" } }
+    ,{ "path": "pages/parent/home", "style": { "navigationBarTitleText": "家长端" } }
     ,{ "path": "pages/student/growth", "style": { "navigationBarTitleText": "成长" } }
     ,{ "path": "pages/student/scan-entry", "style": { "navigationBarTitleText": "作业入口" } }
     ,{ "path": "pages/student/practice-sheet", "style": { "navigationBarTitleText": "错题练习" } }

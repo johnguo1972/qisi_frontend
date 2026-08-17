@@ -30,6 +30,14 @@ interface RequestError {
   data?: any
 }
 
+function responseErrorMessage(data: any, statusCode: number): string {
+  if (data && typeof data === 'object') {
+    const detail = data.detail || data.message || data.error
+    if (typeof detail === 'string' && detail.trim()) return detail.trim()
+  }
+  return `请求失败（${statusCode}）`
+}
+
 export interface RequestOptions {
   silentError?: boolean
 }
@@ -83,16 +91,17 @@ function request<T>(
           uni.reLaunch({ url: '/pages/login/index' })
           return
         }
-        // 非 2xx 状态码也算失败，但能拿到响应
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          const msg = `接口 ${method} ${fullUrl} 返回异常状态码 ${res.statusCode}`
-          console.error(msg, res.data)
-          if (!options.silentError) uni.showToast({ title: `请求异常(${res.statusCode})`, icon: 'none', duration: 3000 })
-        }
         // 手动解析 JSON（兼容 APP 平台）
         let parsed = res.data
         if (typeof parsed === 'string') {
           try { parsed = JSON.parse(parsed) } catch { /* 已经是字符串，保持原样 */ }
+        }
+        // 非 2xx 状态码仍保持原有 resolve 行为，避免改变已有业务调用链，
+        // 但优先展示后端返回的真实错误信息（如 DRF 的 detail）。
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          const msg = responseErrorMessage(parsed, res.statusCode)
+          console.error(`[request] ${method} ${fullUrl} -> ${res.statusCode}: ${msg}`)
+          if (!options.silentError) uni.showToast({ title: msg.slice(0, 80), icon: 'none', duration: 3000 })
         }
         resolve(parsed as ApiResponse<T>)
       },
