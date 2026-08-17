@@ -1,3 +1,46 @@
-<template><view class="card" @click="$emit('click', missionId)"><text v-if="classLabel" class="badge">{{ classLabel }}</text><view class="head"><text class="name">{{ missionName }}</text><text :class="'status-'+status">{{ statusText }}</text></view><view class="meta">📋 {{ levelCount }} 关卡　{{ questionCount }} 题目</view><text v-if="endAt" class="deadline">截止：{{ deadlineText }}</text><view class="progress"><view class="fill" :style="{width: `${Math.min(100, Math.max(0, progressPercent))}%`}"/><text>{{ progressPercent }}%</text></view></view></template>
-<script setup lang="ts">import { computed } from 'vue'; const p=defineProps<{missionId:string;missionName:string;classLabel?:string;status:string;levelCount:number;questionCount:number;endAt?:string;progressPercent:number}>(); defineEmits<{click:[id:string]}>(); const statusText=computed(()=>({not_started:'未开始',in_progress:'进行中',completed:'已完成'} as any)[p.status]||p.status); const deadlineText=computed(()=>p.endAt?new Date(p.endAt).toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'}):'')</script>
-<style scoped>.card{background:#fff;border-radius:18rpx;padding:28rpx;margin-bottom:22rpx;position:relative;box-shadow:0 2rpx 12rpx #0000000d}.badge{position:absolute;top:0;left:0;background:#409eff;color:#fff;border-radius:18rpx 0 18rpx 0;padding:6rpx 18rpx;font-size:20rpx}.head{display:flex;justify-content:space-between;gap:20rpx;margin-bottom:18rpx}.name{font-size:30rpx;font-weight:600}.status-not_started{color:#999}.status-in_progress{color:#409eff}.status-completed{color:#67c23a}.meta,.deadline{display:block;color:#888;font-size:24rpx;margin-bottom:14rpx}.progress{display:flex;align-items:center;gap:14rpx;color:#666;font-size:22rpx}.progress>view{height:12rpx;flex:1;background:#eee;border-radius:8rpx}.fill{height:100%;background:linear-gradient(90deg,#409eff,#6366f1);border-radius:8rpx}</style>
+<template>
+  <view class="card" @click="$emit('click', missionId)">
+    <text v-if="classLabel" class="badge">{{ classLabel }}</text>
+    <view class="head">
+      <text class="name">{{ missionName }}</text>
+      <text :class="`status-${status}`">{{ statusLabel(status, '未开始') }}</text>
+    </view>
+    <view class="meta">📋 {{ levelCount }} 关卡　{{ questionCount }} 题目</view>
+    <text v-if="endAt" class="deadline">截止：{{ formatDateTime(endAt) }}</text>
+    <view class="progress">
+      <view class="fill" :style="{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }" />
+      <text>{{ progressPercent }}%</text>
+    </view>
+  </view>
+</template>
+
+<script setup lang="ts">
+import { formatDateTime, statusLabel } from '@/utils/display-format'
+
+defineProps<{
+  missionId: string
+  missionName: string
+  classLabel?: string
+  status: string
+  levelCount: number
+  questionCount: number
+  endAt?: string
+  progressPercent: number
+}>()
+
+defineEmits<{ click: [id: string] }>()
+</script>
+
+<style scoped>
+.card { position: relative; margin-bottom: 22rpx; padding: 28rpx; border-radius: 18rpx; background: #fff; box-shadow: 0 2rpx 12rpx #0000000d; }
+.badge { position: absolute; top: 0; left: 0; padding: 6rpx 18rpx; border-radius: 18rpx 0 18rpx 0; color: #fff; background: #409eff; font-size: 20rpx; }
+.head { display: flex; justify-content: space-between; gap: 20rpx; margin-bottom: 18rpx; }
+.name { font-size: 30rpx; font-weight: 600; }
+.status-not_started, .status-locked { color: #999; }
+.status-in_progress, .status-running { color: #409eff; }
+.status-completed, .status-passed { color: #67c23a; }
+.meta, .deadline { display: block; margin-bottom: 14rpx; color: #888; font-size: 24rpx; }
+.progress { display: flex; align-items: center; gap: 14rpx; color: #666; font-size: 22rpx; }
+.progress > view { height: 12rpx; flex: 1; border-radius: 8rpx; background: #eee; }
+.fill { height: 100%; border-radius: 8rpx; background: linear-gradient(90deg, #409eff, #6366f1); }
+</style>

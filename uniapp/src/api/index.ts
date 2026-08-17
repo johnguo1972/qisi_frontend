@@ -1,4 +1,4 @@
-import { get, post, put } from '@/utils/request'
+import { del, get, post, put } from '@/utils/request'
 export { qrcodeApi } from './qrcode'
 export { wechatApi } from './wechat'
 
@@ -23,5 +23,19 @@ export const wechatBind = (data: any) => post<any>('/auth/wechat-bind', data)
 export const parentApi = {
   children: () => get<any[]>('/parent/children'),
   setContext: (childId: string) => post('/parent/context', { student_id: childId }),
+  overview: () => get<any>('/parent/overview'),
+  missions: (params?: { scope?: string; class_id?: string }) => get<any>('/parent/missions', params),
+  missionDetail: (missionId: string) => get<any>(`/parent/missions/${missionId}`),
+  createBindRequest: (bindCode: string, relationType: string = 'guardian') =>
+    post('/parent/bind-requests', { bind_code: bindCode, relation_type: relationType }),
+  pendingRequests: () => get<any[]>('/parent/bind-requests/pending'),
+  removeBind: (bindId: string) => del(`/parent/binds/${bindId}`),
+}
+
+export const studentParentApi = {
+  createBindCode: () => post<{ bind_code: string; expires_in: number }>('/student/parent-bind-codes'),
+  pendingRequests: () => get<any[]>('/student/parent-bind-requests'),
+  decide: (bindId: string, decision: 'approve' | 'reject') =>
+    post(`/student/parent-bind-requests/${bindId}/decision`, { decision }),
 }
 export { courseApi, materialApi, treeApi, courseQuestionApi, variantApi } from './courses'

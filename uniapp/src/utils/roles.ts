@@ -3,7 +3,7 @@ export type AppRole = 'admin' | 'teacher' | 'parent' | 'student'
 export function routeForRole(role: AppRole): string {
   if (role === 'admin') return '/pages/admin/home'
   if (role === 'teacher') return '/pages/teacher/layout'
-  if (role === 'parent') return '/pages/parent/home'
+  if (role === 'parent') return '/pages/parent/layout'
   let studentRoute = '/pages/student/layout'
   // #ifdef MP-WEIXIN
   studentRoute = '/pages/student/mp-home'

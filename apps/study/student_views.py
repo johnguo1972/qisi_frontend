@@ -7,8 +7,9 @@ from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from apps.study.permissions import IsStudentOrParentContext, IsStudentOrParentHomeContext
+from apps.study.permissions import IsStudentOnly, IsStudentOrParentContext, IsStudentOrParentHomeContext
 from rest_framework.response import Response
+from apps.accounts.auth import get_request_role
 from apps.missions.models import LearningMission, MissionLevel, MissionQuestionRel
 from apps.study.models import StudentMissionProgress, StudentLevelProgress, AnswerAttempt
 from apps.parser.models import ExamQuestion
@@ -81,7 +82,7 @@ def student_home(request):
                 progress_status='not_started',
                 progress_percent=0,
             ))
-    if to_create:
+    if to_create and get_request_role(request) == 'student':
         StudentMissionProgress.objects.bulk_create(to_create)
 
     # 查询进度记录（现在一定包含了所有已发布的任务）
@@ -134,12 +135,13 @@ def student_home(request):
         overall_progress = round(total_progress / max(level_count, 1), 2)
 
         # 同步更新数据库
-        p.progress_percent = overall_progress
-        if overall_progress >= 100:
-            p.progress_status = 'completed'
-        elif overall_progress > 0:
-            p.progress_status = 'in_progress'
-        p.save(update_fields=['progress_percent', 'progress_status'])
+        if get_request_role(request) == 'student':
+            p.progress_percent = overall_progress
+            if overall_progress >= 100:
+                p.progress_status = 'completed'
+            elif overall_progress > 0:
+                p.progress_status = 'in_progress'
+            p.save(update_fields=['progress_percent', 'progress_status'])
 
         missions.append({
             'mission': {
@@ -207,12 +209,13 @@ def student_mission_detail(request, mission_id):
         sp = StudentMissionProgress.objects.get(
             mission=mission, student_user_id=request.user
         )
-        sp.progress_percent = overall_progress
-        if overall_progress >= 100:
-            sp.progress_status = 'completed'
-        elif sp.progress_status == 'not_started' and overall_progress > 0:
-            sp.progress_status = 'in_progress'
-        sp.save()
+        if get_request_role(request) == 'student':
+            sp.progress_percent = overall_progress
+            if overall_progress >= 100:
+                sp.progress_status = 'completed'
+            elif sp.progress_status == 'not_started' and overall_progress > 0:
+                sp.progress_status = 'in_progress'
+            sp.save()
     except StudentMissionProgress.DoesNotExist:
         pass
 
@@ -521,7 +524,7 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudentOrParentContext])
+@permission_classes([IsAuthenticated, IsStudentOnly])
 def export_pdf(request):
     """导出错题本或任务题目为 PDF（当前返回 HTML 占位，待 reportlab 可用后替换）。
 
@@ -628,7 +631,7 @@ def export_pdf(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudentOrParentContext])
+@permission_classes([IsAuthenticated, IsStudentOnly])
 def upload_attempt_image(request, attempt_id):
     """Upload a photo for a student's answer attempt.
 

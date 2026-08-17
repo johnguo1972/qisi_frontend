@@ -35,6 +35,7 @@ function navigate(key: string) {
   const routes: Record<string, string> = {
     knowledge: '/pages/student/knowledge-graph',
     'join-class': '/pages/student/join-class',
+    'parent-bind': '/pages/student/parent-bind-requests',
     export: '/pages/student/export',
   }
   if (routes[key]) uni.navigateTo({ url: routes[key] })

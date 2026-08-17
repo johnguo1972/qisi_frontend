@@ -49,6 +49,8 @@ async function onChange(event: any) {
 }
 
 onMounted(() => load().catch((error: any) => uni.showToast({ title: error.message || '孩子列表加载失败', icon: 'none' })))
+
+defineExpose({ load })
 </script>
 
 <style scoped>

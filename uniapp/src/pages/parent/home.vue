@@ -1,18 +1,19 @@
 <template>
+  <ParentShell active-item="home">
   <view class="page">
     <view class="header">
       <view>
         <text class="title">家长端</text>
         <text class="subtitle">查看孩子的学习任务和完成进度</text>
       </view>
-      <RoleSwitcher />
     </view>
 
-    <MpChildSwitcher :visible="true" @changed="onChildChanged" />
+    <MpChildSwitcher ref="childSwitcher" :visible="true" @changed="onChildChanged" />
 
     <view v-if="!selectedChild" class="state-card">
       <text class="state-title">暂无已绑定孩子</text>
       <text class="state-text">请先完成家长与学生的绑定，绑定后即可查看学习情况。</text>
+      <button class="bind-button" @click="goBind">添加孩子</button>
     </view>
     <view v-else-if="loading" class="state-card">
       <text class="state-text">正在加载孩子的学习任务...</text>
@@ -41,19 +42,24 @@
       />
     </view>
   </view>
+  </ParentShell>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import RoleSwitcher from '@/components/RoleSwitcher.vue'
+import { inject, ref } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
+import ParentShell from '@/components/ParentShell.vue'
 import MpChildSwitcher from '@/components/MpChildSwitcher.vue'
 import MpMissionCard from '@/components/MpMissionCard.vue'
-import { studentApi } from '@/api/student'
+import { parentApi } from '@/api/index'
+import { ensurePageRole } from '@/utils/roles'
 
 const selectedChild = ref<any>(null)
 const missions = ref<any[]>([])
 const loading = ref(false)
 const errorMessage = ref('')
+const childSwitcher = ref<any>(null)
+const navigateParentSection = inject<(key: string) => void>('parentLayoutNavigate', undefined)
 
 async function onChildChanged(child: any) {
   selectedChild.value = child
@@ -65,7 +71,7 @@ async function load() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const response: any = await studentApi.home({ scope: 'all' }, Date.now())
+    const response: any = await parentApi.missions({ scope: 'all' })
     if (response?.detail) {
       missions.value = []
       errorMessage.value = response.detail
@@ -76,7 +82,15 @@ async function load() {
       errorMessage.value = response.message || '学习任务加载失败'
       return
     }
-    missions.value = response?.data?.missions || []
+    missions.value = (response?.data?.missions || []).map((item: any) => ({
+      ...item,
+      mission: {
+        id: item.id,
+        mission_name: item.mission_name,
+        deadline: item.deadline,
+      },
+      class_label: item.class_name,
+    }))
   } catch (error: any) {
     missions.value = []
     errorMessage.value = error?.message || '学习任务加载失败，请稍后重试'
@@ -86,8 +100,21 @@ async function load() {
 }
 
 function goMission(id: string) {
-  if (id && id !== 'undefined') uni.navigateTo({ url: `/pages/student/mission?id=${id}` })
+  if (id && id !== 'undefined') uni.navigateTo({ url: `/pages/parent/mission?id=${id}` })
 }
+
+function goBind() {
+  if (navigateParentSection) {
+    navigateParentSection('children')
+    return
+  }
+  uni.navigateTo({ url: '/pages/parent/bind' })
+}
+
+onShow(() => {
+  if (!ensurePageRole('parent')) return
+  childSwitcher.value?.load?.()
+})
 </script>
 
 <style scoped>
@@ -100,4 +127,5 @@ function goMission(id: string) {
 .state-card { margin-top: 24rpx; padding: 70rpx 30rpx; border-radius: 18rpx; background: #fff; text-align: center; }
 .state-title { display: block; color: #606266; font-size: 29rpx; font-weight: 600; }
 .state-text { display: block; margin-top: 14rpx; color: #909399; font-size: 25rpx; line-height: 1.6; }
+.bind-button { margin-top: 28rpx; width: 260rpx; color: #fff; background: #409eff; font-size: 25rpx; }
 </style>

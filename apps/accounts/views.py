@@ -60,11 +60,14 @@ def login(request):
     else:
         user = UserAccount.objects.filter(mobile=mobile).first()
         if user is None:
-            if active_role != 'student':
+            # Student and parent accounts can be self-created after SMS
+            # verification.  Teacher/admin accounts still require an
+            # existing business grant and cannot be created from login.
+            if active_role not in ('student', 'parent'):
                 return role_error(
                     'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
                 )
-            user, _ = get_or_create_user(mobile, initial_role='student')
+            user, _ = get_or_create_user(mobile, initial_role=active_role)
         else:
             if not has_user_role(user, active_role):
                 return role_error(

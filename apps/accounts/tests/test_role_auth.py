@@ -179,6 +179,23 @@ def test_new_sms_account_can_only_self_create_as_student(api_client, sms_code):
 
 
 @pytest.mark.django_db
+def test_new_sms_account_can_create_as_parent_for_binding(api_client, sms_code):
+    mobile = "13900009306"
+    cache.set(f"sms_code:{mobile}", sms_code, timeout=180)
+
+    response = api_client.post(
+        "/api/v1/auth/login",
+        {"mobile": mobile, "verify_code": sms_code, "role_type": "parent"},
+    )
+
+    assert response.status_code == 200
+    user = UserAccount.objects.get(mobile=mobile)
+    assert user.role_type == "parent"
+    assert has_user_role(user, "parent")
+    assert response.data["data"]["user"]["active_role"] == "parent"
+
+
+@pytest.mark.django_db
 def test_two_tokens_keep_independent_active_roles(admin_teacher):
     admin_tokens = generate_tokens(admin_teacher, "admin")
     teacher_tokens = generate_tokens(admin_teacher, "teacher")
