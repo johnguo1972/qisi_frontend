@@ -34,6 +34,10 @@
         <text class="nav-icon">&#128101;</text>
         <text class="nav-text">加入班级</text>
       </view>
+      <view class="nav-item" @click="goParentBind">
+        <text class="nav-icon">&#128106;</text>
+        <text class="nav-text">家长绑定</text>
+      </view>
       <view class="nav-item" @click="goScanEntry">
         <text class="nav-icon">&#128247;</text>
         <text class="nav-text">扫码作业</text>
@@ -129,6 +133,7 @@ function goWrongBook() { emit('navigate', 'wrongbook') }
 function goKnowledgeGraph() { uni.navigateTo({ url: '/pages/student/knowledge-graph' }) }
 function goGrowth() { emit('navigate', 'growth') }
 function goJoinClass() { emit('navigate', 'join-class') }
+function goParentBind() { uni.navigateTo({ url: '/pages/student/parent-bind-requests' }) }
 function goScanEntry() { uni.navigateTo({ url: '/pages/student/scan-entry' }) }
 
 async function handleLogout() {

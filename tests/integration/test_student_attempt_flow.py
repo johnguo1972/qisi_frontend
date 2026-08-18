@@ -48,7 +48,7 @@ def test_student_cannot_submit_another_students_attempt(student_client, teacher_
 
 
 @pytest.mark.django_db
-def test_parent_context_can_create_attempt_for_bound_child(student_user, sample_question):
+def test_parent_context_cannot_create_attempt_for_bound_child(student_user, sample_question):
     parent = UserAccount.objects.create(role_type='parent', mobile='13900000999', display_name='parent')
     StudentParentBind.objects.create(
         parent_user_id=parent,
@@ -64,5 +64,7 @@ def test_parent_context_can_create_attempt_for_bound_child(student_user, sample_
         {'question_id': str(sample_question.id)},
         format='json',
     )
-    assert response.status_code == 200
-    assert AnswerAttempt.objects.get(pk=response.data['data']['attempt_id']).student_user_id_id == student_user.id
+    assert response.status_code == 403
+    assert response.data['code'] == 'PARENT_READ_ONLY'
+    assert response.data['message'] == '家长端仅支持查看，不能代替学生答题'
+    assert not AnswerAttempt.objects.filter(student_user_id=student_user, question_id=sample_question.id).exists()

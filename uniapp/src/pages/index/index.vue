@@ -9,6 +9,7 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import { routeForRole, type AppRole } from '@/utils/roles'
 
 function goLogin() {
   const pages = getCurrentPages()
@@ -23,20 +24,8 @@ function goLogin() {
     return
   }
 
-  const role = userInfo?.role_type || 'student'
-  if (role === 'teacher') {
-    uni.reLaunch({ url: '/pages/teacher/layout' })
-  } else if (role === 'admin') {
-    uni.reLaunch({ url: '/pages/admin/home' })
-  } else {
-    // 微信小程序学生/家长使用小程序专用首页。
-    // #ifdef MP-WEIXIN
-    uni.reLaunch({ url: '/pages/student/mp-home' })
-    // #endif
-    // #ifndef MP-WEIXIN
-    uni.reLaunch({ url: '/pages/student/layout' })
-    // #endif
-  }
+  const role = (userInfo?.active_role || userInfo?.role_type || 'student') as AppRole
+  uni.reLaunch({ url: routeForRole(role) })
 }
 
 onMounted(() => {

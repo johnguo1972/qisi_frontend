@@ -1,5 +1,9 @@
 """Custom exceptions for the exam parser system."""
 
+import uuid
+
+from rest_framework.views import exception_handler as drf_exception_handler
+
 from .ai.exceptions import AIConfigError, AIPromptError, AIResponseError
 
 __all__ = [
@@ -11,6 +15,7 @@ __all__ = [
     "ImageCropError",
     "SchemaValidationError",
     "TaskExecutionError",
+    "api_exception_handler",
 ]
 
 
@@ -37,3 +42,27 @@ class TaskExecutionError(Exception):
 class ImageCropError(Exception):
     """Raised when image cropping fails."""
     pass
+
+
+def api_exception_handler(exc, context):
+    """Keep parent read-only failures consistent with the API envelope."""
+    response = drf_exception_handler(exc, context)
+    if response is None:
+        return response
+
+    detail = response.data.get('detail') if isinstance(response.data, dict) else None
+    if detail == '家长端仅支持查看，不能代替学生答题':
+        response.data = {
+            'code': 'PARENT_READ_ONLY',
+            'message': detail,
+            'data': None,
+            'trace_id': uuid.uuid4().hex[:16],
+        }
+    elif detail == '请先选择已绑定的孩子':
+        response.data = {
+            'code': 'PARENT_CONTEXT_REQUIRED',
+            'message': detail,
+            'data': None,
+            'trace_id': uuid.uuid4().hex[:16],
+        }
+    return response

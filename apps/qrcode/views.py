@@ -1,6 +1,8 @@
 import base64
 import json
 import os
+import secrets
+import string
 import uuid
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from apps.institutions.models import ClassStudent, ClassTeacher
 from apps.missions.models import LearningMission
 from apps.study.models import AnswerAttempt
 from apps.common.media import media_url
+from apps.study.permissions import IsNotParentSession
 
 from .models import AttemptImage, MissionShortCode, PaperScanBatch, PaperScanPage, StudentClassShortCode, WrongbookPracticeSheet
 from .services import (
@@ -38,9 +41,17 @@ def trace_id():
 
 def effective_student(request):
     active_role = get_request_role(request)
-    if active_role == 'student' and has_user_role(request.user, 'student'):
+    if (
+        active_role == 'student'
+        and request.user.status == 'active'
+        and has_user_role(request.user, 'student')
+    ):
         return request.user
-    if active_role != 'parent' or not has_user_role(request.user, 'parent'):
+    if (
+        active_role != 'parent'
+        or request.user.status != 'active'
+        or not has_user_role(request.user, 'parent')
+    ):
         return None
     child_id = cache.get(f'parent_context:{request.user.id}')
     if not child_id:
@@ -48,7 +59,9 @@ def effective_student(request):
     relation = StudentParentBind.objects.filter(
         parent_user_id=request.user, student_user_id=child_id, bind_status='active',
     ).select_related('student_user_id').first()
-    return relation.student_user_id if relation else None
+    if not relation or relation.student_user_id.status != 'active':
+        return None
+    return relation.student_user_id
 
 
 def _is_platform_admin(request):
@@ -140,7 +153,7 @@ def short_code_info(request, short_code):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsNotParentSession])
 def enter_mission(request, short_code):
     code = MissionShortCode.objects.select_related('mission').filter(short_code=short_code.upper()).first()
     if not code or _expired(code):
@@ -166,7 +179,7 @@ def enter_mission(request, short_code):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsNotParentSession])
 def upload_attempt_image(request, attempt_id):
     owner = effective_student(request)
     if not owner:
@@ -258,6 +271,7 @@ def parent_children(request):
     if (
         get_request_role(request) != 'parent'
         or not has_user_role(request.user, 'parent')
+        or request.user.status != 'active'
     ):
         return Response({'code': 403, 'message': 'parent role required'}, status=403)
     children = StudentParentBind.objects.filter(parent_user_id=request.user, bind_status='active').select_related('student_user_id')
@@ -271,6 +285,7 @@ def parent_context(request):
     if (
         get_request_role(request) != 'parent'
         or not has_user_role(request.user, 'parent')
+        or request.user.status != 'active'
         or not StudentParentBind.objects.filter(
             parent_user_id=request.user,
             student_user_id=child_id,
@@ -280,6 +295,261 @@ def parent_context(request):
         return Response({'code': 403, 'message': '孩子未绑定或无权切换', 'data': None, 'trace_id': trace_id()}, status=403)
     cache.set(f'parent_context:{request.user.id}', str(child_id), timeout=1800)
     return Response({'code': 0, 'message': '代理对象已切换', 'data': {'student_id': child_id}, 'trace_id': trace_id()})
+
+
+PARENT_BIND_CODE_TTL = 3600
+
+
+def _parent_bind_code_key(code):
+    return f'parent_bind_code:{code}'
+
+
+def _parent_bind_code_owner_key(student_id):
+    return f'parent_bind_code_owner:{student_id}'
+
+
+def _new_parent_bind_code():
+    alphabet = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(8))
+
+
+def _is_student_session(request):
+    return (
+        get_request_role(request) == 'student'
+        and has_user_role(request.user, 'student')
+        and request.user.status == 'active'
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_parent_bind_code(request):
+    """Create a short-lived code that identifies the authenticated student."""
+    if not _is_student_session(request):
+        return Response({
+            'code': 'STUDENT_ROLE_REQUIRED',
+            'message': '请先以学生身份进入家长绑定',
+            'data': None,
+            'trace_id': trace_id(),
+        }, status=403)
+
+    previous_code = cache.get(_parent_bind_code_owner_key(request.user.id))
+    if previous_code:
+        cache.delete(_parent_bind_code_key(previous_code))
+
+    code = _new_parent_bind_code()
+    while cache.get(_parent_bind_code_key(code)):
+        code = _new_parent_bind_code()
+    cache.set(
+        _parent_bind_code_key(code),
+        {'student_id': str(request.user.id)},
+        timeout=PARENT_BIND_CODE_TTL,
+    )
+    cache.set(
+        _parent_bind_code_owner_key(request.user.id),
+        code,
+        timeout=PARENT_BIND_CODE_TTL,
+    )
+    return Response({
+        'code': 0,
+        'message': '申请码已生成',
+        'data': {'bind_code': code, 'expires_in': PARENT_BIND_CODE_TTL},
+        'trace_id': trace_id(),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@transaction.atomic
+def create_parent_bind_request(request):
+    """Create a pending parent-child request from a parent account."""
+    if (
+        get_request_role(request) != 'parent'
+        or not has_user_role(request.user, 'parent')
+        or request.user.status != 'active'
+    ):
+        return Response({
+            'code': 'PARENT_ROLE_REQUIRED',
+            'message': '请先以家长身份登录',
+            'data': None,
+            'trace_id': trace_id(),
+        }, status=403)
+
+    code = str(request.data.get('bind_code') or '').strip().upper()
+    relation_type = str(request.data.get('relation_type') or 'guardian').strip().lower()
+    if relation_type not in ('father', 'mother', 'guardian'):
+        return Response({
+            'code': 'INVALID_RELATION',
+            'message': '关系类型不正确',
+            'data': None,
+            'trace_id': trace_id(),
+        }, status=400)
+    payload = cache.get(_parent_bind_code_key(code)) if code else None
+    if not payload:
+        return Response({
+            'code': 'BIND_CODE_INVALID',
+            'message': '申请码无效或已过期',
+            'data': None,
+            'trace_id': trace_id(),
+        }, status=400)
+
+    student_id = payload.get('student_id') if isinstance(payload, dict) else payload
+    try:
+        student = UserAccount.objects.get(pk=student_id, status='active')
+    except (UserAccount.DoesNotExist, ValueError, TypeError):
+        cache.delete(_parent_bind_code_key(code))
+        return Response({
+            'code': 'STUDENT_NOT_FOUND',
+            'message': '学生账号不存在或已停用',
+            'data': None,
+            'trace_id': trace_id(),
+        }, status=404)
+    if not has_user_role(student, 'student'):
+        return Response({
+            'code': 'INVALID_STUDENT_BINDING',
+            'message': '申请码对应的账号不是学生账号',
+            'data': None,
+            'trace_id': trace_id(),
+        }, status=400)
+    if student.id == request.user.id:
+        return Response({
+            'code': 'SELF_BINDING_NOT_ALLOWED',
+            'message': '家长账号不能绑定自己，请使用其他学生账号生成申请码',
+            'data': None,
+            'trace_id': trace_id(),
+        }, status=400)
+
+    relation = StudentParentBind.objects.filter(
+        parent_user_id=request.user,
+        student_user_id=student,
+    ).first()
+    if relation and relation.bind_status == 'active':
+        return Response({
+            'code': 'ALREADY_BOUND',
+            'message': '该学生已经绑定',
+            'data': None,
+            'trace_id': trace_id(),
+        }, status=409)
+    if relation:
+        relation.relation_type = relation_type
+        relation.bind_status = 'pending'
+        relation.save(update_fields=['relation_type', 'bind_status'])
+    else:
+        relation = StudentParentBind.objects.create(
+            parent_user_id=request.user,
+            student_user_id=student,
+            relation_type=relation_type,
+            bind_status='pending',
+        )
+    cache.delete(_parent_bind_code_key(code))
+    cache.delete(_parent_bind_code_owner_key(student.id))
+    return Response({
+        'code': 0,
+        'message': '绑定申请已提交，等待学生确认',
+        'data': {
+            'id': str(relation.id),
+            'student_id': str(student.id),
+            'student_name': student.display_name,
+            'bind_status': relation.bind_status,
+        },
+        'trace_id': trace_id(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def parent_bind_requests(request):
+    if get_request_role(request) != 'parent' or not has_user_role(request.user, 'parent'):
+        return Response({'code': 'PARENT_ROLE_REQUIRED', 'message': '请先以家长身份登录', 'data': None, 'trace_id': trace_id()}, status=403)
+    rows = StudentParentBind.objects.filter(
+        parent_user_id=request.user,
+        bind_status='pending',
+    ).select_related('student_user_id').order_by('-bound_at')
+    return Response({
+        'code': 0,
+        'message': 'success',
+        'data': [{
+            'id': str(row.id),
+            'student_id': str(row.student_user_id_id),
+            'student_name': row.student_user_id.display_name,
+            'relation_type': row.relation_type,
+            'bind_status': row.bind_status,
+        } for row in rows],
+        'trace_id': trace_id(),
+    })
+
+
+def _student_bind_requests_response(request):
+    if not _is_student_session(request):
+        return Response({'code': 'STUDENT_ROLE_REQUIRED', 'message': '请先以学生身份登录', 'data': None, 'trace_id': trace_id()}, status=403)
+    rows = StudentParentBind.objects.filter(
+        student_user_id=request.user,
+        bind_status='pending',
+    ).select_related('parent_user_id').order_by('-bound_at')
+    return Response({
+        'code': 0,
+        'message': 'success',
+        'data': [{
+            'id': str(row.id),
+            'parent_id': str(row.parent_user_id_id),
+            'parent_name': row.parent_user_id.display_name,
+            'parent_mobile': row.parent_user_id.mobile,
+            'relation_type': row.relation_type,
+            'bind_status': row.bind_status,
+        } for row in rows],
+        'trace_id': trace_id(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_parent_bind_requests(request):
+    return _student_bind_requests_response(request)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@transaction.atomic
+def student_parent_bind_decision(request, bind_id):
+    if not _is_student_session(request):
+        return Response({'code': 'STUDENT_ROLE_REQUIRED', 'message': '请先以学生身份登录', 'data': None, 'trace_id': trace_id()}, status=403)
+    decision = str(request.data.get('decision') or '').strip().lower()
+    if decision not in ('approve', 'reject'):
+        return Response({'code': 'INVALID_DECISION', 'message': '确认操作不正确', 'data': None, 'trace_id': trace_id()}, status=400)
+    relation = StudentParentBind.objects.filter(
+        id=bind_id,
+        student_user_id=request.user,
+        bind_status='pending',
+    ).first()
+    if relation is None:
+        return Response({'code': 'BIND_REQUEST_NOT_FOUND', 'message': '绑定申请不存在或已处理', 'data': None, 'trace_id': trace_id()}, status=404)
+    relation.bind_status = 'active' if decision == 'approve' else 'rejected'
+    relation.save(update_fields=['bind_status'])
+    return Response({
+        'code': 0,
+        'message': '绑定已确认' if decision == 'approve' else '绑定申请已拒绝',
+        'data': {'id': str(relation.id), 'bind_status': relation.bind_status},
+        'trace_id': trace_id(),
+    })
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+@transaction.atomic
+def remove_parent_bind(request, bind_id):
+    if get_request_role(request) != 'parent' or not has_user_role(request.user, 'parent'):
+        return Response({'code': 'PARENT_ROLE_REQUIRED', 'message': '请先以家长身份登录', 'data': None, 'trace_id': trace_id()}, status=403)
+    relation = StudentParentBind.objects.filter(
+        id=bind_id,
+        parent_user_id=request.user,
+        bind_status='active',
+    ).first()
+    if relation is None:
+        return Response({'code': 'BIND_NOT_FOUND', 'message': '绑定关系不存在', 'data': None, 'trace_id': trace_id()}, status=404)
+    relation.bind_status = 'removed'
+    relation.save(update_fields=['bind_status'])
+    cache.delete(f'parent_context:{request.user.id}')
+    return Response({'code': 0, 'message': '绑定已解除', 'data': None, 'trace_id': trace_id()})
 
 
 @api_view(['POST'])
@@ -507,7 +777,7 @@ def practice_sheet_info(request, sheet_code):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsNotParentSession])
 def create_practice_sheet(request):
     from apps.wrongbook.models import WrongBookItem
     from apps.wrongbook.services import find_variant_questions
@@ -529,7 +799,7 @@ def create_practice_sheet(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsNotParentSession])
 def submit_practice_sheet(request, sheet_code):
     sheet = WrongbookPracticeSheet.objects.filter(sheet_code=str(sheet_code).upper()).first()
     owner = effective_student(request)
@@ -557,7 +827,7 @@ def _validate_image_file(image):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsNotParentSession])
 def upload_attempt_images(request, attempt_id):
     owner = effective_student(request)
     if not owner:
@@ -595,7 +865,7 @@ def upload_attempt_images(request, attempt_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsNotParentSession])
 def attempt_image_check(request):
     image = request.FILES.get('image')
     if not _validate_image_file(image):

@@ -40,11 +40,19 @@
     { "path": "pages/student/variant-practice", "style": { "navigationBarTitleText": "同类题练习" } },
     { "path": "pages/student/export", "style": { "navigationBarTitleText": "导出 PDF" } },
     { "path": "pages/student/mp-home", "style": { "navigationBarTitleText": "今日任务" } }
+    ,{ "path": "pages/parent/layout", "style": { "navigationBarTitleText": "家长端" } }
+    ,{ "path": "pages/parent/home", "style": { "navigationBarTitleText": "家长端" } }
+    ,{ "path": "pages/parent/mission", "style": { "navigationBarTitleText": "任务详情" } }
     ,{ "path": "pages/student/growth", "style": { "navigationBarTitleText": "成长" } }
     ,{ "path": "pages/student/scan-entry", "style": { "navigationBarTitleText": "作业入口" } }
     ,{ "path": "pages/student/practice-sheet", "style": { "navigationBarTitleText": "错题练习" } }
     ,{ "path": "pages/student/paper-scan", "style": { "navigationBarTitleText": "纸质扫描" } }
     ,{ "path": "pages/student/parent-bind", "style": { "navigationBarTitleText": "绑定手机号" } }
+    ,{ "path": "pages/student/parent-bind-requests", "style": { "navigationBarTitleText": "家长绑定" } }
+    ,{ "path": "pages/parent/bind", "style": { "navigationBarTitleText": "添加孩子" } }
+    ,{ "path": "pages/parent/wrongbook", "style": { "navigationBarTitleText": "错题分析" } }
+    ,{ "path": "pages/parent/growth", "style": { "navigationBarTitleText": "成长分析" } }
+    ,{ "path": "pages/parent/knowledge", "style": { "navigationBarTitleText": "知识掌握" } }
   ],
   "tabBar": {
     "color": "#999999", "selectedColor": "#409eff", "backgroundColor": "#ffffff", "borderStyle": "white",

@@ -4,7 +4,7 @@ from datetime import timedelta
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from apps.study.permissions import IsStudentOrParentContext
+from apps.study.permissions import IsStudentOnly, IsStudentOrParentContext
 from rest_framework.response import Response
 from apps.parser.models import ExamQuestion
 from apps.study.models import AIGuidanceSession
@@ -145,7 +145,7 @@ def _extract_c_mode_step(ai_c: dict, step_index: int) -> dict:
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudentOrParentContext])
+@permission_classes([IsAuthenticated, IsStudentOnly])
 def start_guidance(request):
     """S-06: 启动引导。当 mode_type 为空时根据题型自动推荐。"""
     question_id = request.data.get('question_id')
@@ -260,7 +260,7 @@ def start_guidance(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudentOrParentContext])
+@permission_classes([IsAuthenticated, IsStudentOnly])
 def guidance_reply(request, session_id):
     """S-07: 推进引导（B 模式分步判断 + C 模式 LLM 评价 + 步进）。"""
     try:

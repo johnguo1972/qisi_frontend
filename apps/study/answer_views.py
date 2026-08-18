@@ -1,7 +1,7 @@
 import uuid
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from apps.study.permissions import IsStudentOrParentContext
+from apps.study.permissions import IsStudentOnly, IsStudentOrParentContext
 from rest_framework.response import Response
 from apps.parser.models import ExamQuestion
 from apps.study.models import AnswerAttempt, StudentLevelProgress
@@ -132,7 +132,7 @@ def _handle_submit_answer(request, question_id, answer_content, mission_id, leve
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudentOrParentContext])
+@permission_classes([IsAuthenticated, IsStudentOnly])
 def start_attempt(request):
     """Create a draft attempt so image answers have an owner before upload."""
     question_id = request.data.get('question_id')
@@ -159,7 +159,7 @@ def start_attempt(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudentOrParentContext])
+@permission_classes([IsAuthenticated, IsStudentOnly])
 def submit_attempt(request, attempt_id):
     """Finalize a draft attempt after optional image uploads."""
     try:
@@ -205,7 +205,7 @@ def submit_attempt(request, attempt_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudentOrParentContext])
+@permission_classes([IsAuthenticated, IsStudentOnly])
 def submit_answer(request):
     """S-04: Submit answer."""
     return _handle_submit_answer(
@@ -219,7 +219,7 @@ def submit_answer(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudentOrParentContext])
+@permission_classes([IsAuthenticated, IsStudentOnly])
 def retry_answer(request, attempt_id):
     """S-05: Retry wrong answer."""
     try:

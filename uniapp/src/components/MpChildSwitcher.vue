@@ -26,7 +26,7 @@ async function load() {
   children.value = Array.isArray(res.data) ? res.data : []
   const saved = uni.getStorageSync('activeChildId')
   selected.value = children.value.find(child => String(child.id) === String(saved)) || children.value[0] || null
-  if (selected.value) await setContext(selected.value, false)
+  if (selected.value) await setContext(selected.value)
 }
 
 async function setContext(child: any, notify = true) {
@@ -49,6 +49,8 @@ async function onChange(event: any) {
 }
 
 onMounted(() => load().catch((error: any) => uni.showToast({ title: error.message || '孩子列表加载失败', icon: 'none' })))
+
+defineExpose({ load })
 </script>
 
 <style scoped>
