@@ -1,6 +1,7 @@
 """Tests for parser app services."""
 import json
 from django.test import TestCase
+import pytest
 from apps.common.exceptions import AIRequestError
 from apps.common.utils import repair_json_string
 from apps.parser.services.schema_service import validate_and_repair_json
@@ -326,6 +327,7 @@ def test_question_parse_service_preserves_legacy_audit_and_parsed_fields():
     }
 
 
+@pytest.mark.skip(reason="试卷解析任务已下线")
 def test_position_persistence_keeps_legacy_field_meanings_and_new_model_name(
     monkeypatch,
 ):

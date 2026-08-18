@@ -5,7 +5,6 @@ from django.shortcuts import render, get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from apps.papers.models import ExamPaper, ParseTask
 from apps.parser.models import ExamQuestion, ExamPage, AIParseResult, QuestionImage
-from apps.parser.tasks import parse_paper_task
 from apps.review.services.image_recrop_service import recrop_question_image, delete_question_image
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.http import require_POST
@@ -72,7 +71,7 @@ def upload_paper_htmx(request):
         )
 
         # Dispatch Celery task
-        parse_paper_task.delay(paper.id)
+        return HttpResponse('<div class="alert alert-warning">试卷解析功能已停用</div>', status=410)
 
         return render(request, 'papers/upload_success.html', {
             'paper': paper, 'task': task
@@ -196,7 +195,7 @@ def paper_reparse_htmx(request, paper_id):
         status=const.TASK_RUNNING,
     )
 
-    parse_paper_task.delay(paper.id)
+    return HttpResponse('<div class="alert alert-warning">试卷解析功能已停用</div>', status=410)
 
     # Check if this is a list page request (has hx-current-url header) or detail page
     if 'HX-Current-URL' in request.headers:
@@ -322,7 +321,6 @@ def image_delete_htmx(request, question_id, image_id):
 def question_reparse_htmx(request, question_id):
     """Trigger a single-question re-parse via Celery."""
     from apps.parser.models import ExamQuestion
-    from apps.parser.tasks import reparse_question_task
 
     question = get_object_or_404(ExamQuestion.objects.select_related('paper'), id=question_id)
 
@@ -356,7 +354,7 @@ def question_reparse_htmx(request, question_id):
     )
 
     # Dispatch Celery task
-    reparse_question_task.delay(question_id)
+    return HttpResponse('<div class="alert alert-warning">单题重新解析功能已停用</div>', status=410)
 
     return render(request, 'review/fragments/question_reparse_progress.html', {
         'question': question, 'task': task, 'paper': question.paper,
@@ -380,11 +378,9 @@ def question_reparse_progress_htmx(request, question_id):
 urlpatterns = [
     path('', paper_list_htmx, name='paper-list-htmx'),
     path('upload-modal/', upload_modal_htmx, name='upload-modal-htmx'),
-    path('papers/upload/', upload_paper_htmx, name='upload-paper-htmx'),
     path('papers/<uuid:paper_id>/', paper_detail_htmx, name='paper-detail-htmx'),
     path('papers/<uuid:paper_id>/progress/', paper_progress_htmx, name='paper-progress-htmx'),
     path('papers/<uuid:paper_id>/edit-inline/', paper_edit_inline_htmx, name='paper-edit-inline-htmx'),
-    path('papers/<uuid:paper_id>/reparse-htmx/', paper_reparse_htmx, name='paper-reparse-htmx'),
     path('papers/<uuid:paper_id>/delete-htmx/', paper_delete_htmx, name='paper-delete-htmx'),
     path('review/<uuid:paper_id>/', review_list_htmx, name='review-list-htmx'),
     path('review/question/<uuid:question_id>/', question_edit_htmx, name='question-edit-htmx'),
@@ -392,6 +388,4 @@ urlpatterns = [
     path('review/question/<uuid:question_id>/images/panel/', image_correction_panel_htmx, name='image-correction-panel-htmx'),
     path('review/question/<uuid:question_id>/images/recrop/', image_recrop_htmx, name='image-recrop-htmx'),
     path('review/question/<uuid:question_id>/images/<uuid:image_id>/delete/', image_delete_htmx, name='image-delete-htmx'),
-    path('review/question/<uuid:question_id>/reparse-htmx/', question_reparse_htmx, name='question-reparse-htmx'),
-    path('review/question/<uuid:question_id>/reparse-progress/', question_reparse_progress_htmx, name='question-reparse-progress-htmx'),
 ]

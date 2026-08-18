@@ -5,6 +5,7 @@ from apps.papers.models import ExamPaper, ParseTask
 
 
 @pytest.mark.django_db
+@pytest.mark.skip(reason="试卷解析功能已下线")
 class TestPaperUpload:
     """Test paper upload via import_batch_list endpoint."""
 

@@ -165,9 +165,12 @@ def student_home(request):
 def student_mission_detail(request, mission_id):
     """S-02: Student mission detail."""
     try:
-        mission = LearningMission.objects.get(pk=mission_id, status='published')
+        mission = LearningMission.objects.get(pk=mission_id)
     except LearningMission.DoesNotExist:
         return Response({'code': 404, 'message': '任务不存在或未发布', 'data': None, 'trace_id': make_trace_id()}, status=404)
+
+    if mission.status != 'published':
+        return Response({'code': 403, 'message': '任务未发布', 'data': None, 'trace_id': make_trace_id()}, status=403)
 
     # 校验学生有权访问（存在任务进度记录）
     if not StudentMissionProgress.objects.filter(

@@ -60,12 +60,26 @@ def execute_ai_job_item(self, item_id: str):
     item.save(update_fields=['status', 'attempt_count', 'started_at'])
     service = AIReviewService()
     try:
-        results = service.process_question_full_v2(item.question_id, model=item.model)
+        def persist_completed_step(step_key, value):
+            service.save_results_to_question(
+                item.question_id,
+                {step_key: value, 'errors': {}},
+            )
+
+        results = service.process_question_full_v2(
+            item.question_id,
+            model=item.model,
+            on_step_complete=persist_completed_step,
+            retry_mode_b=True,
+        )
         service.save_results_to_question(item.question_id, results)
         item.status = (AIProcessingJobItem.Status.PARTIAL if results.get('errors')
                        else AIProcessingJobItem.Status.SUCCEEDED)
+        item.error_code = (
+            'answer_b_failed' if 'answer_b' in results.get('errors', {}) else ''
+        )
         item.finished_at = timezone.now()
-        item.save(update_fields=['status', 'finished_at'])
+        item.save(update_fields=['status', 'error_code', 'finished_at'])
         return {'status': 'partial' if results.get('errors') else 'complete', 'question_id': str(item.question_id)}
     except Exception:
         item.status = AIProcessingJobItem.Status.FAILED

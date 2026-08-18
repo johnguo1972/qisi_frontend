@@ -189,6 +189,51 @@ def test_matching_answer_with_invalid_qwen_content_uses_complete_independent_con
     assert outcome.answer["steps"] == _mode_content()["steps"]
 
 
+def test_trusted_cross_mode_evidence_avoids_repeating_independent_solution():
+    """A verified canonical conclusion may validate another mode's Qwen content."""
+    context = _context(question_type="calculation")
+    first_calls = _Calls(_qwen("A", answer="C"), _independent("A", answer="C"), _final())
+    first = _arbitrator(first_calls).process("A", context)
+
+    second_calls = _Calls(
+        _qwen(
+            "B",
+            answer="C",
+            key_facts=["The supplied fact determines the answer."],
+        ),
+        AssertionError("a trusted canonical answer must be reused"),
+        _final("B", answer="C"),
+    )
+    second = _arbitrator(second_calls).process(
+        "B", context, cached_verification=first.shared_verifier_result
+    )
+
+    _assert_counts(first_calls, 1, 1, 0)
+    _assert_counts(second_calls, 1, 0, 0)
+    assert second.answer["final_answer"] == "C"
+    assert second.verification["deepseek_thinking_enabled"] is True
+    assert "independent_verification_cached" in second.verification["warnings"]
+
+
+def test_trusted_cross_mode_evidence_never_accepts_a_conflicting_qwen_answer():
+    """Cross-mode reuse is a proof source, not permission to bypass conflicts."""
+    context = _context(question_type="calculation")
+    first_calls = _Calls(_qwen("A", answer="C"), _independent("A", answer="C"), _final())
+    first = _arbitrator(first_calls).process("A", context)
+
+    second_calls = _Calls(
+        _qwen("B", answer="B"),
+        _independent("B", answer="C"),
+        _final("B", answer="C"),
+    )
+    second = _arbitrator(second_calls).process(
+        "B", context, cached_verification=first.shared_verifier_result
+    )
+
+    _assert_counts(second_calls, 1, 0, 1)
+    assert second.answer["final_answer"] == "C"
+
+
 def test_matching_answer_with_invalid_content_escalates_when_independent_content_cannot_repair_mode():
     calls = _Calls(
         _qwen(answer="C", steps=[]),

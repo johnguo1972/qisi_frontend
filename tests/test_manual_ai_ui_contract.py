@@ -8,7 +8,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 API_PATH = ROOT / 'uniapp' / 'src' / 'api' / 'questions.ts'
 COMPONENT_PATH = ROOT / 'uniapp' / 'src' / 'components' / 'QuestionAIControls.vue'
+ANSWER_MODAL_PATH = ROOT / 'uniapp' / 'src' / 'components' / 'AiAnswerModal.vue'
 QUESTION_EDIT_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'teacher' / 'question-edit.vue'
+COURSE_PRACTICE_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'teacher' / 'course-practice.vue'
 PHOTO_VIEWS_PATH = ROOT / 'apps' / 'study' / 'photo_views.py'
 STUDY_RECEIVERS_PATH = ROOT / 'apps' / 'study' / 'receivers.py'
 TEACHER_PAGES = {
@@ -85,6 +87,18 @@ def test_action_dispatch_uses_the_exact_api_mapping():
         assert re.search(rf"action === '{mode}'[\s\S]*?aiProcessSingleMode\(props.questionId, '{mode}'\)", source)
 
 
+def test_answer_modal_reprocesses_only_the_selected_mode_without_opening_controls():
+    """The answer-modal retry must remain a background mode task, not a nested dialog."""
+    source = read(ANSWER_MODAL_PATH)
+    assert 'QuestionAIControls' not in source
+    assert re.search(r'import\s*\{[^}]*questionApi[^}]*getAiTaskStatus[^}]*\}', source)
+    body = function_body(source, 'reprocess')
+    assert re.search(r'questionApi\.aiProcessMode\(props\.question\.id,\s*item\)', body)
+    assert 'getAiTaskStatus' in source
+    assert 'reprocessVisible' not in source
+    assert 'reprocessAction' not in source
+
+
 def test_processing_is_only_started_by_explicit_buttons():
     source = read(COMPONENT_PATH)
     assert len(re.findall(r'@click="startAction\(', source)) == 5
@@ -123,7 +137,6 @@ def test_pending_start_request_is_invalidated_before_it_can_begin_polling():
     ('audit', 'processAI'),
     ('bank', 'handleAiProcess'),
     ('new-question', 'handleAiProcess'),
-    ('course-practice', 'handleAiProcess'),
 ])
 def test_teacher_question_page_delegates_single_ai_processing_to_shared_controls(page_name: str, handler_name: str):
     source = read(TEACHER_PAGES[page_name])
@@ -164,8 +177,8 @@ def test_teacher_question_page_delegates_single_ai_processing_to_shared_controls
         assert 'handleModeAiProcess' not in source
         assert 'modeAiState' not in source
         assert 'aiProcessSingleMode' not in source
-    if page_name in ('review-list', 'course-practice'):
-        batch_handler = 'handleBatchAiProcess' if page_name == 'review-list' else 'batchAiProcess'
+    if page_name == 'review-list':
+        batch_handler = 'handleBatchAiProcess'
         assert re.search(rf'@click="{batch_handler}"', source)
         batch_body = function_body(source, batch_handler)
         assert re.search(r'if\s*\(ids\.length\s*===\s*0\)\s*return', batch_body)
@@ -178,7 +191,6 @@ def test_teacher_question_page_delegates_single_ai_processing_to_shared_controls
     ('page_name', 'timer_collection'),
     [
         ('review-list', 'aiPollTimers'),
-        ('course-practice', 'batchAiPollTimers'),
     ],
 )
 def test_batch_ai_pollers_stop_and_refresh_for_every_terminal_status(
@@ -203,6 +215,28 @@ def test_batch_ai_pollers_stop_and_refresh_for_every_terminal_status(
         r"data\.status === 'skipped'[\s\S]*?showToast\(\{\s*title:\s*`[^`]*(?:跳过|不存在)[^`]*`",
         body,
     )
+
+
+def test_course_practice_submits_single_and_batch_ai_to_background_jobs_without_controls_modal():
+    """课程练习入口只能创建持久后台作业，不得打开同步 AI 控制弹窗。"""
+    source = read(COURSE_PRACTICE_PATH)
+    assert 'QuestionAIControls' not in source
+    assert 'showAiControls' not in source
+    assert 'selectedAiQuestionId' not in source
+    assert 'runSequentially' not in source
+    assert 'aiProcessQuestion' not in source
+    assert 'getAiTaskStatus' not in source
+
+    single_body = function_body(source, 'handleAiProcess')
+    assert 'questionApi.batchAi([questionId])' in single_body
+    assert 'showToast' in single_body
+
+    batch_body = function_body(source, 'batchAiProcess')
+    assert 'if (ids.length === 0) return' in batch_body
+    assert 'questionApi.batchAi(ids)' in batch_body
+    assert 'startBackgroundAiJob' in batch_body
+
+    assert re.search(r'getAiJobStatus:\s*\(jobId: string\)\s*=>\s*get<any>\(`?/review/ai-jobs/\$\{jobId\}/`?\)', read(API_PATH))
 
 
 def test_question_edit_delegates_ai_processing_to_one_shared_control():

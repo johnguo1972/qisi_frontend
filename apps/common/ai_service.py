@@ -31,7 +31,7 @@ from apps.common.ai.answer_arbitration import (
     ArbitrationProviderError,
     ModeAnswerArbitrator,
 )
-from apps.common.ai.question_context import QuestionContextBuilder
+from apps.common.ai.question_context import QuestionContextBuilder, question_context_hash
 from apps.common.ai.schemas import ModeAResponse, ModeBResponse, ModeCResponse
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,8 @@ _SHARED_VERIFIER_FIELDS = (
     "confidence",
 )
 _MODE_ARBITRATION_ATTEMPTS = 2
+_PIPELINE_CACHE_KEY = "_ai_cache"
+_PIPELINE_CACHE_VERSION = 1
 
 
 def _project_schema_value(value):
@@ -388,6 +390,75 @@ class AIReviewService:
                 **metadata,
             },
         )
+
+    def _processing_input_hash(self, question, image_urls, model: str | None) -> str:
+        """Return the cache identity for AI preprocessing inputs only."""
+        context = QuestionContextBuilder.build(
+            question,
+            image_urls=image_urls,
+            normalized_text="",
+            vision_result={},
+            knowledge_refs="",
+        )
+        # An explicit caller model is part of the request contract.  A model
+        # override must therefore never receive preprocessing from another
+        # model route.
+        return f"{question_context_hash(context)}:{model or ''}"
+
+    @staticmethod
+    def _cached_pipeline_result(value, input_hash: str) -> dict | None:
+        if not isinstance(value, dict) or value.get("error"):
+            return None
+        metadata = value.get(_PIPELINE_CACHE_KEY)
+        if not isinstance(metadata, dict):
+            return None
+        if (
+            metadata.get("version") != _PIPELINE_CACHE_VERSION
+            or metadata.get("input_hash") != input_hash
+        ):
+            return None
+        return deepcopy(value)
+
+    @staticmethod
+    def _with_pipeline_cache(result: dict, input_hash: str) -> dict:
+        cached = deepcopy(result)
+        cached[_PIPELINE_CACHE_KEY] = {
+            "version": _PIPELINE_CACHE_VERSION,
+            "input_hash": input_hash,
+        }
+        return cached
+
+    @staticmethod
+    def _without_pipeline_cache_metadata(value):
+        if not isinstance(value, dict):
+            return value
+        cleaned = deepcopy(value)
+        cleaned.pop(_PIPELINE_CACHE_KEY, None)
+        return cleaned
+
+    @staticmethod
+    def _cached_shared_verification(
+        question,
+        *,
+        image_urls,
+        normalized_text: str,
+        vision_result: dict,
+        knowledge_refs: str,
+    ) -> dict | None:
+        shared = _safe_shared_verifier_result(
+            getattr(question, "ai_verifier_result", None)
+        )
+        if shared is None:
+            return None
+        clean_vision = AIReviewService._without_pipeline_cache_metadata(vision_result)
+        context = QuestionContextBuilder.build(
+            question,
+            image_urls=image_urls,
+            normalized_text=normalized_text,
+            vision_result=clean_vision,
+            knowledge_refs=knowledge_refs,
+        )
+        return shared if shared["context_hash"] == question_context_hash(context) else None
 
     def analyze_knowledge(self, question, model: str = None) -> dict:
         """Analyze knowledge points through the configured shared component."""
@@ -755,7 +826,13 @@ class AIReviewService:
         results['errors'] = errors
         return results
 
-    def process_question_full_v2(self, question_id: int, model: str = None) -> dict:
+    def process_question_full_v2(
+        self,
+        question_id: int,
+        model: str = None,
+        on_step_complete=None,
+        retry_mode_b: bool = False,
+    ) -> dict:
         """Full 6-step pipeline: Probe -> Vision -> Solver A/B/C -> Verifier."""
         from django.utils import timezone
         from apps.parser.models import ExamQuestion
@@ -764,6 +841,11 @@ class AIReviewService:
         errors = {}
         results = {}
 
+        def notify_step_complete(step_key: str) -> None:
+            """Allow durable batch callers to persist each successful step."""
+            if on_step_complete is not None:
+                on_step_complete(step_key, deepcopy(results[step_key]))
+
         # Update status to running
         question.ai_processing_status = 'running'
         question.save(update_fields=['ai_processing_status'])
@@ -771,39 +853,69 @@ class AIReviewService:
         # Get image URLs
         image_urls = self._get_question_image_urls(question)
         logger.info(f'[AI] Got {len(image_urls)} image URLs for question {question_id}')
+        input_hash = self._processing_input_hash(question, image_urls, model)
 
         # Step 1: Probe & Norm
-        try:
-            probe_result = self.probe_and_norm(question, image_urls, model=model)
-            normalized_text = probe_result.get('normalized_text', question.stem or '')
+        probe_result = self._cached_pipeline_result(
+            getattr(question, "ai_probe_result", None), input_hash
+        )
+        if probe_result is not None:
             results['probe'] = probe_result
-        except AIRequestError as e:
-            errors['probe'] = str(e)
-            results['probe'] = {'error': str(e)}
-            normalized_text = question.stem or ''
+            normalized_text = probe_result.get('normalized_text', question.stem or '')
+        else:
+            try:
+                probe_result = self.probe_and_norm(question, image_urls, model=model)
+                probe_result = self._with_pipeline_cache(probe_result, input_hash)
+                normalized_text = probe_result.get('normalized_text', question.stem or '')
+                results['probe'] = probe_result
+            except AIRequestError as e:
+                errors['probe'] = str(e)
+                results['probe'] = {'error': str(e)}
+                normalized_text = question.stem or ''
+        if not results['probe'].get('error'):
+            notify_step_complete('probe')
 
         # Step 1.5: Knowledge analysis（识别 1-5 个知识点 + 难度，供 save 匹配并更新）
-        try:
-            knowledge = self.analyze_knowledge_points(
-                question, normalized_text,
-                subject_hint=results.get('probe', {}).get('subject', ''),
-                model=model,
-            )
+        knowledge = self._cached_pipeline_result(
+            getattr(question, "ai_knowledge_enrichment", None), input_hash
+        )
+        if knowledge is not None:
             results['knowledge'] = knowledge
-        except AIRequestError as e:
-            errors['knowledge'] = str(e)
-            results['knowledge'] = {'error': str(e)}
+        else:
+            try:
+                knowledge = self.analyze_knowledge_points(
+                    question, normalized_text,
+                    subject_hint=results.get('probe', {}).get('subject', ''),
+                    model=model,
+                )
+                results['knowledge'] = self._with_pipeline_cache(knowledge, input_hash)
+            except AIRequestError as e:
+                errors['knowledge'] = str(e)
+                results['knowledge'] = {'error': str(e)}
+        if not results['knowledge'].get('error'):
+            notify_step_complete('knowledge')
 
         # Step 2: Vision Extraction
-        try:
-            vision_result = self.vision_extraction(
-                question, image_urls, normalized_text, model=model
-            )
+        vision_result = self._cached_pipeline_result(
+            getattr(question, "ai_vision_extract", None), input_hash
+        )
+        if vision_result is not None:
             results['vision'] = vision_result
-        except AIRequestError as e:
-            errors['vision'] = str(e)
-            results['vision'] = {'error': str(e)}
-            vision_result = {}
+        else:
+            try:
+                vision_result = self.vision_extraction(
+                    question, image_urls, normalized_text, model=model
+                )
+                vision_result = self._with_pipeline_cache(vision_result, input_hash)
+                results['vision'] = vision_result
+            except AIRequestError as e:
+                errors['vision'] = str(e)
+                results['vision'] = {'error': str(e)}
+                vision_result = {}
+        if not results['vision'].get('error'):
+            notify_step_complete('vision')
+
+        vision_for_ai = self._without_pipeline_cache_metadata(vision_result)
 
         # Build knowledge refs
         knowledge_refs = ""
@@ -811,34 +923,50 @@ class AIReviewService:
             knowledge_refs = ", ".join(results['probe']['topic_tags_top3'])
 
         # Step 3: Solver A/B/C with independent verification and arbitration.
-        shared_verification = None
+        shared_verification = self._cached_shared_verification(
+            question,
+            image_urls=image_urls,
+            normalized_text=normalized_text,
+            vision_result=vision_for_ai,
+            knowledge_refs=knowledge_refs,
+        )
         for mode in "ABC":
             answer_key = f"answer_{mode.lower()}"
-            try:
-                outcome = self.solve_mode_with_arbitration(
-                    question,
-                    mode=mode,
-                    image_urls=image_urls,
-                    normalized_text=normalized_text,
-                    vision_result=vision_result,
-                    knowledge_refs=knowledge_refs,
-                    cached_verification=shared_verification,
-                    model=model,
-                )
-                answer = dict(outcome.answer)
-                route_provider, route_model = self._task_route(
-                    f"mode_{mode.lower()}_answer"
-                )
-                answer['provider'] = route_provider
-                answer['model'] = route_model
-                results[answer_key] = answer
-                if outcome.shared_verifier_result is not None:
-                    shared_verification = _safe_shared_verifier_result(
-                        outcome.shared_verifier_result
+            attempts = 2 if retry_mode_b and mode == 'B' else 1
+            for attempt in range(attempts):
+                try:
+                    outcome = self.solve_mode_with_arbitration(
+                        question,
+                        mode=mode,
+                        image_urls=image_urls,
+                        normalized_text=normalized_text,
+                        vision_result=vision_for_ai,
+                        knowledge_refs=knowledge_refs,
+                        cached_verification=shared_verification,
+                        model=model,
                     )
-            except (AIRequestError, ArbitrationError) as error:
-                errors[answer_key] = str(error)
-                results[answer_key] = {'error': str(error)}
+                    answer = dict(outcome.answer)
+                    route_provider, route_model = self._task_route(
+                        f"mode_{mode.lower()}_answer"
+                    )
+                    answer['provider'] = route_provider
+                    answer['model'] = route_model
+                    results[answer_key] = answer
+                    if outcome.shared_verifier_result is not None:
+                        shared_verification = _safe_shared_verifier_result(
+                            outcome.shared_verifier_result
+                        )
+                    notify_step_complete(answer_key)
+                    break
+                except (AIRequestError, ArbitrationError) as error:
+                    if attempt + 1 < attempts:
+                        logger.warning(
+                            'AI mode B retrying after recoverable processing failure',
+                            extra={'question_id': str(question_id), 'mode': mode},
+                        )
+                        continue
+                    errors[answer_key] = str(error)
+                    results[answer_key] = {'error': str(error)}
 
         if shared_verification is not None and not errors:
             results['verifier'] = deepcopy(shared_verification)

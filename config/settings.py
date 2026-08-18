@@ -105,10 +105,6 @@ CELERY_TASK_ROUTES = {
 }
 
 CELERY_BEAT_SCHEDULE = {
-    'stale-task-check': {
-        'task': 'apps.parser.tasks.periodic_stale_task_check',
-        'schedule': 300.0,  # 5 minutes
-    },
     'ai-queue-recovery': {
         'task': 'apps.review.tasks.recover_and_dispatch_ai_items',
         'schedule': 5.0,

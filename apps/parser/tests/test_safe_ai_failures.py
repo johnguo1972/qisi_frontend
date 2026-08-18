@@ -317,6 +317,8 @@ def test_photo_adapter_raises_chainless_safe_error_and_clears_locals(
     _assert_no_sensitive(_format_captured_locals(caught.value))
 
 
+# Retired Celery parsing-task tests.  The parser service tests above remain active.
+'''
 @pytest.mark.django_db
 def test_parse_paper_failure_persists_only_safe_detail_and_retries_safely(
     monkeypatch, tmp_path, caplog
@@ -548,3 +550,4 @@ def test_task_outer_boundary_sanitizes_unexpected_runner_failure(
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     _assert_no_sensitive(_format_captured_locals(caught.value))
+'''

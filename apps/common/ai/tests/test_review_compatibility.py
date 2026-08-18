@@ -1439,6 +1439,76 @@ def test_full_entrypoints_route_all_modes_through_arbitration_and_reuse_shared_v
     service.verify_result.assert_not_called()
 
 
+def test_full_v2_reuses_unchanged_preprocessing_and_verified_evidence():
+    """A repeated full run must spend tokens only on fresh A/B/C mode content."""
+    shared = {
+        "context_hash": "same-context",
+        "independent_answer": "C",
+        "reference_answer_valid": True,
+        "reference_analysis_valid": True,
+        "reference_issues": [],
+        "key_facts": ["The facts select C."],
+        "confidence": 0.95,
+    }
+    cached = {"_ai_cache": {"version": 1, "input_hash": "same-input"}}
+    question = SimpleNamespace(
+        stem="Which value is correct?",
+        options=[],
+        answer="C",
+        solution="Use the supplied facts.",
+        analysis="Use the supplied facts.",
+        question_type="single_choice",
+        subject="math",
+        ai_probe_result=cached | {
+            "normalized_text": "Normalized stem", "topic_tags_top3": ["linear"]
+        },
+        ai_knowledge_enrichment=cached | {"knowledge_points": []},
+        ai_vision_extract=cached | {"figure_present": False},
+        ai_verifier_result=shared,
+        ai_processing_status=None,
+        save=MagicMock(),
+    )
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda component_type: MagicMock()
+    )
+    service._get_question_image_urls = MagicMock(return_value=[])
+    service._processing_input_hash = MagicMock(return_value="same-input")
+    service.probe_and_norm = MagicMock(
+        side_effect=AssertionError("unchanged probe must be reused")
+    )
+    service.analyze_knowledge_points = MagicMock(
+        side_effect=AssertionError("unchanged knowledge result must be reused")
+    )
+    service.vision_extraction = MagicMock(
+        side_effect=AssertionError("unchanged vision result must be reused")
+    )
+    service.solve_mode_with_arbitration = MagicMock(
+        side_effect=lambda _question, *, mode, **_kwargs: _arbitration_outcome(
+            mode, shared
+        )
+    )
+    shared["context_hash"] = question_context_hash(
+        QuestionContextBuilder.build(
+            question,
+            image_urls=[],
+            normalized_text="Normalized stem",
+            vision_result={"figure_present": False},
+            knowledge_refs="linear",
+        )
+    )
+
+    with patch.object(ExamQuestion.objects, "get", return_value=question):
+        results = service.process_question_full_v2("question-id")
+
+    assert results["probe"]["normalized_text"] == "Normalized stem"
+    assert results["knowledge"]["knowledge_points"] == []
+    assert results["vision"]["figure_present"] is False
+    assert all(
+        call.kwargs["cached_verification"] == shared
+        for call in service.solve_mode_with_arbitration.call_args_list
+    )
+
+
 def test_full_pipeline_keeps_failed_mode_non_savable_without_legacy_fallback():
     question = SimpleNamespace(
         stem="Question",
@@ -1473,6 +1543,48 @@ def test_full_pipeline_keeps_failed_mode_non_savable_without_legacy_fallback():
         "generated_at": results["answer_b"]["generated_at"],
     }
     service.generate_answer_b.assert_not_called()
+
+
+def test_full_v2_retries_only_b_and_emits_each_completed_step():
+    """Batch callers can persist each step while a transient B failure retries B only."""
+    question = SimpleNamespace(
+        stem="Question",
+        subject="math",
+        ai_processing_status=None,
+        save=MagicMock(),
+    )
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda component_type: MagicMock()
+    )
+    service._get_question_image_urls = MagicMock(return_value=[])
+    service._processing_input_hash = MagicMock(return_value="input-hash")
+    service.probe_and_norm = MagicMock(
+        return_value={"normalized_text": "Question", "topic_tags_top3": []}
+    )
+    service.analyze_knowledge_points = MagicMock(return_value={"knowledge_points": []})
+    service.vision_extraction = MagicMock(return_value={"figure_present": False})
+    calls = []
+
+    def arbitrate(_question, *, mode, **_kwargs):
+        calls.append(mode)
+        if mode == "B" and calls.count("B") == 1:
+            raise ArbitrationProviderError()
+        return _arbitration_outcome(mode, None)
+
+    service.solve_mode_with_arbitration = MagicMock(side_effect=arbitrate)
+    completed = []
+    with patch.object(ExamQuestion.objects, "get", return_value=question):
+        results = service.process_question_full_v2(
+            "question-id",
+            on_step_complete=lambda key, value: completed.append((key, value)),
+            retry_mode_b=True,
+        )
+
+    assert calls == ["A", "B", "B", "C"]
+    assert [key for key, _value in completed] == [
+        "probe", "knowledge", "vision", "answer_a", "answer_b", "answer_c",
+    ]
+    assert results["errors"] == {}
 
 
 def test_full_v2_keeps_failed_mode_partial_without_raw_solver_fallback():

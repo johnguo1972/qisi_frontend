@@ -37,8 +37,10 @@ def _mission_student_ids(mission):
             return UserAccount.objects.none().values_list('id', flat=True)
         return UserAccount.objects.filter(
             id__in=targets,
-            role_grants__role='student',
-            role_grants__status='active',
+            status='active',
+        ).filter(
+            Q(role_type='student') |
+            Q(role_grants__role='student', role_grants__status='active'),
         ).distinct().values_list('id', flat=True)
 
     students = ClassStudent.objects.filter(

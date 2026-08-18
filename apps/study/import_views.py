@@ -6,7 +6,6 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.conf import settings
 from apps.papers.models import ExamPaper, ParseTask
-from apps.parser.tasks import parse_paper_task
 from .serializers import ImportBatchSerializer, PaperListSerializer
 
 
@@ -25,6 +24,7 @@ def import_batch_list(request):
 
 def _handle_upload(request):
     """Q-01: Upload Word/PDF and start async parsing."""
+    return Response({'code': 410, 'message': '试卷解析功能已停用', 'data': None, 'trace_id': make_trace_id()}, status=410)
     file = request.FILES.get('file')
     if not file:
         return Response(
@@ -105,11 +105,10 @@ def _handle_upload(request):
     # Start async Celery task (or sync if ALWAYS_EAGER)
     if settings.CELERY_TASK_ALWAYS_EAGER:
         # Run synchronously — no Celery worker needed
-        parse_paper_task(paper_id=paper.id)
+        celery_task_id = None
         celery_task_id = None
     else:
-        celery_result = parse_paper_task.delay(paper_id=paper.id)
-        celery_task_id = celery_result.id
+        celery_task_id = None
 
     task.celery_task_id = celery_task_id
     task.save(update_fields=['celery_task_id'])
@@ -120,7 +119,7 @@ def _handle_upload(request):
         'data': {
             'paper_id': paper.id,
             'task_id': task.id,
-            'celery_task_id': celery_result.id,
+            'celery_task_id': celery_task_id,
         },
         'trace_id': make_trace_id(),
     })

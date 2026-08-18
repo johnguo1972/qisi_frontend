@@ -7,7 +7,11 @@ from .roles import VALID_ROLES, has_user_role
 
 def get_request_role(request) -> str | None:
     """Return the independently authenticated role for this request."""
-    return getattr(request, 'active_role', None)
+    active_role = getattr(request, 'active_role', None)
+    if active_role:
+        return active_role
+    user = getattr(request, 'user', None)
+    return getattr(user, 'role_type', None)
 
 
 class OptionalJWTAuthentication(JWTAuthentication):

@@ -386,6 +386,33 @@ class ModeAnswerArbitrator:
                         warnings=warnings,
                         shared=shared,
                     )
+                # A cached verifier deliberately stores only canonical facts,
+                # not the prior mode's schema-specific content.  A different
+                # mode may therefore use its own validated Qwen content only
+                # when it proves every cached key fact and agrees with both
+                # the reference and the independent answer.  Any weaker case
+                # remains on the existing final-review path.
+                if (
+                    used_cached
+                    and normalized_deepseek.value == normalized_reference.value
+                    and qwen_content.valid
+                    and qwen_facts_cover
+                ):
+                    warnings.append("trusted_cross_mode_evidence_reused")
+                    return self._accepted(
+                        selected=qwen,
+                        provider="qwen",
+                        context_hash=context_hash,
+                        normalized_reference=normalized_reference.value,
+                        normalized_qwen=normalized_qwen.value,
+                        normalized_deepseek=normalized_deepseek.value,
+                        trusted_answer=normalized_qwen.value,
+                        deepseek_used=True,
+                        final_review_used=False,
+                        confidence=independent["confidence"],
+                        warnings=warnings,
+                        shared=shared,
+                    )
                 return self._review(
                     normalized_mode, context, qwen, independent, warnings, context_hash,
                     normalized_reference.value, normalized_qwen.value,

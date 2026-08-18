@@ -8,7 +8,6 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from .models import ExamPaper, ParseTask
 from apps.common import status as const
-from apps.parser.tasks import parse_paper_task
 
 
 @csrf_exempt
@@ -87,7 +86,7 @@ def start_parse(request, paper_id):
     )
 
     # Dispatch Celery task
-    result = parse_paper_task.delay(paper.id)
+    return JsonResponse({'error': 'Paper parsing has been retired'}, status=410)
     task.celery_task_id = str(result.id)
     task.save(update_fields=['celery_task_id'])
 
@@ -185,7 +184,7 @@ def reparse_paper(request, paper_id):
             'code': 400, 'message': '已有解析任务正在运行', 'data': None, 'trace_id': make_trace_id()
         }, status=400)
 
-    result = parse_paper_task.delay(paper.id)
+    return Response({'code': 410, 'message': '试卷解析功能已停用', 'data': None, 'trace_id': make_trace_id()}, status=410)
 
     task = ParseTask.objects.create(
         paper=paper, task_type='full_parse', status=const.TASK_RUNNING,

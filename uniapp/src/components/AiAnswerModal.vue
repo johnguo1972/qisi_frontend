@@ -38,29 +38,23 @@
               </button>
             </template>
             <template v-else>
-              <button size="mini" type="primary" @click="reprocess(item)">重新处理</button>
+              <button size="mini" type="primary" :disabled="reprocessing[item]" @click="reprocess(item)">
+                {{ reprocessing[item] ? '处理中...' : '重新处理' }}
+              </button>
               <button size="mini" @click="startEdit(item)" :disabled="!answerExists(item)">编辑内容</button>
             </template>
           </view>
         </view>
       </view>
 
-      <QuestionAIControls
-        :visible="reprocessVisible"
-        :question-id="question?.id ?? null"
-        :actions="reprocessAction ? [reprocessAction] : []"
-        @close="reprocessVisible = false"
-        @completed="handleReprocessed"
-      />
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { questionApi } from '@/api/questions'
+import { computed, onUnmounted, ref, watch } from 'vue'
+import { questionApi, getAiTaskStatus } from '@/api/questions'
 import { renderWithKatex } from '@/utils/katex-renderer'
-import QuestionAIControls from '@/components/QuestionAIControls.vue'
 
 type AnswerMode = 'A' | 'B' | 'C'
 
@@ -81,8 +75,8 @@ const answerHtml = ref<Record<AnswerMode, string>>({ A: '', B: '', C: '' })
 const editingMode = ref<AnswerMode | null>(null)
 const editingText = ref('')
 const saving = ref(false)
-const reprocessVisible = ref(false)
-const reprocessAction = ref<AnswerMode | null>(null)
+const reprocessing = ref<Record<AnswerMode, boolean>>({ A: false, B: false, C: false })
+const reprocessTimers: Partial<Record<AnswerMode, ReturnType<typeof setInterval>>> = {}
 
 const mode = computed(() => props.mode || 'ALL')
 const visibleModes = computed(() => mode.value === 'ALL' ? modes : [mode.value])
@@ -162,22 +156,58 @@ async function saveEdit(item: AnswerMode) {
   }
 }
 
-function reprocess(item: AnswerMode) {
-  if (!props.question?.id) return
-  reprocessAction.value = item
-  reprocessVisible.value = true
+function stopReprocessPolling(item: AnswerMode) {
+  const timer = reprocessTimers[item]
+  if (timer) clearInterval(timer)
+  delete reprocessTimers[item]
+  reprocessing.value[item] = false
 }
 
-function handleReprocessed(payload: { action: string }) {
-  reprocessVisible.value = false
-  const item = (payload.action || reprocessAction.value) as AnswerMode
-  if (item === 'A' || item === 'B' || item === 'C') emit('reprocessed', { mode: item })
-  reprocessAction.value = null
+async function pollReprocessStatus(item: AnswerMode, taskId: string) {
+  try {
+    const response: any = await getAiTaskStatus(taskId)
+    const task = response?.data ?? response
+    const status = task?.status
+    if (!['complete', 'partial', 'failed', 'skipped'].includes(status)) return
+
+    stopReprocessPolling(item)
+    if (status === 'complete' || status === 'partial') {
+      uni.showToast({ title: status === 'complete' ? `${item}模式处理完成` : `${item}模式部分完成`, icon: 'success' })
+      emit('reprocessed', { mode: item })
+      return
+    }
+    uni.showToast({ title: `${item}模式处理失败，请稍后重试`, icon: 'none' })
+  } catch {
+    stopReprocessPolling(item)
+    uni.showToast({ title: `${item}模式任务状态获取失败`, icon: 'none' })
+  }
+}
+
+async function reprocess(item: AnswerMode) {
+  if (!props.question?.id) return
+  if (reprocessing.value[item]) return
+  reprocessing.value[item] = true
+  try {
+    const response: any = await questionApi.aiProcessMode(props.question.id, item)
+    const taskId = response?.data?.task_id ?? response?.task_id
+    if (!taskId) throw new Error('Missing AI task ID')
+    reprocessTimers[item] = setInterval(() => void pollReprocessStatus(item, String(taskId)), 2000)
+    void pollReprocessStatus(item, String(taskId))
+  } catch {
+    stopReprocessPolling(item)
+    uni.showToast({ title: `${item}模式处理启动失败`, icon: 'none' })
+  }
 }
 
 watch(() => [props.visible, props.question, props.mode], () => {
   if (props.visible) void renderAnswers()
 }, { deep: true, immediate: true })
+
+watch(() => props.visible, (visible) => {
+  if (!visible) modes.forEach(stopReprocessPolling)
+})
+
+onUnmounted(() => modes.forEach(stopReprocessPolling))
 </script>
 
 <style scoped>

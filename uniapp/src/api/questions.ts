@@ -90,6 +90,8 @@ export const questionApi = {
     post<any>(`/review/question/${questionId}/ai-process-mode/${mode}/`),
   batchAi: (questionIds: UUID[], model?: string) =>
     post<any>('/review/batch-ai-process/', { question_ids: questionIds, model }),
+  getAiJobStatus: (jobId: string) =>
+    get<any>(`/review/ai-jobs/${jobId}/`),
   similar: (questionId: UUID) => get<any>(`/questions/${questionId}/similar/`),
 
   // AI task status polling

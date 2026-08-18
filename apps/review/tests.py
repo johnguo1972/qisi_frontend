@@ -532,10 +532,21 @@ class AIProcessFullPipelineTest(TestCase):
                 ModeAAnswerComponent,
                 DeepSeekIndependentVerifierComponent,
                 ModeBAnswerComponent,
-                DeepSeekFinalReviewComponent,
                 ModeCAnswerComponent,
-                DeepSeekFinalReviewComponent,
             ],
+        )
+        self.assertIn(DeepSeekIndependentVerifierComponent, created_types)
+        self.assertNotIn(DeepSeekFinalReviewComponent, created_types)
+        self.assertEqual(created_types.count(ModeAAnswerComponent), 1)
+        self.assertEqual(created_types.count(ModeBAnswerComponent), 1)
+        self.assertEqual(created_types.count(ModeCAnswerComponent), 1)
+        self.assertLess(
+            created_types.index(ModeAAnswerComponent),
+            created_types.index(ModeBAnswerComponent),
+        )
+        self.assertLess(
+            created_types.index(ModeBAnswerComponent),
+            created_types.index(ModeCAnswerComponent),
         )
         self.assertEqual(
             set(results),
@@ -993,6 +1004,51 @@ class AIQueueSchedulerTest(TestCase):
 
 
 class AIQueueExecutionTaskTest(TestCase):
+    def test_execute_item_persists_completed_steps_before_full_pipeline_returns(self):
+        """A partial batch run keeps already-completed probe/A/C results durable."""
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.tasks import execute_ai_job_item
+
+        teacher = UserAccount.objects.create(mobile='13900009013', display_name='Step Save Teacher', role_type='teacher')
+        paper = ExamPaper.objects.create(title='Step Save Paper', subject='physics')
+        question = ExamQuestion.objects.create(paper=paper, stem='Step save stem', answer='A', question_type='single_choice')
+        item = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[question.id], source='batch', model=None,
+        ).job.items.get()
+        item.status = AIProcessingJobItem.Status.DISPATCHED
+        item.save(update_fields=['status'])
+
+        saved_steps = []
+
+        def process_with_completed_steps(
+            _service, _question_id, *, model=None, on_step_complete=None,
+            retry_mode_b=False,
+        ):
+            self.assertTrue(retry_mode_b)
+            for key, value in (
+                ('probe', {'normalized_text': 'Step save stem'}),
+                ('answer_a', {'mode': 'A', 'final_answer': 'A'}),
+                ('answer_c', {'mode': 'C', 'final_answer': 'A'}),
+            ):
+                on_step_complete(key, value)
+            return {'answer_b': {'error': 'schema_invalid'}, 'errors': {'answer_b': 'schema_invalid'}}
+
+        def save_capture(_service, _question_id, result):
+            saved_steps.append(tuple(sorted(key for key in result if key != 'errors')))
+
+        with (
+            patch('apps.review.tasks.AIReviewService.process_question_full_v2', new=process_with_completed_steps),
+            patch('apps.review.tasks.AIReviewService.save_results_to_question', new=save_capture),
+            patch('apps.review.ai_queue.RedisLeasePool.release', return_value=True),
+        ):
+            result = execute_ai_job_item.run(str(item.id))
+
+        item.refresh_from_db()
+        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(saved_steps[:3], [('probe',), ('answer_a',), ('answer_c',)])
+        self.assertEqual(item.status, AIProcessingJobItem.Status.PARTIAL)
+        self.assertEqual(item.error_code, 'answer_b_failed')
+
     def test_execute_item_runs_existing_full_pipeline_and_releases_lease(self):
         from apps.review.models import AIProcessingJob, AIProcessingJobItem
         from apps.review.tasks import execute_ai_job_item

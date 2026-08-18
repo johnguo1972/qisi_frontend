@@ -43,11 +43,6 @@ class PromptRegistry:
         prompt = self._get_prompt(task_key)
         expected = set(prompt.variables)
         supplied = set(variables)
-        missing = expected - supplied
-        if missing:
-            raise AIPromptError(
-                "Missing prompt variable(s): " + _safe_variable_names(missing)
-            )
         unknown = supplied - expected
         if unknown:
             raise AIPromptError(
@@ -55,10 +50,33 @@ class PromptRegistry:
             )
 
         defaults = dict(prompt.defaults)
-        rendered = {
-            name: str(defaults[name] if not value and name in defaults else value)
-            for name, value in variables.items()
+        rendered = {}
+        missing = set()
+        context_defaults = {
+            "question_context_json",
         }
+        for name in expected:
+            is_provided = name in variables
+            value = variables[name] if is_provided else None
+            if (not is_provided and name in defaults and name in context_defaults):
+                value = defaults[name]
+            if is_provided and name in defaults and (
+                value is None
+                or value == ""
+                or (
+                    isinstance(value, (list, tuple, dict))
+                    and len(value) == 0
+                )
+            ):
+                value = defaults[name]
+            if value is None:
+                missing.add(name)
+                continue
+            rendered[name] = str(value)
+        if missing:
+            raise AIPromptError(
+                "Missing prompt variable(s): " + _safe_variable_names(missing)
+            )
         system = _render_template(prompt.system, rendered)
         user = _render_template(prompt.user, rendered)
         unresolved = {

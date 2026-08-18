@@ -3,18 +3,14 @@ from django.core.cache import cache
 from apps.accounts.auth import get_request_role
 from apps.accounts.models import StudentParentBind
 from apps.accounts.roles import has_user_role
-from apps.institutions.models import ClassStudent
 
 
 class IsStudent(permissions.BasePermission):
-    """Require a student session, active grant, and active class membership."""
+    """Require a student session and active student grant."""
     def has_permission(self, request, view):
         return (
             get_request_role(request) == 'student'
             and has_user_role(request.user, 'student')
-            and ClassStudent.objects.filter(
-                student=request.user, status='active',
-            ).exists()
         )
 
 
@@ -24,7 +20,6 @@ def effective_student_user(request):
     if (
         active_role == 'student'
         and has_user_role(request.user, 'student')
-        and ClassStudent.objects.filter(student=request.user, status='active').exists()
     ):
         return request.user
     if active_role != 'parent' or not has_user_role(request.user, 'parent'):

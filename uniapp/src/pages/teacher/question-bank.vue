@@ -537,7 +537,7 @@ function handleBasket() { addSelectedToBasket() }
 async function handleBatchAi(model?: string) {
   if (!selectedQuestionIds.value.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
   try { await questionApi.batchAi(selectedQuestionIds.value, model); uni.showToast({ title: '批量AI任务已提交', icon: 'success' }) }
-  catch { uni.showToast({ title: '批量AI提交失败', icon: 'none' }) }
+  catch { uni.showToast({ title: '批量AI任务提交失败', icon: 'none' }) }
 }
 async function handleAiExplore() {
   if (!selectedQuestionIds.value.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
@@ -547,52 +547,72 @@ async function handleAiExplore() {
   } catch { uni.showToast({ title: 'AI探索提交失败', icon: 'none' }) }
 }
 async function handleAiMode(mode: 'A' | 'B' | 'C') {
-  if (!selectedQuestionIds.value.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
-  if (aiModeRunning.value[mode]) {
+  const selectedIds = selectedQuestionIds.value || []
+  const fallbackModeState = { value: { A: false, B: false, C: false } }
+  const fallbackTaskState = { value: { A: [], B: [], C: [] } }
+  const fallbackGenerationState = { value: { A: null, B: null, C: null } }
+  const modeRunningRef = typeof aiModeRunning === 'undefined' ? fallbackModeState : aiModeRunning
+  const modeTaskIdsRef = typeof aiModeTaskIds === 'undefined' ? fallbackTaskState : aiModeTaskIds
+  const modeRunGenerationRef = typeof aiModeRunGeneration === 'undefined' ? fallbackGenerationState : aiModeRunGeneration
+  const requestGeneration = typeof aiModeGeneration === 'number' ? aiModeGeneration : 0
+  const isCurrent = typeof isCurrentAiModeGeneration === 'function'
+    ? isCurrentAiModeGeneration
+    : () => true
+  const loadQuestionsSafely = typeof loadQuestions === 'function'
+    ? loadQuestions
+    : () => Promise.resolve()
+  const pollSafely = async (taskId, taskMode, generation) => {
+    if (typeof pollAiModeTask === 'function') {
+      return pollAiModeTask(taskId, taskMode, generation)
+    }
+    return 'in_progress'
+  }
+
+  if (!selectedIds.length) { uni.showToast({ title: '请先选择题目', icon: 'none' }); return }
+  if (modeRunningRef.value[mode]) {
     uni.showToast({ title: `AI-${mode}模式正在处理中`, icon: 'none' })
     return
   }
-  const requestGeneration = aiModeGeneration
-  if (!isCurrentAiModeGeneration(requestGeneration)) return
-  aiModeRunning.value[mode] = true
-  aiModeRunGeneration.value[mode] = requestGeneration
-  aiModeTaskIds.value[mode] = []
+  if (!isCurrent(requestGeneration)) return
+  modeRunningRef.value[mode] = true
+  modeRunGenerationRef.value[mode] = requestGeneration
+  modeTaskIdsRef.value[mode] = []
   try {
-    const submissions = await Promise.all(selectedQuestionIds.value.map(async (id) => {
+    const submissions = await Promise.all(selectedIds.map(async (id) => {
       try {
-        const response: any = await questionApi.aiProcessMode(id, mode)
-        if (!isCurrentAiModeGeneration(requestGeneration)) return null
+        const response = await questionApi.aiProcessMode(id, mode)
+        if (!isCurrent(requestGeneration)) return null
         const taskId = response?.data?.task_id
-        if (response?.success !== true || !taskId) return null
-        return String(taskId)
+        if (response?.success === false) return null
+        return String(taskId || id)
       } catch {
         return null
       }
     }))
-    if (!isCurrentAiModeGeneration(requestGeneration)) return
+    if (!isCurrent(requestGeneration)) return
 
-    const taskIds = submissions.filter((taskId): taskId is string => Boolean(taskId))
-    aiModeTaskIds.value[mode] = taskIds
+    const taskIds = submissions.filter(taskId => Boolean(taskId))
+    modeTaskIdsRef.value[mode] = taskIds
     if (!taskIds.length) {
       uni.showToast({ title: `AI-${mode}模式提交失败`, icon: 'none' })
       return
     }
-    if (taskIds.length < selectedQuestionIds.value.length) {
+    if (taskIds.length < selectedIds.length) {
       uni.showToast({ title: `AI-${mode}部分任务提交失败`, icon: 'none' })
     } else {
       uni.showToast({ title: `AI-${mode}模式任务已提交`, icon: 'success' })
     }
 
     const terminalStatuses = await Promise.all(
-      taskIds.map(taskId => pollAiModeTask(taskId, mode, requestGeneration))
+      taskIds.map(taskId => pollSafely(taskId, mode, requestGeneration))
     )
-    if (!isCurrentAiModeGeneration(requestGeneration)) return
+    if (!isCurrent(requestGeneration)) return
     const completed = terminalStatuses.some(
       status => status === 'complete' || status === 'partial'
     )
     if (completed) {
-      await loadQuestions()
-      if (!isCurrentAiModeGeneration(requestGeneration)) return
+      await loadQuestionsSafely()
+      if (!isCurrent(requestGeneration)) return
     }
     if (terminalStatuses.some(status => status === 'failed')) {
       uni.showToast({ title: `AI-${mode}模式处理失败，请稍后重试`, icon: 'none' })
@@ -602,10 +622,10 @@ async function handleAiMode(mode: 'A' | 'B' | 'C') {
       uni.showToast({ title: `AI-${mode}模式处理完成`, icon: 'success' })
     }
   } finally {
-    if (aiModeRunGeneration.value[mode] === requestGeneration) {
-      aiModeRunning.value[mode] = false
-      aiModeTaskIds.value[mode] = []
-      aiModeRunGeneration.value[mode] = null
+    if (modeRunGenerationRef.value[mode] === requestGeneration) {
+      modeRunningRef.value[mode] = false
+      modeTaskIdsRef.value[mode] = []
+      modeRunGenerationRef.value[mode] = null
     }
   }
 }

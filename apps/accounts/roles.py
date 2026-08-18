@@ -25,7 +25,10 @@ def get_user_roles(user):
 
 def has_user_role(user, role):
     _validate_role(role)
-    return UserRole.objects.filter(user=user, role=role, status="active").exists()
+    role_queryset = UserRole.objects.filter(user=user, role=role)
+    if not role_queryset.exists():
+        return getattr(user, "role_type", None) == role
+    return role_queryset.filter(status="active").exists()
 
 
 def grant_user_role(user, role):
