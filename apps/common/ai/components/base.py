@@ -113,7 +113,7 @@ class QuestionAIComponent(ABC):
                     self.task_key,
                     system=system,
                     user=user,
-                    images=question.image_urls,
+                    images=self.request_images(question),
                     trace_id=str(trace_id) if trace_id is not None else None,
                 )
                 parsed = ResponseParser.parse_json(result.content)
@@ -154,6 +154,10 @@ class QuestionAIComponent(ABC):
 
     def normalize(self, result: dict) -> dict:
         return result
+
+    def request_images(self, question: QuestionInput) -> tuple[str, ...]:
+        """Return image inputs supported by this component's configured provider."""
+        return question.image_urls
 
     def validate_result(self, result: dict, question: QuestionInput) -> dict:
         """Validate component-specific contracts inside the shared retry loop."""

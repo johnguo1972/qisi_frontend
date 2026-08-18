@@ -228,6 +228,10 @@ class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
         safe_question = _safe_question_input(question)
         return super().run(safe_question)
 
+    def request_images(self, question: QuestionInput) -> tuple[str, ...]:
+        """DeepSeek verification is text-only; vision facts are already in context."""
+        return ()
+
     def validate_result(self, result: dict, question: QuestionInput) -> dict:
         answer_available = _has_reference_answer(question)
         analysis_available = _has_reference_analysis(question)
@@ -247,6 +251,10 @@ class DeepSeekFinalReviewComponent(QuestionAIComponent):
 
     task_key = "deepseek_final_review"
     response_schema = FinalReviewResponse
+
+    def request_images(self, question: QuestionInput) -> tuple[str, ...]:
+        """DeepSeek verification is text-only; vision facts are already in context."""
+        return ()
 
     def normalize(self, result: dict) -> dict:
         return _normalize_mode_content(_normalize_confidence(result))

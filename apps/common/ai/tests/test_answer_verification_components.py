@@ -243,6 +243,29 @@ def test_verification_components_normalize_nested_mode_b_content(
 
 
 @pytest.mark.parametrize(
+    ("component_name", "task_key", "response_factory"),
+    [
+        (
+            "DeepSeekIndependentVerifierComponent",
+            "deepseek_independent_verify",
+            _independent_response,
+        ),
+        ("DeepSeekFinalReviewComponent", "deepseek_final_review", _final_response),
+    ],
+)
+def test_deepseek_verification_components_never_send_question_images(
+    component_name, task_key, response_factory
+):
+    """DeepSeek is text-only; visual facts stay in the rendered JSON context."""
+    components = _components()
+    client = RecordingAIClient({task_key: response_factory()})
+
+    getattr(components, component_name)(client).run(_question())
+
+    assert client.calls[0]["images"] == ()
+
+
+@pytest.mark.parametrize(
     ("mode", "payload", "expected"),
     [
         (
