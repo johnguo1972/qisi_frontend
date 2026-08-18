@@ -1147,7 +1147,7 @@ async function publish() {
       const res = await missionApi.create({
         mission_name: form.value.mission_name,
         goal_text: form.value.goal_text,
-        start_at: form.value.start_at,
+        start_at: form.value.start_at || null,
         end_at: form.value.end_at,
         class_id: form.value.class_id,
         course_id: courseId.value,

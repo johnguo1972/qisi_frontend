@@ -11,6 +11,7 @@ COMPONENT_PATH = ROOT / 'uniapp' / 'src' / 'components' / 'QuestionAIControls.vu
 ANSWER_MODAL_PATH = ROOT / 'uniapp' / 'src' / 'components' / 'AiAnswerModal.vue'
 QUESTION_EDIT_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'teacher' / 'question-edit.vue'
 COURSE_PRACTICE_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'teacher' / 'course-practice.vue'
+MISSION_CREATE_PATH = ROOT / 'uniapp' / 'src' / 'pages' / 'teacher' / 'mission-create.vue'
 PHOTO_VIEWS_PATH = ROOT / 'apps' / 'study' / 'photo_views.py'
 STUDY_RECEIVERS_PATH = ROOT / 'apps' / 'study' / 'receivers.py'
 TEACHER_PAGES = {
@@ -237,6 +238,21 @@ def test_course_practice_submits_single_and_batch_ai_to_background_jobs_without_
     assert 'startBackgroundAiJob' in batch_body
 
     assert re.search(r'getAiJobStatus:\s*\(jobId: string\)\s*=>\s*get<any>\(`?/review/ai-jobs/\$\{jobId\}/`?\)', read(API_PATH))
+
+
+def test_mission_create_sends_null_for_an_optional_empty_start_time():
+    """DRF DateTimeField rejects '', while an omitted start time is valid."""
+    source = read(MISSION_CREATE_PATH)
+    publish_body = function_body(source, 'publish')
+
+    create_payload = re.search(
+        r'missionApi\.create\(\{(?P<payload>[\s\S]*?)\}\)', publish_body
+    )
+    assert create_payload, 'Missing mission creation payload'
+    assert re.search(
+        r'start_at:\s*form\.value\.start_at\s*\|\|\s*null',
+        create_payload.group('payload'),
+    )
 
 
 def test_question_edit_delegates_ai_processing_to_one_shared_control():
