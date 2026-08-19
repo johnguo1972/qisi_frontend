@@ -185,6 +185,9 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 WECHAT_MP_APPID = os.environ.get('WECHAT_MP_APPID', '')
 WECHAT_MP_APPSECRET = os.environ.get('WECHAT_MP_APPSECRET', '')
+WECHAT_WEB_APP_ID = os.environ.get('WECHAT_WEB_APP_ID', '')
+WECHAT_WEB_APP_SECRET = os.environ.get('WECHAT_WEB_APP_SECRET', '')
+WECHAT_WEB_REDIRECT_URI = os.environ.get('WECHAT_WEB_REDIRECT_URI', '')
 PUBLIC_WEB_URL = os.environ.get('PUBLIC_WEB_URL', 'https://qisi.chengxuelu.com')
 
 # Aliyun OSS Configuration
