@@ -11,6 +11,7 @@ from pydantic import BaseModel, ValidationError
 from apps.common.ai.exceptions import AIResponseError
 from apps.common.ai.question_context import question_context_payload
 from apps.common.ai.schemas import (
+    BaselineSolveResponse,
     FinalReviewResponse,
     IndependentVerificationResponse,
     ModeAResponse,
@@ -244,6 +245,32 @@ class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
                 "Independent verification reference-analysis flag mismatches context"
             )
         return _validate_mode_content(result, question)
+
+
+class DeepSeekBaselineSolveComponent(QuestionAIComponent):
+    """Produce only the canonical answer and concise analysis for an unanswered question."""
+
+    task_key = "deepseek_baseline_solve"
+    response_schema = BaselineSolveResponse
+
+    def normalize(self, result: dict) -> dict:
+        _normalize_confidence(result)
+        key_facts = result.get("key_facts")
+        if isinstance(key_facts, str) and has_visible_text(key_facts):
+            result["key_facts"] = [key_facts.strip()]
+        return result
+
+    def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
+        return {
+            "question_context_json": _json_text(_clean_question_context(question)),
+        }
+
+    def run(self, question: QuestionInput) -> dict:
+        return super().run(_safe_question_input(question))
+
+    def request_images(self, question: QuestionInput) -> tuple[str, ...]:
+        """The DeepSeek baseline consumes visual facts already in the context."""
+        return ()
 
 
 class DeepSeekFinalReviewComponent(QuestionAIComponent):

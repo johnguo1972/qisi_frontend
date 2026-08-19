@@ -92,6 +92,11 @@ AI_GLOBAL_CONCURRENCY = int(os.environ.get('AI_GLOBAL_CONCURRENCY', '16'))
 AI_QUEUE_CAPACITY = int(os.environ.get('AI_QUEUE_CAPACITY', '10000'))
 AI_QWEN_CONCURRENCY = int(os.environ.get('AI_QWEN_CONCURRENCY', '16'))
 AI_DEEPSEEK_CONCURRENCY = int(os.environ.get('AI_DEEPSEEK_CONCURRENCY', '8'))
+# A saturated provider returns to the shared pool as soon as an in-flight HTTP
+# request completes.  Waiting avoids turning that short-lived saturation into
+# a permanent per-question B-mode failure.
+AI_PROVIDER_LEASE_WAIT_SECONDS = int(os.environ.get('AI_PROVIDER_LEASE_WAIT_SECONDS', '300'))
+AI_PROVIDER_LEASE_POLL_SECONDS = float(os.environ.get('AI_PROVIDER_LEASE_POLL_SECONDS', '2'))
 
 # AI calls are long-running and must not be prefetched ahead of available
 # workers.  Late acknowledgement allows a lost worker to return its item to
@@ -194,5 +199,5 @@ PUBLIC_WEB_URL = os.environ.get('PUBLIC_WEB_URL', 'https://qisi.chengxuelu.com')
 ALIYUN_OSS_ACCESS_KEY_ID = os.environ.get('ALIYUN_OSS_ACCESS_KEY_ID', '')
 ALIYUN_OSS_ACCESS_KEY_SECRET = os.environ.get('ALIYUN_OSS_ACCESS_KEY_SECRET', '')
 ALIYUN_OSS_BUCKET = os.environ.get('ALIYUN_OSS_BUCKET', '')
-ALIYUN_OSS_REGION = os.environ.get('ALIYUN_OSS_REGION', 'cn-shanghai')
-ALIYUN_OSS_ENDPOINT = os.environ.get('ALIYUN_OSS_ENDPOINT', 'https://oss-cn-shanghai.aliyuncs.com')
+ALIYUN_OSS_REGION = os.environ.get('ALIYUN_OSS_REGION', 'cn-shenzhen')
+ALIYUN_OSS_ENDPOINT = os.environ.get('ALIYUN_OSS_ENDPOINT', 'https://oss-cn-shenzhen.aliyuncs.com')

@@ -248,6 +248,17 @@ class IndependentVerificationResponse(_StrictResponseModel):
     mode_content: dict[str, Any]
 
 
+class BaselineSolveResponse(_StrictResponseModel):
+    """Canonical answer and concise analysis for a question without an answer."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+    canonical_answer: NonBlankStr
+    canonical_analysis: NonBlankStr
+    key_facts: list[NonBlankStr]
+    confidence: float = Field(ge=0, le=1)
+
+
 class FinalReviewResponse(_StrictResponseModel):
     """Structured output from the escalated final-answer review stage."""
 

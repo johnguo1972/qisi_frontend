@@ -20,6 +20,29 @@ logger = logging.getLogger(__name__)
 
 PROGRESS_KEY_PREFIX = 'single_ai_progress:'
 
+
+def classify_ai_failure(error: BaseException) -> str:
+    """Return a stable, non-sensitive category for durable AI task telemetry."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).lower()
+        if '429' in message or 'rate limit' in message or 'rate_limited' in message:
+            return 'rate_limited'
+        if 'connecttimeout' in message or 'connect timeout' in message:
+            return 'connect_timeout'
+        if 'timeout' in message or 'timed out' in message:
+            return 'read_timeout'
+        if any(marker in message for marker in ('schema', 'json', 'validation')):
+            return 'schema_invalid'
+        if any(marker in message for marker in ('not configured', 'configuration', 'api key')):
+            return 'configuration_error'
+        if any(marker in message for marker in ('500', '502', '503', '504', 'unavailable')):
+            return 'provider_unavailable'
+        current = current.__cause__
+    return 'unknown_error'
+
 # Step labels for progress reporting
 STEP_LABELS = {
     'starting': '准备中...',
@@ -75,8 +98,11 @@ def execute_ai_job_item(self, item_id: str):
         service.save_results_to_question(item.question_id, results)
         item.status = (AIProcessingJobItem.Status.PARTIAL if results.get('errors')
                        else AIProcessingJobItem.Status.SUCCEEDED)
+        b_mode_error = results.get('errors', {}).get('answer_b')
         item.error_code = (
-            'answer_b_failed' if 'answer_b' in results.get('errors', {}) else ''
+            f'answer_b_failed_{classify_ai_failure(Exception(b_mode_error))}'
+            if b_mode_error
+            else ''
         )
         item.finished_at = timezone.now()
         item.save(update_fields=['status', 'error_code', 'finished_at'])
@@ -147,8 +173,18 @@ def single_ai_process_question(self, question_id, model=None):
     service = create_ai_review_service()
 
     try:
+        def persist_completed_step(step_key, value):
+            service.save_results_to_question(
+                question_id,
+                {step_key: value, 'errors': {}},
+            )
+
         # Call the new 6-step pipeline
-        results = service.process_question_full_v2(question_id, model=model)
+        results = service.process_question_full_v2(
+            question_id,
+            model=model,
+            on_step_complete=persist_completed_step,
+        )
         service.save_results_to_question(question_id, results)
 
         logger.info(
@@ -320,6 +356,17 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         probe_result = question.ai_probe_result or {}
         vision_result = question.ai_vision_extract or {}
 
+        if normalized_mode == 'B' and not probe_result:
+            set_progress(
+                'failed', 'failed', '请先完成 AI 探查', error='probe_result_required'
+            )
+            return {
+                'status': 'failed',
+                'question_id': question_id,
+                'mode': normalized_mode,
+                'error': 'probe_result_required',
+            }
+
         # Build normalized_text and knowledge_refs from existing data
         normalized_text = probe_result.get('normalized_text', question.stem or '')
         knowledge_refs = ""
@@ -434,19 +481,21 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         )
         set_progress('failed', 'failed', '处理超时', error='processing_timeout')
         return {'status': 'failed', 'error': 'processing_timeout'}
-    except Exception:
+    except Exception as error:
         if service is None:
             raise
+        error_category = classify_ai_failure(error)
         logger.error(
             'AI single mode processing failed',
             extra={
                 'question_id': str(question_id),
                 'mode': normalized_mode,
                 'status': 'failed',
+                'error_category': error_category,
             },
         )
-        set_progress('failed', 'failed', '处理失败', error='processing_failed')
-        return {'status': 'failed', 'error': 'processing_failed'}
+        set_progress('failed', 'failed', '处理失败', error=error_category)
+        return {'status': 'failed', 'error': error_category}
     finally:
         try:
             if service is not None:

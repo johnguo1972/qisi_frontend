@@ -10,6 +10,8 @@ Group=ubuntu
 WorkingDirectory=/mnt/datadisk0/qisi/backend
 Environment="PATH=/mnt/datadisk0/qisi/backend/venv/bin"
 ExecStart=/mnt/datadisk0/qisi/backend/venv/bin/celery -A config worker -l info \
+  -Q celery,ai.batch \
+  --concurrency=16 \
   --logfile=/mnt/datadisk0/qisi/logs/celery-worker.log \
   --pidfile=/mnt/datadisk0/qisi/logs/celery-worker.pid
 Restart=always
