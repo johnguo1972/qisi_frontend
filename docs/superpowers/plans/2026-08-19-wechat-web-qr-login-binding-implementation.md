@@ -49,7 +49,18 @@
 - [ ] 最小实现：H5 仅创建会话、展示授权地址、轮询状态、消费短期票据；不采集手机号。绑定未完成时显示小程序授权引导；成功后复用现有会话持久化和角色跳转。
 - [ ] 运行 `python -m pytest tests/test_wechat_web_login_ui_contract.py -q; npm run build:h5`，确认 GREEN，并提交：`git commit -m "feat(login): guide h5 wechat qr binding"`。
 
-## Task 4: 全链路验证与验收记录
+## Task 4: H5 网页扫码会话与回调入口
+
+**Files:** `apps/accounts/wechat_web.py`、`apps/accounts/serializers.py`、`apps/accounts/views.py`、`apps/accounts/urls.py`、`apps/accounts/tests/test_wechat_web_login.py`
+
+**Produces:** `POST /api/v1/auth/wechat-web/session`、`GET /api/v1/auth/wechat-web/callback`；前者返回 H5 所需的 `authorization_url`，后者只处理网页微信身份并重定向到不含 JWT/code 的 H5 路径。
+
+- [ ] 写失败测试：创建会话需要合法 `requested_role`，响应含授权地址和过期时间；回调使用相同浏览器会话才可消费 state；回调 URL 及重定向不暴露 code/JWT；未配置网页微信应用、无效 state、身份交换失败均返回受控错误。
+- [ ] 运行 `python -m pytest apps/accounts/tests/test_wechat_web_login.py -k 'web_session or callback' -q`，确认 RED。
+- [ ] 最小实现：服务端确保 Django session 存在，调用浏览器绑定 state 并生成标准微信网页扫码授权 URL；回调只交换 OpenID/UnionID、关联已有网页身份或创建等待小程序绑定的状态，不签发 JWT。状态与回调必须复用 Task 1 的一次性语义。
+- [ ] 运行同一测试命令确认 GREEN，并提交：`git commit -m "feat(auth): add web wechat session endpoints"`。
+
+## Task 5: 全链路验证与验收记录
 
 **Files:** `apps/accounts/tests/test_wechat_web_login.py`、`docs/superpowers/specs/2026-08-19-wechat-web-qr-login-design.md`
 
