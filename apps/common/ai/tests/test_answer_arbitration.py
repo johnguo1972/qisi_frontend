@@ -7,6 +7,7 @@ from copy import deepcopy
 import pytest
 
 from apps.common.ai.answer_arbitration import (
+    ArbitrationError,
     ArbitrationProviderError,
     HumanReviewRequired,
     ModeAnswerArbitrator,
@@ -173,6 +174,45 @@ def test_matching_reference_and_qwen_accepts_qwen_without_deepseek():
     assert outcome.verification["selected_content_provider"] == "qwen"
     assert outcome.verification["deepseek_thinking_enabled"] is False
     assert outcome.shared_verifier_result is None
+
+
+def test_unanswered_mode_accepts_matching_baseline_answer_without_final_review():
+    """无答案题只需核对最终答案，不比较三种引导过程。"""
+    calls = _Calls(_qwen(mode="B", answer="C"), AssertionError("must not call"), AssertionError("must not call"))
+
+    outcome = _arbitrator(calls).process_unanswered(
+        "B",
+        _context(answer="", analysis=""),
+        baseline={
+            "canonical_answer": "C",
+            "canonical_analysis": "Baseline analysis.",
+            "key_facts": ["The stated fact decides the answer."],
+            "confidence": 0.95,
+        },
+    )
+
+    _assert_counts(calls, 1, 0, 0)
+    assert outcome.answer["final_answer"] == "C"
+    assert outcome.verification["selected_content_provider"] == "qwen"
+
+
+def test_unanswered_mode_retries_qwen_once_after_deepseek_rejects_conflict():
+    """DeepSeek 两次都否定时，任务只记录该模式错误并继续下一题。"""
+    calls = _Calls(_qwen(answer="B"), AssertionError("must not call"), _final(answer="C", qwen_content_valid=False))
+
+    with pytest.raises(ArbitrationError, match="answer_mismatch_after_retry"):
+        _arbitrator(calls).process_unanswered(
+            "A",
+            _context(answer="", analysis=""),
+            baseline={
+                "canonical_answer": "C",
+                "canonical_analysis": "Baseline analysis.",
+                "key_facts": ["The stated fact decides the answer."],
+                "confidence": 0.95,
+            },
+        )
+
+    _assert_counts(calls, 2, 0, 2)
 
 
 def test_matching_answer_with_invalid_qwen_content_uses_complete_independent_content():
@@ -469,6 +509,33 @@ def test_malformed_independent_result_fails_closed():
         _arbitrator(calls).process("A", _context())
 
     _assert_counts(calls, 1, 1, 0)
+
+
+def test_qwen_provider_failure_keeps_safe_stage_and_original_cause():
+    """Task telemetry needs the failed boundary without recording model payloads."""
+    cause = AIRequestError("HTTP 429 rate limited")
+    calls = _Calls(cause, _independent(answer="B"), _final())
+
+    with pytest.raises(ArbitrationProviderError) as raised:
+        _arbitrator(calls).process("A", _context())
+
+    assert raised.value.stage == "qwen_generate"
+    assert raised.value.__cause__ is cause
+
+
+@pytest.mark.parametrize(
+    ("calls", "expected_stage"),
+    [
+        (_Calls(_qwen(answer="B"), AIRequestError("ReadTimeout"), _final()), "deepseek_independent"),
+        (_Calls(_qwen(answer="B"), _independent(answer="D"), AIRequestError("HTTP 503")), "deepseek_final_review"),
+    ],
+)
+def test_deepseek_provider_failures_keep_their_boundary(calls, expected_stage):
+    with pytest.raises(ArbitrationProviderError) as raised:
+        _arbitrator(calls).process("A", _context())
+
+    assert raised.value.stage == expected_stage
+    assert isinstance(raised.value.__cause__, AIRequestError)
 
 
 def test_genuine_missing_conditions_requires_human_review_and_never_selects_qwen():

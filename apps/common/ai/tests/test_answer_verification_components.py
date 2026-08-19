@@ -169,6 +169,17 @@ def _final_response(**overrides):
     return payload
 
 
+def _baseline_response(**overrides):
+    payload = {
+        "canonical_answer": "C",
+        "canonical_analysis": "由题干条件可知应选择 C。",
+        "key_facts": ["题干给出的条件决定选项 C。"],
+        "confidence": 0.93,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _legacy_mode_b_content():
     question = {
         "question": "Which option follows?",
@@ -197,6 +208,7 @@ def test_public_components_and_strict_response_schemas_are_available():
 
     assert hasattr(components, "DeepSeekIndependentVerifierComponent")
     assert hasattr(components, "DeepSeekFinalReviewComponent")
+    assert hasattr(components, "DeepSeekBaselineSolveComponent")
     with pytest.raises(ValidationError):
         schemas.IndependentVerificationResponse.model_validate(
             {**_independent_response(), "unexpected": "field"}
@@ -205,6 +217,22 @@ def test_public_components_and_strict_response_schemas_are_available():
         schemas.FinalReviewResponse.model_validate(
             {**_final_response(), "confidence": 1.01}
         )
+    with pytest.raises(ValidationError):
+        schemas.BaselineSolveResponse.model_validate(
+            {**_baseline_response(), "canonical_analysis": "   "}
+        )
+
+
+def test_baseline_component_returns_only_answer_and_analysis_without_mode_content():
+    components = _components()
+    client = RecordingAIClient({"deepseek_baseline_solve": _baseline_response()})
+
+    result = components.DeepSeekBaselineSolveComponent(client).run(_question())
+
+    assert result == _baseline_response()
+    assert client.calls[0]["task_key"] == "deepseek_baseline_solve"
+    assert client.calls[0]["images"] == ()
+    assert "target_mode" not in client.calls[0]["user"]
 
 
 @pytest.mark.parametrize(

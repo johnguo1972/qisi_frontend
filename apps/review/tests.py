@@ -1047,7 +1047,7 @@ class AIQueueExecutionTaskTest(TestCase):
         self.assertEqual(result['status'], 'partial')
         self.assertEqual(saved_steps[:3], [('probe',), ('answer_a',), ('answer_c',)])
         self.assertEqual(item.status, AIProcessingJobItem.Status.PARTIAL)
-        self.assertEqual(item.error_code, 'answer_b_failed')
+        self.assertEqual(item.error_code, 'answer_b_failed_schema_invalid')
 
     def test_execute_item_runs_existing_full_pipeline_and_releases_lease(self):
         from apps.review.models import AIProcessingJob, AIProcessingJobItem

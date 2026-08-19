@@ -38,6 +38,7 @@ TASK_PROVIDER_SCHEMA = {
     "teacher_guidance_evaluate": "qwen",
     "variant_generate": "qwen",
     "variant_verify_deepseek": "deepseek",
+    "deepseek_baseline_solve": "deepseek",
     "deepseek_independent_verify": "deepseek",
     "deepseek_final_review": "deepseek",
     "photo_recognize": "qwen",
