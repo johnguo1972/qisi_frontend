@@ -1,6 +1,7 @@
 """Secure server-side boundary for WeChat web OAuth login."""
 
 from dataclasses import dataclass
+from datetime import timedelta
 import secrets
 from typing import Any
 
@@ -169,6 +170,7 @@ def create_web_binding_session(
         or not isinstance(identity.openid, str)
         or not identity.openid
         or not isinstance(identity.unionid, str)
+        or not identity.unionid
         or requested_role not in VALID_ROLES
         or not isinstance(browser_session_id, str)
         or not browser_session_id
@@ -183,6 +185,7 @@ def create_web_binding_session(
         "unionid": identity.unionid,
         "requested_role": requested_role,
         "browser_session_id": browser_session_id,
+        "expires_at": (timezone.now() + timedelta(seconds=WEB_LOGIN_TTL_SECONDS)).timestamp(),
     }
     _set_binding_cache(_binding_session_key(value), payload)
     return WebBindingSession(
@@ -252,6 +255,7 @@ def bind_web_identity_from_miniprogram(
         "requested_role": session["requested_role"],
         "browser_session_id": session["browser_session_id"],
         "web_session_id": web_session_id,
+        "expires_at": session["expires_at"],
     }
     _set_binding_cache(_binding_ticket_key(ticket), ticket_payload)
     session["ticket"] = ticket
@@ -365,8 +369,14 @@ def _binding_ticket_key(value: str) -> str:
 
 
 def _set_binding_cache(key: str, payload: dict[str, Any]) -> None:
+    expires_at = payload.get("expires_at")
+    if not isinstance(expires_at, (int, float)):
+        raise WebBindingError("binding_cache_failed")
+    timeout = int(expires_at - timezone.now().timestamp())
+    if timeout <= 0:
+        raise WebBindingError("binding_session_invalid")
     try:
-        stored = cache.set(key, payload, timeout=WEB_LOGIN_TTL_SECONDS)
+        stored = cache.set(key, payload, timeout=timeout)
     except Exception:
         raise WebBindingError("binding_cache_failed") from None
     if stored is False:
@@ -383,7 +393,13 @@ def _get_binding_session(value: str) -> dict[str, Any]:
     if not isinstance(payload, dict) or any(
         not isinstance(payload.get(field), str) or not payload.get(field)
         for field in ("appid", "openid", "requested_role", "browser_session_id")
-    ) or not isinstance(payload.get("unionid"), str):
+    ) or not isinstance(payload.get("unionid"), str) or not payload.get("unionid"):
+        raise WebBindingError("binding_session_invalid")
+    expires_at = payload.get("expires_at")
+    if (
+        not isinstance(expires_at, (int, float))
+        or expires_at <= timezone.now().timestamp()
+    ):
         raise WebBindingError("binding_session_invalid")
     if payload["requested_role"] not in VALID_ROLES:
         raise WebBindingError("binding_session_invalid")

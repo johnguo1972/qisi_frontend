@@ -157,6 +157,8 @@ def wechat_web_binding_status(request):
 @permission_classes([AllowAny])
 def wechat_web_binding_complete(request):
     """Consume a one-time, browser-bound ticket and return the normal session."""
+    if 'mobile' in request.data:
+        return binding_error('BINDING_MOBILE_NOT_ALLOWED')
     serializer = WebBindingCompleteSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     try:

@@ -1,11 +1,12 @@
 import logging
+from datetime import datetime, timezone as datetime_timezone
 
 import pytest
 from django.core.cache import cache
 from django.test import override_settings
-from rest_framework.test import APIClient
+from rest_framework.test import APIClient, APIRequestFactory
 
-from apps.accounts import wechat_web
+from apps.accounts import views, wechat_web
 from apps.accounts.models import UserAccount, WechatWebIdentity
 from apps.accounts.roles import grant_user_role, has_user_role
 from apps.accounts.services import generate_tokens
@@ -35,6 +36,31 @@ class FakeWechatClient:
     def get(self, url, *, params, timeout):
         self.calls.append({"url": url, "params": params, "timeout": timeout})
         return self.responses.pop(0)
+
+
+class ClockedCache:
+    """Minimal cache fake whose expiry can be advanced without a database."""
+
+    def __init__(self):
+        self.now = 0
+        self.values = {}
+
+    def set(self, key, value, timeout):
+        self.values[key] = (value, self.now + timeout)
+        return True
+
+    def get(self, key):
+        stored = self.values.get(key)
+        if stored is None:
+            return None
+        value, expires_at = stored
+        if self.now >= expires_at:
+            self.values.pop(key, None)
+            return None
+        return value
+
+    def delete(self, key):
+        return self.values.pop(key, None) is not None
 
 
 @pytest.fixture(autouse=True)
@@ -200,6 +226,60 @@ def test_web_binding_session_is_bound_to_its_originating_browser():
 
     with pytest.raises(wechat_web.WebBindingError):
         get_status(session.value, "browser-b")
+
+
+def test_rewriting_binding_session_never_extends_its_initial_expiry(monkeypatch):
+    """Resetting the cache timeout during binding must not make the session live longer."""
+    clocked_cache = ClockedCache()
+    monkeypatch.setattr(wechat_web, "cache", clocked_cache)
+    monkeypatch.setattr(
+        wechat_web.timezone,
+        "now",
+        lambda: datetime.fromtimestamp(clocked_cache.now, tz=datetime_timezone.utc),
+    )
+    session = _binding_session("browser-a", suffix="ttl")
+
+    clocked_cache.now = 299
+    payload = wechat_web._get_binding_session(session.value)
+    payload["ticket"] = "opaque-ticket"
+    wechat_web._set_binding_cache(wechat_web._binding_session_key(session.value), payload)
+
+    clocked_cache.now = 300
+    with pytest.raises(wechat_web.WebBindingError):
+        wechat_web.get_web_binding_status(session.value, "browser-a")
+
+
+def test_binding_session_rejects_blank_unionid():
+    """Accepting a blank UnionID would bypass the later ownership-conflict check."""
+    with pytest.raises(wechat_web.WebBindingError):
+        wechat_web.create_web_binding_session(
+            identity=wechat_web.WebIdentity(
+                openid="web-openid-blank-unionid", unionid=""
+            ),
+            requested_role="student",
+            browser_session_id="browser-a",
+        )
+
+
+def test_binding_complete_rejects_mobile_before_consuming_ticket(monkeypatch):
+    """Removing this guard would allow the H5 body to carry an untrusted mobile."""
+    request = APIRequestFactory().post(
+        "/api/v1/auth/wechat-web/binding-complete",
+        {"ticket": "opaque-ticket", "requested_role": "student", "mobile": "13900009999"},
+        format="json",
+    )
+    request.session = type("BrowserSession", (), {"session_key": "browser-a"})()
+    monkeypatch.setattr(
+        views,
+        "complete_web_binding",
+        lambda *args: (object(), {"access_token": "access", "refresh_token": "refresh"}),
+    )
+    monkeypatch.setattr(views, "serialize_user_session", lambda *args: {})
+
+    response = views.wechat_web_binding_complete(request)
+
+    assert response.status_code == 400
+    assert response.data["code"] == "BINDING_MOBILE_NOT_ALLOWED"
 
 
 @pytest.mark.django_db
