@@ -515,6 +515,7 @@ def test_binding_flow_never_calls_sms_services(monkeypatch):
     assert completed.status_code == 200
 
 
+@pytest.mark.django_db
 def test_web_session_requires_a_valid_role_and_returns_an_expiring_authorization_url(
     wechat_settings,
 ):
@@ -539,6 +540,7 @@ def test_web_session_requires_a_valid_role_and_returns_an_expiring_authorization
     assert client.session.session_key
 
 
+@pytest.mark.django_db
 def test_web_session_fails_closed_when_web_oauth_is_not_configured():
     """Dropping config checks would make an unusable provider URL look valid."""
     client = APIClient()
@@ -554,6 +556,7 @@ def test_web_session_fails_closed_when_web_oauth_is_not_configured():
     assert response.data["code"] == "WECHAT_WEB_NOT_CONFIGURED"
 
 
+@pytest.mark.django_db
 def test_callback_requires_the_originating_browser_and_consumes_state(
     wechat_settings, monkeypatch
 ):
@@ -583,6 +586,7 @@ def test_callback_requires_the_originating_browser_and_consumes_state(
     assert replay.data["code"] == "WECHAT_WEB_CALLBACK_INVALID"
 
 
+@pytest.mark.django_db
 def test_callback_rejects_an_unknown_state_without_echoing_oauth_values():
     """Accepting arbitrary state would let an attacker attach their OAuth response."""
     response = APIClient().get(
@@ -661,6 +665,7 @@ def test_callback_for_existing_web_identity_creates_a_login_ticket_without_jwt(
     assert status_response.data["data"]["ticket"]
 
 
+@pytest.mark.django_db
 def test_callback_returns_controlled_error_when_identity_exchange_fails(
     wechat_settings, monkeypatch
 ):
