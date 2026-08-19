@@ -92,6 +92,34 @@ class RoleNotGranted(Exception):
 
 
 @transaction.atomic
+def login_with_trusted_mobile(
+    mobile: str, active_role: str
+) -> tuple[UserAccount, dict]:
+    """Create or sign in an account from a server-verified phone number.
+
+    Callers must obtain ``mobile`` from a trusted server-side identity.  This
+    function deliberately has no SMS dependency: it only applies the same
+    first-role and existing-role rules as the verified mobile login flow.
+    """
+    if not isinstance(mobile, str) or not mobile:
+        raise ValueError("trusted mobile is required")
+    if active_role not in ("admin", "teacher", "parent", "student"):
+        raise ValueError("invalid role")
+
+    user = UserAccount.objects.filter(mobile=mobile).first()
+    if user is None:
+        if active_role not in ("student", "parent"):
+            raise RoleNotGranted(active_role)
+        user, _ = get_or_create_user(mobile, initial_role=active_role)
+    else:
+        if not has_user_role(user, active_role):
+            raise RoleNotGranted(active_role)
+        user, _ = get_or_create_user(mobile, initial_role=active_role)
+
+    return user, generate_tokens(user, active_role)
+
+
+@transaction.atomic
 def get_or_create_user(
     mobile: str, initial_role: str = 'student'
 ) -> tuple[UserAccount, bool]:

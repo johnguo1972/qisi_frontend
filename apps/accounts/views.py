@@ -14,12 +14,20 @@ from .serializers import (
     LoginSerializer,
     ProfileUpdateSerializer,
     RefreshTokenSerializer,
+    WebBindingCompleteSerializer,
+    WebBindingSessionSerializer,
     serialize_user_session,
 )
 from .services import (
     verify_code, get_or_create_user, generate_tokens,
     generate_verify_code, send_sms_code, ensure_fixed_test_account,
     is_fixed_test_account_code,
+)
+from .wechat_web import (
+    WebBindingError,
+    bind_web_identity_from_miniprogram,
+    complete_web_binding,
+    get_web_binding_status,
 )
 
 
@@ -34,6 +42,22 @@ def role_error(code, message, http_status):
         'data': None,
         'trace_id': make_trace_id(),
     }, status=http_status)
+
+
+def binding_error(code, http_status=status.HTTP_400_BAD_REQUEST):
+    return Response({
+        'code': code,
+        'message': '微信网页绑定无效或已过期',
+        'data': None,
+        'trace_id': make_trace_id(),
+    }, status=http_status)
+
+
+def browser_session_id(request):
+    """Get the server-managed browser session identifier, never a client field."""
+    if not request.session.session_key:
+        request.session.save()
+    return request.session.session_key
 
 
 @api_view(['POST'])
@@ -83,6 +107,77 @@ def login(request):
         'data': {
             **tokens,
             'user': serialize_user_session(user, active_role),
+        },
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def wechat_web_binding_session(request):
+    """Let an authenticated mini-program account bind an OAuth web session."""
+    if 'mobile' in request.data:
+        return binding_error('BINDING_MOBILE_NOT_ALLOWED')
+    serializer = WebBindingSessionSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    try:
+        binding = bind_web_identity_from_miniprogram(
+            serializer.validated_data['web_session_id'], request.user
+        )
+    except WebBindingError:
+        return binding_error('BINDING_SESSION_INVALID')
+    return Response({
+        'code': 0,
+        'message': '绑定已确认',
+        'data': {'bound': binding.bound},
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def wechat_web_binding_status(request):
+    """Expose the opaque binding ticket only to its original H5 browser."""
+    web_session_id = request.query_params.get('web_session_id', '')
+    try:
+        binding = get_web_binding_status(
+            web_session_id, browser_session_id(request)
+        )
+    except WebBindingError:
+        return binding_error('BINDING_SESSION_INVALID')
+    return Response({
+        'code': 0,
+        'message': 'success',
+        'data': {'bound': binding.bound, 'ticket': binding.ticket},
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_web_binding_complete(request):
+    """Consume a one-time, browser-bound ticket and return the normal session."""
+    serializer = WebBindingCompleteSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    try:
+        user, tokens = complete_web_binding(
+            serializer.validated_data['ticket'],
+            browser_session_id(request),
+            serializer.validated_data.get('requested_role'),
+        )
+    except WebBindingError:
+        return binding_error('BINDING_TICKET_INVALID')
+    active_role = serializer.validated_data.get('requested_role')
+    if active_role is None:
+        active_role = RefreshToken(tokens['refresh_token'])['active_role']
+    return Response({
+        'code': 0,
+        'message': '登录成功',
+        'data': {
+            **tokens,
+            'user': serialize_user_session(
+                user, active_role
+            ),
         },
         'trace_id': make_trace_id(),
     })
