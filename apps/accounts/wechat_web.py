@@ -199,7 +199,6 @@ def create_web_binding_session(
         or not isinstance(identity.openid, str)
         or not identity.openid
         or not isinstance(identity.unionid, str)
-        or not identity.unionid
         or requested_role not in VALID_ROLES
         or not isinstance(browser_session_id, str)
         or not browser_session_id
@@ -464,7 +463,7 @@ def _get_binding_session(value: str) -> dict[str, Any]:
     if not isinstance(payload, dict) or any(
         not isinstance(payload.get(field), str) or not payload.get(field)
         for field in ("appid", "openid", "requested_role", "browser_session_id")
-    ) or not isinstance(payload.get("unionid"), str) or not payload.get("unionid"):
+    ) or not isinstance(payload.get("unionid"), str):
         raise WebBindingError("binding_session_invalid")
     expires_at = payload.get("expires_at")
     if (

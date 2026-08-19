@@ -249,16 +249,17 @@ def test_rewriting_binding_session_never_extends_its_initial_expiry(monkeypatch)
         wechat_web.get_web_binding_status(session.value, "browser-a")
 
 
-def test_binding_session_rejects_blank_unionid():
-    """Accepting a blank UnionID would bypass the later ownership-conflict check."""
-    with pytest.raises(wechat_web.WebBindingError):
-        wechat_web.create_web_binding_session(
-            identity=wechat_web.WebIdentity(
-                openid="web-openid-blank-unionid", unionid=""
-            ),
-            requested_role="student",
-            browser_session_id="browser-a",
-        )
+def test_binding_session_accepts_standard_oauth_without_unionid(wechat_settings):
+    """UnionID 是可选字段；网站应用必须能仅凭 AppID + OpenID 继续绑定。"""
+    session = wechat_web.create_web_binding_session(
+        identity=wechat_web.WebIdentity(
+            openid="web-openid-blank-unionid", unionid=""
+        ),
+        requested_role="student",
+        browser_session_id="browser-a",
+    )
+
+    assert session.value
 
 
 def test_binding_complete_rejects_mobile_before_consuming_ticket(monkeypatch):
