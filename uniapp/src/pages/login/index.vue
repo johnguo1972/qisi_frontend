@@ -66,9 +66,15 @@
             <view class="wechat-web-login">
               <view class="wechat-web-title">微信扫码登录</view>
               <text class="wechat-web-desc">使用微信扫码确认网页身份</text>
+              <view class="wechat-web-consent" @click="wechatWebPhoneAuthorizationConfirmed = !wechatWebPhoneAuthorizationConfirmed">
+                <view class="checkbox" :class="{ checked: wechatWebPhoneAuthorizationConfirmed }">
+                  <view class="checkmark"></view>
+                </view>
+                <text class="remember-text">手机号绑定授权确认</text>
+              </view>
               <button
                 class="wechat-web-start"
-                :disabled="wechatWebLoading"
+                :disabled="wechatWebLoading || !wechatWebPhoneAuthorizationConfirmed"
                 @click="startWechatWebLogin"
               >
                 {{ wechatWebLoading ? '正在创建扫码会话...' : '开始微信扫码' }}
@@ -124,6 +130,7 @@ const wechatWebSession = ref<WechatWebSession | null>(null)
 const wechatWebLoading = ref(false)
 const wechatWebBindingComplete = ref(false)
 const wechatWebCompleting = ref(false)
+const wechatWebPhoneAuthorizationConfirmed = ref(false)
 const wechatWebStatusText = ref('请使用微信扫描二维码')
 let wechatWebPollTimer: ReturnType<typeof setInterval> | undefined
 
@@ -166,6 +173,10 @@ async function pollWechatWebBindingStatus(): Promise<boolean> {
 
 async function startWechatWebLogin() {
   if (wechatWebLoading.value) return
+  if (!wechatWebPhoneAuthorizationConfirmed.value) {
+    uni.showToast({ title: '请先确认手机号绑定授权', icon: 'none' })
+    return
+  }
   stopWechatWebPolling()
   wechatWebLoading.value = true
   wechatWebSession.value = null
@@ -173,7 +184,10 @@ async function startWechatWebLogin() {
   wechatWebCompleting.value = false
   wechatWebStatusText.value = '正在创建扫码会话...'
   try {
-    const res = await wechatWebApi.createSession(activeTab.value)
+    const res = await wechatWebApi.createSession(
+      activeTab.value,
+      wechatWebPhoneAuthorizationConfirmed.value,
+    )
     if (res.code !== 0 || !res.data?.web_session_id || !res.data.authorization_url) {
       throw new Error(res.message || '无法创建微信扫码会话')
     }
@@ -521,6 +535,7 @@ input:focus {
   font-size: 26rpx;
 }
 .wechat-web-start[disabled] { background: #93d7ad; }
+.wechat-web-consent { display: flex; align-items: center; gap: 10rpx; margin-top: 16rpx; }
 .wechat-web-qr { margin-top: 20rpx; }
 .wechat-web-qr-frame {
   width: 240px;

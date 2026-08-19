@@ -526,7 +526,7 @@ def test_web_session_requires_a_valid_role_and_returns_an_expiring_authorization
         "/api/v1/auth/wechat-web/session", {"requested_role": "operator"}, format="json"
     )
     response = client.post(
-        "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+        "/api/v1/auth/wechat-web/session", {"requested_role": "student", "phone_authorization_confirmed": True}, format="json"
     )
 
     assert invalid.status_code == 400
@@ -541,6 +541,32 @@ def test_web_session_requires_a_valid_role_and_returns_an_expiring_authorization
 
 
 @pytest.mark.django_db
+def test_web_session_requires_explicit_phone_binding_authorization_confirmation(
+    wechat_settings,
+):
+    """扫码会话必须由用户明确确认手机号绑定授权后才可创建。"""
+    client = APIClient()
+
+    missing = client.post(
+        "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+    )
+    denied = client.post(
+        "/api/v1/auth/wechat-web/session", {
+            "requested_role": "student", "phone_authorization_confirmed": False,
+        }, format="json"
+    )
+    accepted = client.post(
+        "/api/v1/auth/wechat-web/session", {
+            "requested_role": "student", "phone_authorization_confirmed": True,
+        }, format="json"
+    )
+
+    assert missing.status_code == 400
+    assert denied.status_code == 400
+    assert accepted.status_code == 200
+
+
+@pytest.mark.django_db
 def test_web_session_fails_closed_when_web_oauth_is_not_configured():
     """Dropping config checks would make an unusable provider URL look valid."""
     client = APIClient()
@@ -549,7 +575,7 @@ def test_web_session_fails_closed_when_web_oauth_is_not_configured():
         WECHAT_WEB_APP_ID="", WECHAT_WEB_APP_SECRET="", WECHAT_WEB_REDIRECT_URI=""
     ):
         response = client.post(
-            "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+            "/api/v1/auth/wechat-web/session", {"requested_role": "student", "phone_authorization_confirmed": True}, format="json"
         )
 
     assert response.status_code == 400
@@ -563,7 +589,7 @@ def test_callback_requires_the_originating_browser_and_consumes_state(
     """Dropping browser binding or one-time consumption would enable login CSRF."""
     browser = APIClient()
     session = browser.post(
-        "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+        "/api/v1/auth/wechat-web/session", {"requested_role": "student", "phone_authorization_confirmed": True}, format="json"
     ).data["data"]
     state = session["authorization_url"].split("state=", 1)[1].split("&", 1)[0].split("#", 1)[0]
     monkeypatch.setattr(
@@ -606,7 +632,7 @@ def test_callback_redirect_never_leaks_provider_code_or_jwt_for_unbound_identity
     """Returning OAuth values in the redirect would expose credentials to H5 history."""
     browser = APIClient()
     session = browser.post(
-        "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+        "/api/v1/auth/wechat-web/session", {"requested_role": "student", "phone_authorization_confirmed": True}, format="json"
     ).data["data"]
     state = session["authorization_url"].split("state=", 1)[1].split("&", 1)[0].split("#", 1)[0]
     provider_code = "provider-code-must-not-leak"
@@ -642,7 +668,7 @@ def test_callback_for_existing_web_identity_creates_a_login_ticket_without_jwt(
     )
     browser = APIClient()
     session = browser.post(
-        "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+        "/api/v1/auth/wechat-web/session", {"requested_role": "student", "phone_authorization_confirmed": True}, format="json"
     ).data["data"]
     state = session["authorization_url"].split("state=", 1)[1].split("&", 1)[0].split("#", 1)[0]
     monkeypatch.setattr(
@@ -672,7 +698,7 @@ def test_callback_returns_controlled_error_when_identity_exchange_fails(
     """Letting provider failures escape would expose OAuth details in an error body."""
     browser = APIClient()
     session = browser.post(
-        "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+        "/api/v1/auth/wechat-web/session", {"requested_role": "student", "phone_authorization_confirmed": True}, format="json"
     ).data["data"]
     state = session["authorization_url"].split("state=", 1)[1].split("&", 1)[0].split("#", 1)[0]
     monkeypatch.setattr(

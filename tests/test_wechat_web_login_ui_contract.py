@@ -28,6 +28,8 @@ def test_h5_wechat_binding_login_ui_contract():
     assert "wechatWebApi.createSession" in source
     assert "wechatWebApi.bindingStatus" in source
     assert "wechatWebApi.complete" in source
+    assert "wechatWebPhoneAuthorizationConfirmed" in source
+    assert "手机号绑定授权确认" in source
 
 
 def test_wechat_web_api_only_exchanges_opaque_session_and_ticket_values():
@@ -43,3 +45,4 @@ def test_wechat_web_api_only_exchanges_opaque_session_and_ticket_values():
     assert "/auth/wechat-web/binding-complete" in source
     assert "mobile" not in source.lower()
     assert "wechatWebApi" in index
+    assert "phone_authorization_confirmed" in source

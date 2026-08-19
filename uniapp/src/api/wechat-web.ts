@@ -18,9 +18,10 @@ export interface WechatWebLoginSession {
 }
 
 export const wechatWebApi = {
-  createSession: (requestedRole: string) =>
+  createSession: (requestedRole: string, phoneAuthorizationConfirmed: boolean) =>
     post<WechatWebSession>('/auth/wechat-web/session', {
       requested_role: requestedRole,
+      phone_authorization_confirmed: phoneAuthorizationConfirmed,
     }),
   bindingStatus: (webSessionId: string) =>
     get<WechatWebBindingStatus>(

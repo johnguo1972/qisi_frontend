@@ -30,6 +30,12 @@ class WechatWebSessionSerializer(serializers.Serializer):
     """The H5 client may select a role, but never supplies an OAuth identity."""
 
     requested_role = serializers.ChoiceField(choices=VALID_ROLES)
+    phone_authorization_confirmed = serializers.BooleanField()
+
+    def validate_phone_authorization_confirmed(self, value):
+        if value is not True:
+            raise serializers.ValidationError("phone_authorization_confirmation_required")
+        return value
 
 
 class WebBindingSessionSerializer(serializers.Serializer):
