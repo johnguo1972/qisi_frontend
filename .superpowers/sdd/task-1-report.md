@@ -1,37 +1,60 @@
-# Task 1 Report: Secure Web WeChat OAuth State Boundary
+# Task 1 Report: Django App 脚手架 + 数据库模型 + 迁移
+
+## Status: DONE
 
 ## Commit
 
-`8a2919c fix(auth): secure web wechat oauth state`
+```
+b50afd9 feat(courses): 创建 courses Django app + 5 个模型 + 迁移
+```
 
-## Submitted scope
+Branch: `feature/task-1-courses-app`
 
-- `apps/accounts/wechat_web.py`
-- `apps/accounts/tests/test_wechat_web_login.py`
+## 创建的文件
 
-## Implemented boundary
+| 文件 | 说明 |
+|------|------|
+| `apps/courses/__init__.py` | 空文件 |
+| `apps/courses/apps.py` | AppConfig (verbose_name: 课程管理) |
+| `apps/courses/models.py` | 5 个数据模型 |
+| `apps/courses/migrations/0001_initial.py` | 初始迁移 |
+| `apps/courses/migrations/__init__.py` | 空文件 |
+| `apps/courses/tests/__init__.py` | 空文件 |
+| `apps/courses/tests/test_models.py` | 7 个单元测试 |
 
-- Web OAuth state now stores and requires the initiating `browser_session_id`.
-- Consuming a state deletes its cache entry before comparing the browser session,
-  so an attempted cross-browser consumption also invalidates that state.
-- `exchange_web_identity()` calls only the OAuth token endpoint and returns only
-  `openid` and `unionid`; it does not request profile data or read a phone field.
-- Cache set, get, and delete exceptions raise controlled `WebLoginStateError`
-  failures. No OAuth code or provider token is logged.
+## 修改的文件
 
-## Verification evidence
+| 文件 | 说明 |
+|------|------|
+| `config/settings.py` | 添加 `'apps.courses'` 到 INSTALLED_APPS |
 
-- Passed: `python -m py_compile apps/accounts/wechat_web.py apps/accounts/tests/test_wechat_web_login.py`
-- Passed before commit: `git diff --check`
-- Not run (environment blocker):
-  `python -m pytest apps/accounts/tests/test_wechat_web_login.py -k 'browser or standard_oauth or cache or log' -q`
-  exited with `No module named pytest`.
-- Django is also unavailable in the current interpreter:
-  `ModuleNotFoundError: No module named 'django'`.
+## 模型清单
 
-## TDD status
+1. **Course** (db_table: `course`) — 课程基本信息，关联教师 (PROTECT)，软删除标记
+2. **CourseMaterial** (db_table: `course_material`) — 课程资料，级联删除课程，上传者 SET_NULL
+3. **CourseTree** (db_table: `course_tree`) — 课程树节点，自引用 parent，按 sort_order 排序
+4. **CourseQuestionLink** (db_table: `course_question_link`) — 课程与题库习题关联，unique_together (course, question)
+5. **VariantTask** (db_table: `course_variant_task`) — 变式题生成任务，JSON 字段存储生成/校验结果
 
-The required regression tests were written first, but their RED and GREEN
-executions could not be collected because the worktree has no usable Django/
-pytest environment. Dependency installation and environment changes were not
-attempted because they are outside this task's authorized scope.
+## 测试摘要
+
+7 个测试全部通过：
+- `test_course_creation` — 课程基本创建
+- `test_course_soft_delete` — 软删除标记
+- `test_course_material_creation` — 资料创建
+- `test_course_tree_hierarchy` — 树层级关系
+- `test_course_question_link` — 习题关联
+- `test_course_question_link_unique_together` — 唯一约束
+- `test_variant_task_creation` — 变式题任务创建
+
+## 遇到的问题
+
+1. **ExamPaper.grade_level 字段不存在** — 实际字段名为 `grade`，测试已修正
+2. **测试数据库 stale** — 手动删除 test_qisi_ai_tutor 后恢复
+3. **makemigrations --name 参数** — Django 不接受带连字符的名称，自动生成 `0001_initial.py` 符合规范
+
+## 注意事项
+
+- 数据库为 PostgreSQL，迁移已应用到生产数据库
+- 遵循了现有 apps 的命名模式和代码风格
+- `AUTH_USER_MODEL` 用于教师外键，`'parser.ExamQuestion'` 用于习题外键
