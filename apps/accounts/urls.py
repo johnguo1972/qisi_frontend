@@ -5,6 +5,8 @@ from . import views
 app_name = 'accounts'
 urlpatterns = [
     path('login', views.login, name='auth-login'),
+    path('wechat-web/session', views.wechat_web_session, name='wechat-web-session'),
+    path('wechat-web/callback', views.wechat_web_callback, name='wechat-web-callback'),
     path('wechat-web/binding-session', views.wechat_web_binding_session, name='wechat-web-binding-session'),
     path('wechat-web/binding-status', views.wechat_web_binding_status, name='wechat-web-binding-status'),
     path('wechat-web/binding-complete', views.wechat_web_binding_complete, name='wechat-web-binding-complete'),

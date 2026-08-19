@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from .models import UserAccount
-from .roles import get_user_roles
+from .roles import VALID_ROLES, get_user_roles
 
 
 class LoginSerializer(serializers.Serializer):
@@ -24,6 +24,12 @@ class ProfileUpdateSerializer(serializers.Serializer):
 
 class RefreshTokenSerializer(serializers.Serializer):
     refresh_token = serializers.CharField()
+
+
+class WechatWebSessionSerializer(serializers.Serializer):
+    """The H5 client may select a role, but never supplies an OAuth identity."""
+
+    requested_role = serializers.ChoiceField(choices=VALID_ROLES)
 
 
 class WebBindingSessionSerializer(serializers.Serializer):

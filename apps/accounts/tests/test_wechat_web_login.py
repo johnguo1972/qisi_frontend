@@ -513,3 +513,173 @@ def test_binding_flow_never_calls_sms_services(monkeypatch):
     )
 
     assert completed.status_code == 200
+
+
+def test_web_session_requires_a_valid_role_and_returns_an_expiring_authorization_url(
+    wechat_settings,
+):
+    """Removing role validation or the server session would permit unsafe QR starts."""
+    client = APIClient()
+
+    invalid = client.post(
+        "/api/v1/auth/wechat-web/session", {"requested_role": "operator"}, format="json"
+    )
+    response = client.post(
+        "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+    )
+
+    assert invalid.status_code == 400
+    assert invalid.data["code"] == "INVALID_ROLE"
+    assert response.status_code == 200
+    assert response.data["code"] == 0
+    assert response.data["data"]["web_session_id"]
+    assert response.data["data"]["expires_in"] == 300
+    assert "https://open.weixin.qq.com/connect/qrconnect?" in response.data["data"]["authorization_url"]
+    assert "state=" in response.data["data"]["authorization_url"]
+    assert client.session.session_key
+
+
+def test_web_session_fails_closed_when_web_oauth_is_not_configured():
+    """Dropping config checks would make an unusable provider URL look valid."""
+    client = APIClient()
+
+    with override_settings(
+        WECHAT_WEB_APP_ID="", WECHAT_WEB_APP_SECRET="", WECHAT_WEB_REDIRECT_URI=""
+    ):
+        response = client.post(
+            "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+        )
+
+    assert response.status_code == 400
+    assert response.data["code"] == "WECHAT_WEB_NOT_CONFIGURED"
+
+
+def test_callback_requires_the_originating_browser_and_consumes_state(
+    wechat_settings, monkeypatch
+):
+    """Dropping browser binding or one-time consumption would enable login CSRF."""
+    browser = APIClient()
+    session = browser.post(
+        "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+    ).data["data"]
+    state = session["authorization_url"].split("state=", 1)[1].split("&", 1)[0].split("#", 1)[0]
+    monkeypatch.setattr(
+        views,
+        "exchange_web_identity",
+        lambda code: wechat_web.WebIdentity(openid="callback-openid", unionid="callback-unionid"),
+    )
+
+    other_browser = APIClient()
+    rejected = other_browser.get(
+        "/api/v1/auth/wechat-web/callback", {"code": "provider-code", "state": state}
+    )
+    replay = browser.get(
+        "/api/v1/auth/wechat-web/callback", {"code": "provider-code", "state": state}
+    )
+
+    assert rejected.status_code == 400
+    assert rejected.data["code"] == "WECHAT_WEB_CALLBACK_INVALID"
+    assert replay.status_code == 400
+    assert replay.data["code"] == "WECHAT_WEB_CALLBACK_INVALID"
+
+
+def test_callback_rejects_an_unknown_state_without_echoing_oauth_values():
+    """Accepting arbitrary state would let an attacker attach their OAuth response."""
+    response = APIClient().get(
+        "/api/v1/auth/wechat-web/callback",
+        {"code": "provider-code-must-not-echo", "state": "unknown-state"},
+    )
+
+    assert response.status_code == 400
+    assert response.data["code"] == "WECHAT_WEB_CALLBACK_INVALID"
+    assert "provider-code-must-not-echo" not in str(response.data)
+
+
+@pytest.mark.django_db
+def test_callback_redirect_never_leaks_provider_code_or_jwt_for_unbound_identity(
+    wechat_settings, monkeypatch
+):
+    """Returning OAuth values in the redirect would expose credentials to H5 history."""
+    browser = APIClient()
+    session = browser.post(
+        "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+    ).data["data"]
+    state = session["authorization_url"].split("state=", 1)[1].split("&", 1)[0].split("#", 1)[0]
+    provider_code = "provider-code-must-not-leak"
+    monkeypatch.setattr(
+        views,
+        "exchange_web_identity",
+        lambda code: wechat_web.WebIdentity(openid="waiting-openid", unionid="waiting-unionid"),
+    )
+
+    response = browser.get(
+        "/api/v1/auth/wechat-web/callback", {"code": provider_code, "state": state}
+    )
+
+    location = response["Location"]
+    assert response.status_code == 302
+    assert provider_code not in location
+    assert "access_token" not in location
+    assert "refresh_token" not in location
+    assert "web_session_id=" in location
+
+
+@pytest.mark.django_db
+def test_callback_for_existing_web_identity_creates_a_login_ticket_without_jwt(
+    wechat_settings, monkeypatch
+):
+    """Skipping the existing identity branch would unnecessarily force MP rebinding."""
+    user = _user("13900009501")
+    WechatWebIdentity.objects.create(
+        user=user,
+        appid="web-test-app-id",
+        openid="known-openid",
+        unionid="known-unionid",
+    )
+    browser = APIClient()
+    session = browser.post(
+        "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+    ).data["data"]
+    state = session["authorization_url"].split("state=", 1)[1].split("&", 1)[0].split("#", 1)[0]
+    monkeypatch.setattr(
+        views,
+        "exchange_web_identity",
+        lambda code: wechat_web.WebIdentity(openid="known-openid", unionid="known-unionid"),
+    )
+
+    callback = browser.get(
+        "/api/v1/auth/wechat-web/callback", {"code": "provider-code", "state": state}
+    )
+    status_response = browser.get(
+        "/api/v1/auth/wechat-web/binding-status",
+        {"web_session_id": callback["Location"].split("web_session_id=", 1)[1]},
+    )
+
+    assert callback.status_code == 302
+    assert "access_token" not in callback["Location"]
+    assert status_response.data["data"]["bound"] is True
+    assert status_response.data["data"]["ticket"]
+
+
+def test_callback_returns_controlled_error_when_identity_exchange_fails(
+    wechat_settings, monkeypatch
+):
+    """Letting provider failures escape would expose OAuth details in an error body."""
+    browser = APIClient()
+    session = browser.post(
+        "/api/v1/auth/wechat-web/session", {"requested_role": "student"}, format="json"
+    ).data["data"]
+    state = session["authorization_url"].split("state=", 1)[1].split("&", 1)[0].split("#", 1)[0]
+    monkeypatch.setattr(
+        views,
+        "exchange_web_identity",
+        lambda code: (_ for _ in ()).throw(wechat_web.WebAuthorizationError("provider failed")),
+    )
+
+    response = browser.get(
+        "/api/v1/auth/wechat-web/callback", {"code": "provider-code", "state": state}
+    )
+
+    assert response.status_code == 400
+    assert response.data["code"] == "WECHAT_WEB_CALLBACK_INVALID"
+    assert "provider-code" not in str(response.data)

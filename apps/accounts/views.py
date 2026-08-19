@@ -1,5 +1,7 @@
 import uuid
+from urllib.parse import urlencode
 
+from django.shortcuts import redirect
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -14,6 +16,7 @@ from .serializers import (
     LoginSerializer,
     ProfileUpdateSerializer,
     RefreshTokenSerializer,
+    WechatWebSessionSerializer,
     WebBindingCompleteSerializer,
     WebBindingSessionSerializer,
     serialize_user_session,
@@ -24,11 +27,20 @@ from .services import (
     is_fixed_test_account_code,
 )
 from .wechat_web import (
+    WebAuthorizationError,
     WebBindingError,
+    WebConfigurationError,
+    WebLoginStateError,
     bind_web_identity_from_miniprogram,
+    build_web_authorization_url,
+    consume_web_login_state,
+    create_web_login_state,
+    exchange_web_identity,
     complete_web_binding,
     get_web_binding_status,
+    prepare_web_login_session,
 )
+from django.conf import settings
 
 
 def make_trace_id() -> str:
@@ -58,6 +70,16 @@ def browser_session_id(request):
     if not request.session.session_key:
         request.session.save()
     return request.session.session_key
+
+
+def web_callback_error():
+    return binding_error('WECHAT_WEB_CALLBACK_INVALID')
+
+
+def h5_login_redirect(web_session_id):
+    """Return the configured H5 login path with only an opaque session id."""
+    public_web_url = getattr(settings, 'PUBLIC_WEB_URL', '').rstrip('/')
+    return f"{public_web_url}/#/pages/login/index?{urlencode({'web_session_id': web_session_id})}"
 
 
 @api_view(['POST'])
@@ -110,6 +132,59 @@ def login(request):
         },
         'trace_id': make_trace_id(),
     })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_web_session(request):
+    """Start a browser-bound WeChat QR OAuth session without issuing tokens."""
+    serializer = WechatWebSessionSerializer(data=request.data)
+    if not serializer.is_valid():
+        return role_error('INVALID_ROLE', 'Invalid role', status.HTTP_400_BAD_REQUEST)
+    try:
+        state = create_web_login_state(
+            serializer.validated_data['requested_role'], browser_session_id(request)
+        )
+        authorization_url = build_web_authorization_url(state.value)
+    except WebConfigurationError:
+        return binding_error('WECHAT_WEB_NOT_CONFIGURED')
+    except WebLoginStateError:
+        return binding_error('WECHAT_WEB_SESSION_UNAVAILABLE')
+    return Response({
+        'code': 0,
+        'message': 'success',
+        'data': {
+            'web_session_id': state.value,
+            'authorization_url': authorization_url,
+            'expires_in': state.expires_in,
+        },
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def wechat_web_callback(request):
+    """Consume browser-bound OAuth state and return to H5 without credentials."""
+    code = request.query_params.get('code', '')
+    state = request.query_params.get('state', '')
+    try:
+        login_state = consume_web_login_state(state, browser_session_id(request))
+        identity = exchange_web_identity(code)
+        prepare_web_login_session(
+            identity,
+            login_state.requested_role,
+            login_state.browser_session_id,
+            session_id=login_state.value,
+        )
+    except (
+        WebLoginStateError,
+        WebAuthorizationError,
+        WebConfigurationError,
+        WebBindingError,
+    ):
+        return web_callback_error()
+    return redirect(h5_login_redirect(login_state.value))
 
 
 @api_view(['POST'])

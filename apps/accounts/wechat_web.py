@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 import secrets
 from typing import Any
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 from django.conf import settings
@@ -18,6 +19,7 @@ from .services import RoleNotGranted, login_with_trusted_mobile as _trusted_mobi
 
 WEB_LOGIN_TTL_SECONDS = 300
 WECHAT_WEB_TOKEN_URL = "https://api.weixin.qq.com/sns/oauth2/access_token"
+WECHAT_WEB_AUTHORIZE_URL = "https://open.weixin.qq.com/connect/qrconnect"
 
 
 class WebLoginStateError(Exception):
@@ -159,10 +161,37 @@ def exchange_web_identity(
     return WebIdentity(openid=openid, unionid=unionid)
 
 
+def build_web_authorization_url(state: str) -> str:
+    """Build the standard QR OAuth URL from server-only configuration."""
+    if not isinstance(state, str) or not state:
+        raise WebLoginStateError("state_invalid")
+    appid, _ = _get_wechat_web_configuration()
+    redirect_uri = getattr(settings, "WECHAT_WEB_REDIRECT_URI", "")
+    parsed_redirect = urlsplit(redirect_uri) if isinstance(redirect_uri, str) else None
+    if (
+        not parsed_redirect
+        or parsed_redirect.scheme != "https"
+        or not parsed_redirect.netloc
+    ):
+        raise WebConfigurationError("wechat_web_not_configured")
+    query = urlencode(
+        {
+            "appid": appid,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "snsapi_login",
+            "state": state,
+        }
+    )
+    return f"{WECHAT_WEB_AUTHORIZE_URL}?{query}#wechat_redirect"
+
+
 def create_web_binding_session(
     identity: WebIdentity,
     requested_role: str,
     browser_session_id: str,
+    *,
+    session_id: str | None = None,
 ) -> WebBindingSession:
     """Store a verified web identity for binding by the original browser only."""
     if (
@@ -178,7 +207,9 @@ def create_web_binding_session(
         raise WebBindingError("binding_session_invalid")
 
     appid, _ = _get_wechat_web_configuration()
-    value = secrets.token_urlsafe(32)
+    if session_id is not None and (not isinstance(session_id, str) or not session_id):
+        raise WebBindingError("binding_session_invalid")
+    value = session_id or secrets.token_urlsafe(32)
     payload = {
         "appid": appid,
         "openid": identity.openid,
@@ -194,6 +225,38 @@ def create_web_binding_session(
         requested_role=requested_role,
         browser_session_id=browser_session_id,
     )
+
+
+@transaction.atomic
+def prepare_web_login_session(
+    identity: WebIdentity,
+    requested_role: str,
+    browser_session_id: str,
+    *,
+    session_id: str,
+) -> WebBindingStatus:
+    """Create the browser-bound H5 session and complete known identities only.
+
+    A standard web OAuth response proves the web identity, not a trusted mobile.
+    Unknown identities therefore remain pending for the mini-program binding flow.
+    """
+    session = create_web_binding_session(
+        identity,
+        requested_role,
+        browser_session_id,
+        session_id=session_id,
+    )
+    appid, _ = _get_wechat_web_configuration()
+    known_identity = WechatWebIdentity.objects.select_for_update().filter(
+        appid=appid, openid=identity.openid
+    ).select_related("user").first()
+    if known_identity is None:
+        return WebBindingStatus(bound=False)
+    if known_identity.unionid and identity.unionid and known_identity.unionid != identity.unionid:
+        raise WebBindingError("binding_identity_conflict")
+    known_identity.last_login_at = timezone.now()
+    known_identity.save(update_fields=["last_login_at"])
+    return _mark_binding_session_bound(session.value, known_identity.user)
 
 
 @transaction.atomic
@@ -249,6 +312,14 @@ def bind_web_identity_from_miniprogram(
     except IntegrityError:
         raise WebBindingError("binding_identity_conflict") from None
 
+    return _mark_binding_session_bound(web_session_id, user)
+
+
+def _mark_binding_session_bound(
+    web_session_id: str, user: UserAccount
+) -> WebBindingStatus:
+    """Create the normal one-time completion ticket for a verified account."""
+    session = _get_binding_session(web_session_id)
     ticket = secrets.token_urlsafe(32)
     ticket_payload = {
         "user_id": str(user.id),
