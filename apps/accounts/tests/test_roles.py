@@ -94,6 +94,27 @@ def test_web_openid_is_unique_per_appid(user):
         )
 
 
+def test_web_openid_can_be_reused_by_different_appids(user):
+    WechatWebIdentity.objects.create(
+        user=user,
+        appid="web-app",
+        openid="openid-1",
+    )
+    other_user = UserAccount.objects.create(
+        role_type="student",
+        mobile="13900009997",
+        display_name="Different App Identity User",
+    )
+
+    other_app_identity = WechatWebIdentity.objects.create(
+        user=other_user,
+        appid="another-web-app",
+        openid="openid-1",
+    )
+
+    assert other_app_identity.appid == "another-web-app"
+
+
 @pytest.mark.django_db(transaction=True)
 def test_0003_runpython_cleanup_deletes_only_migration_sourced_grants():
     executor = MigrationExecutor(connection)
@@ -200,7 +221,8 @@ def test_0003_full_schema_downgrade_removes_user_role_table():
     assert "user_role" not in connection.introspection.table_names()
 
     # Restore the test database's normal schema after proving the downgrade.
-    MigrationExecutor(connection).migrate([("accounts", "0003_userrole")])
+    MigrationExecutor(connection).migrate([("accounts", "0004_wechatwebidentity")])
+    assert "wechat_web_identity" in connection.introspection.table_names()
 
 
 @pytest.mark.django_db(transaction=True)
