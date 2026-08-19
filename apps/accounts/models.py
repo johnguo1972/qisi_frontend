@@ -103,3 +103,25 @@ class WechatIdentity(models.Model):
     class Meta:
         db_table = 'wechat_identity'
         constraints = [models.UniqueConstraint(fields=['appid', 'openid'], name='uq_wechat_appid_openid')]
+
+
+class WechatWebIdentity(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    user = models.ForeignKey(
+        UserAccount,
+        on_delete=models.CASCADE,
+        related_name='wechat_web_identities',
+    )
+    appid = models.CharField(max_length=64)
+    openid = models.CharField(max_length=128)
+    unionid = models.CharField(max_length=128, blank=True, default='')
+    last_login_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'wechat_web_identity'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['appid', 'openid'],
+                name='uq_wechat_web_appid_openid',
+            )
+        ]

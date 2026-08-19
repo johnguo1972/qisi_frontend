@@ -3,10 +3,10 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from django.db import close_old_connections, connection
+from django.db import IntegrityError, close_old_connections, connection
 from django.db.migrations.executor import MigrationExecutor
 
-from apps.accounts.models import UserAccount, UserRole
+from apps.accounts.models import UserAccount, UserRole, WechatWebIdentity
 from apps.accounts.roles import (
     get_user_roles,
     grant_user_role,
@@ -72,6 +72,26 @@ def test_user_role_helpers_delegate_to_role_service(user):
     assert user.get_roles() == ["student"]
     assert user.has_role("student")
     assert not user.has_role("teacher")
+
+
+def test_web_openid_is_unique_per_appid(user):
+    WechatWebIdentity.objects.create(
+        user=user,
+        appid="web-app",
+        openid="openid-1",
+    )
+    other_user = UserAccount.objects.create(
+        role_type="student",
+        mobile="13900009998",
+        display_name="Second Web Identity User",
+    )
+
+    with pytest.raises(IntegrityError):
+        WechatWebIdentity.objects.create(
+            user=other_user,
+            appid="web-app",
+            openid="openid-1",
+        )
 
 
 @pytest.mark.django_db(transaction=True)
