@@ -40,6 +40,18 @@ def test_h5_wechat_binding_login_ui_contract():
     assert "scrolling=\"no\"" in source
 
 
+def test_h5_wechat_qr_view_keeps_the_full_code_visible_and_consent_below_it():
+    """The QR-only page must not crop WeChat's code or place consent above it."""
+    source = LOGIN_PAGE.read_text(encoding="utf-8")
+
+    assert 'class="wechat-web-title"' not in source
+    assert 'class="wechat-web-desc"' not in source
+    assert source.index('class="wechat-web-qr"') < source.index('class="wechat-web-consent"')
+    assert "width: 360px" in source
+    assert "height: 420px" in source
+    assert 'scrolling="no"' in source
+
+
 def test_wechat_web_api_only_exchanges_opaque_session_and_ticket_values():
     """The H5 API client never submits, stores, or models a mobile number."""
     source = API_CLIENT.read_text(encoding="utf-8")

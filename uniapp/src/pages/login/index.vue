@@ -71,14 +71,6 @@
             </template>
             <!-- #ifdef H5 -->
             <view v-else class="wechat-web-login">
-              <view class="wechat-web-title">微信扫码登录</view>
-              <text class="wechat-web-desc">使用微信扫码确认网页身份</text>
-              <view class="wechat-web-consent" @click="wechatWebPhoneAuthorizationConfirmed = !wechatWebPhoneAuthorizationConfirmed">
-                <view class="checkbox" :class="{ checked: wechatWebPhoneAuthorizationConfirmed }">
-                  <view class="checkmark"></view>
-                </view>
-                <text class="remember-text">手机号绑定授权确认</text>
-              </view>
               <button
                 class="wechat-web-start"
                 :disabled="wechatWebLoading || !wechatWebPhoneAuthorizationConfirmed"
@@ -93,8 +85,14 @@
                   title="微信扫码登录二维码"
                   scrolling="no"
                 ></iframe>
-                <text class="wechat-web-status">{{ wechatWebStatusText }}</text>
               </view>
+              <view class="wechat-web-consent" @click="wechatWebPhoneAuthorizationConfirmed = !wechatWebPhoneAuthorizationConfirmed">
+                <view class="checkbox" :class="{ checked: wechatWebPhoneAuthorizationConfirmed }">
+                  <view class="checkmark"></view>
+                </view>
+                <text class="remember-text">手机号绑定授权确认</text>
+              </view>
+              <text v-if="wechatWebSession" class="wechat-web-status">{{ wechatWebStatusText }}</text>
               <view v-if="wechatWebSession && !wechatWebBindingComplete" class="wechat-web-binding-guide">
                 <text>请在微信小程序完成手机号授权</text>
                 <text class="wechat-web-guide-desc">完成后此页面会自动继续登录，请勿关闭页面。</text>
@@ -559,8 +557,7 @@ input:focus {
 .wechat-web-login {
   text-align: center;
 }
-.wechat-web-title { color: #333; font-size: 28rpx; font-weight: 600; }
-.wechat-web-desc, .wechat-web-status, .wechat-web-guide-desc {
+.wechat-web-status, .wechat-web-guide-desc {
   display: block;
   margin-top: 10rpx;
   color: #888;
@@ -577,15 +574,17 @@ input:focus {
 .wechat-web-start[disabled] { background: #93d7ad; }
 .wechat-web-consent { display: flex; align-items: center; gap: 10rpx; margin-top: 16rpx; }
 .wechat-web-qr {
-  width: 240px;
-  height: 240px;
+  width: 360px;
+  height: 420px;
+  max-width: 100%;
   margin: 20rpx auto 0;
   overflow: hidden;
-  background: #f7f7f7;
+  background: #fff;
 }
 .wechat-web-qr-frame {
-  width: 240px;
-  height: 240px;
+  width: 360px;
+  height: 420px;
+  max-width: 100%;
   display: block;
   border: 0;
   overflow: hidden;
@@ -606,6 +605,14 @@ input:focus {
   border: 2rpx solid #409eff;
   border-radius: 8rpx;
   font-size: 26rpx;
+}
+
+@media (max-width: 480px) {
+  .wechat-web-qr,
+  .wechat-web-qr-frame {
+    width: 320px;
+    height: 390px;
+  }
 }
 
 /* #ifdef MP-WEIXIN */
