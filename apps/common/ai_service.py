@@ -56,6 +56,33 @@ _SHARED_VERIFIER_FIELDS = (
 _MODE_ARBITRATION_ATTEMPTS = 2
 _PIPELINE_CACHE_KEY = "_ai_cache"
 _PIPELINE_CACHE_VERSION = 1
+_RESPONSE_CONTRACT_FAILURE_MARKERS = (
+    "schema",
+    "json",
+    "validation",
+    "corrupted latex",
+)
+
+
+def _is_response_contract_failure(error: BaseException) -> bool:
+    """Return whether a failed component result is eligible for B JSON repair.
+
+    Mode B structure repair regenerates a teaching payload.  It cannot repair
+    transport, rate-limit, or provider-capacity failures, and routing those
+    failures through the repair prompt both wastes a request and obscures the
+    true failed provider boundary.
+    """
+    message = str(error).lower()
+    return any(marker in message for marker in _RESPONSE_CONTRACT_FAILURE_MARKERS)
+
+
+def _safe_arbitration_failure(error: BaseException) -> str:
+    """Serialize a stable arbitration boundary without retaining raw provider text."""
+    if isinstance(error, ArbitrationProviderError):
+        stage = getattr(error, "stage", "")
+        if isinstance(stage, str) and stage and stage != "unknown":
+            return stage
+    return str(error)
 
 
 def _project_schema_value(value):
@@ -583,9 +610,10 @@ class AIReviewService:
                         outcome.shared_verifier_result
                     )
             except (AIRequestError, ArbitrationError) as error:
-                errors[answer_key] = str(error)
+                failure = _safe_arbitration_failure(error)
+                errors[answer_key] = failure
                 results[answer_key] = {
-                    'error': str(error),
+                    'error': failure,
                     'provider': self._task_route(
                         f"mode_{mode.lower()}_answer"
                     )[0],
@@ -689,8 +717,11 @@ class AIReviewService:
         def generate(_mode, question_input):
             try:
                 return self._run_component(generator, question_input)
-            except AIRequestError:
-                if normalized_mode != "B":
+            except AIRequestError as error:
+                if (
+                    normalized_mode != "B"
+                    or not _is_response_contract_failure(error)
+                ):
                     raise
                 logger.warning(
                     "Mode B schema response rejected; regenerating once",
@@ -805,8 +836,11 @@ class AIReviewService:
         def generate(_mode, question_input):
             try:
                 return self._run_component(generator, question_input)
-            except AIRequestError:
-                if normalized_mode != "B":
+            except AIRequestError as error:
+                if (
+                    normalized_mode != "B"
+                    or not _is_response_contract_failure(error)
+                ):
                     raise
                 logger.warning(
                     "Mode B schema response rejected; regenerating once",
@@ -1149,8 +1183,9 @@ class AIReviewService:
                             extra={'question_id': str(question_id), 'mode': mode},
                         )
                         continue
-                    errors[answer_key] = str(error)
-                    results[answer_key] = {'error': str(error)}
+                    failure = _safe_arbitration_failure(error)
+                    errors[answer_key] = failure
+                    results[answer_key] = {'error': failure}
 
         if shared_verification is not None and not errors:
             results['verifier'] = deepcopy(shared_verification)

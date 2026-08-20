@@ -38,6 +38,7 @@ from apps.common.ai.answer_arbitration import (
     ArbitrationProviderError,
 )
 from apps.common.ai.exceptions import AIResponseError
+from apps.common.exceptions import AIRequestError
 from apps.common.ai.question_context import QuestionContextBuilder, question_context_hash
 from apps.parser.models import ExamPaper, ExamQuestion, QuestionOption
 from apps.knowledge.models import KnowledgePoint
@@ -328,6 +329,50 @@ def test_unanswered_mode_b_schema_failure_uses_one_structure_repair():
     assert outcome.answer["final_answer"] == "B"
     components[ModeBAnswerComponent].run.assert_called_once()
     components[repair_type].run.assert_called_once()
+
+
+def test_unanswered_mode_b_transport_failure_never_uses_structure_repair():
+    """Transport failures must retain their provider stage, not fake a JSON repair."""
+    responses = _component_responses()
+    components = {}
+
+    def component_factory(component_type):
+        component = MagicMock()
+        components[component_type] = component
+        if component_type is ModeBAnswerComponent:
+            component.run.side_effect = AIRequestError("HTTP 503 unavailable")
+        else:
+            component.run.return_value = deepcopy(responses[component_type])
+        return component
+
+    question = SimpleNamespace(
+        stem="1 + 1 = ?",
+        options=[
+            {"label": "A", "content": "1"},
+            {"label": "B", "content": "2"},
+            {"label": "C", "content": "3"},
+            {"label": "D", "content": "4"},
+        ],
+        answer="B",
+        analysis="DeepSeek baseline analysis.",
+        question_type="single_choice",
+        subject="math",
+        difficulty="L1",
+    )
+    service = common_ai_service.AIReviewService(component_factory=component_factory)
+
+    with pytest.raises(ArbitrationProviderError) as raised:
+        service.solve_unanswered_mode_with_arbitration(
+            question,
+            mode="B",
+            baseline={
+                "canonical_answer": "B",
+                "canonical_analysis": "DeepSeek baseline analysis.",
+            },
+        )
+
+    assert raised.value.stage == "qwen_generate"
+    assert ModeBStructureRepairComponent not in components
 
 
 @pytest.mark.django_db
@@ -880,7 +925,7 @@ def test_single_b_mode_logs_a_traceback_for_an_unclassified_failure():
     assert log_exception.call_args.kwargs["extra"]["error_category"] == "schema_invalid"
 
 
-def test_b_mode_failure_classification_reads_the_preserved_provider_cause():
+def test_b_mode_failure_classification_prefers_the_safe_provider_stage():
     from apps.common.ai.answer_arbitration import ArbitrationProviderError
     from apps.common.exceptions import AIRequestError
     from apps.review import tasks
@@ -888,7 +933,7 @@ def test_b_mode_failure_classification_reads_the_preserved_provider_cause():
     error = ArbitrationProviderError("deepseek_independent")
     error.__cause__ = AIRequestError("ReadTimeout while waiting for provider")
 
-    assert tasks.classify_ai_failure(error) == "read_timeout"
+    assert tasks.classify_ai_failure(error) == "deepseek_independent"
 
 
 def test_unanswered_baseline_solves_once_and_returns_persistable_answer_analysis():
@@ -2027,6 +2072,40 @@ def test_full_v2_keeps_failed_mode_partial_without_raw_solver_fallback():
     assert results["answer_c"]["verification"]["status"] == "accepted"
     assert question.ai_processing_status == "failed"
     service.solve_mode_b.assert_not_called()
+
+
+def test_full_v2_preserves_a_safe_b_mode_provider_stage():
+    """Batch telemetry must retain the failed B boundary for targeted retries."""
+    question = SimpleNamespace(
+        stem="Question",
+        subject="math",
+        ai_processing_status=None,
+        save=MagicMock(),
+    )
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda component_type: MagicMock()
+    )
+    service._get_question_image_urls = MagicMock(return_value=[])
+    service.probe_and_norm = MagicMock(
+        return_value={"normalized_text": "Question", "topic_tags_top3": []}
+    )
+    service.analyze_knowledge_points = MagicMock(
+        return_value={"knowledge_points": []}
+    )
+    service.vision_extraction = MagicMock(return_value={})
+
+    def arbitrate(_question, *, mode, **_kwargs):
+        if mode == "B":
+            raise ArbitrationProviderError("qwen_structure_repair")
+        return _arbitration_outcome(mode, None)
+
+    service.solve_mode_with_arbitration = MagicMock(side_effect=arbitrate)
+
+    with patch.object(ExamQuestion.objects, "get", return_value=question):
+        results = service.process_question_full_v2("question-id")
+
+    assert results["errors"] == {"answer_b": "qwen_structure_repair"}
+    assert results["answer_b"] == {"error": "qwen_structure_repair"}
 
 
 def test_full_v2_persists_unanswered_baseline_before_each_mode():

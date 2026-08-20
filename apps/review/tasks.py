@@ -19,6 +19,13 @@ from .ai_queue import dispatch_queued_ai_items, recover_stale_ai_items
 logger = logging.getLogger(__name__)
 
 PROGRESS_KEY_PREFIX = 'single_ai_progress:'
+_ARBITRATION_FAILURE_STAGES = frozenset({
+    'baseline_invalid',
+    'qwen_generate',
+    'qwen_structure_repair',
+    'deepseek_independent',
+    'deepseek_final_review',
+})
 
 
 def _unanswered_baseline_from_verifier(value):
@@ -51,7 +58,12 @@ def classify_ai_failure(error: BaseException) -> str:
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
+        stage = getattr(current, 'stage', None)
+        if stage in _ARBITRATION_FAILURE_STAGES:
+            return stage
         message = str(current).lower()
+        if message in _ARBITRATION_FAILURE_STAGES:
+            return message
         if '429' in message or 'rate limit' in message or 'rate_limited' in message:
             return 'rate_limited'
         if 'connecttimeout' in message or 'connect timeout' in message:
