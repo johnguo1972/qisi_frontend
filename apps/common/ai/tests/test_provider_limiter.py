@@ -6,6 +6,19 @@ from apps.common.exceptions import AIRequestError
 from apps.common.ai import provider_limiter
 
 
+def test_provider_limits_fall_back_to_the_six_request_safety_cap(monkeypatch):
+    """Missing settings must never silently restore the former 16-way limit."""
+    monkeypatch.delattr(
+        provider_limiter.settings, "AI_QWEN_CONCURRENCY", raising=False
+    )
+    monkeypatch.delattr(
+        provider_limiter.settings, "AI_DEEPSEEK_CONCURRENCY", raising=False
+    )
+
+    assert provider_limiter._limit_for("qwen") == 6
+    assert provider_limiter._limit_for("deepseek") == 6
+
+
 def test_provider_lease_waits_for_a_redis_slot_before_failing(monkeypatch):
     """A brief saturation must wait rather than turn a valid B call into failure."""
     events = []

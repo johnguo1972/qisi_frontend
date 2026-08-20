@@ -27,6 +27,7 @@ TASK_PROVIDER_SCHEMA = {
     "knowledge_analysis": "qwen",
     "mode_a_answer": "qwen",
     "mode_b_answer": "qwen",
+    "mode_b_structure_repair": "qwen",
     "mode_c_answer": "qwen",
     "result_verify": "qwen",
     "vision_fact_extract": "qwen",

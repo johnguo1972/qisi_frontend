@@ -86,12 +86,12 @@ CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', 'True').lo
 
 # Durable AI queue limits.  These values are deliberately independent from
 # Celery worker concurrency: three batch jobs may be active while at most
-# sixteen individual question pipelines are leased globally.
+# six individual question pipelines are leased globally.
 AI_MAX_ACTIVE_JOBS = int(os.environ.get('AI_MAX_ACTIVE_JOBS', '3'))
-AI_GLOBAL_CONCURRENCY = int(os.environ.get('AI_GLOBAL_CONCURRENCY', '16'))
+AI_GLOBAL_CONCURRENCY = int(os.environ.get('AI_GLOBAL_CONCURRENCY', '6'))
 AI_QUEUE_CAPACITY = int(os.environ.get('AI_QUEUE_CAPACITY', '10000'))
-AI_QWEN_CONCURRENCY = int(os.environ.get('AI_QWEN_CONCURRENCY', '16'))
-AI_DEEPSEEK_CONCURRENCY = int(os.environ.get('AI_DEEPSEEK_CONCURRENCY', '8'))
+AI_QWEN_CONCURRENCY = int(os.environ.get('AI_QWEN_CONCURRENCY', '6'))
+AI_DEEPSEEK_CONCURRENCY = int(os.environ.get('AI_DEEPSEEK_CONCURRENCY', '6'))
 # A saturated provider returns to the shared pool as soon as an in-flight HTTP
 # request completes.  Waiting avoids turning that short-lived saturation into
 # a permanent per-question B-mode failure.

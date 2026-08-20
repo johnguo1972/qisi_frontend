@@ -212,6 +212,12 @@ class ModeBAnswerComponent(_ModeAnswerComponent):
         return normalize_mode_answer_payload(self.mode, result)
 
 
+class ModeBStructureRepairComponent(ModeBAnswerComponent):
+    """Regenerate a malformed Mode B payload from the immutable question context."""
+
+    task_key = "mode_b_structure_repair"
+
+
 class ModeCAnswerComponent(_ModeAnswerComponent):
     task_key = "mode_c_answer"
     mode = "C"
