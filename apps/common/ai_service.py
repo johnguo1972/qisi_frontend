@@ -19,6 +19,7 @@ from apps.common.ai.components import (
     KnowledgeAnalysisComponent,
     ModeAAnswerComponent,
     ModeBAnswerComponent,
+    ModeBStructureRepairComponent,
     ModeCAnswerComponent,
     QuestionComponentFactory,
     QuestionInput,
@@ -686,7 +687,23 @@ class AIReviewService:
         generator = self._component(component_type)
 
         def generate(_mode, question_input):
-            return self._run_component(generator, question_input)
+            try:
+                return self._run_component(generator, question_input)
+            except AIRequestError:
+                if normalized_mode != "B":
+                    raise
+                logger.warning(
+                    "Mode B schema response rejected; regenerating once",
+                    extra={"mode": "B", "stage": "qwen_structure_repair"},
+                )
+                try:
+                    return self._run_component(
+                        self._component(ModeBStructureRepairComponent), question_input
+                    )
+                except AIRequestError as repair_error:
+                    raise ArbitrationProviderError(
+                        "qwen_structure_repair"
+                    ) from repair_error
 
         def independent_verify(_mode, question_input):
             return self._run_component(
@@ -786,7 +803,23 @@ class AIReviewService:
         generator = self._component(component_type)
 
         def generate(_mode, question_input):
-            return self._run_component(generator, question_input)
+            try:
+                return self._run_component(generator, question_input)
+            except AIRequestError:
+                if normalized_mode != "B":
+                    raise
+                logger.warning(
+                    "Mode B schema response rejected; regenerating once",
+                    extra={"mode": "B", "stage": "qwen_structure_repair"},
+                )
+                try:
+                    return self._run_component(
+                        self._component(ModeBStructureRepairComponent), question_input
+                    )
+                except AIRequestError as repair_error:
+                    raise ArbitrationProviderError(
+                        "qwen_structure_repair"
+                    ) from repair_error
 
         def independent_verify(_mode, _question_input):
             raise AssertionError("unanswered arbitration never calls independent verifier")

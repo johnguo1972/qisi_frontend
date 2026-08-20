@@ -1,6 +1,7 @@
 """Compatibility tests for review/common callers of the shared AI facade."""
 
 from io import StringIO
+from contextlib import nullcontext
 from copy import deepcopy
 import json
 import logging
@@ -25,6 +26,7 @@ from apps.common.ai.components import (
     KnowledgeAnalysisComponent,
     ModeAAnswerComponent,
     ModeBAnswerComponent,
+    ModeBStructureRepairComponent,
     ModeCAnswerComponent,
     QuestionProbeComponent,
     ResultVerifierComponent,
@@ -35,6 +37,7 @@ from apps.common.ai.answer_arbitration import (
     ArbitrationOutcome,
     ArbitrationProviderError,
 )
+from apps.common.ai.exceptions import AIResponseError
 from apps.common.ai.question_context import QuestionContextBuilder, question_context_hash
 from apps.parser.models import ExamPaper, ExamQuestion, QuestionOption
 from apps.knowledge.models import KnowledgePoint
@@ -162,6 +165,8 @@ def _real_facade_with_components():
                     responses[mode_components[question.metadata["target_mode"]]]
                 ),
             }
+        elif component_type is ModeBStructureRepairComponent:
+            component.run.return_value = deepcopy(responses[ModeBAnswerComponent])
         elif component_type is DeepSeekFinalReviewComponent:
             component.run.side_effect = lambda question: {
                 "trusted_answer": "2",
@@ -210,6 +215,119 @@ def test_legacy_component_client_exposes_single_attempt_provider_path():
         task_key="question_probe",
         single_attempt=True,
     )
+
+
+def test_mode_b_schema_failure_uses_one_structure_repair_before_arbitration():
+    """A malformed B response is regenerated once before DeepSeek arbitration."""
+    from apps.common.ai.components import mode_answers
+
+    repair_type = getattr(mode_answers, "ModeBStructureRepairComponent")
+    responses = _component_responses()
+    responses[ModeBAnswerComponent]["final_answer"] = "B"
+    components = {}
+
+    def component_factory(component_type):
+        component = MagicMock()
+        components[component_type] = component
+        if component_type is ModeBAnswerComponent:
+            component.run.side_effect = AIResponseError("mode B schema validation")
+        elif component_type is repair_type:
+            component.run.return_value = deepcopy(responses[ModeBAnswerComponent])
+        elif component_type is DeepSeekIndependentVerifierComponent:
+            component.run.return_value = {
+                "independent_answer": "B",
+                "independent_reasoning_summary": "1 + 1 = 2.",
+                "reference_answer_valid": True,
+                "reference_analysis_valid": True,
+                "reference_issues": [],
+                "key_facts": ["1 + 1 equals 2."],
+                "confidence": 0.95,
+                "mode_content": deepcopy(responses[ModeBAnswerComponent]),
+            }
+        elif component_type is DeepSeekFinalReviewComponent:
+            component.run.return_value = {
+                "trusted_answer": "B",
+                "qwen_content_valid": True,
+                "candidate_issues": [],
+                "confidence": 0.95,
+                "mode_content": deepcopy(responses[ModeBAnswerComponent]),
+            }
+        else:
+            component.run.return_value = deepcopy(responses[component_type])
+        return component
+
+    question = SimpleNamespace(
+        stem="1 + 1 = ?",
+        options=[
+            {"label": "A", "content": "1"},
+            {"label": "B", "content": "2"},
+            {"label": "C", "content": "3"},
+            {"label": "D", "content": "4"},
+        ],
+        answer="B",
+        analysis="Add the two ones.",
+        question_type="single_choice",
+        subject="math",
+        difficulty="L1",
+    )
+    service = common_ai_service.AIReviewService(component_factory=component_factory)
+
+    outcome = service.solve_mode_with_arbitration(question, mode="B")
+
+    assert outcome.answer["final_answer"] == "B"
+    components[ModeBAnswerComponent].run.assert_called_once()
+    components[repair_type].run.assert_called_once()
+    assert DeepSeekIndependentVerifierComponent not in components
+
+
+def test_unanswered_mode_b_schema_failure_uses_one_structure_repair():
+    """The 277-question no-answer batch path gets the same B recovery."""
+    from apps.common.ai.components import mode_answers
+
+    repair_type = getattr(mode_answers, "ModeBStructureRepairComponent")
+    responses = _component_responses()
+    responses[ModeBAnswerComponent]["final_answer"] = "B"
+    components = {}
+
+    def component_factory(component_type):
+        component = MagicMock()
+        components[component_type] = component
+        if component_type is ModeBAnswerComponent:
+            component.run.side_effect = AIResponseError("mode B schema validation")
+        elif component_type is repair_type:
+            component.run.return_value = deepcopy(responses[ModeBAnswerComponent])
+        else:
+            component.run.return_value = deepcopy(responses[component_type])
+        return component
+
+    question = SimpleNamespace(
+        stem="1 + 1 = ?",
+        options=[
+            {"label": "A", "content": "1"},
+            {"label": "B", "content": "2"},
+            {"label": "C", "content": "3"},
+            {"label": "D", "content": "4"},
+        ],
+        answer="B",
+        analysis="DeepSeek baseline analysis.",
+        question_type="single_choice",
+        subject="math",
+        difficulty="L1",
+    )
+    service = common_ai_service.AIReviewService(component_factory=component_factory)
+
+    outcome = service.solve_unanswered_mode_with_arbitration(
+        question,
+        mode="B",
+        baseline={
+            "canonical_answer": "B",
+            "canonical_analysis": "DeepSeek baseline analysis.",
+        },
+    )
+
+    assert outcome.answer["final_answer"] == "B"
+    components[ModeBAnswerComponent].run.assert_called_once()
+    components[repair_type].run.assert_called_once()
 
 
 @pytest.mark.django_db
@@ -605,6 +723,75 @@ def test_single_b_mode_requires_saved_probe_and_never_reprobes():
         "error": "probe_result_required",
     }
     service.probe_and_norm.assert_not_called()
+    service.solve_mode_with_arbitration.assert_not_called()
+
+
+def test_single_b_mode_for_unanswered_question_persists_baseline_then_uses_unanswered_arbitration():
+    """A manual B request must not treat a no-answer question as a legacy one."""
+    from apps.review import tasks
+
+    question = SimpleNamespace(
+        id="unanswered-b-question",
+        stem="1 + 1 = ?",
+        answer="",
+        analysis="",
+        ai_probe_result={"normalized_text": "1 + 1 = ?", "topic_tags_top3": []},
+        ai_vision_extract={},
+        ai_verifier_result=None,
+        save=MagicMock(),
+    )
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service._task_route.return_value = ("qwen", "qwen3.7-plus")
+    service.solve_unanswered_question_baseline.return_value = {
+        "canonical_answer": "2",
+        "canonical_analysis": "1 + 1 = 2",
+        "key_facts": ["basic addition"],
+        "confidence": 0.95,
+        "context_hash": "baseline-hash",
+    }
+
+    def unanswered_outcome(_question, **kwargs):
+        context = QuestionContextBuilder.build(
+            question,
+            image_urls=(),
+            normalized_text="1 + 1 = ?",
+            vision_result={},
+            knowledge_refs="",
+            target_mode="B",
+        )
+        return ArbitrationOutcome(
+            answer={"mode": "B", "final_answer": "2", "questions": []},
+            verification={"context_hash": question_context_hash(context)},
+            shared_verifier_result=None,
+        )
+
+    service.solve_unanswered_mode_with_arbitration.side_effect = unanswered_outcome
+    locked_queryset = MagicMock()
+    locked_queryset.get.return_value = question
+
+    with (
+        patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(
+            tasks.ExamQuestion.objects,
+            "select_for_update",
+            return_value=locked_queryset,
+        ),
+        patch.object(tasks, "create_ai_review_service", return_value=service),
+        patch.object(tasks.cache, "set"),
+        patch.object(tasks.transaction, "atomic", return_value=nullcontext()),
+        patch.object(tasks, "release_single_mode_ai_task_lock"),
+    ):
+        result = tasks.single_mode_ai_process_question.run(
+            "unanswered-b-question", "B"
+        )
+
+    assert result["status"] == "complete"
+    assert question.answer == "2"
+    assert question.analysis == "1 + 1 = 2"
+    assert question.ai_verifier_result["unanswered_baseline"]["canonical_answer"] == "2"
+    service.solve_unanswered_question_baseline.assert_called_once()
+    service.solve_unanswered_mode_with_arbitration.assert_called_once()
     service.solve_mode_with_arbitration.assert_not_called()
 
 

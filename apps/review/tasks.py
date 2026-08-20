@@ -21,6 +21,30 @@ logger = logging.getLogger(__name__)
 PROGRESS_KEY_PREFIX = 'single_ai_progress:'
 
 
+def _unanswered_baseline_from_verifier(value):
+    """Return a usable persisted no-answer baseline without exposing raw AI data."""
+    if not isinstance(value, dict):
+        return None
+    baseline = value.get('unanswered_baseline')
+    if not isinstance(baseline, dict):
+        return None
+    if not all(
+        isinstance(baseline.get(key), str) and baseline[key].strip()
+        for key in ('canonical_answer', 'canonical_analysis')
+    ):
+        return None
+    return dict(baseline)
+
+
+def _question_has_no_source_answer(question) -> bool:
+    if not hasattr(question, 'answer'):
+        # Lightweight compatibility callers may intentionally omit this field;
+        # only a persisted blank answer opts into the DeepSeek baseline flow.
+        return False
+    answer = getattr(question, 'answer', None)
+    return answer is None or (isinstance(answer, str) and not answer.strip())
+
+
 def classify_ai_failure(error: BaseException) -> str:
     """Return a stable, non-sensitive category for durable AI task telemetry."""
     current: BaseException | None = error
@@ -107,17 +131,26 @@ def execute_ai_job_item(self, item_id: str):
         item.finished_at = timezone.now()
         item.save(update_fields=['status', 'error_code', 'finished_at'])
         return {'status': 'partial' if results.get('errors') else 'complete', 'question_id': str(item.question_id)}
-    except Exception:
+    except Exception as error:
         item.status = AIProcessingJobItem.Status.FAILED
-        item.error_code = 'processing_failed'
+        error_category = classify_ai_failure(error)
+        item.error_code = f'processing_failed_{error_category}'
         item.finished_at = timezone.now()
         item.save(update_fields=['status', 'error_code', 'finished_at'])
+        logger.exception(
+            'AI queue item processing failed',
+            extra={
+                'question_id': str(item.question_id),
+                'item_id': str(item.id),
+                'error_category': error_category,
+            },
+        )
         return {'status': 'failed', 'question_id': str(item.question_id)}
     finally:
         service.close()
         RedisLeasePool(
             'question',
-            limit=int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 16)),
+            limit=int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 6)),
             ttl_seconds=4200,
         ).release(str(item.id))
 
@@ -376,16 +409,78 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         # Get image URLs
         image_urls = service._get_question_image_urls(question)
 
-        outcome = service.solve_mode_with_arbitration(
-            question,
-            mode=normalized_mode,
-            image_urls=image_urls,
-            normalized_text=normalized_text,
-            vision_result=vision_result,
-            knowledge_refs=knowledge_refs,
-            cached_verification=question.ai_verifier_result,
-            model=model,
+        # A manual A/B/C request for a source-unanswered question must retain
+        # the same canonical DeepSeek baseline as the full pipeline.  The
+        # baseline is committed before any mode-specific generation so later
+        # failures never discard the newly established answer and analysis.
+        baseline = _unanswered_baseline_from_verifier(
+            question.ai_verifier_result
         )
+        if baseline is None and _question_has_no_source_answer(question):
+            generated_baseline = service.solve_unanswered_question_baseline(
+                question,
+                image_urls=image_urls,
+                normalized_text=normalized_text,
+                vision_result=vision_result,
+                knowledge_refs=knowledge_refs,
+            )
+            with transaction.atomic():
+                locked_question = (
+                    ExamQuestion.objects.select_for_update().get(id=question_id)
+                )
+                baseline = _unanswered_baseline_from_verifier(
+                    locked_question.ai_verifier_result
+                )
+                if baseline is None and _question_has_no_source_answer(
+                    locked_question
+                ):
+                    baseline = {
+                        key: generated_baseline[key]
+                        for key in (
+                            'canonical_answer',
+                            'canonical_analysis',
+                            'key_facts',
+                            'confidence',
+                            'context_hash',
+                        )
+                        if key in generated_baseline
+                    }
+                    verifier = (
+                        dict(locked_question.ai_verifier_result)
+                        if isinstance(locked_question.ai_verifier_result, dict)
+                        else {}
+                    )
+                    verifier['unanswered_baseline'] = baseline
+                    locked_question.answer = baseline['canonical_answer']
+                    locked_question.analysis = baseline['canonical_analysis']
+                    locked_question.ai_verifier_result = verifier
+                    locked_question.save(
+                        update_fields=['answer', 'analysis', 'ai_verifier_result']
+                    )
+                question = locked_question
+
+        if baseline is not None:
+            outcome = service.solve_unanswered_mode_with_arbitration(
+                question,
+                mode=normalized_mode,
+                baseline=baseline,
+                image_urls=image_urls,
+                normalized_text=normalized_text,
+                vision_result=vision_result,
+                knowledge_refs=knowledge_refs,
+                model=model,
+            )
+        else:
+            outcome = service.solve_mode_with_arbitration(
+                question,
+                mode=normalized_mode,
+                image_urls=image_urls,
+                normalized_text=normalized_text,
+                vision_result=vision_result,
+                knowledge_refs=knowledge_refs,
+                cached_verification=question.ai_verifier_result,
+                model=model,
+            )
 
         mode_key = f'ai_answer_{normalized_mode.lower()}'
         answer = dict(outcome.answer)

@@ -23,8 +23,8 @@ def _fallback_pool(provider: str, limit: int) -> threading.BoundedSemaphore:
 
 def _limit_for(provider: str) -> int:
     if provider == 'deepseek':
-        return int(getattr(settings, 'AI_DEEPSEEK_CONCURRENCY', 8))
-    return int(getattr(settings, 'AI_QWEN_CONCURRENCY', 16))
+        return int(getattr(settings, 'AI_DEEPSEEK_CONCURRENCY', 6))
+    return int(getattr(settings, 'AI_QWEN_CONCURRENCY', 6))
 
 
 def _lease_wait_seconds() -> float:
