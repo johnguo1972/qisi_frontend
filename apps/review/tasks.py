@@ -60,6 +60,8 @@ def classify_ai_failure(error: BaseException) -> str:
             return 'read_timeout'
         if any(marker in message for marker in ('schema', 'json', 'validation')):
             return 'schema_invalid'
+        if 'baseline_invalid' in message:
+            return 'baseline_invalid'
         if any(marker in message for marker in ('not configured', 'configuration', 'api key')):
             return 'configuration_error'
         if any(marker in message for marker in ('500', '502', '503', '504', 'unavailable')):

@@ -634,15 +634,15 @@ class AIReviewService:
             vision_result=vision_result,
             knowledge_refs=knowledge_refs,
         )
-        result = self._run_component(
-            self._component(DeepSeekBaselineSolveComponent), context
-        )
-        if result["confidence"] < 0.80:
-            raise AIRequestError("baseline_invalid")
-        return {
-            **result,
-            "context_hash": question_context_hash(context),
-        }
+        component = self._component(DeepSeekBaselineSolveComponent)
+        for _attempt in range(2):
+            result = self._run_component(component, context)
+            if result["confidence"] >= 0.80:
+                return {
+                    **result,
+                    "context_hash": question_context_hash(context),
+                }
+        raise AIRequestError("baseline_invalid")
 
     def solve_mode_with_arbitration(
         self,

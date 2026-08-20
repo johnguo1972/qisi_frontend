@@ -803,6 +803,7 @@ def test_single_b_mode_for_unanswered_question_persists_baseline_then_uses_unans
         ("ConnectTimeout while opening provider connection", "connect_timeout"),
         ("ReadTimeout while waiting for provider", "read_timeout"),
         ("JSON response schema invalid", "schema_invalid"),
+        ("baseline_invalid", "baseline_invalid"),
         ("WECHAT_WEB_APP_SECRET is not configured", "configuration_error"),
         ("unclassified failure", "unknown_error"),
     ],
@@ -927,6 +928,48 @@ def test_unanswered_baseline_solves_once_and_returns_persistable_answer_analysis
     assert baseline["canonical_analysis"] == "一加一等于二。"
     assert baseline["confidence"] == 0.91
     assert baseline["context_hash"]
+
+
+def test_unanswered_baseline_retries_once_when_confidence_is_below_threshold():
+    question = SimpleNamespace(
+        stem="1 + 1 = ?",
+        answer="",
+        analysis="",
+        solution="",
+        options=[],
+        subject="math",
+        question_type="fill_blank",
+        difficulty=1,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    component = MagicMock()
+    component.run.side_effect = [
+        {
+            "canonical_answer": "2",
+            "canonical_analysis": "low confidence attempt",
+            "key_facts": ["basic addition"],
+            "confidence": 0.79,
+        },
+        {
+            "canonical_answer": "2",
+            "canonical_analysis": "verified attempt",
+            "key_facts": ["basic addition"],
+            "confidence": 0.91,
+        },
+    ]
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda _component_type: component
+    )
+
+    baseline = service.solve_unanswered_question_baseline(
+        question, image_urls=(), normalized_text=question.stem,
+        vision_result={}, knowledge_refs="",
+    )
+
+    assert baseline["confidence"] == 0.91
+    assert component.run.call_count == 2
 
 
 @pytest.mark.parametrize(
