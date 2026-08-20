@@ -580,7 +580,7 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         if service is None:
             raise
         error_category = classify_ai_failure(error)
-        logger.error(
+        logger.exception(
             'AI single mode processing failed',
             extra={
                 'question_id': str(question_id),

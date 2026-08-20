@@ -849,6 +849,36 @@ def test_single_b_mode_reports_a_safe_provider_failure_category():
     service.close.assert_called_once_with()
 
 
+def test_single_b_mode_logs_a_traceback_for_an_unclassified_failure():
+    """Unexpected manual-mode failures must retain a server-side traceback."""
+    from apps.review import tasks
+
+    question = SimpleNamespace(
+        id="b-unclassified-failure",
+        stem="1 + 1 = ?",
+        ai_probe_result={"normalized_text": "1 + 1 = ?"},
+        ai_vision_extract={},
+        ai_verifier_result=None,
+    )
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service.solve_mode_with_arbitration.side_effect = RuntimeError("write validation failed")
+
+    with (
+        patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(tasks, "create_ai_review_service", return_value=service),
+        patch.object(tasks.cache, "set"),
+        patch.object(tasks, "release_single_mode_ai_task_lock"),
+        patch.object(tasks.logger, "exception") as log_exception,
+    ):
+        result = tasks.single_mode_ai_process_question.run("b-unclassified-failure", "B")
+
+    assert result == {"status": "failed", "error": "schema_invalid"}
+    log_exception.assert_called_once()
+    assert log_exception.call_args.args == ("AI single mode processing failed",)
+    assert log_exception.call_args.kwargs["extra"]["error_category"] == "schema_invalid"
+
+
 def test_b_mode_failure_classification_reads_the_preserved_provider_cause():
     from apps.common.ai.answer_arbitration import ArbitrationProviderError
     from apps.common.exceptions import AIRequestError
