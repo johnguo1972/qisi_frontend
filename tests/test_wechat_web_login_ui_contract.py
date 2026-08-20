@@ -30,6 +30,14 @@ def test_h5_wechat_binding_login_ui_contract():
     assert "wechatWebApi.complete" in source
     assert "wechatWebPhoneAuthorizationConfirmed" in source
     assert "手机号绑定授权确认" in source
+    assert "const loginMode = ref<'phone' | 'wechat'>('phone')" in source
+    assert "v-if=\"loginMode === 'phone'\"" in source
+    assert "v-else" in source
+    assert "switchLoginMode('wechat')" in source
+    assert "switchLoginMode('phone')" in source
+    assert "@click.stop=\"switchRole(tab.role)\"" in source
+    assert "overflow: hidden" in source
+    assert "scrolling=\"no\"" in source
 
 
 def test_wechat_web_api_only_exchanges_opaque_session_and_ticket_values():

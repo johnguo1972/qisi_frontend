@@ -28,7 +28,7 @@
             <view v-for="tab in tabs" :key="tab.role"
                   class="tab-item"
                   :class="{ active: activeTab === tab.role }"
-                  @click.stop="activeTab = tab.role">
+                  @click.stop="switchRole(tab.role)">
               <text class="tab-icon">{{ tab.icon }}</text>
               <text class="tab-text">{{ tab.label }}</text>
             </view>
@@ -36,6 +36,7 @@
 
           <!-- 登录表单 -->
           <view class="form-content">
+            <template v-if="loginMode === 'phone'">
             <view class="form-title">{{ currentTabLabel }}登录</view>
             <view class="form-item">
               <text class="label">手机号</text>
@@ -59,11 +60,17 @@
             <button class="login-btn" :disabled="loading" @click="handleLogin">
               {{ loading ? '登录中...' : '登 录' }}
             </button>
+            <!-- #ifdef H5 -->
+            <button class="wechat-web-entry" :disabled="loading" @click="switchLoginMode('wechat')">
+              微信扫码登录
+            </button>
+            <!-- #endif -->
             <!-- #ifdef MP-WEIXIN -->
             <button class="wechat-btn" :disabled="loading" @click="handleWechatLogin">微信一键登录</button>
             <!-- #endif -->
+            </template>
             <!-- #ifdef H5 -->
-            <view class="wechat-web-login">
+            <view v-else class="wechat-web-login">
               <view class="wechat-web-title">微信扫码登录</view>
               <text class="wechat-web-desc">使用微信扫码确认网页身份</text>
               <view class="wechat-web-consent" @click="wechatWebPhoneAuthorizationConfirmed = !wechatWebPhoneAuthorizationConfirmed">
@@ -84,6 +91,7 @@
                   class="wechat-web-qr-frame"
                   :src="wechatWebSession.authorization_url"
                   title="微信扫码登录二维码"
+                  scrolling="no"
                 ></iframe>
                 <text class="wechat-web-status">{{ wechatWebStatusText }}</text>
               </view>
@@ -91,6 +99,9 @@
                 <text>请在微信小程序完成手机号授权</text>
                 <text class="wechat-web-guide-desc">完成后此页面会自动继续登录，请勿关闭页面。</text>
               </view>
+              <button class="wechat-web-back" @click="switchLoginMode('phone')">
+                手机号验证码登录
+              </button>
             </view>
             <!-- #endif -->
           </view>
@@ -115,6 +126,7 @@ const tabs = [
 ]
 
 const activeTab = ref('student')
+const loginMode = ref<'phone' | 'wechat'>('phone')
 const currentTabLabel = computed(() => {
   const tab = tabs.find(t => t.role === activeTab.value)
   return tab ? tab.label : ''
@@ -138,6 +150,31 @@ function stopWechatWebPolling() {
   if (wechatWebPollTimer) {
     clearInterval(wechatWebPollTimer)
     wechatWebPollTimer = undefined
+  }
+}
+
+function resetWechatWebSession() {
+  stopWechatWebPolling()
+  wechatWebSession.value = null
+  wechatWebBindingComplete.value = false
+  wechatWebCompleting.value = false
+  wechatWebStatusText.value = '请使用微信扫描二维码'
+}
+
+function switchLoginMode(mode: 'phone' | 'wechat') {
+  if (loginMode.value === mode) return
+  loginMode.value = mode
+  resetWechatWebSession()
+}
+
+function switchRole(role: string) {
+  if (activeTab.value === role) return
+  activeTab.value = role
+  if (loginMode.value === 'wechat') {
+    resetWechatWebSession()
+    if (wechatWebPhoneAuthorizationConfirmed.value) {
+      void startWechatWebLogin()
+    }
   }
 }
 
@@ -177,11 +214,8 @@ async function startWechatWebLogin() {
     uni.showToast({ title: '请先确认手机号绑定授权', icon: 'none' })
     return
   }
-  stopWechatWebPolling()
+  resetWechatWebSession()
   wechatWebLoading.value = true
-  wechatWebSession.value = null
-  wechatWebBindingComplete.value = false
-  wechatWebCompleting.value = false
   wechatWebStatusText.value = '正在创建扫码会话...'
   try {
     const res = await wechatWebApi.createSession(
@@ -512,11 +546,17 @@ input:focus {
 .login-btn[disabled] {
   background: #ccc;
 }
+.wechat-web-entry {
+  width: 100%;
+  margin-top: 18rpx;
+  color: #07c160;
+  background: #fff;
+  border: 2rpx solid #07c160;
+  border-radius: 8rpx;
+  font-size: 28rpx;
+}
 .wechat-btn { margin-top: 18rpx; background: #07c160; color: #fff; font-size: 28rpx; border-radius: 8rpx; }
 .wechat-web-login {
-  margin-top: 28rpx;
-  padding-top: 28rpx;
-  border-top: 1rpx solid #eee;
   text-align: center;
 }
 .wechat-web-title { color: #333; font-size: 28rpx; font-weight: 600; }
@@ -536,12 +576,19 @@ input:focus {
 }
 .wechat-web-start[disabled] { background: #93d7ad; }
 .wechat-web-consent { display: flex; align-items: center; gap: 10rpx; margin-top: 16rpx; }
-.wechat-web-qr { margin-top: 20rpx; }
+.wechat-web-qr {
+  width: 240px;
+  height: 240px;
+  margin: 20rpx auto 0;
+  overflow: hidden;
+  background: #f7f7f7;
+}
 .wechat-web-qr-frame {
   width: 240px;
   height: 240px;
+  display: block;
   border: 0;
-  background: #f7f7f7;
+  overflow: hidden;
 }
 .wechat-web-binding-guide {
   margin-top: 18rpx;
@@ -550,6 +597,15 @@ input:focus {
   color: #8a5a00;
   background: #fff7e6;
   font-size: 24rpx;
+}
+.wechat-web-back {
+  width: 100%;
+  margin-top: 20rpx;
+  color: #409eff;
+  background: #fff;
+  border: 2rpx solid #409eff;
+  border-radius: 8rpx;
+  font-size: 26rpx;
 }
 
 /* #ifdef MP-WEIXIN */
