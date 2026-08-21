@@ -840,6 +840,83 @@ def test_single_b_mode_for_unanswered_question_persists_baseline_then_uses_unans
     service.solve_mode_with_arbitration.assert_not_called()
 
 
+def test_single_b_mode_rebuilds_an_invalid_persisted_unanswered_baseline():
+    """历史基线答案不符合题型时，先重建再进入对应模式仲裁。"""
+    from apps.review import tasks
+
+    stale_baseline = {
+        "canonical_answer": "这一题正确答案是正确。",
+        "canonical_analysis": "旧的冗长答案。",
+    }
+    question = SimpleNamespace(
+        id="invalid-unanswered-baseline",
+        stem="下列说法正确吗？",
+        answer=stale_baseline["canonical_answer"],
+        analysis=stale_baseline["canonical_analysis"],
+        question_type="true_false",
+        options=[],
+        ai_probe_result={"normalized_text": "下列说法正确吗？", "topic_tags_top3": []},
+        ai_vision_extract={},
+        ai_verifier_result={"unanswered_baseline": stale_baseline},
+        save=MagicMock(),
+    )
+    rebuilt = {
+        "canonical_answer": "true",
+        "canonical_analysis": "说法成立。",
+        "key_facts": ["判断题答案必须为真或假。"],
+        "confidence": 0.95,
+        "context_hash": "rebuilt-baseline-hash",
+    }
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service._task_route.return_value = ("qwen", "qwen3.7-plus")
+    service.unanswered_baseline_is_valid.side_effect = [False, False]
+    service.solve_unanswered_question_baseline.return_value = rebuilt
+    def unanswered_outcome(current_question, **_kwargs):
+        context = QuestionContextBuilder.build(
+            current_question,
+            normalized_text=current_question.stem,
+            vision_result={},
+            target_mode="B",
+        )
+        return ArbitrationOutcome(
+            answer={"mode": "B", "final_answer": "true", "questions": []},
+            verification={"context_hash": question_context_hash(context)},
+            shared_verifier_result=None,
+        )
+
+    service.solve_unanswered_mode_with_arbitration.side_effect = unanswered_outcome
+    locked_queryset = MagicMock()
+    locked_queryset.get.return_value = question
+
+    with (
+        patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(
+            tasks.ExamQuestion.objects,
+            "select_for_update",
+            return_value=locked_queryset,
+        ),
+        patch.object(tasks, "create_ai_review_service", return_value=service),
+        patch.object(tasks.cache, "set"),
+        patch.object(tasks.transaction, "atomic", return_value=nullcontext()),
+        patch.object(tasks, "release_single_mode_ai_task_lock"),
+    ):
+        result = tasks.single_mode_ai_process_question.run(
+            "invalid-unanswered-baseline", "B"
+        )
+
+    assert result["status"] == "complete"
+    assert question.answer == "true"
+    assert question.analysis == "说法成立。"
+    assert question.ai_verifier_result["unanswered_baseline"]["canonical_answer"] == "true"
+    service.solve_unanswered_question_baseline.assert_called_once()
+    assert service.solve_unanswered_question_baseline.call_args.kwargs[
+        "exclude_reference_answer"
+    ] is True
+    service.solve_unanswered_mode_with_arbitration.assert_called_once()
+    service.solve_mode_with_arbitration.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("message", "expected"),
     [
@@ -1015,6 +1092,92 @@ def test_unanswered_baseline_retries_once_when_confidence_is_below_threshold():
 
     assert baseline["confidence"] == 0.91
     assert component.run.call_count == 2
+
+
+def test_unanswered_baseline_retries_when_answer_does_not_match_question_type():
+    """高置信度的冗长判断题答案也不能成为可持久化基线。"""
+    question = SimpleNamespace(
+        stem="该说法是否正确？",
+        answer="",
+        analysis="",
+        solution="",
+        options=[],
+        subject="physics",
+        question_type="true_false",
+        difficulty=1,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    component = MagicMock()
+    component.run.side_effect = [
+        {
+            "canonical_answer": "not-a-true-false-answer",
+            "canonical_analysis": "第一轮答案格式不合题型。",
+            "key_facts": [],
+            "confidence": 0.96,
+        },
+        {
+            "canonical_answer": "true",
+            "canonical_analysis": "该说法成立。",
+            "key_facts": [],
+            "confidence": 0.91,
+        },
+    ]
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda _component_type: component
+    )
+
+    baseline = service.solve_unanswered_question_baseline(
+        question,
+        image_urls=(),
+        normalized_text=question.stem,
+        vision_result={},
+        knowledge_refs="",
+    )
+
+    assert baseline["canonical_answer"] == "TRUE"
+    assert component.run.call_count == 2
+
+
+def test_rebuilt_unanswered_baseline_excludes_invalid_legacy_reference_answer():
+    question = SimpleNamespace(
+        stem="该说法是否正确？",
+        answer="旧的错误格式答案。",
+        analysis="旧解析。",
+        solution="旧解答。",
+        options=[],
+        subject="physics",
+        question_type="true_false",
+        difficulty=1,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    component = MagicMock()
+    component.run.return_value = {
+        "canonical_answer": "true",
+        "canonical_analysis": "该说法成立。",
+        "key_facts": [],
+        "confidence": 0.91,
+    }
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda _component_type: component
+    )
+
+    service.solve_unanswered_question_baseline(
+        question,
+        image_urls=(),
+        normalized_text=question.stem,
+        vision_result={},
+        knowledge_refs="",
+        exclude_reference_answer=True,
+    )
+
+    context = component.run.call_args.args[0]
+    assert context.answer == ""
+    assert context.solution == ""
+    assert context.metadata["reference_analysis"] == ""
 
 
 @pytest.mark.parametrize(

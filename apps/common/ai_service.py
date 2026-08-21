@@ -33,7 +33,12 @@ from apps.common.ai.answer_arbitration import (
     ArbitrationProviderError,
     ModeAnswerArbitrator,
 )
-from apps.common.ai.question_context import QuestionContextBuilder, question_context_hash
+from apps.common.ai.answer_validation import AnswerNormalizer
+from apps.common.ai.question_context import (
+    QuestionContextBuilder,
+    question_context_hash,
+    question_context_payload,
+)
 from apps.common.ai.schemas import ModeAResponse, ModeBResponse, ModeCResponse
 
 logger = logging.getLogger(__name__)
@@ -653,6 +658,7 @@ class AIReviewService:
         normalized_text="",
         vision_result=None,
         knowledge_refs="",
+        exclude_reference_answer=False,
     ) -> dict:
         """Create the canonical answer/analysis baseline for a question without one."""
         context = QuestionContextBuilder.build(
@@ -662,15 +668,91 @@ class AIReviewService:
             vision_result=vision_result,
             knowledge_refs=knowledge_refs,
         )
+        if exclude_reference_answer:
+            # A historical generated baseline can be syntactically invalid for
+            # an objective question.  Do not feed that faulty answer back to
+            # the independent DeepSeek solve which is supposed to replace it.
+            context = QuestionInput(
+                stem=context.stem,
+                options=context.options,
+                answer="",
+                solution="",
+                image_urls=context.image_urls,
+                metadata={
+                    **context.metadata,
+                    "reference_analysis": "",
+                },
+            )
         component = self._component(DeepSeekBaselineSolveComponent)
         for _attempt in range(2):
             result = self._run_component(component, context)
-            if result["confidence"] >= 0.80:
+            normalized_answer = self._normalize_unanswered_baseline_answer(
+                context, result.get("canonical_answer")
+            )
+            if result["confidence"] >= 0.80 and normalized_answer is not None:
                 return {
                     **result,
+                    "canonical_answer": normalized_answer,
                     "context_hash": question_context_hash(context),
                 }
         raise AIRequestError("baseline_invalid")
+
+    @staticmethod
+    def _normalize_unanswered_baseline_answer(context, answer: object) -> str | None:
+        """Return a canonical answer only when it satisfies the question contract.
+
+        A high model confidence is not enough for objective questions.  Historic
+        rows show that an explanatory sentence can be persisted as a judgment
+        or choice answer; then every later A/B/C arbitration fails before it
+        reaches a provider.  Keep the same deterministic normalizer used by
+        arbitration so new and persisted baselines have one validity boundary.
+        """
+        payload = question_context_payload(context)
+        option_labels = tuple(
+            item.get("label", "")
+            for item in payload.get("options", ())
+            if isinstance(item, dict)
+        )
+        normalized = AnswerNormalizer().normalize(
+            answer,
+            question_type=payload.get("question_type", ""),
+            option_labels=option_labels,
+        )
+        return normalized.value if normalized.valid else None
+
+    def unanswered_baseline_is_valid(
+        self,
+        question,
+        baseline: object,
+        *,
+        image_urls=(),
+        normalized_text="",
+        vision_result=None,
+        knowledge_refs="",
+    ) -> bool:
+        """Validate a persisted no-answer baseline before reusing it.
+
+        This intentionally validates only the canonical answer shape.  Analysis
+        remains free-form, while choice/judgment answer notation must be safe
+        for the shared arbitrator.  It is used for legacy records whose answer
+        field is no longer blank because a previous baseline was persisted.
+        """
+        if not isinstance(baseline, dict):
+            return False
+        if not isinstance(baseline.get("canonical_analysis"), str) or not baseline[
+            "canonical_analysis"
+        ].strip():
+            return False
+        context = QuestionContextBuilder.build(
+            question,
+            image_urls=image_urls,
+            normalized_text=normalized_text,
+            vision_result=vision_result,
+            knowledge_refs=knowledge_refs,
+        )
+        return self._normalize_unanswered_baseline_answer(
+            context, baseline.get("canonical_answer")
+        ) is not None
 
     def solve_mode_with_arbitration(
         self,

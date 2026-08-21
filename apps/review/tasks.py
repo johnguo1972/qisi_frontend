@@ -430,13 +430,30 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         baseline = _unanswered_baseline_from_verifier(
             question.ai_verifier_result
         )
-        if baseline is None and _question_has_no_source_answer(question):
+        rebuild_invalid_baseline = baseline is not None and not service.unanswered_baseline_is_valid(
+            question,
+            baseline,
+            image_urls=image_urls,
+            normalized_text=normalized_text,
+            vision_result=vision_result,
+            knowledge_refs=knowledge_refs,
+        )
+        if rebuild_invalid_baseline:
+            # A previous no-answer baseline may have filled answer/analysis
+            # with an explanatory sentence that is invalid for the question
+            # type.  Treat it as missing and recreate it before mode handling.
+            baseline = None
+
+        if baseline is None and (
+            _question_has_no_source_answer(question) or rebuild_invalid_baseline
+        ):
             generated_baseline = service.solve_unanswered_question_baseline(
                 question,
                 image_urls=image_urls,
                 normalized_text=normalized_text,
                 vision_result=vision_result,
                 knowledge_refs=knowledge_refs,
+                exclude_reference_answer=rebuild_invalid_baseline,
             )
             with transaction.atomic():
                 locked_question = (
@@ -445,8 +462,19 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
                 baseline = _unanswered_baseline_from_verifier(
                     locked_question.ai_verifier_result
                 )
-                if baseline is None and _question_has_no_source_answer(
-                    locked_question
+                locked_baseline_valid = baseline is not None and service.unanswered_baseline_is_valid(
+                    locked_question,
+                    baseline,
+                    image_urls=image_urls,
+                    normalized_text=normalized_text,
+                    vision_result=vision_result,
+                    knowledge_refs=knowledge_refs,
+                )
+                if not locked_baseline_valid:
+                    baseline = None
+                if baseline is None and (
+                    _question_has_no_source_answer(locked_question)
+                    or rebuild_invalid_baseline
                 ):
                     baseline = {
                         key: generated_baseline[key]
