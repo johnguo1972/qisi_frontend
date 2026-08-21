@@ -4,6 +4,7 @@ import logging
 import time
 import os
 import threading
+import re
 from django.conf import settings
 from pydantic import BaseModel, ValidationError
 from apps.common.exceptions import AIRequestError
@@ -66,6 +67,10 @@ _RESPONSE_CONTRACT_FAILURE_MARKERS = (
     "json",
     "validation",
     "corrupted latex",
+)
+_TRUE_FALSE_CANONICAL_TOKENS = (
+    ("FALSE", re.compile(r"\bfalse\b|错误|\bwrong\b|[×✗]", re.IGNORECASE)),
+    ("TRUE", re.compile(r"\btrue\b|正确|\bcorrect\b|[√✓]", re.IGNORECASE)),
 )
 
 
@@ -687,7 +692,9 @@ class AIReviewService:
         for _attempt in range(2):
             result = self._run_component(component, context)
             normalized_answer = self._normalize_unanswered_baseline_answer(
-                context, result.get("canonical_answer")
+                context,
+                result.get("canonical_answer"),
+                allow_new_true_false_explanation=True,
             )
             if result["confidence"] >= 0.80 and normalized_answer is not None:
                 return {
@@ -698,7 +705,12 @@ class AIReviewService:
         raise AIRequestError("baseline_invalid")
 
     @staticmethod
-    def _normalize_unanswered_baseline_answer(context, answer: object) -> str | None:
+    def _normalize_unanswered_baseline_answer(
+        context,
+        answer: object,
+        *,
+        allow_new_true_false_explanation=False,
+    ) -> str | None:
         """Return a canonical answer only when it satisfies the question contract.
 
         A high model confidence is not enough for objective questions.  Historic
@@ -718,7 +730,27 @@ class AIReviewService:
             question_type=payload.get("question_type", ""),
             option_labels=option_labels,
         )
-        return normalized.value if normalized.valid else None
+        if normalized.valid:
+            return normalized.value
+        if not allow_new_true_false_explanation or not isinstance(answer, str):
+            return None
+        if payload.get("question_type", "").strip().casefold() not in {
+            "true_false",
+            "judgement",
+            "judgment",
+            "判断题",
+        }:
+            return None
+        # Models occasionally return a semantically unambiguous presentation
+        # variant such as ``TRUE（正确）``.  This narrow fallback is for a fresh
+        # DeepSeek result only; persisted historical baselines continue through
+        # the strict normalizer above and are regenerated when malformed.
+        matches = {
+            canonical
+            for canonical, pattern in _TRUE_FALSE_CANONICAL_TOKENS
+            if pattern.search(answer)
+        }
+        return next(iter(matches)) if len(matches) == 1 else None
 
     def unanswered_baseline_is_valid(
         self,

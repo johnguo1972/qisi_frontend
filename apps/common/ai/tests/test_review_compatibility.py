@@ -1140,6 +1140,52 @@ def test_unanswered_baseline_retries_when_answer_does_not_match_question_type():
     assert component.run.call_count == 2
 
 
+def test_new_true_false_baseline_accepts_an_unambiguous_presentation_variant():
+    """新生成判断题答案可收敛为 TRUE/FALSE，但旧基线仍保持严格。"""
+    question = SimpleNamespace(
+        stem="该说法是否正确？",
+        answer="",
+        analysis="",
+        solution="",
+        options=[],
+        subject="physics",
+        question_type="true_false",
+        difficulty=1,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    component = MagicMock()
+    component.run.return_value = {
+        "canonical_answer": "TRUE（正确）",
+        "canonical_analysis": "该说法成立。",
+        "key_facts": ["判断成立。"],
+        "confidence": 0.91,
+    }
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda _component_type: component
+    )
+
+    baseline = service.solve_unanswered_question_baseline(
+        question,
+        image_urls=(),
+        normalized_text=question.stem,
+        vision_result={},
+        knowledge_refs="",
+    )
+
+    assert baseline["canonical_answer"] == "TRUE"
+    assert service.unanswered_baseline_is_valid(
+        question,
+        {
+            "canonical_answer": "TRUE（正确）",
+            "canonical_analysis": "旧解析。",
+        },
+        normalized_text=question.stem,
+        vision_result={},
+    ) is False
+
+
 def test_rebuilt_unanswered_baseline_excludes_invalid_legacy_reference_answer():
     question = SimpleNamespace(
         stem="该说法是否正确？",
