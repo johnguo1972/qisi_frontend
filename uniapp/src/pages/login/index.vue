@@ -78,15 +78,15 @@
               >
                 {{ wechatWebLoading ? '正在创建扫码会话...' : '开始微信扫码' }}
               </button>
-              <view v-if="wechatWebSession?.authorization_url" class="wechat-web-qr">
-                <iframe
+              <view v-if="false" class="wechat-web-qr">
+                <view v-if="false"
                   class="wechat-web-qr-frame"
                   :src="wechatWebSession.authorization_url"
                   title="微信扫码登录二维码"
                   scrolling="no"
-                ></iframe>
+                ></view>
               </view>
-              <view v-else-if="wechatWebSession" class="wechat-web-qr">
+              <view v-if="wechatWebSession" class="wechat-web-qr">
                 <image class="wechat-web-binding-qr-image" :src="wechatWebBindingQrUrl" mode="aspectFit" />
               </view>
               <view class="wechat-web-consent" @click="wechatWebPhoneAuthorizationConfirmed = !wechatWebPhoneAuthorizationConfirmed">
@@ -247,6 +247,12 @@ async function startWechatWebLogin() {
       throw new Error(res.message || '无法创建微信扫码会话')
     }
     wechatWebSession.value = res.data
+    // WeChat OAuth must navigate at the top level. A nested callback would
+    // leave the browser on the QR frame instead of showing the MP bridge QR.
+    if (window.location.href !== res.data.authorization_url) {
+      window.location.assign(res.data.authorization_url)
+      return
+    }
     wechatWebStatusText.value = '请使用微信扫描二维码'
     const loginCompleted = await pollWechatWebBindingStatus()
     if (!loginCompleted) {

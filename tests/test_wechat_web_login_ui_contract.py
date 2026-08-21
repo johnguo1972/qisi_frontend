@@ -42,6 +42,8 @@ def test_h5_wechat_binding_login_ui_contract():
     assert "scrolling=\"no\"" in source
     assert "restoreWechatWebSessionFromCallback" in source
     assert "web_session_id" in source
+    assert "window.location.assign(res.data.authorization_url)" in source
+    assert "<iframe" not in source
 
 
 def test_h5_wechat_qr_view_keeps_the_full_code_visible_and_consent_below_it():
@@ -53,7 +55,7 @@ def test_h5_wechat_qr_view_keeps_the_full_code_visible_and_consent_below_it():
     assert source.index('class="wechat-web-qr"') < source.index('class="wechat-web-consent"')
     assert "width: 360px" in source
     assert "height: 420px" in source
-    assert 'scrolling="no"' in source
+    assert '<iframe' not in source
 
 
 def test_wechat_web_api_only_exchanges_opaque_session_and_ticket_values():
