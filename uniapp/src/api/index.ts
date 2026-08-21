@@ -1,7 +1,6 @@
 import { del, get, post, put } from '@/utils/request'
 export { qrcodeApi } from './qrcode'
 export { wechatApi } from './wechat'
-export { wechatWebApi, type WechatWebSession } from './wechat-web'
 
 export const authApi = {
   login: (mobile: string, verifyCode: string, roleType?: string) => {
