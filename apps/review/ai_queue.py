@@ -81,7 +81,7 @@ def reserve_queued_item_ids(*, limit: int | None = None) -> list[str]:
     """Atomically reserve a fair set of queued items for later Celery enqueue."""
     from .models import AIProcessingJob, AIProcessingJobItem
 
-    capacity = limit if limit is not None else int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 16))
+    capacity = limit if limit is not None else int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 6))
     jobs = list(AIProcessingJob.objects.filter(
         status__in=(AIProcessingJob.Status.QUEUED, AIProcessingJob.Status.RUNNING),
         cancel_requested=False,
@@ -124,7 +124,7 @@ def dispatch_queued_ai_items(*, limit: int | None = None) -> int:
             ).update(status=AIProcessingJobItem.Status.QUEUED)
             RedisLeasePool(
                 'question',
-                limit=limit if limit is not None else int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 16)),
+                limit=limit if limit is not None else int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 6)),
                 ttl_seconds=4200,
             ).release(str(item_id))
     return dispatched
@@ -143,7 +143,7 @@ def recover_stale_ai_items(*, now=None, timeout_seconds: int = 4200) -> int:
     cutoff = now - timedelta(seconds=timeout_seconds)
     pool = RedisLeasePool(
         'question',
-        limit=int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 16)),
+        limit=int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 6)),
         ttl_seconds=4200,
     )
     recovered: list[str] = []

@@ -859,6 +859,10 @@ class AIProcessFullPipelineTest(TestCase):
                 },
             },
         }
+        # The bounded B structure repair is intentionally malformed too, so
+        # this regression still verifies that an unrecoverable response is
+        # reported as a partial item after its one allowed repair attempt.
+        responses['mode_b_structure_repair'] = responses['mode_b_answer']
 
         class _ConfiguredResponseClient:
             def complete(
@@ -1047,7 +1051,7 @@ class AIQueueExecutionTaskTest(TestCase):
         self.assertEqual(result['status'], 'partial')
         self.assertEqual(saved_steps[:3], [('probe',), ('answer_a',), ('answer_c',)])
         self.assertEqual(item.status, AIProcessingJobItem.Status.PARTIAL)
-        self.assertEqual(item.error_code, 'answer_b_failed')
+        self.assertEqual(item.error_code, 'answer_b_failed_schema_invalid')
 
     def test_execute_item_runs_existing_full_pipeline_and_releases_lease(self):
         from apps.review.models import AIProcessingJob, AIProcessingJobItem
@@ -1073,6 +1077,32 @@ class AIQueueExecutionTaskTest(TestCase):
         self.assertEqual(result['status'], 'complete')
         self.assertEqual(item.status, AIProcessingJobItem.Status.SUCCEEDED)
         release.assert_called_once_with(str(item.id))
+
+    def test_execute_item_records_a_safe_failure_category_for_unhandled_errors(self):
+        """Operational jobs retain the reason category instead of opaque processing_failed."""
+        from apps.common.exceptions import AIRequestError
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.tasks import execute_ai_job_item
+
+        teacher = UserAccount.objects.create(mobile='13900009014', display_name='Failure Category Teacher', role_type='teacher')
+        paper = ExamPaper.objects.create(title='Failure Category Paper', subject='physics')
+        question = ExamQuestion.objects.create(paper=paper, stem='Failure category stem', answer='A', question_type='single_choice')
+        item = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[question.id], source='batch', model=None,
+        ).job.items.get()
+        item.status = AIProcessingJobItem.Status.DISPATCHED
+        item.save(update_fields=['status'])
+
+        with (
+            patch('apps.review.tasks.AIReviewService.process_question_full_v2', side_effect=AIRequestError('ReadTimeout while waiting for provider')),
+            patch('apps.review.ai_queue.RedisLeasePool.release', return_value=True),
+        ):
+            result = execute_ai_job_item.run(str(item.id))
+
+        item.refresh_from_db()
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(item.status, AIProcessingJobItem.Status.FAILED)
+        self.assertEqual(item.error_code, 'processing_failed_read_timeout')
 
 
 class AIQueueCeleryDispatchTest(TestCase):

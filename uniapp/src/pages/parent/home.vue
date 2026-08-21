@@ -4,7 +4,7 @@
     <view class="header">
       <view>
         <text class="title">家长端</text>
-        <text class="subtitle">查看孩子的学习任务和完成进度</text>
+        <text class="subtitle">查看孩子的作业和完成进度</text>
       </view>
     </view>
 
@@ -16,16 +16,16 @@
       <button class="bind-button" @click="goBind">添加孩子</button>
     </view>
     <view v-else-if="loading" class="state-card">
-      <text class="state-text">正在加载孩子的学习任务...</text>
+      <text class="state-text">正在加载孩子的作业...</text>
     </view>
     <view v-else-if="errorMessage" class="state-card">
       <text class="state-title">暂时无法加载</text>
       <text class="state-text">{{ errorMessage }}</text>
     </view>
     <view v-else class="content">
-      <text class="section-title">学习任务</text>
+      <text class="section-title">作业</text>
       <view v-if="!missions.length" class="state-card">
-        <text class="state-text">暂无任务，等待老师发布吧</text>
+        <text class="state-text">暂无作业，等待老师发布吧</text>
       </view>
       <MpMissionCard
         v-for="mission in missions"
@@ -36,8 +36,10 @@
         :status="mission.progress_status || 'not_started'"
         :level-count="mission.level_count || 0"
         :question-count="mission.question_count || 0"
+        :assignment-mode="mission.assignment_mode"
         :end-at="mission.mission?.deadline || mission.end_at"
         :progress-percent="mission.progress_percent || 0"
+        :pdf-download-url="mission.pdf_download_url"
         @click="goMission"
       />
     </view>
@@ -79,7 +81,7 @@ async function load() {
     }
     if (response?.code !== undefined && response.code !== 0) {
       missions.value = []
-      errorMessage.value = response.message || '学习任务加载失败'
+      errorMessage.value = response.message || '作业加载失败'
       return
     }
     missions.value = (response?.data?.missions || []).map((item: any) => ({
@@ -93,7 +95,7 @@ async function load() {
     }))
   } catch (error: any) {
     missions.value = []
-    errorMessage.value = error?.message || '学习任务加载失败，请稍后重试'
+    errorMessage.value = error?.message || '作业加载失败，请稍后重试'
   } finally {
     loading.value = false
   }

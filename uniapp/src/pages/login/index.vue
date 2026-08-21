@@ -28,7 +28,7 @@
             <view v-for="tab in tabs" :key="tab.role"
                   class="tab-item"
                   :class="{ active: activeTab === tab.role }"
-                  @click.stop="activeTab = tab.role">
+                  @click.stop="switchRole(tab.role)">
               <text class="tab-icon">{{ tab.icon }}</text>
               <text class="tab-text">{{ tab.label }}</text>
             </view>
@@ -36,6 +36,7 @@
 
           <!-- 登录表单 -->
           <view class="form-content">
+            <template v-if="loginMode === 'phone'">
             <view class="form-title">{{ currentTabLabel }}登录</view>
             <view class="form-item">
               <text class="label">手机号</text>
@@ -59,8 +60,50 @@
             <button class="login-btn" :disabled="loading" @click="handleLogin">
               {{ loading ? '登录中...' : '登 录' }}
             </button>
+            <!-- #ifdef H5 -->
+            <button class="wechat-web-entry" :disabled="loading" @click="switchLoginMode('wechat')">
+              微信扫码登录
+            </button>
+            <!-- #endif -->
             <!-- #ifdef MP-WEIXIN -->
             <button class="wechat-btn" :disabled="loading" @click="handleWechatLogin">微信一键登录</button>
+            <!-- #endif -->
+            </template>
+            <!-- #ifdef H5 -->
+            <view v-else class="wechat-web-login">
+              <button
+                class="wechat-web-start"
+                :disabled="wechatWebLoading || !wechatWebPhoneAuthorizationConfirmed"
+                @click="startWechatWebLogin"
+              >
+                {{ wechatWebLoading ? '正在创建扫码会话...' : '开始微信扫码' }}
+              </button>
+              <view v-if="false" class="wechat-web-qr">
+                <view v-if="false"
+                  class="wechat-web-qr-frame"
+                  :src="wechatWebSession.authorization_url"
+                  title="微信扫码登录二维码"
+                  scrolling="no"
+                ></view>
+              </view>
+              <view v-if="wechatWebSession" class="wechat-web-qr">
+                <image class="wechat-web-binding-qr-image" :src="wechatWebBindingQrUrl" mode="aspectFit" />
+              </view>
+              <view class="wechat-web-consent" @click="wechatWebPhoneAuthorizationConfirmed = !wechatWebPhoneAuthorizationConfirmed">
+                <view class="checkbox" :class="{ checked: wechatWebPhoneAuthorizationConfirmed }">
+                  <view class="checkmark"></view>
+                </view>
+                <text class="remember-text">手机号绑定授权确认</text>
+              </view>
+              <text v-if="wechatWebSession" class="wechat-web-status">{{ wechatWebStatusText }}</text>
+              <view v-if="wechatWebSession && !wechatWebBindingComplete" class="wechat-web-binding-guide">
+                <text>请在微信小程序完成手机号授权</text>
+                <text class="wechat-web-guide-desc">完成后此页面会自动继续登录，请勿关闭页面。</text>
+              </view>
+              <button class="wechat-web-back" @click="switchLoginMode('phone')">
+                手机号验证码登录
+              </button>
+            </view>
             <!-- #endif -->
           </view>
         </view>
@@ -70,8 +113,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { authApi } from '@/api/index.ts'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { authApi, wechatWebApi, type WechatWebSession } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
 import { wxLogin } from '@/utils/wechat-auth'
 import { persistSession, routeForRole, type AppRole } from '@/utils/roles'
@@ -84,6 +127,7 @@ const tabs = [
 ]
 
 const activeTab = ref('student')
+const loginMode = ref<'phone' | 'wechat'>('phone')
 const currentTabLabel = computed(() => {
   const tab = tabs.find(t => t.role === activeTab.value)
   return tab ? tab.label : ''
@@ -95,6 +139,136 @@ const countdown = ref(0)
 const loading = ref(false)
 const rememberMe = ref(false)
 const userStore = useUserStore()
+const wechatWebSession = ref<WechatWebSession | null>(null)
+const wechatWebLoading = ref(false)
+const wechatWebBindingComplete = ref(false)
+const wechatWebCompleting = ref(false)
+const wechatWebPhoneAuthorizationConfirmed = ref(false)
+const wechatWebStatusText = ref('请使用微信扫描二维码')
+let wechatWebPollTimer: ReturnType<typeof setInterval> | undefined
+const wechatWebBindingQrUrl = computed(() => {
+  const webSessionId = wechatWebSession.value?.web_session_id
+  return webSessionId
+    ? `/api/v1/auth/wechat-web/binding-qrcode?web_session_id=${encodeURIComponent(webSessionId)}`
+    : ''
+})
+
+function stopWechatWebPolling() {
+  if (wechatWebPollTimer) {
+    clearInterval(wechatWebPollTimer)
+    wechatWebPollTimer = undefined
+  }
+}
+
+function resetWechatWebSession() {
+  stopWechatWebPolling()
+  wechatWebSession.value = null
+  wechatWebBindingComplete.value = false
+  wechatWebCompleting.value = false
+  wechatWebStatusText.value = '请使用微信扫描二维码'
+}
+
+function restoreWechatWebSessionFromCallback() {
+  // #ifdef H5
+  const query = window.location.hash.split('?', 2)[1] || ''
+  const webSessionId = new URLSearchParams(query).get('web_session_id')
+  if (!webSessionId) return
+  loginMode.value = 'wechat'
+  wechatWebPhoneAuthorizationConfirmed.value = true
+  wechatWebSession.value = { web_session_id: webSessionId, authorization_url: '', expires_in: 0 }
+  wechatWebStatusText.value = '已完成扫码，等待小程序手机号授权'
+  void pollWechatWebBindingStatus()
+  wechatWebPollTimer = setInterval(() => { void pollWechatWebBindingStatus() }, 3000)
+  // #endif
+}
+
+function switchLoginMode(mode: 'phone' | 'wechat') {
+  if (loginMode.value === mode) return
+  loginMode.value = mode
+  resetWechatWebSession()
+}
+
+function switchRole(role: string) {
+  if (activeTab.value === role) return
+  activeTab.value = role
+  if (loginMode.value === 'wechat') {
+    resetWechatWebSession()
+    if (wechatWebPhoneAuthorizationConfirmed.value) {
+      void startWechatWebLogin()
+    }
+  }
+}
+
+async function completeWechatWebLogin(ticket: string) {
+  stopWechatWebPolling()
+  wechatWebCompleting.value = true
+  wechatWebStatusText.value = '正在完成登录...'
+  const res = await wechatWebApi.complete(ticket, activeTab.value)
+  if (res.code !== 0 || !res.data) {
+    throw new Error(res.message || '微信扫码登录失败')
+  }
+  wechatWebBindingComplete.value = true
+  persistSession(res.data)
+  userStore.setUserInfo(res.data.user)
+  uni.reLaunch({ url: routeForRole(res.data.user.active_role as AppRole) })
+}
+
+async function pollWechatWebBindingStatus(): Promise<boolean> {
+  if (!wechatWebSession.value || wechatWebCompleting.value) return false
+  try {
+    const res = await wechatWebApi.bindingStatus(wechatWebSession.value.web_session_id)
+    if (res.code !== 0 || !res.data) return false
+    if (res.data.bound && res.data.ticket) {
+      await completeWechatWebLogin(res.data.ticket)
+      return true
+    }
+    wechatWebStatusText.value = '扫码后，请在小程序完成授权'
+  } catch (e) {
+    console.error('查询微信绑定状态失败:', e)
+  }
+  return false
+}
+
+async function startWechatWebLogin() {
+  if (wechatWebLoading.value) return
+  if (!wechatWebPhoneAuthorizationConfirmed.value) {
+    uni.showToast({ title: '请先确认手机号绑定授权', icon: 'none' })
+    return
+  }
+  resetWechatWebSession()
+  wechatWebLoading.value = true
+  wechatWebStatusText.value = '正在创建扫码会话...'
+  try {
+    const res = await wechatWebApi.createSession(
+      activeTab.value,
+      wechatWebPhoneAuthorizationConfirmed.value,
+    )
+    if (res.code !== 0 || !res.data?.web_session_id || !res.data.authorization_url) {
+      throw new Error(res.message || '无法创建微信扫码会话')
+    }
+    wechatWebSession.value = res.data
+    // WeChat OAuth must navigate at the top level. A nested callback would
+    // leave the browser on the QR frame instead of showing the MP bridge QR.
+    if (window.location.href !== res.data.authorization_url) {
+      window.location.assign(res.data.authorization_url)
+      return
+    }
+    wechatWebStatusText.value = '请使用微信扫描二维码'
+    const loginCompleted = await pollWechatWebBindingStatus()
+    if (!loginCompleted) {
+      wechatWebPollTimer = setInterval(() => { void pollWechatWebBindingStatus() }, 3000)
+    }
+  } catch (e: any) {
+    console.error('创建微信扫码会话失败:', e)
+    wechatWebStatusText.value = '二维码创建失败，请重试'
+    uni.showToast({ title: e?.message || '创建微信扫码会话失败', icon: 'none' })
+  } finally {
+    wechatWebLoading.value = false
+  }
+}
+
+onMounted(restoreWechatWebSessionFromCallback)
+onUnmounted(stopWechatWebPolling)
 
 async function sendCode() {
   if (!mobile.value || mobile.value.length !== 11) {
@@ -154,7 +328,7 @@ async function handleWechatLogin() {
   if (loading.value) return
   loading.value = true
   try {
-    const result = await wxLogin()
+    const result = await wxLogin(activeTab.value)
     if (result.needBindPhone) {
       uni.navigateTo({ url: `/pages/student/parent-bind?bindToken=${encodeURIComponent(result.bindToken || '')}` })
       return
@@ -400,7 +574,77 @@ input:focus {
 .login-btn[disabled] {
   background: #ccc;
 }
+.wechat-web-entry {
+  width: 100%;
+  margin-top: 18rpx;
+  color: #07c160;
+  background: #fff;
+  border: 2rpx solid #07c160;
+  border-radius: 8rpx;
+  font-size: 28rpx;
+}
 .wechat-btn { margin-top: 18rpx; background: #07c160; color: #fff; font-size: 28rpx; border-radius: 8rpx; }
+.wechat-web-login {
+  text-align: center;
+}
+.wechat-web-status, .wechat-web-guide-desc {
+  display: block;
+  margin-top: 10rpx;
+  color: #888;
+  font-size: 22rpx;
+}
+.wechat-web-start {
+  width: 100%;
+  margin-top: 18rpx;
+  color: #fff;
+  background: #07c160;
+  border-radius: 8rpx;
+  font-size: 26rpx;
+}
+.wechat-web-start[disabled] { background: #93d7ad; }
+.wechat-web-consent { display: flex; align-items: center; gap: 10rpx; margin-top: 16rpx; }
+.wechat-web-qr {
+  width: 360px;
+  height: 420px;
+  max-width: 100%;
+  margin: 20rpx auto 0;
+  overflow: hidden;
+  background: #fff;
+}
+.wechat-web-qr-frame {
+  width: 360px;
+  height: 420px;
+  max-width: 100%;
+  display: block;
+  border: 0;
+  overflow: hidden;
+}
+.wechat-web-binding-qr-image { width: 360px; height: 420px; display: block; }
+.wechat-web-binding-guide {
+  margin-top: 18rpx;
+  padding: 18rpx;
+  border-radius: 8rpx;
+  color: #8a5a00;
+  background: #fff7e6;
+  font-size: 24rpx;
+}
+.wechat-web-back {
+  width: 100%;
+  margin-top: 20rpx;
+  color: #409eff;
+  background: #fff;
+  border: 2rpx solid #409eff;
+  border-radius: 8rpx;
+  font-size: 26rpx;
+}
+
+@media (max-width: 480px) {
+  .wechat-web-qr,
+  .wechat-web-qr-frame {
+    width: 320px;
+    height: 390px;
+  }
+}
 
 /* #ifdef MP-WEIXIN */
 .login-page input {

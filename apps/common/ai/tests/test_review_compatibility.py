@@ -1,6 +1,7 @@
 """Compatibility tests for review/common callers of the shared AI facade."""
 
 from io import StringIO
+from contextlib import nullcontext
 from copy import deepcopy
 import json
 import logging
@@ -25,6 +26,7 @@ from apps.common.ai.components import (
     KnowledgeAnalysisComponent,
     ModeAAnswerComponent,
     ModeBAnswerComponent,
+    ModeBStructureRepairComponent,
     ModeCAnswerComponent,
     QuestionProbeComponent,
     ResultVerifierComponent,
@@ -35,6 +37,8 @@ from apps.common.ai.answer_arbitration import (
     ArbitrationOutcome,
     ArbitrationProviderError,
 )
+from apps.common.ai.exceptions import AIResponseError
+from apps.common.exceptions import AIRequestError
 from apps.common.ai.question_context import QuestionContextBuilder, question_context_hash
 from apps.parser.models import ExamPaper, ExamQuestion, QuestionOption
 from apps.knowledge.models import KnowledgePoint
@@ -162,6 +166,8 @@ def _real_facade_with_components():
                     responses[mode_components[question.metadata["target_mode"]]]
                 ),
             }
+        elif component_type is ModeBStructureRepairComponent:
+            component.run.return_value = deepcopy(responses[ModeBAnswerComponent])
         elif component_type is DeepSeekFinalReviewComponent:
             component.run.side_effect = lambda question: {
                 "trusted_answer": "2",
@@ -210,6 +216,163 @@ def test_legacy_component_client_exposes_single_attempt_provider_path():
         task_key="question_probe",
         single_attempt=True,
     )
+
+
+def test_mode_b_schema_failure_uses_one_structure_repair_before_arbitration():
+    """A malformed B response is regenerated once before DeepSeek arbitration."""
+    from apps.common.ai.components import mode_answers
+
+    repair_type = getattr(mode_answers, "ModeBStructureRepairComponent")
+    responses = _component_responses()
+    responses[ModeBAnswerComponent]["final_answer"] = "B"
+    components = {}
+
+    def component_factory(component_type):
+        component = MagicMock()
+        components[component_type] = component
+        if component_type is ModeBAnswerComponent:
+            component.run.side_effect = AIResponseError("mode B schema validation")
+        elif component_type is repair_type:
+            component.run.return_value = deepcopy(responses[ModeBAnswerComponent])
+        elif component_type is DeepSeekIndependentVerifierComponent:
+            component.run.return_value = {
+                "independent_answer": "B",
+                "independent_reasoning_summary": "1 + 1 = 2.",
+                "reference_answer_valid": True,
+                "reference_analysis_valid": True,
+                "reference_issues": [],
+                "key_facts": ["1 + 1 equals 2."],
+                "confidence": 0.95,
+                "mode_content": deepcopy(responses[ModeBAnswerComponent]),
+            }
+        elif component_type is DeepSeekFinalReviewComponent:
+            component.run.return_value = {
+                "trusted_answer": "B",
+                "qwen_content_valid": True,
+                "candidate_issues": [],
+                "confidence": 0.95,
+                "mode_content": deepcopy(responses[ModeBAnswerComponent]),
+            }
+        else:
+            component.run.return_value = deepcopy(responses[component_type])
+        return component
+
+    question = SimpleNamespace(
+        stem="1 + 1 = ?",
+        options=[
+            {"label": "A", "content": "1"},
+            {"label": "B", "content": "2"},
+            {"label": "C", "content": "3"},
+            {"label": "D", "content": "4"},
+        ],
+        answer="B",
+        analysis="Add the two ones.",
+        question_type="single_choice",
+        subject="math",
+        difficulty="L1",
+    )
+    service = common_ai_service.AIReviewService(component_factory=component_factory)
+
+    outcome = service.solve_mode_with_arbitration(question, mode="B")
+
+    assert outcome.answer["final_answer"] == "B"
+    components[ModeBAnswerComponent].run.assert_called_once()
+    components[repair_type].run.assert_called_once()
+    assert DeepSeekIndependentVerifierComponent not in components
+
+
+def test_unanswered_mode_b_schema_failure_uses_one_structure_repair():
+    """The 277-question no-answer batch path gets the same B recovery."""
+    from apps.common.ai.components import mode_answers
+
+    repair_type = getattr(mode_answers, "ModeBStructureRepairComponent")
+    responses = _component_responses()
+    responses[ModeBAnswerComponent]["final_answer"] = "B"
+    components = {}
+
+    def component_factory(component_type):
+        component = MagicMock()
+        components[component_type] = component
+        if component_type is ModeBAnswerComponent:
+            component.run.side_effect = AIResponseError("mode B schema validation")
+        elif component_type is repair_type:
+            component.run.return_value = deepcopy(responses[ModeBAnswerComponent])
+        else:
+            component.run.return_value = deepcopy(responses[component_type])
+        return component
+
+    question = SimpleNamespace(
+        stem="1 + 1 = ?",
+        options=[
+            {"label": "A", "content": "1"},
+            {"label": "B", "content": "2"},
+            {"label": "C", "content": "3"},
+            {"label": "D", "content": "4"},
+        ],
+        answer="B",
+        analysis="DeepSeek baseline analysis.",
+        question_type="single_choice",
+        subject="math",
+        difficulty="L1",
+    )
+    service = common_ai_service.AIReviewService(component_factory=component_factory)
+
+    outcome = service.solve_unanswered_mode_with_arbitration(
+        question,
+        mode="B",
+        baseline={
+            "canonical_answer": "B",
+            "canonical_analysis": "DeepSeek baseline analysis.",
+        },
+    )
+
+    assert outcome.answer["final_answer"] == "B"
+    components[ModeBAnswerComponent].run.assert_called_once()
+    components[repair_type].run.assert_called_once()
+
+
+def test_unanswered_mode_b_transport_failure_never_uses_structure_repair():
+    """Transport failures must retain their provider stage, not fake a JSON repair."""
+    responses = _component_responses()
+    components = {}
+
+    def component_factory(component_type):
+        component = MagicMock()
+        components[component_type] = component
+        if component_type is ModeBAnswerComponent:
+            component.run.side_effect = AIRequestError("HTTP 503 unavailable")
+        else:
+            component.run.return_value = deepcopy(responses[component_type])
+        return component
+
+    question = SimpleNamespace(
+        stem="1 + 1 = ?",
+        options=[
+            {"label": "A", "content": "1"},
+            {"label": "B", "content": "2"},
+            {"label": "C", "content": "3"},
+            {"label": "D", "content": "4"},
+        ],
+        answer="B",
+        analysis="DeepSeek baseline analysis.",
+        question_type="single_choice",
+        subject="math",
+        difficulty="L1",
+    )
+    service = common_ai_service.AIReviewService(component_factory=component_factory)
+
+    with pytest.raises(ArbitrationProviderError) as raised:
+        service.solve_unanswered_mode_with_arbitration(
+            question,
+            mode="B",
+            baseline={
+                "canonical_answer": "B",
+                "canonical_analysis": "DeepSeek baseline analysis.",
+            },
+        )
+
+    assert raised.value.stage == "qwen_generate"
+    assert ModeBStructureRepairComponent not in components
 
 
 @pytest.mark.django_db
@@ -532,7 +695,7 @@ def test_single_mode_task_persists_actual_route_metadata_even_when_compat_model_
 
     question = SimpleNamespace(
         stem="1 + 1 = ?",
-        ai_probe_result={},
+        ai_probe_result={"normalized_text": "1 + 1 = ?"},
         ai_vision_extract={},
         ai_verifier_result=None,
         save=MagicMock(),
@@ -543,7 +706,7 @@ def test_single_mode_task_persists_actual_route_metadata_even_when_compat_model_
     service._task_route.return_value = ('qwen', expected_model)
     service._get_model.return_value = model or 'compatibility-default'
     context = QuestionContextBuilder.build(
-        question, normalized_text=question.stem, vision_result={}
+        question, normalized_text=question.stem, vision_result={}, target_mode=mode
     )
     service.solve_mode_with_arbitration.return_value = ArbitrationOutcome(
         answer={'mode': mode, 'final_answer': '2'},
@@ -577,6 +740,490 @@ def test_single_mode_task_persists_actual_route_metadata_even_when_compat_model_
     }
     assert getattr(question, field)["model"] == expected_model
     assert getattr(question, field)["provider"] == 'qwen'
+
+
+def test_single_b_mode_requires_saved_probe_and_never_reprobes():
+    """Manual B processing must reuse persisted exploration rather than spend a new probe call."""
+    from apps.review import tasks
+
+    question = SimpleNamespace(
+        stem="1 + 1 = ?",
+        ai_probe_result={},
+        ai_vision_extract={},
+        ai_verifier_result=None,
+    )
+    service = MagicMock()
+
+    with (
+        patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(tasks, "create_ai_review_service", return_value=service),
+        patch.object(tasks.cache, "set"),
+    ):
+        result = tasks.single_mode_ai_process_question.run("missing-probe", "B")
+
+    assert result == {
+        "status": "failed",
+        "question_id": "missing-probe",
+        "mode": "B",
+        "error": "probe_result_required",
+    }
+    service.probe_and_norm.assert_not_called()
+    service.solve_mode_with_arbitration.assert_not_called()
+
+
+def test_single_b_mode_for_unanswered_question_persists_baseline_then_uses_unanswered_arbitration():
+    """A manual B request must not treat a no-answer question as a legacy one."""
+    from apps.review import tasks
+
+    question = SimpleNamespace(
+        id="unanswered-b-question",
+        stem="1 + 1 = ?",
+        answer="",
+        analysis="",
+        ai_probe_result={"normalized_text": "1 + 1 = ?", "topic_tags_top3": []},
+        ai_vision_extract={},
+        ai_verifier_result=None,
+        save=MagicMock(),
+    )
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service._task_route.return_value = ("qwen", "qwen3.7-plus")
+    service.solve_unanswered_question_baseline.return_value = {
+        "canonical_answer": "2",
+        "canonical_analysis": "1 + 1 = 2",
+        "key_facts": ["basic addition"],
+        "confidence": 0.95,
+        "context_hash": "baseline-hash",
+    }
+
+    def unanswered_outcome(_question, **kwargs):
+        context = QuestionContextBuilder.build(
+            question,
+            image_urls=(),
+            normalized_text="1 + 1 = ?",
+            vision_result={},
+            knowledge_refs="",
+            target_mode="B",
+        )
+        return ArbitrationOutcome(
+            answer={"mode": "B", "final_answer": "2", "questions": []},
+            verification={"context_hash": question_context_hash(context)},
+            shared_verifier_result=None,
+        )
+
+    service.solve_unanswered_mode_with_arbitration.side_effect = unanswered_outcome
+    locked_queryset = MagicMock()
+    locked_queryset.get.return_value = question
+
+    with (
+        patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(
+            tasks.ExamQuestion.objects,
+            "select_for_update",
+            return_value=locked_queryset,
+        ),
+        patch.object(tasks, "create_ai_review_service", return_value=service),
+        patch.object(tasks.cache, "set"),
+        patch.object(tasks.transaction, "atomic", return_value=nullcontext()),
+        patch.object(tasks, "release_single_mode_ai_task_lock"),
+    ):
+        result = tasks.single_mode_ai_process_question.run(
+            "unanswered-b-question", "B"
+        )
+
+    assert result["status"] == "complete"
+    assert question.answer == "2"
+    assert question.analysis == "1 + 1 = 2"
+    assert question.ai_verifier_result["unanswered_baseline"]["canonical_answer"] == "2"
+    service.solve_unanswered_question_baseline.assert_called_once()
+    service.solve_unanswered_mode_with_arbitration.assert_called_once()
+    service.solve_mode_with_arbitration.assert_not_called()
+
+
+def test_single_b_mode_rebuilds_an_invalid_persisted_unanswered_baseline():
+    """历史基线答案不符合题型时，先重建再进入对应模式仲裁。"""
+    from apps.review import tasks
+
+    stale_baseline = {
+        "canonical_answer": "这一题正确答案是正确。",
+        "canonical_analysis": "旧的冗长答案。",
+    }
+    question = SimpleNamespace(
+        id="invalid-unanswered-baseline",
+        stem="下列说法正确吗？",
+        answer=stale_baseline["canonical_answer"],
+        analysis=stale_baseline["canonical_analysis"],
+        question_type="true_false",
+        options=[],
+        ai_probe_result={"normalized_text": "下列说法正确吗？", "topic_tags_top3": []},
+        ai_vision_extract={},
+        ai_verifier_result={"unanswered_baseline": stale_baseline},
+        save=MagicMock(),
+    )
+    rebuilt = {
+        "canonical_answer": "true",
+        "canonical_analysis": "说法成立。",
+        "key_facts": ["判断题答案必须为真或假。"],
+        "confidence": 0.95,
+        "context_hash": "rebuilt-baseline-hash",
+    }
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service._task_route.return_value = ("qwen", "qwen3.7-plus")
+    service.unanswered_baseline_is_valid.side_effect = [False, False]
+    service.solve_unanswered_question_baseline.return_value = rebuilt
+    def unanswered_outcome(current_question, **_kwargs):
+        context = QuestionContextBuilder.build(
+            current_question,
+            normalized_text=current_question.stem,
+            vision_result={},
+            target_mode="B",
+        )
+        return ArbitrationOutcome(
+            answer={"mode": "B", "final_answer": "true", "questions": []},
+            verification={"context_hash": question_context_hash(context)},
+            shared_verifier_result=None,
+        )
+
+    service.solve_unanswered_mode_with_arbitration.side_effect = unanswered_outcome
+    locked_queryset = MagicMock()
+    locked_queryset.get.return_value = question
+
+    with (
+        patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(
+            tasks.ExamQuestion.objects,
+            "select_for_update",
+            return_value=locked_queryset,
+        ),
+        patch.object(tasks, "create_ai_review_service", return_value=service),
+        patch.object(tasks.cache, "set"),
+        patch.object(tasks.transaction, "atomic", return_value=nullcontext()),
+        patch.object(tasks, "release_single_mode_ai_task_lock"),
+    ):
+        result = tasks.single_mode_ai_process_question.run(
+            "invalid-unanswered-baseline", "B"
+        )
+
+    assert result["status"] == "complete"
+    assert question.answer == "true"
+    assert question.analysis == "说法成立。"
+    assert question.ai_verifier_result["unanswered_baseline"]["canonical_answer"] == "true"
+    service.solve_unanswered_question_baseline.assert_called_once()
+    assert service.solve_unanswered_question_baseline.call_args.kwargs[
+        "exclude_reference_answer"
+    ] is True
+    service.solve_unanswered_mode_with_arbitration.assert_called_once()
+    service.solve_mode_with_arbitration.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("HTTP 429 rate limited", "rate_limited"),
+        ("HTTP 503 upstream unavailable", "provider_unavailable"),
+        ("ConnectTimeout while opening provider connection", "connect_timeout"),
+        ("ReadTimeout while waiting for provider", "read_timeout"),
+        ("JSON response schema invalid", "schema_invalid"),
+        ("baseline_invalid", "baseline_invalid"),
+        ("WECHAT_WEB_APP_SECRET is not configured", "configuration_error"),
+        ("unclassified failure", "unknown_error"),
+    ],
+)
+def test_b_mode_error_classification_is_safe_and_actionable(message, expected):
+    """Durable job state must classify failures without persisting provider payloads."""
+    from apps.review import tasks
+
+    assert tasks.classify_ai_failure(Exception(message)) == expected
+
+
+def test_single_b_mode_reports_a_safe_provider_failure_category():
+    """Manual B processing must expose a usable reason without provider payloads."""
+    from apps.common.exceptions import AIRequestError
+    from apps.review import tasks
+
+    question = SimpleNamespace(
+        id="b-provider-failure",
+        stem="1 + 1 = ?",
+        ai_probe_result={"normalized_text": "1 + 1 = ?"},
+        ai_vision_extract={},
+        ai_verifier_result=None,
+    )
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service.solve_mode_with_arbitration.side_effect = AIRequestError(
+        "AI provider capacity unavailable"
+    )
+    progress = []
+
+    def record_progress(_key, value, **_kwargs):
+        progress.append(json.loads(value))
+
+    with (
+        patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(tasks, "create_ai_review_service", return_value=service),
+        patch.object(tasks.cache, "set", side_effect=record_progress),
+        patch.object(tasks, "release_single_mode_ai_task_lock"),
+    ):
+        result = tasks.single_mode_ai_process_question.run("b-provider-failure", "B")
+
+    assert result == {"status": "failed", "error": "provider_unavailable"}
+    assert progress[-1]["error"] == "provider_unavailable"
+    service.close.assert_called_once_with()
+
+
+def test_single_b_mode_logs_a_traceback_for_an_unclassified_failure():
+    """Unexpected manual-mode failures must retain a server-side traceback."""
+    from apps.review import tasks
+
+    question = SimpleNamespace(
+        id="b-unclassified-failure",
+        stem="1 + 1 = ?",
+        ai_probe_result={"normalized_text": "1 + 1 = ?"},
+        ai_vision_extract={},
+        ai_verifier_result=None,
+    )
+    service = MagicMock()
+    service._get_question_image_urls.return_value = []
+    service.solve_mode_with_arbitration.side_effect = RuntimeError("write validation failed")
+
+    with (
+        patch.object(tasks.ExamQuestion.objects, "get", return_value=question),
+        patch.object(tasks, "create_ai_review_service", return_value=service),
+        patch.object(tasks.cache, "set"),
+        patch.object(tasks, "release_single_mode_ai_task_lock"),
+        patch.object(tasks.logger, "exception") as log_exception,
+    ):
+        result = tasks.single_mode_ai_process_question.run("b-unclassified-failure", "B")
+
+    assert result == {"status": "failed", "error": "schema_invalid"}
+    log_exception.assert_called_once()
+    assert log_exception.call_args.args == ("AI single mode processing failed",)
+    assert log_exception.call_args.kwargs["extra"]["error_category"] == "schema_invalid"
+
+
+def test_b_mode_failure_classification_prefers_the_safe_provider_stage():
+    from apps.common.ai.answer_arbitration import ArbitrationProviderError
+    from apps.common.exceptions import AIRequestError
+    from apps.review import tasks
+
+    error = ArbitrationProviderError("deepseek_independent")
+    error.__cause__ = AIRequestError("ReadTimeout while waiting for provider")
+
+    assert tasks.classify_ai_failure(error) == "deepseek_independent"
+
+
+def test_unanswered_baseline_solves_once_and_returns_persistable_answer_analysis():
+    question = SimpleNamespace(
+        stem="1 + 1 = ?",
+        answer="",
+        analysis="",
+        solution="",
+        options=[],
+        subject="math",
+        question_type="fill_blank",
+        difficulty=1,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    component = MagicMock()
+    component.run.return_value = {
+        "canonical_answer": "2",
+        "canonical_analysis": "一加一等于二。",
+        "key_facts": ["基本加法"],
+        "confidence": 0.91,
+    }
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda _component_type: component
+    )
+
+    baseline = service.solve_unanswered_question_baseline(
+        question,
+        image_urls=(),
+        normalized_text=question.stem,
+        vision_result={},
+        knowledge_refs="",
+    )
+
+    assert baseline["canonical_answer"] == "2"
+    assert baseline["canonical_analysis"] == "一加一等于二。"
+    assert baseline["confidence"] == 0.91
+    assert baseline["context_hash"]
+
+
+def test_unanswered_baseline_retries_once_when_confidence_is_below_threshold():
+    question = SimpleNamespace(
+        stem="1 + 1 = ?",
+        answer="",
+        analysis="",
+        solution="",
+        options=[],
+        subject="math",
+        question_type="fill_blank",
+        difficulty=1,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    component = MagicMock()
+    component.run.side_effect = [
+        {
+            "canonical_answer": "2",
+            "canonical_analysis": "low confidence attempt",
+            "key_facts": ["basic addition"],
+            "confidence": 0.79,
+        },
+        {
+            "canonical_answer": "2",
+            "canonical_analysis": "verified attempt",
+            "key_facts": ["basic addition"],
+            "confidence": 0.91,
+        },
+    ]
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda _component_type: component
+    )
+
+    baseline = service.solve_unanswered_question_baseline(
+        question, image_urls=(), normalized_text=question.stem,
+        vision_result={}, knowledge_refs="",
+    )
+
+    assert baseline["confidence"] == 0.91
+    assert component.run.call_count == 2
+
+
+def test_unanswered_baseline_retries_when_answer_does_not_match_question_type():
+    """高置信度的冗长判断题答案也不能成为可持久化基线。"""
+    question = SimpleNamespace(
+        stem="该说法是否正确？",
+        answer="",
+        analysis="",
+        solution="",
+        options=[],
+        subject="physics",
+        question_type="true_false",
+        difficulty=1,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    component = MagicMock()
+    component.run.side_effect = [
+        {
+            "canonical_answer": "not-a-true-false-answer",
+            "canonical_analysis": "第一轮答案格式不合题型。",
+            "key_facts": [],
+            "confidence": 0.96,
+        },
+        {
+            "canonical_answer": "true",
+            "canonical_analysis": "该说法成立。",
+            "key_facts": [],
+            "confidence": 0.91,
+        },
+    ]
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda _component_type: component
+    )
+
+    baseline = service.solve_unanswered_question_baseline(
+        question,
+        image_urls=(),
+        normalized_text=question.stem,
+        vision_result={},
+        knowledge_refs="",
+    )
+
+    assert baseline["canonical_answer"] == "TRUE"
+    assert component.run.call_count == 2
+
+
+def test_new_true_false_baseline_accepts_an_unambiguous_presentation_variant():
+    """新生成判断题答案可收敛为 TRUE/FALSE，但旧基线仍保持严格。"""
+    question = SimpleNamespace(
+        stem="该说法是否正确？",
+        answer="",
+        analysis="",
+        solution="",
+        options=[],
+        subject="physics",
+        question_type="true_false",
+        difficulty=1,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    component = MagicMock()
+    component.run.return_value = {
+        "canonical_answer": "TRUE（正确）",
+        "canonical_analysis": "该说法成立。",
+        "key_facts": ["判断成立。"],
+        "confidence": 0.91,
+    }
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda _component_type: component
+    )
+
+    baseline = service.solve_unanswered_question_baseline(
+        question,
+        image_urls=(),
+        normalized_text=question.stem,
+        vision_result={},
+        knowledge_refs="",
+    )
+
+    assert baseline["canonical_answer"] == "TRUE"
+    assert service.unanswered_baseline_is_valid(
+        question,
+        {
+            "canonical_answer": "TRUE（正确）",
+            "canonical_analysis": "旧解析。",
+        },
+        normalized_text=question.stem,
+        vision_result={},
+    ) is False
+
+
+def test_rebuilt_unanswered_baseline_excludes_invalid_legacy_reference_answer():
+    question = SimpleNamespace(
+        stem="该说法是否正确？",
+        answer="旧的错误格式答案。",
+        analysis="旧解析。",
+        solution="旧解答。",
+        options=[],
+        subject="physics",
+        question_type="true_false",
+        difficulty=1,
+        material="",
+        tables=[],
+        subquestions=[],
+    )
+    component = MagicMock()
+    component.run.return_value = {
+        "canonical_answer": "true",
+        "canonical_analysis": "该说法成立。",
+        "key_facts": [],
+        "confidence": 0.91,
+    }
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda _component_type: component
+    )
+
+    service.solve_unanswered_question_baseline(
+        question,
+        image_urls=(),
+        normalized_text=question.stem,
+        vision_result={},
+        knowledge_refs="",
+        exclude_reference_answer=True,
+    )
+
+    context = component.run.call_args.args[0]
+    assert context.answer == ""
+    assert context.solution == ""
+    assert context.metadata["reference_analysis"] == ""
 
 
 @pytest.mark.parametrize(
@@ -703,6 +1350,9 @@ def test_review_single_mode_uses_facade_and_preserves_answer_metadata(
     from apps.review import tasks
 
     question = _make_question()
+    if mode == "B":
+        question.ai_probe_result = {"normalized_text": question.stem}
+        question.save(update_fields=["ai_probe_result"])
     service = _real_facade_with_components()
 
     with (
@@ -750,6 +1400,8 @@ def test_single_mode_success_uses_arbitration_and_updates_only_requested_mode(
     from apps.review import tasks
 
     question = _make_question()
+    if mode == 'B':
+        question.ai_probe_result = {'normalized_text': question.stem}
     question.ai_answer_a = {'mode': 'A', 'marker': 'old-a'}
     question.ai_answer_b = {'mode': 'B', 'marker': 'old-b'}
     question.ai_answer_c = {'mode': 'C', 'marker': 'old-c'}
@@ -763,6 +1415,7 @@ def test_single_mode_success_uses_arbitration_and_updates_only_requested_mode(
         question,
         normalized_text=question.stem,
         vision_result={},
+        target_mode=mode,
     )
     verification = {
         'status': 'accepted',
@@ -1375,6 +2028,8 @@ def test_full_entrypoints_route_all_modes_through_arbitration_and_reuse_shared_v
 ):
     question = SimpleNamespace(
         stem="Which value is correct?",
+        answer="C",
+        analysis="Reference analysis.",
         subject="math",
         ai_processing_status=None,
         save=MagicMock(),
@@ -1626,6 +2281,88 @@ def test_full_v2_keeps_failed_mode_partial_without_raw_solver_fallback():
     assert results["answer_c"]["verification"]["status"] == "accepted"
     assert question.ai_processing_status == "failed"
     service.solve_mode_b.assert_not_called()
+
+
+def test_full_v2_preserves_a_safe_b_mode_provider_stage():
+    """Batch telemetry must retain the failed B boundary for targeted retries."""
+    question = SimpleNamespace(
+        stem="Question",
+        subject="math",
+        ai_processing_status=None,
+        save=MagicMock(),
+    )
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda component_type: MagicMock()
+    )
+    service._get_question_image_urls = MagicMock(return_value=[])
+    service.probe_and_norm = MagicMock(
+        return_value={"normalized_text": "Question", "topic_tags_top3": []}
+    )
+    service.analyze_knowledge_points = MagicMock(
+        return_value={"knowledge_points": []}
+    )
+    service.vision_extraction = MagicMock(return_value={})
+
+    def arbitrate(_question, *, mode, **_kwargs):
+        if mode == "B":
+            raise ArbitrationProviderError("qwen_structure_repair")
+        return _arbitration_outcome(mode, None)
+
+    service.solve_mode_with_arbitration = MagicMock(side_effect=arbitrate)
+
+    with patch.object(ExamQuestion.objects, "get", return_value=question):
+        results = service.process_question_full_v2("question-id")
+
+    assert results["errors"] == {"answer_b": "qwen_structure_repair"}
+    assert results["answer_b"] == {"error": "qwen_structure_repair"}
+
+
+def test_full_v2_persists_unanswered_baseline_before_each_mode():
+    """空答案题先保存基线答案，再逐项调用 A/B/C，任何模式失败不回滚基线。"""
+    question = SimpleNamespace(
+        stem="Question",
+        answer=None,
+        analysis=None,
+        subject="math",
+        ai_processing_status=None,
+        save=MagicMock(),
+    )
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda component_type: MagicMock()
+    )
+    service._get_question_image_urls = MagicMock(return_value=[])
+    service.probe_and_norm = MagicMock(
+        return_value={"normalized_text": "Question", "topic_tags_top3": []}
+    )
+    service.analyze_knowledge_points = MagicMock(return_value={"knowledge_points": []})
+    service.vision_extraction = MagicMock(return_value={"figure_present": False})
+    baseline = {
+        "canonical_answer": "C",
+        "canonical_analysis": "Baseline analysis.",
+        "key_facts": ["fact"],
+        "confidence": 0.95,
+        "context_hash": "baseline-context",
+    }
+    service.solve_unanswered_question_baseline = MagicMock(return_value=baseline)
+    service.solve_unanswered_mode_with_arbitration = MagicMock(
+        side_effect=lambda _question, *, mode, **_kwargs: _arbitration_outcome(mode, None)
+    )
+    completed = []
+
+    with patch.object(ExamQuestion.objects, "get", return_value=question):
+        results = service.process_question_full_v2(
+            "question-id",
+            on_step_complete=lambda key, value: completed.append((key, value)),
+        )
+
+    assert question.answer == "C"
+    assert question.analysis == "Baseline analysis."
+    assert service.solve_unanswered_mode_with_arbitration.call_count == 3
+    assert [key for key, _value in completed] == [
+        "probe", "knowledge", "vision", "baseline", "answer_a", "answer_b", "answer_c",
+    ]
+    assert results["baseline"] == baseline
+    assert results["errors"] == {}
 
 
 @pytest.mark.parametrize("entrypoint", ["process_question_full", "process_question_full_v2"])

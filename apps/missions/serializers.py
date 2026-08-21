@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.db import models
 from .models import LearningMission, MissionLevel, MissionQuestionRel
+from .services import FLAT_ASSIGNMENT_MODE
 
 
 # 课程和历史题目数据中同时存在中文名称、英文编码和单字母编码。
@@ -40,17 +41,19 @@ class MissionListSerializer(serializers.ModelSerializer):
     level_count = serializers.SerializerMethodField()
     class_name = serializers.SerializerMethodField()
     question_count = serializers.SerializerMethodField()
+    unfinished_count = serializers.SerializerMethodField()
+    completion_progress = serializers.SerializerMethodField()
     subject = serializers.SerializerMethodField()
 
     class Meta:
         model = LearningMission
         fields = ['id', 'mission_no', 'mission_name', 'goal_text',
                   'status', 'start_at', 'end_at', 'creator_name',
-                  'level_count', 'class_name', 'question_count', 'subject',
+                  'assignment_mode', 'level_count', 'class_name', 'question_count', 'unfinished_count', 'completion_progress', 'subject',
                   'default_mode_policy', 'class_obj', 'target_student_ids', 'course']
 
     def get_level_count(self, obj):
-        return obj.levels.count()
+        return 0 if obj.assignment_mode == FLAT_ASSIGNMENT_MODE else obj.levels.count()
 
     def get_class_name(self, obj):
         if obj.class_obj:
@@ -59,6 +62,51 @@ class MissionListSerializer(serializers.ModelSerializer):
 
     def get_question_count(self, obj):
         return MissionQuestionRel.objects.filter(mission=obj).count()
+
+    def get_unfinished_count(self, obj):
+        from apps.study.models import StudentMissionProgress
+        return StudentMissionProgress.objects.filter(mission=obj).exclude(
+            progress_status__in=('completed', 'passed'),
+        ).count()
+
+    def get_completion_progress(self, obj):
+        """Return the overall completion progress for this assignment."""
+        from django.db.models import Q
+        from apps.accounts.models import UserAccount
+        from apps.institutions.models import ClassStudent
+        from apps.study.models import StudentMissionProgress
+
+        targets = {str(student_id) for student_id in (obj.target_student_ids or [])}
+        if obj.class_obj_id:
+            assigned_students = ClassStudent.objects.filter(
+                class_obj_id=obj.class_obj_id, status='active',
+            )
+            if targets:
+                assigned_students = assigned_students.filter(student_id__in=targets)
+            student_ids = assigned_students.values_list('student_id', flat=True)
+        else:
+            student_ids = UserAccount.objects.filter(
+                id__in=targets, status='active',
+            ).filter(
+                Q(role_type='student') |
+                Q(role_grants__role='student', role_grants__status='active'),
+            ).distinct().values_list('id', flat=True)
+
+        total = student_ids.count()
+        completed = StudentMissionProgress.objects.filter(
+            mission=obj,
+            student_user_id__in=student_ids,
+            progress_status__in=('completed', 'passed'),
+        ).count()
+        completed = min(completed, total)
+        unfinished = max(total - completed, 0)
+        percent = round(completed / total * 100, 2) if total else 0
+        return {
+            'completed': completed,
+            'total': total,
+            'unfinished': unfinished,
+            'percent': percent,
+        }
 
     def get_subject(self, obj):
         if obj.course_id and getattr(obj, 'course', None):
@@ -78,21 +126,28 @@ class MissionDetailSerializer(serializers.ModelSerializer):
     creator_name = serializers.CharField(source='creator_teacher.display_name', read_only=True)
     creator_teacher = serializers.UUIDField(source='creator_teacher_id.id', read_only=True)
     class_obj = serializers.UUIDField(source='class_obj_id', read_only=True, allow_null=True)
+    question_ids = serializers.SerializerMethodField()
 
     class Meta:
         model = LearningMission
         fields = ['id', 'mission_no', 'mission_name', 'goal_text',
                   'creator_teacher', 'creator_name', 'start_at', 'end_at',
-                  'status', 'default_mode_policy', 'levels', 'class_obj', 'target_student_ids', 'course']
+                  'status', 'assignment_mode', 'default_mode_policy', 'levels',
+                  'question_ids', 'class_obj', 'target_student_ids', 'course']
 
     def get_levels(self, obj):
         levels = obj.levels.all()
+        if obj.assignment_mode == FLAT_ASSIGNMENT_MODE:
+            levels = levels.order_by('level_no', 'id')[:1]
         return [{
             'id': lv.id, 'level_no': lv.level_no, 'level_name': lv.level_name,
             'level_type': lv.level_type, 'pass_rule_json': lv.pass_rule_json,
             'mode_policy': lv.mode_policy, 'hint_strength': lv.hint_strength,
             'question_count': MissionQuestionRel.objects.filter(level_id=lv.id).count(),
         } for lv in levels]
+
+    def get_question_ids(self, obj):
+        return list(MissionQuestionRel.objects.filter(mission=obj).order_by('sort_no', 'id').values_list('question_id', flat=True))
 
 
 class CreateMissionSerializer(serializers.ModelSerializer):
@@ -121,6 +176,10 @@ class CreateMissionSerializer(serializers.ModelSerializer):
         if course_id:
             from apps.courses.models import Course
             validated_data['course_id'] = course_id if Course.objects.filter(pk=course_id).exists() else None
+        if not validated_data.get('start_at'):
+            from django.utils import timezone
+            validated_data['start_at'] = timezone.now()
+        validated_data['assignment_mode'] = FLAT_ASSIGNMENT_MODE
         return super().create(validated_data)
 
 
@@ -146,6 +205,13 @@ class AddQuestionsSerializer(serializers.Serializer):
     level_id = serializers.UUIDField()
     question_ids = serializers.ListField(child=serializers.UUIDField())
     is_required = serializers.BooleanField(default=True)
+
+
+class FlatQuestionsSerializer(serializers.Serializer):
+    """Replace the flat assignment question list while hiding legacy levels."""
+    question_ids = serializers.ListField(
+        child=serializers.UUIDField(), allow_empty=False,
+    )
 
 
 class BatchCreateLevelsSerializer(serializers.Serializer):

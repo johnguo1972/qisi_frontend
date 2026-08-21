@@ -33,6 +33,18 @@ export function formatDateTime(value: string | number | Date | null | undefined,
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
+/** Format assignment dates without exposing the backend time component. */
+export function formatDateOnly(value: string | number | Date | null | undefined, fallback = '暂无日期') {
+  if (!value) return fallback
+  if (typeof value === 'string') {
+    const match = value.trim().match(/^(\d{4}-\d{2}-\d{2})/)
+    if (match) return match[1]
+  }
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
 export function statusLabel(value: string | null | undefined, fallback = '未知状态') {
   if (!value) return fallback
   return STATUS_LABELS[value] || fallback

@@ -530,6 +530,16 @@ def test_guidance_evaluate_matches_complete_legacy_messages(
     assert rendered == legacy
 
 
+def test_baseline_prompt_requires_question_type_canonical_answer_format():
+    system, _ = PromptRegistry(AIConfig.load()).render(
+        "deepseek_baseline_solve", question_context_json="{}"
+    )
+
+    assert "单选题只能为一个大写选项字母" in system
+    assert "判断题只能为 TRUE 或 FALSE" in system
+    assert "不得写“答案是”" in system
+
+
 @pytest.mark.parametrize("answer", ["", "D"])
 def test_teacher_guidance_evaluate_matches_complete_legacy_messages(
     provider_env, answer

@@ -4,8 +4,8 @@
     <!-- 右侧内容区 -->
     <view class="main">
       <view class="page-header">
-        <text class="page-title">任务列表</text>
-        <button class="create-btn" @click="goCreate">+ 创建任务</button>
+        <text class="page-title">作业列表</text>
+        <button class="create-btn" @click="goCreate">+ 创建作业</button>
       </view>
 
       <!-- 筛选栏 -->
@@ -28,23 +28,27 @@
             <view class="filter-value">{{ sortText }}</view>
           </picker>
         </view>
+        <button class="unfinished-filter-btn" :class="{ active: unfinishedOnly }" @click="toggleUnfinished">
+          {{ unfinishedOnly ? '显示全部作业' : '只看未完成作业' }}
+        </button>
         <view class="filter-actions">
           <button class="filter-reset-btn" @click="resetFilters">重置</button>
         </view>
       </view>
 
-      <!-- 任务列表（表格形式） -->
+      <!-- 作业列表（表格形式） -->
       <view v-if="loading" class="loading">加载中...</view>
       <view v-else-if="filteredMissions.length === 0" class="empty">
-        <text>还没有任务，点击"创建任务"开始</text>
+        <text>还没有作业，点击"创建作业"开始</text>
       </view>
       <view v-else class="table-container">
         <!-- 表头 -->
         <view class="table-header">
-          <text class="col col-name">任务名称</text>
+          <text class="col col-name">作业名称</text>
           <text class="col col-class">班级</text>
           <text class="col col-questions">题目数</text>
-          <text class="col col-levels">关卡数</text>
+          <text class="col col-progress">完成进度</text>
+          <!-- <text class="col col-levels">关卡数</text> -->
           <text class="col col-start">开始时间</text>
           <text class="col col-end">截止日期</text>
           <text class="col col-status">状态</text>
@@ -56,7 +60,8 @@
             <text class="col col-name" @click="goMissionDetail(m.id)">{{ m.mission_name }}</text>
             <text class="col col-class">{{ m.class_name || '-' }}</text>
             <text class="col col-questions">{{ m.question_count || 0 }}</text>
-            <text class="col col-levels">{{ m.level_count || 0 }}</text>
+            <text class="col col-progress progress-link" @click.stop="goMissionProgress(m.id)">{{ completionText(m) }}</text>
+            <!-- <text class="col col-levels">{{ m.level_count || 0 }}</text> -->
             <text class="col col-start">{{ formatDate(m.start_at) }}</text>
             <text class="col col-end">{{ formatDate(m.end_at) }}</text>
             <view class="col col-status">
@@ -65,6 +70,7 @@
             <view class="col col-actions">
               <text class="action-btn action-view" @click="goMissionDetail(m.id)">查看</text>
               <text class="action-btn action-edit" @click="goEdit(m.id)">编辑</text>
+              <text v-if="m.status === 'draft'" class="action-btn action-publish" @click.stop="publishMission(m)">发布</text>
               <text v-if="m.status === 'draft'" class="action-btn action-delete" @click="confirmDelete(m)">删除</text>
             </view>
           </view>
@@ -75,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { missionApi, type Mission } from '@/api/missions.ts'
 import { classApi } from '@/api/institutions.ts'
 
@@ -88,19 +94,26 @@ interface MissionExtended extends Mission {
 const missions = ref<MissionExtended[]>([])
 const classList = ref<any[]>([])
 const loading = ref(false)
+const publishingMissionId = ref<string | number | null>(null)
 
 // 筛选状态
 const classFilterIndex = ref(0)
 const statusFilterIndex = ref(0)
 const sortIndex = ref(0)
+const unfinishedOnly = ref(false)
 
 // 选项
 const statusOptions = ['全部状态', '草稿', '已发布', '进行中', '已关闭', '已归档']
 const sortOptions = ['创建时间 ↓', '创建时间 ↑', '截止日期 ↑', '截止日期 ↓']
 
 onMounted(async () => {
+  uni.$on('mission-list-refresh', loadMissions)
   await loadClasses()
   await loadMissions()
+})
+
+onUnmounted(() => {
+  uni.$off('mission-list-refresh', loadMissions)
 })
 
 async function loadClasses() {
@@ -115,7 +128,7 @@ async function loadClasses() {
 async function loadMissions() {
   loading.value = true
   try {
-    const res = await missionApi.list()
+    const res = await missionApi.list(unfinishedOnly.value ? { unfinished: true } : undefined)
     missions.value = res.data || []
   } catch (e) {
     console.error('Failed to load missions:', e)
@@ -191,6 +204,13 @@ function formatDate(dateStr: string | null): string {
   }
 }
 
+function completionText(m: MissionExtended): string {
+  if (m.status === 'draft') return '未发布'
+  const progress = m.completion_progress
+  if (!progress || !progress.total) return '0/0（0%）'
+  return `${progress.completed}/${progress.total}（${progress.percent}%）`
+}
+
 // 筛选事件
 function onClassFilterChange(e: any) { classFilterIndex.value = e.detail.value }
 function onStatusFilterChange(e: any) { statusFilterIndex.value = e.detail.value }
@@ -200,18 +220,50 @@ function resetFilters() {
   classFilterIndex.value = 0
   statusFilterIndex.value = 0
   sortIndex.value = 0
+  unfinishedOnly.value = false
+  loadMissions()
+}
+
+function toggleUnfinished() {
+  unfinishedOnly.value = !unfinishedOnly.value
+  loadMissions()
 }
 
 // 导航
 function goMissionDetail(id: number) { uni.navigateTo({ url: `/pages/teacher/mission-detail?id=${id}` }) }
+function goMissionProgress(id: number) { uni.navigateTo({ url: `/pages/teacher/mission-progress?id=${id}` }) }
 function goEdit(id: number) { uni.navigateTo({ url: `/pages/teacher/mission-create?id=${id}` }) }
 function goCreate() { uni.navigateTo({ url: '/pages/teacher/mission-create' }) }
 
-// 删除任务
+async function publishMission(m: MissionExtended) {
+  if (publishingMissionId.value) return
+  const result = await new Promise<any>((resolve) => {
+    uni.showModal({
+      title: '发布作业',
+      content: `确定要发布作业“${m.mission_name}”吗？`,
+      success: resolve,
+    })
+  })
+  if (!result?.confirm) return
+
+  publishingMissionId.value = m.id
+  try {
+    await missionApi.publish(m.id)
+    uni.showToast({ title: '发布成功', icon: 'success' })
+    await loadMissions()
+  } catch (e: any) {
+    const message = e?.data?.message || e?.message || '发布失败'
+    uni.showToast({ title: message, icon: 'none' })
+  } finally {
+    publishingMissionId.value = null
+  }
+}
+
+// 删除作业
 function confirmDelete(m: MissionExtended) {
   uni.showModal({
     title: '确认删除',
-    content: `确定要删除任务"${m.mission_name}"吗？此操作不可撤销。`,
+    content: `确定要删除作业"${m.mission_name}"吗？此操作不可撤销。`,
     success: async (res) => {
       if (res.confirm) {
         try {
@@ -295,6 +347,23 @@ function confirmDelete(m: MissionExtended) {
 .filter-actions {
   margin-left: auto;
 }
+.unfinished-filter-btn {
+  margin: 0;
+  padding: 10rpx 20rpx;
+  background: #fff;
+  color: #606266;
+  border: 1rpx solid #dcdfe6;
+  border-radius: 6rpx;
+  font-size: 24rpx;
+  height: auto;
+  line-height: normal;
+  flex: 0 0 auto;
+}
+.unfinished-filter-btn.active {
+  color: #fff;
+  background: #e6a23c;
+  border-color: #e6a23c;
+}
 .filter-reset-btn {
   padding: 10rpx 24rpx;
   background: #fff;
@@ -355,11 +424,13 @@ function confirmDelete(m: MissionExtended) {
 .col-name:hover { color: #409eff; }
 .col-class { flex: 1 1 180px; min-width: 180px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-questions { flex-basis: 90px; width: 90px; text-align: center; color: #666; }
+.col-progress { flex-basis: 150px; width: 150px; text-align: center; color: #666; white-space: nowrap; }
+.progress-link { color: #409eff; cursor: pointer; }
 .col-levels { flex-basis: 90px; width: 90px; text-align: center; color: #666; }
 .col-start { flex-basis: 150px; width: 150px; text-align: center; color: #666; font-size: 22rpx; }
 .col-end { flex-basis: 150px; width: 150px; text-align: center; color: #666; font-size: 22rpx; }
 .col-status { flex-basis: 110px; width: 110px; text-align: center; }
-.col-actions { flex: 0 0 150px; width: 150px; min-width: 150px; display: flex; gap: 8rpx; justify-content: center; white-space: nowrap; }
+.col-actions { flex: 0 0 190px; width: 190px; min-width: 190px; display: flex; gap: 8rpx; justify-content: center; white-space: nowrap; }
 
 /* 状态标签 */
 .status-badge {
@@ -387,6 +458,8 @@ function confirmDelete(m: MissionExtended) {
 .action-view:hover { background: #ecf5ff; }
 .action-edit { color: #ff9800; }
 .action-edit:hover { background: #fff3e0; }
+.action-publish { color: #4caf50; }
+.action-publish:hover { background: #e8f5e9; }
 .action-delete { color: #f44336; }
 .action-delete:hover { background: #ffebee; }
 

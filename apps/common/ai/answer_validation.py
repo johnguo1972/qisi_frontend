@@ -58,6 +58,12 @@ _ANSWER_PREFIX = re.compile(
 )
 _SINGLE_OPTION = re.compile(r"^\(?\s*([A-Za-z])\s*\)?\s*[.\u3002]?$" )
 _MULTIPLE_OPTION_TEXT = re.compile(r"^[A-Za-z\s,\uff0c\u3001;\uff1b/]+$")
+_SINGLE_OPTION_PHRASE = re.compile(
+    r"^(?:\u6b63\u786e)?(?:\u7b54\u6848|\u9009\u9879|\u9009\u62e9|\u6b63\u786e\u9009\u9879)?\s*(?:\u4e3a|\u662f|\uff1a|:)?\s*\(?\s*([A-Za-z])\s*\)?\s*(?:\u9009\u9879|\u9879)?\s*[\u3002.!\uff01]?$"
+)
+_TRUE_FALSE_PHRASE = re.compile(
+    r"^(?:(?:\u7b54\u6848|\u7ed3\u8bba|\u5224\u65ad|\u8be5\u8bf4\u6cd5|\u6b64\u8bf4\u6cd5)\s*)?(?:\u4e3a|\u662f|\uff1a|:)?\s*(\u6b63\u786e|\u9519\u8bef|\u5bf9|\u9519|\u221a|\u00d7)\s*[\u3002.!\uff01]?$"
+)
 _OPTION_MISSING_CLAIMS = (
     "\u672a\u63d0\u4f9b\u9009\u9879",
     "\u6ca1\u6709\u63d0\u4f9b\u9009\u9879",
@@ -118,7 +124,9 @@ class AnswerNormalizer:
         if kind == "multiple_choice":
             return self._normalize_multiple(value, _allowed_labels(option_labels))
         if kind == "true_false":
-            canonical = _TRUE_FALSE_ALIASES.get(value.casefold())
+            phrase = _TRUE_FALSE_PHRASE.fullmatch(value)
+            candidate = phrase.group(1) if phrase else value
+            canonical = _TRUE_FALSE_ALIASES.get(candidate.casefold())
             if canonical is None:
                 return NormalizedAnswer(value, False, "unrecognized_true_false")
             return NormalizedAnswer(canonical, True)
@@ -131,6 +139,8 @@ class AnswerNormalizer:
             candidate = direct
         else:
             matched = _SINGLE_OPTION.fullmatch(_strip_answer_prefix(value))
+            if matched is None:
+                matched = _SINGLE_OPTION_PHRASE.fullmatch(value)
             if matched is None:
                 return NormalizedAnswer(value, False, "unrecognized_single_choice")
             candidate = matched.group(1).upper()

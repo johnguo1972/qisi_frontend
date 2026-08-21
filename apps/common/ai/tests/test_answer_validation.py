@@ -15,6 +15,9 @@ VALIDATOR = ModeContentValidator()
     ("raw", "expected"),
     [
         ("c", "C"),
+        ("选项 C", "C"),
+        ("正确选项为 C", "C"),
+        ("C 选项", "C"),
         ("\u9009C", "C"),
         ("\u7b54\u6848\uff1aC", "C"),
         ("C\u3002", "C"),
@@ -65,6 +68,8 @@ def test_normalize_multiple_choice_rejects_an_option_not_in_the_context():
     ("raw", "expected"),
     [
         ("true", "TRUE"),
+        ("判断：正确", "TRUE"),
+        ("该说法错误。", "FALSE"),
         ("\u6b63\u786e", "TRUE"),
         ("\u221a", "TRUE"),
         ("false", "FALSE"),

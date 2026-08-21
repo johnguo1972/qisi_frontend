@@ -10,7 +10,13 @@
     <view v-else class="list">
       <view v-for="item in items" :key="item.id" class="item">
         <text class="stem">{{ item.stem || '错题' }}</text>
+        <view class="item-meta-tags">
+          <text class="meta-chip">🔖 {{ item.difficulty_label || '难度未标注' }}</text>
+          <text v-for="point in (item.knowledge_point_labels || [])" :key="`kp-${item.id}-${point}`" class="meta-chip">💡 {{ point }}</text>
+          <text v-for="tag in (item.tags || [])" :key="`tag-${item.id}-${tag}`" class="meta-chip">🏷️ {{ tag }}</text>
+        </view>
         <view class="meta"><text>{{ statusLabel(item.status, '待复习') }}</text><text>{{ formatDateTime(item.latest_wrong_at) }}</text></view>
+        <view class="item-actions"><button size="mini" type="primary" @click.stop="goPractice(item.id)">加入精练</button></view>
       </view>
     </view>
   </view>
@@ -46,6 +52,13 @@ async function onChildChanged(child: any) {
     loading.value = false
   }
 }
+
+function goPractice(id: string) {
+  uni.navigateTo({
+    url: `/pages/student/wrongbook-practice-candidates?id=${id}`,
+    fail: () => uni.showToast({ title: '打开关联题失败', icon: 'none' }),
+  })
+}
 </script>
 
 <style scoped>
@@ -59,4 +72,7 @@ async function onChildChanged(child: any) {
 .item:last-child { border-bottom: 0; }
 .stem { display: block; color: #303133; font-size: 27rpx; line-height: 1.5; }
 .meta { display: flex; justify-content: space-between; margin-top: 10rpx; color: #909399; font-size: 22rpx; }
+.item-meta-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 8rpx; margin-top: 12rpx; }
+.meta-chip { padding: 4rpx 10rpx; border-radius: 999rpx; background: #f4f4f5; color: #606266; font-size: 21rpx; }
+.item-actions { display: flex; justify-content: flex-end; margin-top: 12rpx; }
 </style>

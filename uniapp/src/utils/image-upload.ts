@@ -6,6 +6,7 @@
  * - uploadImage: uni.uploadFile with Authorization header
  * - checkCameraSupport: H5 desktop detection
  */
+import { getApiUrl } from './api-config'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,6 +28,8 @@ export interface UploadImageOptions {
   fieldName?: string
   /** Override the access token (defaults to uni.getStorageSync('accessToken')) */
   token?: string
+  /** Additional multipart fields, such as a photo page number. */
+  formData?: Record<string, string | number>
 }
 
 export interface UploadImageResult {
@@ -126,7 +129,7 @@ export async function chooseAndUpload(options: { count?: number; sourceType?: Ar
   const files = await new Promise<any[]>((resolve, reject) => wx.chooseMedia({ count: options.count || 9, mediaType: ['image'], sourceType: options.sourceType || ['camera', 'album'], success: (r: any) => resolve(r.tempFiles || []), fail: reject }))
   const urls: string[] = []
   for (const file of files) {
-    const result = await uploadImage({ filePath: file.tempFilePath, uploadUrl: `https://qisi.chengxuelu.com/api/v1/student/attempts/${options.attemptId}/upload-images`, fieldName: 'images' })
+    const result = await uploadImage({ filePath: file.tempFilePath, uploadUrl: getApiUrl(`/student/attempts/${options.attemptId}/upload-images`), fieldName: 'images' })
     if (result.statusCode < 200 || result.statusCode >= 300 || result.data?.code !== 0) throw new Error(result.data?.message || '图片上传失败')
     const uploaded = result.data?.data?.items || result.data?.data?.images || (result.data?.data?.url ? [result.data.data] : [])
     urls.push(...uploaded.map((item: any) => typeof item === 'string' ? item : item.url).filter(Boolean))
@@ -176,6 +179,9 @@ export async function uploadImage(opts: UploadImageOptions): Promise<UploadImage
       throw new Error('H5 upload requires a File object; blob URL could not be fetched')
     }
   }
+  for (const [key, value] of Object.entries(opts.formData || {})) {
+    formData.append(key, String(value))
+  }
 
   const httpResp = await fetch(uploadUrl, {
     method: 'POST',
@@ -194,6 +200,9 @@ export async function uploadImage(opts: UploadImageOptions): Promise<UploadImage
       url: uploadUrl,
       filePath,
       name: fieldName,
+      formData: Object.fromEntries(
+        Object.entries(opts.formData || {}).map(([key, value]) => [key, String(value)]),
+      ),
       header: { Authorization: 'Bearer ' + token },
       success: (res) => {
         let parsed: any

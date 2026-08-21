@@ -3,7 +3,7 @@
     <MpChildSwitcher v-if="isParent" :visible="true" @changed="load" />
     <view class="quick"><button @click="drawer = true"><text class="quick-label">☰ 菜单</text></button><button @click="inputCode"><text class="quick-label">📝 输入作业码</text></button><button @click="goScan"><text class="quick-label">⌕ 扫码进入</text></button></view>
     <MpClassSelector :classes="classes" :selected="classId" :scope="scope" @class="classId = $event; load()" @scope="scope = $event; load()" />
-    <view class="content"><view v-if="loading" class="empty">加载中...</view><view v-else-if="!missions.length" class="empty">暂无任务，等待老师发布吧</view><MpMissionCard v-for="m in missions" :key="m.mission?.id" :mission-id="String(m.mission?.id)" :mission-name="m.mission?.mission_name || m.mission_name" :class-label="m.class_label" :status="m.progress_status || 'not_started'" :level-count="m.level_count || 0" :question-count="m.question_count || 0" :end-at="m.mission?.deadline || m.end_at" :progress-percent="m.progress_percent || 0" @click="goMission" /></view>
+    <view class="content"><view v-if="loading" class="empty">加载中...</view><view v-else-if="!missions.length" class="empty">暂无作业，等待老师发布吧</view><MpMissionCard v-for="m in missions" :key="m.mission?.id" :mission-id="String(m.mission?.id)" :mission-name="m.mission?.mission_name || m.mission_name" :class-label="m.class_label" :status="m.progress_status || 'not_started'" :level-count="m.level_count || 0" :question-count="m.question_count || 0" :assignment-mode="m.assignment_mode" :end-at="m.mission?.deadline || m.end_at" :progress-percent="m.progress_percent || 0" :pdf-download-url="m.pdf_download_url" @click="goMission" /></view>
     <MpDrawer :visible="drawer" :user-name="userName" @close="drawer = false" @navigate="navigate" @logout="logout" />
   </view>
 </template>
@@ -30,6 +30,10 @@ function navigate(key: string) {
   if (key === 'home') return
   if (key === 'wrongbook' || key === 'growth') {
     uni.switchTab({ url: `/pages/student/${key}` })
+    return
+  }
+  if (key === 'practice') {
+    uni.navigateTo({ url: '/pages/student/practice' })
     return
   }
   const routes: Record<string, string> = {

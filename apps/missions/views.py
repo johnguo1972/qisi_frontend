@@ -1,8 +1,6 @@
 import uuid
 import json
-import os
-from django.conf import settings
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -19,7 +17,15 @@ from .serializers import (
     MissionListSerializer, MissionDetailSerializer,
     CreateMissionSerializer, CreateLevelSerializer, AddQuestionsSerializer,
     BatchCreateLevelsSerializer, subject_filter_values,
+    FlatQuestionsSerializer,
 )
+from .services import (
+    FLAT_ASSIGNMENT_MODE,
+    assignment_levels,
+    close_stale_missions,
+    ensure_flat_assignment_level,
+)
+from .pdf_service import ensure_mission_pdf, mission_pdf_download_url
 
 
 def make_trace_id():
@@ -91,38 +97,13 @@ def mission_export_pdf(request, mission_id):
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
     except LearningMission.DoesNotExist:
         return Response({'code': 404, 'message': 'mission not found'}, status=404)
-    rel_ids = MissionQuestionRel.objects.filter(mission=mission).values_list('question_id', flat=True)
-    questions = []
-    for question in ExamQuestion.objects.filter(id__in=list(rel_ids)).values(
-        'id', 'question_no', 'question_type', 'stem', 'stem_html', 'answer', 'analysis', 'knowledge_points'
-    ):
-        options = QuestionOption.objects.filter(question_id=question['id']).values(
-            'option_label', 'content'
-        ).order_by('sort_order')
-        images = QuestionImage.objects.filter(
-            question_id=question['id'],
-        ).exclude(image_type='formula').values('file_path').order_by('sort_order')
-        questions.append({
-            **question,
-            'options_html': [
-                {'label': option['option_label'], 'content': option['content']}
-                for option in options
-            ],
-            'image_urls': [item['file_path'] for item in images],
-        })
-    if not questions:
-        return Response({'code': 404, 'message': 'no questions'}, status=404)
     try:
-        from apps.study.student_views import _build_pdf
-        pdf_bytes = _build_pdf('mission', questions, False, '')
+        ensure_mission_pdf(mission)
     except ImportError:
         return Response({'code': 503, 'message': 'PDF dependency unavailable'}, status=503)
-    export_dir = os.path.join(settings.MEDIA_ROOT, 'exports')
-    os.makedirs(export_dir, exist_ok=True)
-    filename = f'mission_{uuid.uuid4().hex[:12]}.pdf'
-    with open(os.path.join(export_dir, filename), 'wb') as output:
-        output.write(pdf_bytes)
-    return Response({'code': 0, 'data': {'download_url': f'{settings.MEDIA_URL}exports/{filename}'}})
+    except ValueError as exc:
+        return Response({'code': 404, 'message': str(exc)}, status=404)
+    return Response({'code': 0, 'data': {'download_url': mission_pdf_download_url(mission)}})
 
 
 @api_view(['GET'])
@@ -166,6 +147,77 @@ def mission_grading(request, mission_id):
             'id': str(row.student_id), 'name': row.student.display_name, 'mobile': row.student.mobile,
         } for row in students],
         'attempts': attempt_rows,
+    }})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
+def mission_progress(request, mission_id):
+    """Return overall completion progress for every student assigned to a mission."""
+    from apps.accounts.models import UserAccount
+    from apps.study.models import StudentMissionProgress
+
+    try:
+        mission = LearningMission.objects.select_related('class_obj').get(
+            pk=mission_id, creator_teacher_id=request.user,
+        )
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': 'mission not found'}, status=404)
+
+    target_ids = {str(value) for value in (mission.target_student_ids or [])}
+    if mission.class_obj_id:
+        assigned = ClassStudent.objects.filter(
+            class_obj_id=mission.class_obj_id, status='active',
+        )
+        if target_ids:
+            assigned = assigned.filter(student_id__in=target_ids)
+        student_ids = list(assigned.values_list('student_id', flat=True))
+    else:
+        student_ids = list(UserAccount.objects.filter(
+            id__in=target_ids, status='active',
+        ).filter(
+            Q(role_type='student') |
+            Q(role_grants__role='student', role_grants__status='active'),
+        ).distinct().values_list('id', flat=True))
+
+    students = UserAccount.objects.filter(id__in=student_ids).order_by('display_name', 'mobile')
+    progress_by_student = {
+        str(progress.student_user_id_id): progress
+        for progress in StudentMissionProgress.objects.filter(
+            mission=mission, student_user_id__in=student_ids,
+        )
+    }
+    completed_statuses = {'completed', 'passed'}
+    rows = []
+    completed = 0
+    for student in students:
+        progress = progress_by_student.get(str(student.id))
+        progress_status = progress.progress_status if progress else 'not_started'
+        progress_percent = float(progress.progress_percent) if progress else 0.0
+        if progress_status in completed_statuses:
+            completed += 1
+        rows.append({
+            'student_id': str(student.id),
+            'student_name': student.display_name or student.mobile,
+            'mobile': student.mobile,
+            'progress_status': progress_status,
+            'progress_percent': progress_percent,
+            'last_action_at': progress.last_action_at if progress else None,
+        })
+
+    total = len(rows)
+    return Response({'code': 0, 'data': {
+        'mission_id': str(mission.id),
+        'mission_name': mission.mission_name,
+        'mission_status': mission.status,
+        'class_name': mission.class_obj.class_name if mission.class_obj else None,
+        'summary': {
+            'completed': completed,
+            'total': total,
+            'unfinished': max(total - completed, 0),
+            'percent': round(completed / total * 100, 2) if total else 0,
+        },
+        'students': rows,
     }})
 
 
@@ -234,6 +286,7 @@ def mission_list(request):
     user = request.user
 
     if request.method == 'GET':
+        close_stale_missions()
         missions = LearningMission.objects.filter(
             creator_teacher_id=user
         ).select_related('course', 'class_obj').order_by('-created_at')
@@ -252,6 +305,12 @@ def mission_list(request):
             missions = missions.filter(
                 Q(course__subject__in=subject_values) | Q(id__in=mission_ids),
             ).distinct()
+        if request.GET.get('unfinished', '').lower() in ('1', 'true', 'yes'):
+            from apps.study.models import StudentMissionProgress
+            unfinished = StudentMissionProgress.objects.filter(
+                mission_id=OuterRef('pk'),
+            ).exclude(progress_status__in=('completed', 'passed'))
+            missions = missions.filter(Q(status='draft') | Exists(unfinished))
         return Response({
             'code': 0, 'message': 'success', 'trace_id': make_trace_id(),
             'data': MissionListSerializer(missions, many=True).data,
@@ -272,6 +331,7 @@ def mission_list(request):
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_detail(request, mission_id):
     """M-03 / M-04: Mission detail / update."""
+    close_stale_missions()
     try:
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
     except LearningMission.DoesNotExist:
@@ -286,12 +346,14 @@ def mission_detail(request, mission_id):
         })
 
     # PUT: update
-    for field in ['mission_name', 'goal_text', 'start_at', 'end_at', 'default_mode_policy']:
+    for field in ['mission_name', 'goal_text', 'start_at', 'end_at', 'default_mode_policy', 'assignment_mode']:
         if field in request.data:
             val = request.data[field]
             # 空字符串转 None（Django DateTimeField 不接受空字符串）
             if field in ('start_at', 'end_at') and val == '':
                 val = None
+            if field == 'assignment_mode' and val not in ('flat', 'levels'):
+                return Response({'code': 400, 'message': 'assignment_mode 无效', 'data': None, 'trace_id': make_trace_id()}, status=400)
             setattr(mission, field, val)
     if 'target_student_ids' in request.data:
         mission.target_student_ids = request.data.get('target_student_ids') or []
@@ -386,6 +448,9 @@ def mission_levels(request, mission_id):
     serializer = CreateLevelSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     level = serializer.save(mission=mission)
+    # Calls to this endpoint come from the legacy level-based workflow.
+    mission.assignment_mode = 'levels'
+    mission.save(update_fields=['assignment_mode', 'updated_at'])
     return Response({
         'code': 0, 'message': '关卡创建成功',
         'data': {'id': level.id}, 'trace_id': make_trace_id(),
@@ -437,22 +502,61 @@ def mission_levels_batch(request, mission_id):
                 is_required=True,
             )
 
+    # This endpoint is the legacy level editor. Keep the mode explicit so a
+    # flat assignment edited through an old client cannot be half-flat and
+    # half-level based.
+    mission.assignment_mode = 'levels'
+    mission.save(update_fields=['assignment_mode', 'updated_at'])
+
     return Response({
         'code': 0, 'message': '关卡创建成功',
         'data': {'level_ids': level_ids}, 'trace_id': make_trace_id(),
     }, status=status.HTTP_201_CREATED)
 
 
-@api_view(['POST'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_questions(request, mission_id):
-    """M-06: Add questions to level."""
+    """M-06: Read questions or replace the flat assignment question list."""
     try:
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
     except LearningMission.DoesNotExist:
         return Response({
             'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': make_trace_id(),
         }, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        from apps.study.serializers import QuestionListSerializer
+        rels = list(MissionQuestionRel.objects.filter(mission=mission).order_by('sort_no', 'id'))
+        question_map = {
+            str(question.id): question
+            for question in ExamQuestion.objects.filter(id__in=[rel.question_id for rel in rels])
+        }
+        questions = [
+            QuestionListSerializer(question_map[str(rel.question_id)]).data
+            for rel in rels
+            if str(rel.question_id) in question_map
+        ]
+        return Response({'code': 0, 'message': 'success', 'data': questions, 'trace_id': make_trace_id()})
+
+    if 'question_ids' in request.data and 'level_id' not in request.data:
+        serializer = FlatQuestionsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        question_ids = serializer.validated_data['question_ids']
+        level = ensure_flat_assignment_level(mission)
+        MissionQuestionRel.objects.filter(mission=mission).delete()
+        for sort_no, question_id in enumerate(question_ids, start=1):
+            MissionQuestionRel.objects.create(
+                mission=mission,
+                level=level,
+                question_id=question_id,
+                sort_no=sort_no,
+                is_required=True,
+            )
+
+        mission.assignment_mode = FLAT_ASSIGNMENT_MODE
+        mission.save(update_fields=['assignment_mode', 'updated_at'])
+        return Response({'code': 0, 'message': '题目保存成功', 'data': {'question_count': len(question_ids)}, 'trace_id': make_trace_id()})
 
     serializer = AddQuestionsSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -548,6 +652,7 @@ def mission_level_detail(request, mission_id, level_id):
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_publish(request, mission_id):
     """M-07: Publish mission and create progress records for class students."""
+    close_stale_missions()
     try:
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
     except LearningMission.DoesNotExist:
@@ -555,8 +660,29 @@ def mission_publish(request, mission_id):
             'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': make_trace_id(),
         }, status=status.HTTP_404_NOT_FOUND)
 
+    if mission.status == 'closed':
+        return Response({'code': 400, 'message': '作业已自动关闭，不能发布', 'data': None, 'trace_id': make_trace_id()}, status=400)
+    # The simplified flow must have a completion date and at least one
+    # question. Legacy level assignments keep the old publish contract.
+    if mission.assignment_mode == FLAT_ASSIGNMENT_MODE:
+        if not mission.end_at:
+            return Response({'code': 400, 'message': '请设置完成日期', 'data': None, 'trace_id': make_trace_id()}, status=400)
+        if not MissionQuestionRel.objects.filter(mission=mission).exists():
+            return Response({'code': 400, 'message': '请至少选择一道题目', 'data': None, 'trace_id': make_trace_id()}, status=400)
+        if not mission.class_obj_id and not (mission.target_student_ids or []):
+            return Response({'code': 400, 'message': '请先选择班级或指定学生', 'data': None, 'trace_id': make_trace_id()}, status=400)
+
+    # Generate before changing the status so a missing PDF dependency or an
+    # invalid question set cannot publish a worksheet without its download.
+    try:
+        ensure_mission_pdf(mission)
+    except ImportError:
+        return Response({'code': 503, 'message': 'PDF dependency unavailable', 'data': None, 'trace_id': make_trace_id()}, status=503)
+    except ValueError as exc:
+        return Response({'code': 400, 'message': str(exc), 'data': None, 'trace_id': make_trace_id()}, status=400)
+
     mission.status = 'published'
-    mission.save()
+    mission.save(update_fields=['status', 'updated_at'])
     # 作业发布后立即建立幂等的作业短码，二维码端只读取该唯一来源。
     from apps.qrcode.services import ensure_mission_short_code
     short_code = ensure_mission_short_code(mission)
@@ -601,6 +727,10 @@ def mission_clone(request, mission_id):
         start_at=original.start_at,
         end_at=original.end_at,
         default_mode_policy=original.default_mode_policy,
+        assignment_mode=original.assignment_mode,
+        class_obj=original.class_obj,
+        target_student_ids=list(original.target_student_ids or []),
+        course=original.course,
     )
     # Clone levels and questions
     for level in original.levels.all():
@@ -661,6 +791,7 @@ def mission_clone_with_class(request, mission_id):
         start_at=request.data.get('start_at') or original.start_at,
         end_at=request.data.get('end_at'),  # Required for homework
         default_mode_policy=original.default_mode_policy,
+        assignment_mode=original.assignment_mode,
     )
 
     # Clone levels and questions

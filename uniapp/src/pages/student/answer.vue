@@ -179,6 +179,7 @@ import { studentApi } from '@/api/student.ts'
 import { chooseImage, uploadImage, checkCameraSupport, chooseAndUpload } from '@/utils/image-upload'
 import { renderWithKatex } from '@/utils/katex-renderer'
 import { getMediaUrl } from '@/utils/media-url'
+import { getQuestionTypeLabel } from '@/utils/question-type'
 import PhotoUploadEnhanced from '@/components/PhotoUploadEnhanced.vue'
 
 const levelId = ref<string>('')
@@ -237,7 +238,11 @@ const questionTypeLabel = computed(() => {
     computation: '计算题',
     proof: '证明题',
   }
-  return typeMap[currentQuestion.value.question_type] || currentQuestion.value.question_type || '题目'
+  return getQuestionTypeLabel(
+    currentQuestion.value.question_type,
+    currentQuestion.value.stem,
+    currentQuestion.value.options,
+  )
 })
 
 const isObjective = computed(() => {

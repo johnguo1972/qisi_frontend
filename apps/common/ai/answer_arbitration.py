@@ -35,7 +35,8 @@ class ArbitrationProviderError(ArbitrationError):
 
     status = "arbitration_provider_failure"
 
-    def __init__(self) -> None:
+    def __init__(self, stage: str = "unknown") -> None:
+        self.stage = stage
         super().__init__(self.status)
 
 
@@ -46,6 +47,15 @@ class HumanReviewRequired(ArbitrationError):
 
     def __init__(self) -> None:
         super().__init__("missing_conditions")
+
+
+class AnswerMismatchAfterRetry(ArbitrationError):
+    """A mode still disagreed with the trusted baseline after its one retry."""
+
+    status = "answer_mismatch_after_retry"
+
+    def __init__(self) -> None:
+        super().__init__(self.status)
 
 
 @dataclass(frozen=True)
@@ -486,6 +496,106 @@ class ModeAnswerArbitrator:
             normalized_deepseek.value, shared,
         )
 
+    def process_unanswered(
+        self,
+        mode: str,
+        context: QuestionInput,
+        *,
+        baseline: object,
+    ) -> ArbitrationOutcome:
+        """Arbitrate one no-answer mode against the saved DeepSeek baseline.
+
+        The baseline is deliberately answer-only.  A/B/C have different teaching
+        structures, therefore their process fields must never be compared here.
+        """
+        normalized_mode = self._mode(mode)
+        if not isinstance(context, QuestionInput):
+            raise ArbitrationProviderError()
+        baseline_data = _plain_mapping(baseline)
+        if baseline_data is None or not _nonblank_text(baseline_data.get("canonical_answer")):
+            raise ArbitrationProviderError("baseline_invalid")
+
+        context_hash = question_context_hash(context)
+        payload = question_context_payload(context)
+        question_type = payload.get("question_type", "")
+        option_labels = tuple(
+            item.get("label", "")
+            for item in payload.get("options", ())
+            if isinstance(item, Mapping)
+        )
+        trusted = self._normalizer.normalize(
+            baseline_data["canonical_answer"],
+            question_type=question_type,
+            option_labels=option_labels,
+        )
+        if not trusted.valid:
+            raise ArbitrationProviderError("baseline_invalid")
+
+        for attempt in range(2):
+            qwen = self._call_generate(normalized_mode, context)
+            normalized_qwen = self._normalizer.normalize(
+                qwen.get("final_answer"),
+                question_type=question_type,
+                option_labels=option_labels,
+            )
+            qwen_content = self._content_validator.validate(
+                normalized_mode,
+                qwen,
+                trusted_answer=normalized_qwen.value,
+                context=payload,
+            )
+            if normalized_qwen.valid and normalized_qwen.value == trusted.value and qwen_content.valid:
+                return self._accepted(
+                    selected=qwen,
+                    provider="qwen",
+                    context_hash=context_hash,
+                    normalized_reference="",
+                    normalized_qwen=normalized_qwen.value,
+                    normalized_deepseek=trusted.value,
+                    trusted_answer=trusted.value,
+                    deepseek_used=True,
+                    final_review_used=False,
+                    confidence=None,
+                    warnings=(),
+                    shared=None,
+                )
+
+            final = self._unanswered_final_review(
+                normalized_mode, context, qwen, baseline_data, trusted.value
+            )
+            final_answer = self._normalizer.normalize(
+                final["trusted_answer"],
+                question_type=question_type,
+                option_labels=option_labels,
+            )
+            # The final reviewer explicitly accepts Qwen only when it confirms
+            # Qwen's final answer.  Its generated teaching content is not used.
+            if (
+                final["qwen_content_valid"] is True
+                and normalized_qwen.valid
+                and final_answer.valid
+                and final_answer.value == normalized_qwen.value
+                and qwen_content.valid
+            ):
+                return self._accepted(
+                    selected=qwen,
+                    provider="qwen",
+                    context_hash=context_hash,
+                    normalized_reference="",
+                    normalized_qwen=normalized_qwen.value,
+                    normalized_deepseek=trusted.value,
+                    trusted_answer=normalized_qwen.value,
+                    deepseek_used=True,
+                    final_review_used=True,
+                    confidence=float(final["confidence"]),
+                    warnings=("baseline_answer_conflict_resolved",),
+                    shared=None,
+                )
+            if attempt == 1:
+                raise AnswerMismatchAfterRetry()
+
+        raise RuntimeError("unreachable unanswered arbitration loop")
+
     @staticmethod
     def _mode(mode: object) -> str:
         normalized = mode.strip().upper() if isinstance(mode, str) else ""
@@ -496,8 +606,8 @@ class ModeAnswerArbitrator:
     def _call_generate(self, mode: str, context: QuestionInput) -> dict[str, object]:
         try:
             result = self._generate(mode, context)
-        except (AIRequestError, TypeError, ValueError):
-            raise ArbitrationProviderError() from None
+        except (AIRequestError, TypeError, ValueError) as error:
+            raise ArbitrationProviderError("qwen_generate") from error
         mapping = _plain_mapping(result)
         if mapping is None:
             raise ArbitrationProviderError()
@@ -519,8 +629,8 @@ class ModeAnswerArbitrator:
                 return candidate, True
         try:
             result = self._independent_verify(mode, context)
-        except (AIRequestError, TypeError, ValueError):
-            raise ArbitrationProviderError() from None
+        except (AIRequestError, TypeError, ValueError) as error:
+            raise ArbitrationProviderError("deepseek_independent") from error
         candidate = self._validated_independent(
             _plain_mapping(result),
             cached=False,
@@ -605,8 +715,8 @@ class ModeAnswerArbitrator:
         conflicts = tuple(warnings) or ("answer_conflict",)
         try:
             raw_final = self._final_review(mode, context, _copy_mapping(qwen), _copy_mapping(independent), conflicts)
-        except (AIRequestError, TypeError, ValueError):
-            raise ArbitrationProviderError() from None
+        except (AIRequestError, TypeError, ValueError) as error:
+            raise ArbitrationProviderError("deepseek_final_review") from error
         final = _plain_mapping(raw_final)
         if final is None or not self._valid_final(final):
             raise ArbitrationProviderError()
@@ -643,6 +753,31 @@ class ModeAnswerArbitrator:
             warnings=tuple(warnings),
             shared=shared,
         )
+
+    def _unanswered_final_review(
+        self,
+        mode: str,
+        context: QuestionInput,
+        qwen: dict[str, object],
+        baseline: dict[str, object],
+        trusted_answer: str,
+    ) -> dict[str, object]:
+        try:
+            raw_final = self._final_review(
+                mode,
+                context,
+                _copy_mapping(qwen),
+                _copy_mapping(baseline),
+                ("baseline_answer_conflict",),
+            )
+        except (AIRequestError, TypeError, ValueError) as error:
+            raise ArbitrationProviderError("deepseek_final_review") from error
+        final = _plain_mapping(raw_final)
+        if final is None or not self._valid_final(final):
+            raise ArbitrationProviderError("deepseek_final_review")
+        if not _nonblank_text(trusted_answer):
+            raise ArbitrationProviderError("baseline_invalid")
+        return final
 
     @staticmethod
     def _valid_final(result: Mapping[str, object]) -> bool:

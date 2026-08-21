@@ -1,5 +1,8 @@
 import uuid
+from urllib.parse import urlencode
 
+from django.http import HttpResponse
+from django.shortcuts import redirect
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -14,13 +17,37 @@ from .serializers import (
     LoginSerializer,
     ProfileUpdateSerializer,
     RefreshTokenSerializer,
+    WechatWebSessionSerializer,
+    WebBindingCompleteSerializer,
+    WebBindingPhoneSerializer,
+    WebBindingSessionSerializer,
     serialize_user_session,
 )
 from .services import (
-    verify_code, get_or_create_user, generate_tokens,
+    verify_code, get_or_create_user, generate_tokens, ensure_parent_role_for_login,
     generate_verify_code, send_sms_code, ensure_fixed_test_account,
-    is_fixed_test_account_code,
+    is_fixed_test_account_code, RoleNotGranted,
 )
+from .wechat_web import (
+    WebAuthorizationError,
+    WebBindingError,
+    WebConfigurationError,
+    WebLoginStateError,
+    bind_web_identity_from_miniprogram,
+    bind_web_identity_from_trusted_mobile,
+    build_web_authorization_url,
+    consume_web_login_state,
+    create_web_login_state,
+    create_web_binding_bridge_code,
+    consume_web_binding_bridge_code,
+    exchange_miniprogram_phone_code,
+    exchange_web_identity,
+    complete_web_binding,
+    get_web_binding_status,
+    prepare_web_login_session,
+)
+from django.conf import settings
+from apps.qrcode.services import wxacode_png
 
 
 def make_trace_id() -> str:
@@ -34,6 +61,32 @@ def role_error(code, message, http_status):
         'data': None,
         'trace_id': make_trace_id(),
     }, status=http_status)
+
+
+def binding_error(code, http_status=status.HTTP_400_BAD_REQUEST):
+    return Response({
+        'code': code,
+        'message': '微信网页绑定无效或已过期',
+        'data': None,
+        'trace_id': make_trace_id(),
+    }, status=http_status)
+
+
+def browser_session_id(request):
+    """Get the server-managed browser session identifier, never a client field."""
+    if not request.session.session_key:
+        request.session.save()
+    return request.session.session_key
+
+
+def web_callback_error():
+    return binding_error('WECHAT_WEB_CALLBACK_INVALID')
+
+
+def h5_login_redirect(web_session_id):
+    """Return the configured H5 login path with only an opaque session id."""
+    public_web_url = getattr(settings, 'PUBLIC_WEB_URL', '').rstrip('/')
+    return f"{public_web_url}/#/pages/login/index?{urlencode({'web_session_id': web_session_id})}"
 
 
 @api_view(['POST'])
@@ -67,13 +120,27 @@ def login(request):
                 return role_error(
                     'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
                 )
-            user, _ = get_or_create_user(mobile, initial_role=active_role)
+            user, _ = get_or_create_user(
+                mobile, initial_role=active_role, grant_source='self_login'
+            )
         else:
-            if not has_user_role(user, active_role):
+            if active_role == 'parent':
+                try:
+                    user = ensure_parent_role_for_login(user)
+                except RoleNotGranted:
+                    return role_error(
+                        'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
+                    )
+            elif not has_user_role(user, active_role):
                 return role_error(
                     'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
                 )
             user, _ = get_or_create_user(mobile, initial_role=active_role)
+
+    if user.status != 'active':
+        return role_error(
+            'ACCOUNT_INACTIVE', 'Account is inactive', status.HTTP_403_FORBIDDEN
+        )
 
     tokens = generate_tokens(user, active_role)
 
@@ -84,6 +151,176 @@ def login(request):
             **tokens,
             'user': serialize_user_session(user, active_role),
         },
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_web_session(request):
+    """Start a browser-bound WeChat QR OAuth session without issuing tokens."""
+    serializer = WechatWebSessionSerializer(data=request.data)
+    if not serializer.is_valid():
+        return role_error('INVALID_ROLE', 'Invalid role', status.HTTP_400_BAD_REQUEST)
+    try:
+        state = create_web_login_state(
+            serializer.validated_data['requested_role'], browser_session_id(request)
+        )
+        authorization_url = build_web_authorization_url(state.value)
+    except WebConfigurationError:
+        return binding_error('WECHAT_WEB_NOT_CONFIGURED')
+    except WebLoginStateError:
+        return binding_error('WECHAT_WEB_SESSION_UNAVAILABLE')
+    return Response({
+        'code': 0,
+        'message': 'success',
+        'data': {
+            'web_session_id': state.value,
+            'authorization_url': authorization_url,
+            'expires_in': state.expires_in,
+        },
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def wechat_web_callback(request):
+    """Consume browser-bound OAuth state and return to H5 without credentials."""
+    code = request.query_params.get('code', '')
+    state = request.query_params.get('state', '')
+    try:
+        login_state = consume_web_login_state(state, browser_session_id(request))
+        identity = exchange_web_identity(code)
+        prepare_web_login_session(
+            identity,
+            login_state.requested_role,
+            login_state.browser_session_id,
+            session_id=login_state.value,
+        )
+    except (
+        WebLoginStateError,
+        WebAuthorizationError,
+        WebConfigurationError,
+        WebBindingError,
+    ):
+        return web_callback_error()
+    return redirect(h5_login_redirect(login_state.value))
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def wechat_web_binding_session(request):
+    """Let an authenticated mini-program account bind an OAuth web session."""
+    if 'mobile' in request.data:
+        return binding_error('BINDING_MOBILE_NOT_ALLOWED')
+    serializer = WebBindingSessionSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    try:
+        binding = bind_web_identity_from_miniprogram(
+            serializer.validated_data['web_session_id'], request.user
+        )
+    except WebBindingError:
+        return binding_error('BINDING_SESSION_INVALID')
+    return Response({
+        'code': 0,
+        'message': '绑定已确认',
+        'data': {'bound': binding.bound},
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def wechat_web_binding_status(request):
+    """Expose the opaque binding ticket only to its original H5 browser."""
+    web_session_id = request.query_params.get('web_session_id', '')
+    try:
+        binding = get_web_binding_status(
+            web_session_id, browser_session_id(request)
+        )
+    except WebBindingError:
+        return binding_error('BINDING_SESSION_INVALID')
+    return Response({
+        'code': 0,
+        'message': 'success',
+        'data': {'bound': binding.bound, 'ticket': binding.ticket},
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_web_binding_complete(request):
+    """Consume a one-time, browser-bound ticket and return the normal session."""
+    if 'mobile' in request.data:
+        return binding_error('BINDING_MOBILE_NOT_ALLOWED')
+    serializer = WebBindingCompleteSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    try:
+        user, tokens = complete_web_binding(
+            serializer.validated_data['ticket'],
+            browser_session_id(request),
+            serializer.validated_data.get('requested_role'),
+        )
+    except WebBindingError:
+        return binding_error('BINDING_TICKET_INVALID')
+    active_role = serializer.validated_data.get('requested_role')
+    if active_role is None:
+        active_role = RefreshToken(tokens['refresh_token'])['active_role']
+    return Response({
+        'code': 0,
+        'message': '登录成功',
+        'data': {
+            **tokens,
+            'user': serialize_user_session(
+                user, active_role
+            ),
+        },
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def wechat_web_binding_qrcode(request):
+    """Return the Mini Program code only to the browser that owns the web session."""
+    web_session_id = request.query_params.get('web_session_id', '')
+    try:
+        # This verifies the browser binding for both pending and completed
+        # sessions without exposing a ticket in the QR image response.
+        get_web_binding_status(web_session_id, browser_session_id(request))
+        bridge_code = create_web_binding_bridge_code(web_session_id)
+        content = wxacode_png(
+            scene=bridge_code,
+            page='pages/auth/web-binding',
+            width=430,
+        )
+    except (WebBindingError, WebConfigurationError, RuntimeError):
+        return binding_error('BINDING_QRCODE_UNAVAILABLE')
+    return HttpResponse(content, content_type='image/png')
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_web_binding_phone(request):
+    """Bind a pending web identity after Mini Program phone authorization."""
+    serializer = WebBindingPhoneSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    try:
+        web_session_id = consume_web_binding_bridge_code(
+            serializer.validated_data['bridge_code']
+        )
+        mobile = exchange_miniprogram_phone_code(
+            serializer.validated_data['phone_code']
+        )
+        binding = bind_web_identity_from_trusted_mobile(web_session_id, mobile)
+    except (WebBindingError, WebConfigurationError):
+        return binding_error('BINDING_PHONE_AUTHORIZATION_INVALID')
+    return Response({
+        'code': 0,
+        'message': '绑定已确认',
+        'data': {'bound': binding.bound},
         'trace_id': make_trace_id(),
     })
 
@@ -105,6 +342,10 @@ def refresh_token_view(request):
     try:
         token = RefreshToken(refresh_token)
         user = UserAccount.objects.get(pk=token['user_id'])
+        if user.status != 'active':
+            return role_error(
+                'ACCOUNT_INACTIVE', 'Account is inactive', status.HTTP_403_FORBIDDEN
+            )
         active_role = token['active_role'] if 'active_role' in token else user.role_type
         if active_role not in VALID_ROLES or not has_user_role(user, active_role):
             return role_error(
@@ -201,6 +442,10 @@ def switch_role(request):
     active_role = request.data.get('role')
     if active_role not in VALID_ROLES:
         return role_error('INVALID_ROLE', 'Invalid role', status.HTTP_400_BAD_REQUEST)
+    if request.user.status != 'active':
+        return role_error(
+            'ACCOUNT_INACTIVE', 'Account is inactive', status.HTTP_403_FORBIDDEN
+        )
     if not has_user_role(request.user, active_role):
         return role_error(
             'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN

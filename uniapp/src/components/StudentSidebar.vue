@@ -9,7 +9,7 @@
         </view>
       </view>
       <text class="user-role">学生{{ gradeLabel ? ' · ' + gradeLabel : '' }}</text>
-      <!-- #ifdef H5 -->
+      <!-- #ifndef MP-WEIXIN -->
       <RoleSwitcher />
       <!-- #endif -->
     </view>
@@ -33,6 +33,10 @@
       <view class="nav-item" :class="{ active: activeItem === 'join-class' }" @click="goJoinClass">
         <text class="nav-icon">&#128101;</text>
         <text class="nav-text">加入班级</text>
+      </view>
+      <view class="nav-item" :class="{ active: activeItem === 'practice' }" @click="goPractice">
+        <text class="nav-icon">&#128221;</text>
+        <text class="nav-text">精练题</text>
       </view>
       <view class="nav-item" @click="goParentBind">
         <text class="nav-icon">&#128106;</text>
@@ -130,6 +134,7 @@ onMounted(async () => {
 
 function goHome() { emit('navigate', 'home') }
 function goWrongBook() { emit('navigate', 'wrongbook') }
+function goPractice() { emit('navigate', 'practice') }
 function goKnowledgeGraph() { uni.navigateTo({ url: '/pages/student/knowledge-graph' }) }
 function goGrowth() { emit('navigate', 'growth') }
 function goJoinClass() { emit('navigate', 'join-class') }

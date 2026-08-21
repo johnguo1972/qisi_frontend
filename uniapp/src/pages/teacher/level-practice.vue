@@ -112,7 +112,7 @@
 
       <!-- 底部返回 -->
       <view class="footer-actions">
-        <button class="back-btn" @click="goBack">返回任务详情</button>
+        <button class="back-btn" @click="goBack">返回作业详情</button>
       </view>
     </view>
 
@@ -242,6 +242,7 @@ import { missionApi } from '@/api/index.ts'
 import { chooseImage } from '@/utils/image-upload'
 import { renderWithKatex } from '@/utils/katex-renderer'
 import { getMediaUrl } from '@/utils/media-url'
+import { getQuestionTypeLabel } from '@/utils/question-type'
 
 const missionId = ref<string>('')
 const levelId = ref<string>('')
@@ -394,7 +395,7 @@ function questionTypeText(type?: string): string {
     computation: '计算题',
     proof: '证明题',
   }
-  return map[type || ''] || type || '未知题型'
+  return getQuestionTypeLabel(type)
 }
 
 function questionImageUrl(image: any): string {

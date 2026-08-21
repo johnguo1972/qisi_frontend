@@ -70,18 +70,22 @@ import { getPublicMediaUrl } from '@/utils/media-url'
 
 const loading = ref(true)
 const exporting = ref(false)
-const exportType = ref<'wrongbook' | 'mission'>('wrongbook')
+const exportType = ref<'wrongbook' | 'variants' | 'mission'>('wrongbook')
 const itemIds = ref<string[]>([])
+const sourceWrongItemId = ref('')
 const includeAnswers = ref(false)
 const watermarkText = ref('')
 
-const typeLabel = computed(() => exportType.value === 'wrongbook' ? '错题本' : '任务')
+const typeLabel = computed(() => exportType.value === 'wrongbook' ? '错题本' : exportType.value === 'variants' ? '同类题练习' : '作业')
 const itemCount = computed(() => itemIds.value.length)
 
 onLoad((options: any) => {
-  exportType.value = options?.type === 'mission' ? 'mission' : 'wrongbook'
+  const routeTitle = String(options?.title || '')
+  const isLegacyVariantsRoute = routeTitle === '同类题练习'
+  exportType.value = options?.type === 'mission' ? 'mission' : options?.type === 'variants' || isLegacyVariantsRoute ? 'variants' : 'wrongbook'
+  sourceWrongItemId.value = String(options?.source_wrong_item_id || '')
   if (options?.ids) {
-    // 题目和任务主键均可能是 UUID，不能使用 parseInt 截断或转换。
+    // 题目和作业主键均可能是 UUID，不能使用 parseInt 截断或转换。
     itemIds.value = String(options.ids)
       .split(',')
       .map((s: string) => s.trim())
@@ -115,6 +119,7 @@ async function handleExport() {
     const res = await exportApi.exportPdf({
       export_type: exportType.value,
       item_ids: itemIds.value,
+      ...(sourceWrongItemId.value ? { source_wrong_item_id: sourceWrongItemId.value } : {}),
       include_answers: includeAnswers.value,
       watermark_text: watermarkText.value,
     })

@@ -152,3 +152,43 @@ def test_parent_cannot_bind_own_student_role():
     })
     assert response.status_code == 400
     assert response.data['code'] == 'SELF_BINDING_NOT_ALLOWED'
+
+
+@pytest.mark.django_db
+def test_multi_role_parent_can_view_own_student_identity_without_self_binding():
+    user = _user('student', '13900000105')
+    grant_user_role(user, 'student')
+    grant_user_role(user, 'parent')
+    institution = Institution.objects.create(institution_name='Multi Role School', created_by=user)
+    class_obj = Class.objects.create(
+        institution=institution, creator_teacher=user, class_name='Multi Role Class',
+    )
+    ClassStudent.objects.create(
+        class_obj=class_obj, student=user, join_type='manual', status='active',
+    )
+    mission = LearningMission.objects.create(
+        creator_teacher_id=user, class_obj=class_obj,
+        mission_name='本人学生作业', status='published',
+    )
+    parent_client = _client_for(user, 'parent')
+
+    children = parent_client.get('/api/v1/parent/children')
+    assert children.status_code == 200
+    assert children.data['data'] == [{
+        'id': user.id,
+        'display_name': user.display_name,
+        'grade_level': user.grade_level,
+        'is_self': True,
+        'relation_type': 'self',
+    }]
+
+    context = parent_client.post('/api/v1/parent/context', {'student_id': str(user.id)})
+    assert context.status_code == 200
+    overview = parent_client.get('/api/v1/parent/overview')
+    assert overview.status_code == 200
+    assert overview.data['data']['student']['id'] == user.id
+    missions = parent_client.get('/api/v1/parent/missions')
+    assert missions.status_code == 200
+    assert [item['id'] for item in missions.data['data']['missions']] == [mission.id]
+    assert not StudentParentBind.objects.filter(parent_user_id=user, student_user_id=user).exists()
+    cache.clear()

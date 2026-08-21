@@ -5,6 +5,7 @@
       <!-- MP-WEIXIN 不支持动态组件，使用条件渲染保持相同的页面切换行为。 -->
       <HomePage v-if="currentPage === 'home'" />
       <WrongbookPage v-else-if="currentPage === 'wrongbook'" />
+      <PracticePage v-else-if="currentPage === 'practice'" />
       <GrowthPage v-else-if="currentPage === 'growth'" />
       <JoinClassPage v-else-if="currentPage === 'join-class'" />
     </view>
@@ -17,6 +18,7 @@ import { onShow } from '@dcloudio/uni-app'
 import StudentSidebar from '@/components/StudentSidebar.vue'
 import HomePage from './home.vue'
 import WrongbookPage from './wrongbook.vue'
+import PracticePage from '@/components/PracticeContent.vue'
 import GrowthPage from './growth.vue'
 import JoinClassPage from './join-class.vue'
 

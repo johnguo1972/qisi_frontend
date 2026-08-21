@@ -4,6 +4,7 @@ import logging
 import time
 import os
 import threading
+import re
 from django.conf import settings
 from pydantic import BaseModel, ValidationError
 from apps.common.exceptions import AIRequestError
@@ -14,10 +15,12 @@ from apps.common.ai.prompt_registry import PromptRegistry
 from apps.common.ai.types import AIResult
 from apps.common.ai.components import (
     DeepSeekFinalReviewComponent,
+    DeepSeekBaselineSolveComponent,
     DeepSeekIndependentVerifierComponent,
     KnowledgeAnalysisComponent,
     ModeAAnswerComponent,
     ModeBAnswerComponent,
+    ModeBStructureRepairComponent,
     ModeCAnswerComponent,
     QuestionComponentFactory,
     QuestionInput,
@@ -31,7 +34,12 @@ from apps.common.ai.answer_arbitration import (
     ArbitrationProviderError,
     ModeAnswerArbitrator,
 )
-from apps.common.ai.question_context import QuestionContextBuilder, question_context_hash
+from apps.common.ai.answer_validation import AnswerNormalizer
+from apps.common.ai.question_context import (
+    QuestionContextBuilder,
+    question_context_hash,
+    question_context_payload,
+)
 from apps.common.ai.schemas import ModeAResponse, ModeBResponse, ModeCResponse
 
 logger = logging.getLogger(__name__)
@@ -54,6 +62,37 @@ _SHARED_VERIFIER_FIELDS = (
 _MODE_ARBITRATION_ATTEMPTS = 2
 _PIPELINE_CACHE_KEY = "_ai_cache"
 _PIPELINE_CACHE_VERSION = 1
+_RESPONSE_CONTRACT_FAILURE_MARKERS = (
+    "schema",
+    "json",
+    "validation",
+    "corrupted latex",
+)
+_TRUE_FALSE_CANONICAL_TOKENS = (
+    ("FALSE", re.compile(r"\bfalse\b|错误|\bwrong\b|[×✗]", re.IGNORECASE)),
+    ("TRUE", re.compile(r"\btrue\b|正确|\bcorrect\b|[√✓]", re.IGNORECASE)),
+)
+
+
+def _is_response_contract_failure(error: BaseException) -> bool:
+    """Return whether a failed component result is eligible for B JSON repair.
+
+    Mode B structure repair regenerates a teaching payload.  It cannot repair
+    transport, rate-limit, or provider-capacity failures, and routing those
+    failures through the repair prompt both wastes a request and obscures the
+    true failed provider boundary.
+    """
+    message = str(error).lower()
+    return any(marker in message for marker in _RESPONSE_CONTRACT_FAILURE_MARKERS)
+
+
+def _safe_arbitration_failure(error: BaseException) -> str:
+    """Serialize a stable arbitration boundary without retaining raw provider text."""
+    if isinstance(error, ArbitrationProviderError):
+        stage = getattr(error, "stage", "")
+        if isinstance(stage, str) and stage and stage != "unknown":
+            return stage
+    return str(error)
 
 
 def _project_schema_value(value):
@@ -581,9 +620,10 @@ class AIReviewService:
                         outcome.shared_verifier_result
                     )
             except (AIRequestError, ArbitrationError) as error:
-                errors[answer_key] = str(error)
+                failure = _safe_arbitration_failure(error)
+                errors[answer_key] = failure
                 results[answer_key] = {
-                    'error': str(error),
+                    'error': failure,
                     'provider': self._task_route(
                         f"mode_{mode.lower()}_answer"
                     )[0],
@@ -614,6 +654,137 @@ class AIReviewService:
         return self._run_component(
             self._component(VisionExtractionComponent), question_input
         )
+
+    def solve_unanswered_question_baseline(
+        self,
+        question,
+        *,
+        image_urls=(),
+        normalized_text="",
+        vision_result=None,
+        knowledge_refs="",
+        exclude_reference_answer=False,
+    ) -> dict:
+        """Create the canonical answer/analysis baseline for a question without one."""
+        context = QuestionContextBuilder.build(
+            question,
+            image_urls=image_urls,
+            normalized_text=normalized_text,
+            vision_result=vision_result,
+            knowledge_refs=knowledge_refs,
+        )
+        if exclude_reference_answer:
+            # A historical generated baseline can be syntactically invalid for
+            # an objective question.  Do not feed that faulty answer back to
+            # the independent DeepSeek solve which is supposed to replace it.
+            context = QuestionInput(
+                stem=context.stem,
+                options=context.options,
+                answer="",
+                solution="",
+                image_urls=context.image_urls,
+                metadata={
+                    **context.metadata,
+                    "reference_analysis": "",
+                },
+            )
+        component = self._component(DeepSeekBaselineSolveComponent)
+        for _attempt in range(2):
+            result = self._run_component(component, context)
+            normalized_answer = self._normalize_unanswered_baseline_answer(
+                context,
+                result.get("canonical_answer"),
+                allow_new_true_false_explanation=True,
+            )
+            if result["confidence"] >= 0.80 and normalized_answer is not None:
+                return {
+                    **result,
+                    "canonical_answer": normalized_answer,
+                    "context_hash": question_context_hash(context),
+                }
+        raise AIRequestError("baseline_invalid")
+
+    @staticmethod
+    def _normalize_unanswered_baseline_answer(
+        context,
+        answer: object,
+        *,
+        allow_new_true_false_explanation=False,
+    ) -> str | None:
+        """Return a canonical answer only when it satisfies the question contract.
+
+        A high model confidence is not enough for objective questions.  Historic
+        rows show that an explanatory sentence can be persisted as a judgment
+        or choice answer; then every later A/B/C arbitration fails before it
+        reaches a provider.  Keep the same deterministic normalizer used by
+        arbitration so new and persisted baselines have one validity boundary.
+        """
+        payload = question_context_payload(context)
+        option_labels = tuple(
+            item.get("label", "")
+            for item in payload.get("options", ())
+            if isinstance(item, dict)
+        )
+        normalized = AnswerNormalizer().normalize(
+            answer,
+            question_type=payload.get("question_type", ""),
+            option_labels=option_labels,
+        )
+        if normalized.valid:
+            return normalized.value
+        if not allow_new_true_false_explanation or not isinstance(answer, str):
+            return None
+        if payload.get("question_type", "").strip().casefold() not in {
+            "true_false",
+            "judgement",
+            "judgment",
+            "判断题",
+        }:
+            return None
+        # Models occasionally return a semantically unambiguous presentation
+        # variant such as ``TRUE（正确）``.  This narrow fallback is for a fresh
+        # DeepSeek result only; persisted historical baselines continue through
+        # the strict normalizer above and are regenerated when malformed.
+        matches = {
+            canonical
+            for canonical, pattern in _TRUE_FALSE_CANONICAL_TOKENS
+            if pattern.search(answer)
+        }
+        return next(iter(matches)) if len(matches) == 1 else None
+
+    def unanswered_baseline_is_valid(
+        self,
+        question,
+        baseline: object,
+        *,
+        image_urls=(),
+        normalized_text="",
+        vision_result=None,
+        knowledge_refs="",
+    ) -> bool:
+        """Validate a persisted no-answer baseline before reusing it.
+
+        This intentionally validates only the canonical answer shape.  Analysis
+        remains free-form, while choice/judgment answer notation must be safe
+        for the shared arbitrator.  It is used for legacy records whose answer
+        field is no longer blank because a previous baseline was persisted.
+        """
+        if not isinstance(baseline, dict):
+            return False
+        if not isinstance(baseline.get("canonical_analysis"), str) or not baseline[
+            "canonical_analysis"
+        ].strip():
+            return False
+        context = QuestionContextBuilder.build(
+            question,
+            image_urls=image_urls,
+            normalized_text=normalized_text,
+            vision_result=vision_result,
+            knowledge_refs=knowledge_refs,
+        )
+        return self._normalize_unanswered_baseline_answer(
+            context, baseline.get("canonical_answer")
+        ) is not None
 
     def solve_mode_with_arbitration(
         self,
@@ -658,7 +829,26 @@ class AIReviewService:
         generator = self._component(component_type)
 
         def generate(_mode, question_input):
-            return self._run_component(generator, question_input)
+            try:
+                return self._run_component(generator, question_input)
+            except AIRequestError as error:
+                if (
+                    normalized_mode != "B"
+                    or not _is_response_contract_failure(error)
+                ):
+                    raise
+                logger.warning(
+                    "Mode B schema response rejected; regenerating once",
+                    extra={"mode": "B", "stage": "qwen_structure_repair"},
+                )
+                try:
+                    return self._run_component(
+                        self._component(ModeBStructureRepairComponent), question_input
+                    )
+                except AIRequestError as repair_error:
+                    raise ArbitrationProviderError(
+                        "qwen_structure_repair"
+                    ) from repair_error
 
         def independent_verify(_mode, question_input):
             return self._run_component(
@@ -724,6 +914,102 @@ class AIReviewService:
                 )
 
         raise RuntimeError("AI mode arbitration retry loop exhausted")
+
+    def solve_unanswered_mode_with_arbitration(
+        self,
+        question,
+        *,
+        mode,
+        baseline,
+        image_urls=(),
+        normalized_text="",
+        vision_result=None,
+        knowledge_refs="",
+        model=None,
+    ) -> ArbitrationOutcome:
+        """Generate one teaching mode for a question trusted by the baseline solve."""
+        normalized_mode = mode.strip().upper() if isinstance(mode, str) else ""
+        component_type = {
+            "A": ModeAAnswerComponent,
+            "B": ModeBAnswerComponent,
+            "C": ModeCAnswerComponent,
+        }.get(normalized_mode)
+        if component_type is None:
+            raise ArbitrationProviderError()
+        self._get_model(model)
+        context = QuestionContextBuilder.build(
+            question,
+            image_urls=image_urls,
+            normalized_text=normalized_text,
+            vision_result=vision_result,
+            knowledge_refs=knowledge_refs,
+            target_mode=normalized_mode,
+        )
+        generator = self._component(component_type)
+
+        def generate(_mode, question_input):
+            try:
+                return self._run_component(generator, question_input)
+            except AIRequestError as error:
+                if (
+                    normalized_mode != "B"
+                    or not _is_response_contract_failure(error)
+                ):
+                    raise
+                logger.warning(
+                    "Mode B schema response rejected; regenerating once",
+                    extra={"mode": "B", "stage": "qwen_structure_repair"},
+                )
+                try:
+                    return self._run_component(
+                        self._component(ModeBStructureRepairComponent), question_input
+                    )
+                except AIRequestError as repair_error:
+                    raise ArbitrationProviderError(
+                        "qwen_structure_repair"
+                    ) from repair_error
+
+        def independent_verify(_mode, _question_input):
+            raise AssertionError("unanswered arbitration never calls independent verifier")
+
+        def final_review(_mode, question_input, qwen_result, baseline_result, conflicts):
+            review_input = QuestionInput(
+                stem=question_input.stem,
+                options=question_input.options,
+                answer=question_input.answer,
+                solution=question_input.solution,
+                image_urls=question_input.image_urls,
+                metadata={
+                    **dict(question_input.metadata),
+                    "target_mode": normalized_mode,
+                    "qwen_result": qwen_result,
+                    "independent_result": baseline_result,
+                    "conflicts": list(conflicts),
+                },
+            )
+            return self._run_component(
+                self._component(DeepSeekFinalReviewComponent), review_input
+            )
+
+        outcome = ModeAnswerArbitrator(
+            generate=generate,
+            independent_verify=independent_verify,
+            final_review=final_review,
+        ).process_unanswered(normalized_mode, context, baseline=baseline)
+        try:
+            validated_answer = _MODE_RESPONSE_SCHEMAS[normalized_mode].model_validate(
+                outcome.answer
+            )
+        except ValidationError:
+            raise ArbitrationProviderError() from None
+        public_answer = _project_schema_value(validated_answer)
+        verification = deepcopy(outcome.verification)
+        public_answer["verification"] = verification
+        return ArbitrationOutcome(
+            answer=public_answer,
+            verification=verification,
+            shared_verifier_result=None,
+        )
 
     def solve_mode_a(self, question, image_urls: list, normalized_text: str,
                      vision_result: dict, knowledge_refs: str,
@@ -922,8 +1208,42 @@ class AIReviewService:
         if results.get('probe', {}).get('topic_tags_top3'):
             knowledge_refs = ", ".join(results['probe']['topic_tags_top3'])
 
+        # A blank source answer must first become a durable DeepSeek canonical
+        # baseline.  The A/B/C generators then compare only their final answer
+        # with that baseline; their intentionally different teaching processes
+        # are never compared.
+        # ExamQuestion always has ``answer``.  Keep lightweight compatibility
+        # callers that provide only a question-like object on the legacy path.
+        source_answer = getattr(question, 'answer', object())
+        unanswered = source_answer is None or (
+            isinstance(source_answer, str) and not source_answer.strip()
+        )
+        baseline = None
+        if unanswered:
+            try:
+                baseline = self.solve_unanswered_question_baseline(
+                    question,
+                    image_urls=image_urls,
+                    normalized_text=normalized_text,
+                    vision_result=vision_for_ai,
+                    knowledge_refs=knowledge_refs,
+                )
+                question.answer = baseline['canonical_answer']
+                question.analysis = baseline['canonical_analysis']
+                results['baseline'] = baseline
+                notify_step_complete('baseline')
+            except AIRequestError as error:
+                errors['baseline'] = str(error)
+                results['baseline'] = {'error': str(error)}
+                results['errors'] = errors
+                results['image_count'] = len(image_urls)
+                question.ai_processing_status = 'failed'
+                question.ai_processed_at = timezone.now()
+                question.save(update_fields=['ai_processing_status', 'ai_processed_at'])
+                return results
+
         # Step 3: Solver A/B/C with independent verification and arbitration.
-        shared_verification = self._cached_shared_verification(
+        shared_verification = None if baseline is not None else self._cached_shared_verification(
             question,
             image_urls=image_urls,
             normalized_text=normalized_text,
@@ -935,16 +1255,28 @@ class AIReviewService:
             attempts = 2 if retry_mode_b and mode == 'B' else 1
             for attempt in range(attempts):
                 try:
-                    outcome = self.solve_mode_with_arbitration(
-                        question,
-                        mode=mode,
-                        image_urls=image_urls,
-                        normalized_text=normalized_text,
-                        vision_result=vision_for_ai,
-                        knowledge_refs=knowledge_refs,
-                        cached_verification=shared_verification,
-                        model=model,
-                    )
+                    if baseline is not None:
+                        outcome = self.solve_unanswered_mode_with_arbitration(
+                            question,
+                            mode=mode,
+                            baseline=baseline,
+                            image_urls=image_urls,
+                            normalized_text=normalized_text,
+                            vision_result=vision_for_ai,
+                            knowledge_refs=knowledge_refs,
+                            model=model,
+                        )
+                    else:
+                        outcome = self.solve_mode_with_arbitration(
+                            question,
+                            mode=mode,
+                            image_urls=image_urls,
+                            normalized_text=normalized_text,
+                            vision_result=vision_for_ai,
+                            knowledge_refs=knowledge_refs,
+                            cached_verification=shared_verification,
+                            model=model,
+                        )
                     answer = dict(outcome.answer)
                     route_provider, route_model = self._task_route(
                         f"mode_{mode.lower()}_answer"
@@ -965,8 +1297,9 @@ class AIReviewService:
                             extra={'question_id': str(question_id), 'mode': mode},
                         )
                         continue
-                    errors[answer_key] = str(error)
-                    results[answer_key] = {'error': str(error)}
+                    failure = _safe_arbitration_failure(error)
+                    errors[answer_key] = failure
+                    results[answer_key] = {'error': failure}
 
         if shared_verification is not None and not errors:
             results['verifier'] = deepcopy(shared_verification)
@@ -1051,6 +1384,20 @@ class AIReviewService:
         # Save vision extract
         if 'vision' in results:
             question.ai_vision_extract = results['vision']
+
+        # The no-answer baseline is safe structured data.  Persist it with the
+        # canonical answer/analysis immediately, independently of later modes.
+        if 'baseline' in results and not results['baseline'].get('error'):
+            baseline = results['baseline']
+            question.answer = baseline['canonical_answer']
+            question.analysis = baseline['canonical_analysis']
+            question.ai_verifier_result = {
+                'unanswered_baseline': {
+                    key: deepcopy(baseline[key])
+                    for key in ('canonical_answer', 'canonical_analysis', 'key_facts', 'confidence', 'context_hash')
+                    if key in baseline
+                }
+            }
 
         # Save only the shared DeepSeek verification cache. Legacy verifier
         # envelopes and partial/failed runs must preserve the previous cache.

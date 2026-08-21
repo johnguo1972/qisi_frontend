@@ -20,6 +20,7 @@ REQUIRED_TASKS = {
     "knowledge_analysis",
     "mode_a_answer",
     "mode_b_answer",
+    "mode_b_structure_repair",
     "mode_c_answer",
     "result_verify",
     "vision_fact_extract",
@@ -31,6 +32,7 @@ REQUIRED_TASKS = {
     "teacher_guidance_evaluate",
     "variant_generate",
     "variant_verify_deepseek",
+    "deepseek_baseline_solve",
     "deepseek_independent_verify",
     "deepseek_final_review",
     "photo_recognize",
@@ -42,6 +44,7 @@ EXPECTED_ROUTE_MATRIX = {
     "knowledge_analysis": ("qwen", "qwen3.7-flash", 300.0),
     "mode_a_answer": ("qwen", "qwen3.7-plus", 300.0),
     "mode_b_answer": ("qwen", "qwen3.7-plus", 300.0),
+    "mode_b_structure_repair": ("qwen", "qwen3.7-plus", 300.0),
     "mode_c_answer": ("qwen", "qwen3.7-plus", 300.0),
     "result_verify": ("qwen", "qwen3.7-flash", 300.0),
     "vision_fact_extract": ("qwen", "qwen3-vl-plus", 300.0),
@@ -53,6 +56,7 @@ EXPECTED_ROUTE_MATRIX = {
     "teacher_guidance_evaluate": ("qwen", "qwen3.7-flash", 300.0),
     "variant_generate": ("qwen", "qwen3.7-plus", 300.0),
     "variant_verify_deepseek": ("deepseek", "deepseek-v4-pro", 300.0),
+    "deepseek_baseline_solve": ("deepseek", "deepseek-v4-pro", 300.0),
     "deepseek_independent_verify": ("deepseek", "deepseek-v4-pro", 300.0),
     "deepseek_final_review": ("deepseek", "deepseek-v4-pro", 300.0),
     "photo_recognize": ("qwen", "qwen3-vl-plus", 300.0),
@@ -173,7 +177,11 @@ def test_position_detection_routes_to_qwen37_plus_with_300_second_timeout(
 def test_answer_verification_tasks_enable_deepseek_thinking(provider_env):
     config = AIConfig.load()
 
-    for key in ("deepseek_independent_verify", "deepseek_final_review"):
+    for key in (
+        "deepseek_baseline_solve",
+        "deepseek_independent_verify",
+        "deepseek_final_review",
+    ):
         task = config.get_task_config(key)
         assert task.provider == "deepseek"
         assert task.model == "deepseek-v4-pro"
@@ -381,6 +389,7 @@ def test_default_config_declares_every_task_with_300_second_timeout(provider_env
         if key
         in {
             "variant_verify_deepseek",
+            "deepseek_baseline_solve",
             "deepseek_independent_verify",
             "deepseek_final_review",
         }

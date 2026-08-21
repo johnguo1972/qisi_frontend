@@ -19,6 +19,67 @@ from .ai_queue import dispatch_queued_ai_items, recover_stale_ai_items
 logger = logging.getLogger(__name__)
 
 PROGRESS_KEY_PREFIX = 'single_ai_progress:'
+_ARBITRATION_FAILURE_STAGES = frozenset({
+    'baseline_invalid',
+    'qwen_generate',
+    'qwen_structure_repair',
+    'deepseek_independent',
+    'deepseek_final_review',
+})
+
+
+def _unanswered_baseline_from_verifier(value):
+    """Return a usable persisted no-answer baseline without exposing raw AI data."""
+    if not isinstance(value, dict):
+        return None
+    baseline = value.get('unanswered_baseline')
+    if not isinstance(baseline, dict):
+        return None
+    if not all(
+        isinstance(baseline.get(key), str) and baseline[key].strip()
+        for key in ('canonical_answer', 'canonical_analysis')
+    ):
+        return None
+    return dict(baseline)
+
+
+def _question_has_no_source_answer(question) -> bool:
+    if not hasattr(question, 'answer'):
+        # Lightweight compatibility callers may intentionally omit this field;
+        # only a persisted blank answer opts into the DeepSeek baseline flow.
+        return False
+    answer = getattr(question, 'answer', None)
+    return answer is None or (isinstance(answer, str) and not answer.strip())
+
+
+def classify_ai_failure(error: BaseException) -> str:
+    """Return a stable, non-sensitive category for durable AI task telemetry."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        stage = getattr(current, 'stage', None)
+        if stage in _ARBITRATION_FAILURE_STAGES:
+            return stage
+        message = str(current).lower()
+        if message in _ARBITRATION_FAILURE_STAGES:
+            return message
+        if '429' in message or 'rate limit' in message or 'rate_limited' in message:
+            return 'rate_limited'
+        if 'connecttimeout' in message or 'connect timeout' in message:
+            return 'connect_timeout'
+        if 'timeout' in message or 'timed out' in message:
+            return 'read_timeout'
+        if any(marker in message for marker in ('schema', 'json', 'validation')):
+            return 'schema_invalid'
+        if 'baseline_invalid' in message:
+            return 'baseline_invalid'
+        if any(marker in message for marker in ('not configured', 'configuration', 'api key')):
+            return 'configuration_error'
+        if any(marker in message for marker in ('500', '502', '503', '504', 'unavailable')):
+            return 'provider_unavailable'
+        current = current.__cause__
+    return 'unknown_error'
 
 # Step labels for progress reporting
 STEP_LABELS = {
@@ -75,23 +136,35 @@ def execute_ai_job_item(self, item_id: str):
         service.save_results_to_question(item.question_id, results)
         item.status = (AIProcessingJobItem.Status.PARTIAL if results.get('errors')
                        else AIProcessingJobItem.Status.SUCCEEDED)
+        b_mode_error = results.get('errors', {}).get('answer_b')
         item.error_code = (
-            'answer_b_failed' if 'answer_b' in results.get('errors', {}) else ''
+            f'answer_b_failed_{classify_ai_failure(Exception(b_mode_error))}'
+            if b_mode_error
+            else ''
         )
         item.finished_at = timezone.now()
         item.save(update_fields=['status', 'error_code', 'finished_at'])
         return {'status': 'partial' if results.get('errors') else 'complete', 'question_id': str(item.question_id)}
-    except Exception:
+    except Exception as error:
         item.status = AIProcessingJobItem.Status.FAILED
-        item.error_code = 'processing_failed'
+        error_category = classify_ai_failure(error)
+        item.error_code = f'processing_failed_{error_category}'
         item.finished_at = timezone.now()
         item.save(update_fields=['status', 'error_code', 'finished_at'])
+        logger.exception(
+            'AI queue item processing failed',
+            extra={
+                'question_id': str(item.question_id),
+                'item_id': str(item.id),
+                'error_category': error_category,
+            },
+        )
         return {'status': 'failed', 'question_id': str(item.question_id)}
     finally:
         service.close()
         RedisLeasePool(
             'question',
-            limit=int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 16)),
+            limit=int(getattr(settings, 'AI_GLOBAL_CONCURRENCY', 6)),
             ttl_seconds=4200,
         ).release(str(item.id))
 
@@ -147,8 +220,18 @@ def single_ai_process_question(self, question_id, model=None):
     service = create_ai_review_service()
 
     try:
+        def persist_completed_step(step_key, value):
+            service.save_results_to_question(
+                question_id,
+                {step_key: value, 'errors': {}},
+            )
+
         # Call the new 6-step pipeline
-        results = service.process_question_full_v2(question_id, model=model)
+        results = service.process_question_full_v2(
+            question_id,
+            model=model,
+            on_step_complete=persist_completed_step,
+        )
         service.save_results_to_question(question_id, results)
 
         logger.info(
@@ -320,6 +403,17 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         probe_result = question.ai_probe_result or {}
         vision_result = question.ai_vision_extract or {}
 
+        if normalized_mode == 'B' and not probe_result:
+            set_progress(
+                'failed', 'failed', '请先完成 AI 探查', error='probe_result_required'
+            )
+            return {
+                'status': 'failed',
+                'question_id': question_id,
+                'mode': normalized_mode,
+                'error': 'probe_result_required',
+            }
+
         # Build normalized_text and knowledge_refs from existing data
         normalized_text = probe_result.get('normalized_text', question.stem or '')
         knowledge_refs = ""
@@ -329,16 +423,106 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         # Get image URLs
         image_urls = service._get_question_image_urls(question)
 
-        outcome = service.solve_mode_with_arbitration(
+        # A manual A/B/C request for a source-unanswered question must retain
+        # the same canonical DeepSeek baseline as the full pipeline.  The
+        # baseline is committed before any mode-specific generation so later
+        # failures never discard the newly established answer and analysis.
+        baseline = _unanswered_baseline_from_verifier(
+            question.ai_verifier_result
+        )
+        rebuild_invalid_baseline = baseline is not None and not service.unanswered_baseline_is_valid(
             question,
-            mode=normalized_mode,
+            baseline,
             image_urls=image_urls,
             normalized_text=normalized_text,
             vision_result=vision_result,
             knowledge_refs=knowledge_refs,
-            cached_verification=question.ai_verifier_result,
-            model=model,
         )
+        if rebuild_invalid_baseline:
+            # A previous no-answer baseline may have filled answer/analysis
+            # with an explanatory sentence that is invalid for the question
+            # type.  Treat it as missing and recreate it before mode handling.
+            baseline = None
+
+        if baseline is None and (
+            _question_has_no_source_answer(question) or rebuild_invalid_baseline
+        ):
+            generated_baseline = service.solve_unanswered_question_baseline(
+                question,
+                image_urls=image_urls,
+                normalized_text=normalized_text,
+                vision_result=vision_result,
+                knowledge_refs=knowledge_refs,
+                exclude_reference_answer=rebuild_invalid_baseline,
+            )
+            with transaction.atomic():
+                locked_question = (
+                    ExamQuestion.objects.select_for_update().get(id=question_id)
+                )
+                baseline = _unanswered_baseline_from_verifier(
+                    locked_question.ai_verifier_result
+                )
+                locked_baseline_valid = baseline is not None and service.unanswered_baseline_is_valid(
+                    locked_question,
+                    baseline,
+                    image_urls=image_urls,
+                    normalized_text=normalized_text,
+                    vision_result=vision_result,
+                    knowledge_refs=knowledge_refs,
+                )
+                if not locked_baseline_valid:
+                    baseline = None
+                if baseline is None and (
+                    _question_has_no_source_answer(locked_question)
+                    or rebuild_invalid_baseline
+                ):
+                    baseline = {
+                        key: generated_baseline[key]
+                        for key in (
+                            'canonical_answer',
+                            'canonical_analysis',
+                            'key_facts',
+                            'confidence',
+                            'context_hash',
+                        )
+                        if key in generated_baseline
+                    }
+                    verifier = (
+                        dict(locked_question.ai_verifier_result)
+                        if isinstance(locked_question.ai_verifier_result, dict)
+                        else {}
+                    )
+                    verifier['unanswered_baseline'] = baseline
+                    locked_question.answer = baseline['canonical_answer']
+                    locked_question.analysis = baseline['canonical_analysis']
+                    locked_question.ai_verifier_result = verifier
+                    locked_question.save(
+                        update_fields=['answer', 'analysis', 'ai_verifier_result']
+                    )
+                question = locked_question
+
+        if baseline is not None:
+            outcome = service.solve_unanswered_mode_with_arbitration(
+                question,
+                mode=normalized_mode,
+                baseline=baseline,
+                image_urls=image_urls,
+                normalized_text=normalized_text,
+                vision_result=vision_result,
+                knowledge_refs=knowledge_refs,
+                model=model,
+            )
+        else:
+            outcome = service.solve_mode_with_arbitration(
+                question,
+                mode=normalized_mode,
+                image_urls=image_urls,
+                normalized_text=normalized_text,
+                vision_result=vision_result,
+                knowledge_refs=knowledge_refs,
+                cached_verification=question.ai_verifier_result,
+                model=model,
+            )
 
         mode_key = f'ai_answer_{normalized_mode.lower()}'
         answer = dict(outcome.answer)
@@ -434,19 +618,21 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         )
         set_progress('failed', 'failed', '处理超时', error='processing_timeout')
         return {'status': 'failed', 'error': 'processing_timeout'}
-    except Exception:
+    except Exception as error:
         if service is None:
             raise
-        logger.error(
+        error_category = classify_ai_failure(error)
+        logger.exception(
             'AI single mode processing failed',
             extra={
                 'question_id': str(question_id),
                 'mode': normalized_mode,
                 'status': 'failed',
+                'error_category': error_category,
             },
         )
-        set_progress('failed', 'failed', '处理失败', error='processing_failed')
-        return {'status': 'failed', 'error': 'processing_failed'}
+        set_progress('failed', 'failed', '处理失败', error=error_category)
+        return {'status': 'failed', 'error': error_category}
     finally:
         try:
             if service is not None:

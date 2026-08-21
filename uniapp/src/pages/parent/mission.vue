@@ -2,19 +2,19 @@
   <ParentShell active-item="home">
   <view class="page">
     <view class="header">
-      <text class="title">任务详情</text>
+      <text class="title">作业详情</text>
     </view>
     <MpChildSwitcher :visible="true" @changed="onChildChanged" />
 
     <view v-if="!selectedChild" class="state-card">请先绑定并选择孩子</view>
-    <view v-else-if="loading" class="state-card">正在加载任务详情...</view>
+    <view v-else-if="loading" class="state-card">正在加载作业详情...</view>
     <view v-else-if="errorMessage" class="state-card error">{{ errorMessage }}</view>
-    <view v-else-if="!mission" class="state-card">暂无任务详情</view>
+    <view v-else-if="!mission" class="state-card">暂无作业详情</view>
     <template v-else>
       <view class="mission-card">
         <text class="mission-name">{{ mission.mission_name }}</text>
         <text class="mission-meta">{{ mission.class_name || '未设置班级' }}</text>
-        <text class="mission-meta">截止：{{ formatDateTime(mission.deadline) }}</text>
+        <text class="mission-meta">截止：{{ formatDateOnly(mission.deadline) }}</text>
         <view class="overall">
           <text>整体进度 {{ mission.progress_percent || 0 }}%</text>
           <view class="progress"><view class="bar" :style="{ width: `${mission.progress_percent || 0}%` }"></view></view>
@@ -22,10 +22,10 @@
       </view>
 
       <view class="levels">
-        <view class="section-title">关卡进度</view>
+        <view class="section-title">{{ mission.assignment_mode === 'flat' ? '作业进度' : '关卡进度' }}</view>
         <view v-if="!mission.levels?.length" class="empty">暂无关卡数据</view>
         <view v-for="level in mission.levels" :key="level.id" class="level">
-          <view class="level-head"><text class="level-name">第{{ level.level_no }}关 · {{ level.level_name }}</text><text class="level-status">{{ statusLabel(level.status) }}</text></view>
+          <view class="level-head"><text class="level-name">{{ mission.assignment_mode === 'flat' ? '作业题目' : `第${level.level_no}关 · ${level.level_name}` }}</text><text class="level-status">{{ statusLabel(level.status) }}</text></view>
           <text class="level-meta">{{ level.completed_count || 0 }}/{{ level.question_count || 0 }} 题 · 正确率 {{ level.accuracy || 0 }}%</text>
           <view class="progress"><view class="bar" :style="{ width: `${level.progress_percent || 0}%` }"></view></view>
         </view>
@@ -42,7 +42,7 @@ import { parentApi } from '@/api/index'
 import ParentShell from '@/components/ParentShell.vue'
 import MpChildSwitcher from '@/components/MpChildSwitcher.vue'
 import { ensurePageRole } from '@/utils/roles'
-import { formatDateTime, statusLabel } from '@/utils/display-format'
+import { formatDateOnly, statusLabel } from '@/utils/display-format'
 
 const missionId = ref('')
 const selectedChild = ref<any>(null)
@@ -66,11 +66,11 @@ async function loadMission() {
   errorMessage.value = ''
   try {
     const response: any = await parentApi.missionDetail(missionId.value)
-    if (response?.code !== 0) throw new Error(response?.detail || response?.message || '任务详情加载失败')
+    if (response?.code !== 0) throw new Error(response?.detail || response?.message || '作业详情加载失败')
     mission.value = response.data?.mission || null
   } catch (error: any) {
     mission.value = null
-    errorMessage.value = error?.message || '任务详情加载失败，请稍后重试'
+    errorMessage.value = error?.message || '作业详情加载失败，请稍后重试'
   } finally {
     loading.value = false
   }

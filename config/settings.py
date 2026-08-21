@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     'apps.institutions',
     'apps.courses',
     'apps.qrcode',
+    'apps.practice',
 ]
 
 MIDDLEWARE = [
@@ -86,12 +87,17 @@ CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', 'True').lo
 
 # Durable AI queue limits.  These values are deliberately independent from
 # Celery worker concurrency: three batch jobs may be active while at most
-# sixteen individual question pipelines are leased globally.
+# six individual question pipelines are leased globally.
 AI_MAX_ACTIVE_JOBS = int(os.environ.get('AI_MAX_ACTIVE_JOBS', '3'))
-AI_GLOBAL_CONCURRENCY = int(os.environ.get('AI_GLOBAL_CONCURRENCY', '16'))
+AI_GLOBAL_CONCURRENCY = int(os.environ.get('AI_GLOBAL_CONCURRENCY', '6'))
 AI_QUEUE_CAPACITY = int(os.environ.get('AI_QUEUE_CAPACITY', '10000'))
-AI_QWEN_CONCURRENCY = int(os.environ.get('AI_QWEN_CONCURRENCY', '16'))
-AI_DEEPSEEK_CONCURRENCY = int(os.environ.get('AI_DEEPSEEK_CONCURRENCY', '8'))
+AI_QWEN_CONCURRENCY = int(os.environ.get('AI_QWEN_CONCURRENCY', '6'))
+AI_DEEPSEEK_CONCURRENCY = int(os.environ.get('AI_DEEPSEEK_CONCURRENCY', '6'))
+# A saturated provider returns to the shared pool as soon as an in-flight HTTP
+# request completes.  Waiting avoids turning that short-lived saturation into
+# a permanent per-question B-mode failure.
+AI_PROVIDER_LEASE_WAIT_SECONDS = int(os.environ.get('AI_PROVIDER_LEASE_WAIT_SECONDS', '300'))
+AI_PROVIDER_LEASE_POLL_SECONDS = float(os.environ.get('AI_PROVIDER_LEASE_POLL_SECONDS', '2'))
 
 # AI calls are long-running and must not be prefetched ahead of available
 # workers.  Late acknowledgement allows a lost worker to return its item to
@@ -185,7 +191,23 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 WECHAT_MP_APPID = os.environ.get('WECHAT_MP_APPID', '')
 WECHAT_MP_APPSECRET = os.environ.get('WECHAT_MP_APPSECRET', '')
+WECHAT_WEB_APP_ID = os.environ.get('WECHAT_WEB_APP_ID', '')
+WECHAT_WEB_APP_SECRET = os.environ.get('WECHAT_WEB_APP_SECRET', '')
+WECHAT_WEB_REDIRECT_URI = os.environ.get('WECHAT_WEB_REDIRECT_URI', '')
 PUBLIC_WEB_URL = os.environ.get('PUBLIC_WEB_URL', 'https://qisi.chengxuelu.com')
+
+# Practice is off by default in non-debug deployments.  A rollout must opt in
+# and provide a comma-separated beta mobile allowlist; setting the flag to 0
+# is the emergency rollback switch.
+PRACTICE_FEATURE_ENABLED = os.environ.get(
+    'PRACTICE_FEATURE_ENABLED', 'true' if DEBUG else 'false'
+).lower() in ('1', 'true', 'yes', 'on')
+PRACTICE_BETA_MOBILES = tuple(
+    mobile.strip()
+    for mobile in os.environ.get('PRACTICE_BETA_MOBILES', '').split(',')
+    if mobile.strip()
+)
+PRACTICE_RELEASE_VERSION = os.environ.get('PRACTICE_RELEASE_VERSION', 'phase5')
 
 # Aliyun OSS Configuration
 ALIYUN_OSS_ACCESS_KEY_ID = os.environ.get('ALIYUN_OSS_ACCESS_KEY_ID', '')

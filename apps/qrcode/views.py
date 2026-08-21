@@ -21,7 +21,13 @@ from apps.accounts.auth import get_request_role
 from apps.accounts.permissions import IsTeacherSession
 from apps.accounts.roles import VALID_ROLES, has_user_role
 from apps.accounts.serializers import serialize_user_session
-from apps.accounts.services import generate_tokens, get_or_create_user, verify_code
+from apps.accounts.services import (
+    RoleNotGranted,
+    ensure_parent_role_for_login,
+    generate_tokens,
+    get_or_create_user,
+    verify_code,
+)
 from apps.institutions.models import ClassStudent, ClassTeacher
 from apps.missions.models import LearningMission
 from apps.study.models import AnswerAttempt
@@ -56,6 +62,8 @@ def effective_student(request):
     child_id = cache.get(f'parent_context:{request.user.id}')
     if not child_id:
         return None
+    if str(child_id) == str(request.user.id) and has_user_role(request.user, 'student'):
+        return request.user
     relation = StudentParentBind.objects.filter(
         parent_user_id=request.user, student_user_id=child_id, bind_status='active',
     ).select_related('student_user_id').first()
@@ -231,12 +239,20 @@ def wechat_login(request):
         return Response({'code': 400, 'message': result.get('errmsg', '微信登录失败'), 'data': None, 'trace_id': trace_id()}, status=400)
     identity = WechatIdentity.objects.select_related('user').filter(appid=appid, openid=result['openid']).first()
     if identity:
-        active_role = request.data.get('role_type') or identity.user.role_type
+        user = identity.user
+        active_role = request.data.get('role_type') or user.role_type
         if active_role not in VALID_ROLES:
             return Response({'code': 'INVALID_ROLE', 'message': 'Invalid role', 'data': None, 'trace_id': trace_id()}, status=400)
-        if not has_user_role(identity.user, active_role):
+        if user.status != 'active':
+            return Response({'code': 'ACCOUNT_INACTIVE', 'message': 'Account is inactive', 'data': None, 'trace_id': trace_id()}, status=403)
+        if active_role == 'parent':
+            try:
+                user = ensure_parent_role_for_login(user)
+            except RoleNotGranted:
+                return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
+        elif not has_user_role(user, active_role):
             return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
-        return Response({'code': 0, 'message': '登录成功', 'data': {**generate_tokens(identity.user, active_role), 'user': serialize_user_session(identity.user, active_role)}, 'trace_id': trace_id()})
+        return Response({'code': 0, 'message': '登录成功', 'data': {**generate_tokens(user, active_role), 'user': serialize_user_session(user, active_role)}, 'trace_id': trace_id()})
     return Response({'code': 1001, 'message': '请先绑定手机号', 'data': {'bind_token': cache_wechat_pending(appid, result['openid'], result.get('unionid', ''))}, 'trace_id': trace_id()})
 
 
@@ -257,9 +273,19 @@ def wechat_bind(request):
         return Response({'code': 'INVALID_ROLE', 'message': 'Invalid role', 'data': None, 'trace_id': trace_id()}, status=400)
     if existing_user is None and active_role not in ('student', 'parent'):
         return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
-    if existing_user is not None and not has_user_role(existing_user, active_role):
-        return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
-    user, _ = get_or_create_user(mobile, initial_role=active_role)
+    if existing_user is not None:
+        if existing_user.status != 'active':
+            return Response({'code': 'ACCOUNT_INACTIVE', 'message': 'Account is inactive', 'data': None, 'trace_id': trace_id()}, status=403)
+        if active_role == 'parent':
+            try:
+                existing_user = ensure_parent_role_for_login(existing_user)
+            except RoleNotGranted:
+                return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
+        elif not has_user_role(existing_user, active_role):
+            return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
+    user, _ = get_or_create_user(
+        mobile, initial_role=active_role, grant_source='self_login'
+    )
     identity, _ = WechatIdentity.objects.update_or_create(user=user, defaults={'appid': pending['appid'], 'openid': pending['openid'], 'unionid': pending.get('unionid', '')})
     cache.delete(pending_key)
     return Response({'code': 0, 'message': '绑定成功', 'data': {**generate_tokens(user, active_role), 'user': serialize_user_session(user, active_role)}, 'trace_id': trace_id()})
@@ -275,14 +301,36 @@ def parent_children(request):
     ):
         return Response({'code': 403, 'message': 'parent role required'}, status=403)
     children = StudentParentBind.objects.filter(parent_user_id=request.user, bind_status='active').select_related('student_user_id')
-    return Response({'code': 0, 'message': 'success', 'data': [{'id': b.student_user_id_id, 'display_name': b.student_user_id.display_name, 'grade_level': b.student_user_id.grade_level} for b in children], 'trace_id': trace_id()})
+    data = [{
+        'id': b.student_user_id_id,
+        'display_name': b.student_user_id.display_name,
+        'grade_level': b.student_user_id.grade_level,
+        'is_self': False,
+        'relation_type': b.relation_type,
+    } for b in children]
+    if has_user_role(request.user, 'student'):
+        data.insert(0, {
+            'id': request.user.id,
+            'display_name': request.user.display_name,
+            'grade_level': request.user.grade_level,
+            'is_self': True,
+            'relation_type': 'self',
+        })
+    return Response({'code': 0, 'message': 'success', 'data': data, 'trace_id': trace_id()})
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def parent_context(request):
     child_id = request.data.get('student_id')
-    if (
+    is_self_student = (
+        str(child_id) == str(request.user.id)
+        and get_request_role(request) == 'parent'
+        and has_user_role(request.user, 'parent')
+        and has_user_role(request.user, 'student')
+        and request.user.status == 'active'
+    )
+    if not is_self_student and (
         get_request_role(request) != 'parent'
         or not has_user_role(request.user, 'parent')
         or request.user.status != 'active'

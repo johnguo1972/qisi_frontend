@@ -65,7 +65,7 @@
               class="kp-tag"
             >{{ kp }}</text>
           </view>
-          <button class="btn-practice" @click="startPractice()">
+          <button class="btn-practice" @click="startPractice(item.id)">
             开始练习
           </button>
         </view>
@@ -155,9 +155,10 @@ function renderedStem(item: VariantItem): string {
   return renderedStemMap.value[item.id] || item.stem_html || item.stem || ''
 }
 
-function startPractice() {
+function startPractice(questionId?: string) {
   // 进入独立“同类题练习”页，传错题 id
-  uni.navigateTo({ url: `/pages/student/variant-practice?itemId=${wrongId.value}` })
+  const startId = questionId ? `&questionId=${encodeURIComponent(String(questionId))}` : ''
+  uni.navigateTo({ url: `/pages/student/variant-practice?itemId=${wrongId.value}${startId}` })
 }
 
 function exportPDF() {
@@ -167,7 +168,7 @@ function exportPDF() {
   }
   const ids = variants.value.map(v => v.id).join(',')
   uni.navigateTo({
-    url: `/pages/student/export?ids=${ids}&title=同类题练习`,
+    url: `/pages/student/export?type=variants&source_wrong_item_id=${wrongId.value}&ids=${ids}&title=同类题练习`,
   })
 }
 

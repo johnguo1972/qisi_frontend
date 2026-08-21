@@ -48,6 +48,7 @@ const drawerItems = [
   { key: 'home', icon: '📊', label: '学习概览' },
   { key: 'children', icon: '👨‍👩‍👧', label: '孩子管理' },
   { key: 'wrongbook', icon: '📝', label: '错题分析' },
+  { key: 'practice', icon: '📝', label: '精练题' },
   { key: 'growth', icon: '📈', label: '成长分析' },
   { key: 'knowledge', icon: '🧠', label: '知识掌握' },
 ]
@@ -63,6 +64,7 @@ function navigate(key: string) {
     home: '/pages/parent/home',
     children: '/pages/parent/bind',
     wrongbook: '/pages/parent/wrongbook',
+    practice: '/pages/parent/practice',
     growth: '/pages/parent/growth',
     knowledge: '/pages/parent/knowledge',
   }

@@ -3,7 +3,7 @@
     <!-- 左侧任务信息 -->
     <view class="info-panel">
       <view class="page-header">
-        <text class="page-title">关卡</text>
+        <text class="page-title">{{ assignmentMode === 'flat' ? '作业' : '关卡' }}</text>
         <button class="export-btn" @click="goExport">导出习题</button>
       </view>
       <view class="mission-card">
@@ -35,13 +35,13 @@
     <!-- 右侧关卡列表 -->
     <view class="levels-panel">
       <view class="panel-header">
-        <text class="panel-title">关卡列表</text>
+        <text class="panel-title">{{ assignmentMode === 'flat' ? '作业题目' : '关卡列表' }}</text>
       </view>
       <view class="levels">
         <view v-for="lv in levels" :key="lv.id" class="level-card"
               @click="goLevel(lv.id)">
           <view class="level-left">
-            <view class="level-badge">{{ lv.level_no }}</view>
+            <view v-if="assignmentMode !== 'flat'" class="level-badge">{{ lv.level_no }}</view>
             <view class="level-info">
               <text class="level-name">{{ lv.level_name }}</text>
               <text class="level-detail">{{ lv.question_count || 0 }} 题目</text>
@@ -67,24 +67,18 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
+import { formatDateOnly } from '@/utils/display-format'
 
 const missionId = ref<string>('')
 const missionName = ref('')
 const goalText = ref('')
 const className = ref('')
 const deadline = ref('')
+const assignmentMode = ref<'flat' | 'levels'>('levels')
 const levels = ref<any[]>([])
 
 const deadlineText = computed(() => {
-  if (!deadline.value) return ''
-  try {
-    const d = new Date(deadline.value)
-    const month = d.getMonth() + 1
-    const day = d.getDate()
-    return `${month}月${day}日`
-  } catch {
-    return deadline.value
-  }
+  return formatDateOnly(deadline.value, '')
 })
 
 // 计算总体进度（所有关卡进度的平均值）
@@ -116,6 +110,7 @@ async function loadMission() {
     goalText.value = res.data?.goal_text || ''
     className.value = res.data?.class_name || ''
     deadline.value = res.data?.deadline || ''
+    assignmentMode.value = res.data?.assignment_mode || 'levels'
     levels.value = res.data?.levels || []
   } catch (e) {
     uni.showToast({ title: '加载失败', icon: 'none' })
