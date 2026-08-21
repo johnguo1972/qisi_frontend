@@ -6,6 +6,8 @@ import pytest
 LOGIN_PAGE = Path("uniapp/src/pages/login/index.vue")
 API_CLIENT = Path("uniapp/src/api/wechat-web.ts")
 API_INDEX = Path("uniapp/src/api/index.ts")
+MINIPROGRAM_BINDING_PAGE = Path("uniapp/src/pages/auth/web-binding.vue")
+PAGES_CONFIG = Path("uniapp/src/pages.json")
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +40,8 @@ def test_h5_wechat_binding_login_ui_contract():
     assert "@click.stop=\"switchRole(tab.role)\"" in source
     assert "overflow: hidden" in source
     assert "scrolling=\"no\"" in source
+    assert "restoreWechatWebSessionFromCallback" in source
+    assert "web_session_id" in source
 
 
 def test_h5_wechat_qr_view_keeps_the_full_code_visible_and_consent_below_it():
@@ -66,3 +70,14 @@ def test_wechat_web_api_only_exchanges_opaque_session_and_ticket_values():
     assert "mobile" not in source.lower()
     assert "wechatWebApi" in index
     assert "phone_authorization_confirmed" in source
+
+
+def test_miniprogram_phone_bridge_uses_wechat_authorization_code_only():
+    source = MINIPROGRAM_BINDING_PAGE.read_text(encoding="utf-8")
+    pages = PAGES_CONFIG.read_text(encoding="utf-8")
+    assert 'open-type="getPhoneNumber"' in source
+    assert "event?.detail?.code" in source
+    assert "/auth/wechat-web/binding-phone" in source
+    assert "bridge_code" in source and "phone_code" in source
+    assert "mobile" not in source
+    assert "pages/auth/web-binding" in pages

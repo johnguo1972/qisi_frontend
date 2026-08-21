@@ -51,6 +51,13 @@ class WebBindingCompleteSerializer(serializers.Serializer):
     requested_role = serializers.CharField(max_length=20, required=False)
 
 
+class WebBindingPhoneSerializer(serializers.Serializer):
+    """A Mini Program supplies only WeChat's one-time phone authorization code."""
+
+    bridge_code = serializers.CharField(max_length=32)
+    phone_code = serializers.CharField(max_length=256)
+
+
 def serialize_user_session(user, active_role):
     """Serialize account data with session-scoped role compatibility fields."""
     data = ProfileSerializer(user).data

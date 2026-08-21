@@ -1,6 +1,7 @@
 import uuid
 from urllib.parse import urlencode
 
+from django.http import HttpResponse
 from django.shortcuts import redirect
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -18,6 +19,7 @@ from .serializers import (
     RefreshTokenSerializer,
     WechatWebSessionSerializer,
     WebBindingCompleteSerializer,
+    WebBindingPhoneSerializer,
     WebBindingSessionSerializer,
     serialize_user_session,
 )
@@ -32,15 +34,20 @@ from .wechat_web import (
     WebConfigurationError,
     WebLoginStateError,
     bind_web_identity_from_miniprogram,
+    bind_web_identity_from_trusted_mobile,
     build_web_authorization_url,
     consume_web_login_state,
     create_web_login_state,
+    create_web_binding_bridge_code,
+    consume_web_binding_bridge_code,
+    exchange_miniprogram_phone_code,
     exchange_web_identity,
     complete_web_binding,
     get_web_binding_status,
     prepare_web_login_session,
 )
 from django.conf import settings
+from apps.qrcode.services import wxacode_png
 
 
 def make_trace_id() -> str:
@@ -256,6 +263,50 @@ def wechat_web_binding_complete(request):
                 user, active_role
             ),
         },
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def wechat_web_binding_qrcode(request):
+    """Return the Mini Program code only to the browser that owns the web session."""
+    web_session_id = request.query_params.get('web_session_id', '')
+    try:
+        # This verifies the browser binding for both pending and completed
+        # sessions without exposing a ticket in the QR image response.
+        get_web_binding_status(web_session_id, browser_session_id(request))
+        bridge_code = create_web_binding_bridge_code(web_session_id)
+        content = wxacode_png(
+            scene=bridge_code,
+            page='pages/auth/web-binding',
+            width=430,
+        )
+    except (WebBindingError, WebConfigurationError, RuntimeError):
+        return binding_error('BINDING_QRCODE_UNAVAILABLE')
+    return HttpResponse(content, content_type='image/png')
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_web_binding_phone(request):
+    """Bind a pending web identity after Mini Program phone authorization."""
+    serializer = WebBindingPhoneSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    try:
+        web_session_id = consume_web_binding_bridge_code(
+            serializer.validated_data['bridge_code']
+        )
+        mobile = exchange_miniprogram_phone_code(
+            serializer.validated_data['phone_code']
+        )
+        binding = bind_web_identity_from_trusted_mobile(web_session_id, mobile)
+    except (WebBindingError, WebConfigurationError):
+        return binding_error('BINDING_PHONE_AUTHORIZATION_INVALID')
+    return Response({
+        'code': 0,
+        'message': '绑定已确认',
+        'data': {'bound': binding.bound},
         'trace_id': make_trace_id(),
     })
 

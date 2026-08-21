@@ -78,13 +78,16 @@
               >
                 {{ wechatWebLoading ? '正在创建扫码会话...' : '开始微信扫码' }}
               </button>
-              <view v-if="wechatWebSession" class="wechat-web-qr">
+              <view v-if="wechatWebSession?.authorization_url" class="wechat-web-qr">
                 <iframe
                   class="wechat-web-qr-frame"
                   :src="wechatWebSession.authorization_url"
                   title="微信扫码登录二维码"
                   scrolling="no"
                 ></iframe>
+              </view>
+              <view v-else-if="wechatWebSession" class="wechat-web-qr">
+                <image class="wechat-web-binding-qr-image" :src="wechatWebBindingQrUrl" mode="aspectFit" />
               </view>
               <view class="wechat-web-consent" @click="wechatWebPhoneAuthorizationConfirmed = !wechatWebPhoneAuthorizationConfirmed">
                 <view class="checkbox" :class="{ checked: wechatWebPhoneAuthorizationConfirmed }">
@@ -110,7 +113,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { authApi, wechatWebApi, type WechatWebSession } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
 import { wxLogin } from '@/utils/wechat-auth'
@@ -143,6 +146,12 @@ const wechatWebCompleting = ref(false)
 const wechatWebPhoneAuthorizationConfirmed = ref(false)
 const wechatWebStatusText = ref('请使用微信扫描二维码')
 let wechatWebPollTimer: ReturnType<typeof setInterval> | undefined
+const wechatWebBindingQrUrl = computed(() => {
+  const webSessionId = wechatWebSession.value?.web_session_id
+  return webSessionId
+    ? `/api/v1/auth/wechat-web/binding-qrcode?web_session_id=${encodeURIComponent(webSessionId)}`
+    : ''
+})
 
 function stopWechatWebPolling() {
   if (wechatWebPollTimer) {
@@ -157,6 +166,20 @@ function resetWechatWebSession() {
   wechatWebBindingComplete.value = false
   wechatWebCompleting.value = false
   wechatWebStatusText.value = '请使用微信扫描二维码'
+}
+
+function restoreWechatWebSessionFromCallback() {
+  // #ifdef H5
+  const query = window.location.hash.split('?', 2)[1] || ''
+  const webSessionId = new URLSearchParams(query).get('web_session_id')
+  if (!webSessionId) return
+  loginMode.value = 'wechat'
+  wechatWebPhoneAuthorizationConfirmed.value = true
+  wechatWebSession.value = { web_session_id: webSessionId, authorization_url: '', expires_in: 0 }
+  wechatWebStatusText.value = '已完成扫码，等待小程序手机号授权'
+  void pollWechatWebBindingStatus()
+  wechatWebPollTimer = setInterval(() => { void pollWechatWebBindingStatus() }, 3000)
+  // #endif
 }
 
 function switchLoginMode(mode: 'phone' | 'wechat') {
@@ -238,6 +261,7 @@ async function startWechatWebLogin() {
   }
 }
 
+onMounted(restoreWechatWebSessionFromCallback)
 onUnmounted(stopWechatWebPolling)
 
 async function sendCode() {
@@ -589,6 +613,7 @@ input:focus {
   border: 0;
   overflow: hidden;
 }
+.wechat-web-binding-qr-image { width: 360px; height: 420px; display: block; }
 .wechat-web-binding-guide {
   margin-top: 18rpx;
   padding: 18rpx;
