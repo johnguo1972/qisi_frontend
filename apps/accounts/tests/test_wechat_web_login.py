@@ -627,6 +627,25 @@ def test_callback_rejects_an_unknown_state_without_echoing_oauth_values():
 
 
 @pytest.mark.django_db
+def test_binding_status_reports_pending_before_oauth_callback(wechat_settings):
+    """The H5 poll starts before WeChat redirects back, so this is not an error."""
+    browser = APIClient()
+    session = browser.post(
+        "/api/v1/auth/wechat-web/session",
+        {"requested_role": "student", "phone_authorization_confirmed": True},
+        format="json",
+    ).data["data"]
+
+    response = browser.get(
+        "/api/v1/auth/wechat-web/binding-status",
+        {"web_session_id": session["web_session_id"]},
+    )
+
+    assert response.status_code == 200
+    assert response.data["data"] == {"bound": False, "ticket": None}
+
+
+@pytest.mark.django_db
 def test_callback_redirect_never_leaks_provider_code_or_jwt_for_unbound_identity(
     wechat_settings, monkeypatch
 ):

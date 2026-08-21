@@ -338,7 +338,13 @@ def get_web_binding_status(
     web_session_id: str, browser_session_id: str
 ) -> WebBindingStatus:
     """Return only the original browser's opaque, still-valid completion ticket."""
-    session = _get_binding_session(web_session_id)
+    try:
+        session = _get_binding_session(web_session_id)
+    except WebBindingError as exc:
+        if not _is_binding_session_invalid(exc):
+            raise
+        _require_pending_web_login_state(web_session_id, browser_session_id)
+        return WebBindingStatus(bound=False)
     _require_browser_session(session, browser_session_id)
     ticket = session.get("ticket")
     if not isinstance(ticket, str) or not ticket:
@@ -350,6 +356,26 @@ def get_web_binding_status(
     if not isinstance(ticket_payload, dict):
         return WebBindingStatus(bound=False)
     return WebBindingStatus(bound=True, ticket=ticket)
+
+
+def _is_binding_session_invalid(error: WebBindingError) -> bool:
+    return bool(error.args) and error.args[0] == "binding_session_invalid"
+
+
+def _require_pending_web_login_state(value: str, browser_session_id: str) -> None:
+    """Validate an unconsumed OAuth state without consuming or exposing it."""
+    if not isinstance(value, str) or not value:
+        raise WebBindingError("binding_session_invalid")
+    try:
+        payload = cache.get(_state_key(value))
+    except Exception:
+        raise WebBindingError("binding_cache_failed") from None
+    if not isinstance(payload, dict):
+        raise WebBindingError("binding_session_invalid")
+    requested_role = payload.get("requested_role")
+    if not isinstance(requested_role, str) or requested_role not in VALID_ROLES:
+        raise WebBindingError("binding_session_invalid")
+    _require_browser_session(payload, browser_session_id)
 
 
 def complete_web_binding(
