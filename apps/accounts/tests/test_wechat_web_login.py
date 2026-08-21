@@ -228,6 +228,64 @@ def test_web_binding_session_is_bound_to_its_originating_browser():
         get_status(session.value, "browser-b")
 
 
+def test_binding_bridge_code_is_single_use_and_opaque():
+    session = _binding_session("browser-a", suffix="bridge")
+    create = getattr(wechat_web, "create_web_binding_bridge_code", None)
+    consume = getattr(wechat_web, "consume_web_binding_bridge_code", None)
+    assert callable(create)
+    assert callable(consume)
+
+    code = create(session.value)
+    assert len(code) <= 32
+    assert consume(code) == session.value
+    with pytest.raises(wechat_web.WebBindingError):
+        consume(code)
+
+
+@pytest.mark.django_db
+def test_miniprogram_phone_authorization_binds_the_web_session(monkeypatch):
+    """A phone code is verified only by WeChat's server API, never by H5."""
+    browser = APIClient()
+    session = _binding_session(_browser_session_id(browser), suffix="phone-code")
+    bridge_code = wechat_web.create_web_binding_bridge_code(session.value)
+    monkeypatch.setattr(
+        views,
+        "exchange_miniprogram_phone_code",
+        lambda code: "13900009888",
+    )
+
+    response = APIClient().post(
+        "/api/v1/auth/wechat-web/binding-phone",
+        {"bridge_code": bridge_code, "phone_code": "wechat-phone-code"},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["data"] == {"bound": True}
+    assert WechatWebIdentity.objects.get().user.mobile == "13900009888"
+
+
+@pytest.mark.django_db
+def test_binding_qrcode_is_only_available_to_the_originating_browser(monkeypatch):
+    browser = APIClient()
+    session = _binding_session(_browser_session_id(browser), suffix="qrcode")
+    monkeypatch.setattr(views, "wxacode_png", lambda **kwargs: b"png-data")
+
+    denied = APIClient().get(
+        "/api/v1/auth/wechat-web/binding-qrcode",
+        {"web_session_id": session.value},
+    )
+    accepted = browser.get(
+        "/api/v1/auth/wechat-web/binding-qrcode",
+        {"web_session_id": session.value},
+    )
+
+    assert denied.status_code == 400
+    assert accepted.status_code == 200
+    assert accepted["Content-Type"] == "image/png"
+    assert accepted.content == b"png-data"
+
+
 def test_rewriting_binding_session_never_extends_its_initial_expiry(monkeypatch):
     """Resetting the cache timeout during binding must not make the session live longer."""
     clocked_cache = ClockedCache()

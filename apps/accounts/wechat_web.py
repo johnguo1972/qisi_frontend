@@ -20,6 +20,8 @@ from .services import RoleNotGranted, login_with_trusted_mobile as _trusted_mobi
 WEB_LOGIN_TTL_SECONDS = 300
 WECHAT_WEB_TOKEN_URL = "https://api.weixin.qq.com/sns/oauth2/access_token"
 WECHAT_WEB_AUTHORIZE_URL = "https://open.weixin.qq.com/connect/qrconnect"
+WECHAT_MP_TOKEN_URL = "https://api.weixin.qq.com/cgi-bin/token"
+WECHAT_MP_PHONE_URL = "https://api.weixin.qq.com/wxa/business/getuserphonenumber"
 
 
 class WebLoginStateError(Exception):
@@ -226,6 +228,95 @@ def create_web_binding_session(
     )
 
 
+def create_web_binding_bridge_code(web_session_id: str) -> str:
+    """Create a short opaque handoff code for the Mini Program QR scene.
+
+    The Mini Program scene accepts at most 32 characters, whereas a web
+    session id is deliberately longer.  The bridge code is therefore only a
+    cache-backed, one-time reference to the still-live web session; it carries
+    neither the OAuth identity nor a phone number.
+    """
+    session = _get_binding_session(web_session_id)
+    code = secrets.token_urlsafe(18)
+    _set_binding_cache(
+        _binding_bridge_key(code),
+        {
+            "web_session_id": web_session_id,
+            # Keep the original absolute deadline: issuing a bridge code must
+            # never extend the QR login lifetime.
+            "expires_at": session["expires_at"],
+        },
+    )
+    return code
+
+
+def consume_web_binding_bridge_code(code: str) -> str:
+    """Consume a Mini Program bridge code and return its web session id."""
+    if not isinstance(code, str) or not code:
+        raise WebBindingError("binding_bridge_invalid")
+    key = _binding_bridge_key(code)
+    try:
+        payload = cache.get(key)
+        deleted = cache.delete(key)
+    except Exception:
+        raise WebBindingError("binding_cache_failed") from None
+    if deleted is False:
+        raise WebBindingError("binding_cache_failed")
+    if not isinstance(payload, dict):
+        raise WebBindingError("binding_bridge_invalid")
+    web_session_id = payload.get("web_session_id")
+    if not isinstance(web_session_id, str) or not web_session_id:
+        raise WebBindingError("binding_bridge_invalid")
+    # Also reject a bridge that outlived the web session for backends whose
+    # cache deletion is delayed.
+    _get_binding_session(web_session_id)
+    return web_session_id
+
+
+def exchange_miniprogram_phone_code(
+    phone_code: str, *, http_client: httpx.Client | Any | None = None
+) -> str:
+    """Resolve the Mini Program's one-time phone code through WeChat only."""
+    if not isinstance(phone_code, str) or not phone_code:
+        raise WebBindingError("binding_phone_authorization_failed")
+    appid, app_secret = _get_wechat_miniprogram_configuration()
+    owns_client = http_client is None
+    client = http_client or httpx.Client()
+    try:
+        token_payload = _get_json(
+            client,
+            WECHAT_MP_TOKEN_URL,
+            {
+                "grant_type": "client_credential",
+                "appid": appid,
+                "secret": app_secret,
+            },
+        )
+        access_token = token_payload.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise WebBindingError("binding_phone_authorization_failed")
+        try:
+            response = client.post(
+                WECHAT_MP_PHONE_URL,
+                params={"access_token": access_token},
+                json={"code": phone_code},
+                timeout=10.0,
+            )
+            phone_payload = response.json()
+        except (httpx.HTTPError, TypeError, ValueError):
+            raise WebBindingError("binding_phone_authorization_failed") from None
+    finally:
+        if owns_client:
+            client.close()
+    if not isinstance(phone_payload, dict):
+        raise WebBindingError("binding_phone_authorization_failed")
+    phone_info = phone_payload.get("phone_info")
+    mobile = phone_info.get("phoneNumber") if isinstance(phone_info, dict) else None
+    if not isinstance(mobile, str) or not mobile:
+        raise WebBindingError("binding_phone_authorization_failed")
+    return mobile
+
+
 @transaction.atomic
 def prepare_web_login_session(
     identity: WebIdentity,
@@ -312,6 +403,19 @@ def bind_web_identity_from_miniprogram(
         raise WebBindingError("binding_identity_conflict") from None
 
     return _mark_binding_session_bound(web_session_id, user)
+
+
+@transaction.atomic
+def bind_web_identity_from_trusted_mobile(
+    web_session_id: str, mobile: str
+) -> WebBindingStatus:
+    """Apply role policy to WeChat-verified mobile, then bind the web identity."""
+    session = _get_binding_session(web_session_id)
+    try:
+        user, _ = _trusted_mobile_login(mobile, session["requested_role"])
+    except (RoleNotGranted, ValueError):
+        raise WebBindingError("binding_role_conflict") from None
+    return bind_web_identity_from_miniprogram(web_session_id, user)
 
 
 def _mark_binding_session_bound(
@@ -441,6 +545,16 @@ def _get_wechat_web_configuration() -> tuple[str, str]:
     return values
 
 
+def _get_wechat_miniprogram_configuration() -> tuple[str, str]:
+    values = (
+        getattr(settings, "WECHAT_MP_APPID", ""),
+        getattr(settings, "WECHAT_MP_APPSECRET", ""),
+    )
+    if not all(isinstance(value, str) and value for value in values):
+        raise WebConfigurationError("wechat_miniprogram_not_configured")
+    return values
+
+
 def _get_json(client: Any, url: str, params: dict[str, str]) -> dict[str, Any]:
     try:
         response = client.get(url, params=params, timeout=10.0)
@@ -462,6 +576,10 @@ def _binding_session_key(value: str) -> str:
 
 def _binding_ticket_key(value: str) -> str:
     return f"wechat_web:binding_ticket:{value}"
+
+
+def _binding_bridge_key(value: str) -> str:
+    return f"wechat_web:binding_bridge:{value}"
 
 
 def _set_binding_cache(key: str, payload: dict[str, Any]) -> None:
