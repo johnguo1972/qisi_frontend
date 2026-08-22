@@ -326,6 +326,7 @@ def _consume_ticket(ticket: str) -> dict[str, Any]:
 
 
 def _consume_ticket_for_completion(ticket: str) -> _ConsumedTicket:
+    consumed_at = time.monotonic()
     payload, raw_value, ttl_millis = _atomic_consume_with_ttl(
         _ticket_key(ticket), "DEVICE_TICKET_INVALID"
     )
@@ -339,7 +340,7 @@ def _consume_ticket_for_completion(ticket: str) -> _ConsumedTicket:
     return _ConsumedTicket(
         payload=payload,
         raw_value=raw_value,
-        restore_deadline=time.monotonic() + ttl_millis / 1000,
+        restore_deadline=consumed_at + ttl_millis / 1000,
     )
 
 

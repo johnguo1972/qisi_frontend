@@ -344,6 +344,134 @@ def test_role_revoked_after_precheck_restores_ticket_for_retry(clock, monkeypatc
 
 
 @pytest.mark.django_db
+def test_restore_ttl_starts_before_atomic_consume_returns(clock, monkeypatch):
+    """Transport time after Lua consumption must reduce, never extend, the TTL."""
+    user, ticket = _bound_ticket("13900009008", "consume-delay-openid")
+    original_consume = clock.atomic_consume_with_ttl
+    original_generate_tokens = wechat_device.generate_tokens
+    monotonic_clock = [0]
+    monkeypatch.setattr(wechat_device.time, "monotonic", lambda: monotonic_clock[0])
+
+    def delayed_consume(key):
+        consumed = original_consume(key)
+        monotonic_clock[0] = 1
+        return consumed
+
+    def revoke_then_generate(account, requested_role):
+        revoke_user_role(user, "student")
+        return original_generate_tokens(account, requested_role)
+
+    monkeypatch.setattr(clock, "atomic_consume_with_ttl", delayed_consume)
+    monkeypatch.setattr(wechat_device, "generate_tokens", revoke_then_generate)
+    with pytest.raises(wechat_device.DeviceLoginError) as revoked:
+        wechat_device.complete_device_login(ticket, "browser-a", "student")
+
+    _, restored_expiry = clock.values[wechat_device._ticket_key(ticket)]
+    assert revoked.value.code == "DEVICE_ROLE_CONFLICT"
+    assert restored_expiry == 299
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ticket_lock_blocks_second_completion_until_authorization_restore(
+    clock, monkeypatch
+):
+    """Only the post-restore contender may be the single successful consumer."""
+    user, ticket = _bound_ticket("13900009009", "threaded-restore-openid")
+    original_generate_tokens = wechat_device.generate_tokens
+    original_restore = clock.atomic_restore
+    original_try_lock = wechat_device._try_cache_lock
+    first_consumed = threading.Event()
+    second_attempted = threading.Event()
+    restore_written = threading.Event()
+    release_restore = threading.Event()
+    first_result = []
+    second_result = []
+
+    def generate_with_first_thread_revoke(account, requested_role):
+        if threading.current_thread().name == "first-complete":
+            revoke_user_role(user, "student")
+            first_consumed.set()
+        return original_generate_tokens(account, requested_role)
+
+    def restore_then_pause(key, payload, ttl_millis):
+        restored = original_restore(key, payload, ttl_millis)
+        restore_written.set()
+        assert release_restore.wait(timeout=3)
+        return restored
+
+    def observe_second_lock(key, token):
+        if (
+            threading.current_thread().name == "second-complete"
+            and key == wechat_device._ticket_lock_key(ticket)
+        ):
+            second_attempted.set()
+        return original_try_lock(key, token)
+
+    def first_complete():
+        try:
+            wechat_device.complete_device_login(ticket, "browser-a", "student")
+        except wechat_device.DeviceLoginError as error:
+            first_result.append(error.code)
+
+    def second_complete():
+        try:
+            second_result.append(
+                wechat_device.complete_device_login(ticket, "browser-a", "student")
+            )
+        except wechat_device.DeviceLoginError as error:
+            second_result.append(error.code)
+
+    monkeypatch.setattr(wechat_device, "generate_tokens", generate_with_first_thread_revoke)
+    monkeypatch.setattr(clock, "atomic_restore", restore_then_pause)
+    monkeypatch.setattr(wechat_device, "_try_cache_lock", observe_second_lock)
+    first = threading.Thread(target=first_complete, name="first-complete")
+    second = threading.Thread(target=second_complete, name="second-complete")
+    first.start()
+    assert first_consumed.wait(timeout=3)
+    second.start()
+    assert second_attempted.wait(timeout=3)
+    assert restore_written.wait(timeout=3)
+    assert not second_result
+
+    grant_user_role(user, "student")
+    release_restore.set()
+    first.join(timeout=3)
+    second.join(timeout=3)
+
+    assert first_result == ["DEVICE_ROLE_CONFLICT"]
+    assert len(second_result) == 1
+    completed, tokens = second_result[0]
+    assert completed.id == user.id
+    assert tokens["access_token"]
+
+
+@pytest.mark.django_db
+def test_ticket_restore_failure_fails_closed_without_issuing_jwt(clock, monkeypatch):
+    """An authorization failure cannot become a retryable ticket if restore is lost."""
+    from apps.accounts import services
+
+    user, ticket = _bound_ticket("13900009010", "restore-failure-openid")
+    original_generate_tokens = wechat_device.generate_tokens
+
+    def revoke_then_generate(account, requested_role):
+        revoke_user_role(user, "student")
+        return original_generate_tokens(account, requested_role)
+
+    monkeypatch.setattr(wechat_device, "generate_tokens", revoke_then_generate)
+    monkeypatch.setattr(clock, "atomic_restore", lambda *args: False)
+    monkeypatch.setattr(
+        services.RefreshToken,
+        "for_user",
+        lambda *args: (_ for _ in ()).throw(AssertionError("JWT must not be issued")),
+    )
+    with pytest.raises(wechat_device.DeviceLoginError) as failed_restore:
+        wechat_device.complete_device_login(ticket, "browser-a", "student")
+
+    assert failed_restore.value.code == "DEVICE_TICKET_INVALID"
+    assert wechat_device._ticket_key(ticket) not in clock.values
+
+
+@pytest.mark.django_db
 def test_known_identity_marks_device_session_bound_without_issuing_tokens(clock):
     """Signing a JWT at scan time would expose browser credentials to the phone flow."""
     teacher = _user("13900009002", "teacher")
