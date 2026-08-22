@@ -93,7 +93,7 @@ class RoleNotGranted(Exception):
 
 @transaction.atomic
 def login_with_trusted_mobile(
-    mobile: str, active_role: str
+    mobile: str, active_role: str, *, issue_tokens: bool = True
 ) -> tuple[UserAccount, dict]:
     """Create or sign in an account from a server-verified phone number.
 
@@ -120,7 +120,7 @@ def login_with_trusted_mobile(
             mobile, initial_role=active_role, grant_source="wechat_web"
         )
 
-    return user, generate_tokens(user, active_role)
+    return user, generate_tokens(user, active_role) if issue_tokens else {}
 
 
 @transaction.atomic
