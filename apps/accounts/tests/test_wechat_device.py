@@ -3,6 +3,7 @@ import json
 import logging
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.request import ProxyHandler
 
 import httpx
 import pytest
@@ -403,6 +404,54 @@ def test_wechat_exchange_requires_a_strict_zero_errcode(
         if failed_response == "login"
         else "DEVICE_PHONE_AUTHORIZATION_FAILED"
     )
+
+
+def test_wechat_exchange_accepts_explicit_zero_errcode_on_every_success_payload(
+    settings,
+):
+    """Strict validation must still accept WeChat's explicit integer success code."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret"
+    login_client = FakeWechatClient(
+        get_payload={"openid": "openid-1", "errcode": 0}
+    )
+    phone_client = FakeWechatClient(
+        get_payload={"access_token": "provider-token", "errcode": 0},
+        post_payload={
+            "phone_info": {"phoneNumber": "13900000001"},
+            "errcode": 0,
+        },
+    )
+
+    identity = wechat_device.exchange_miniprogram_login_code("one-time", login_client)
+    mobile = wechat_device.exchange_miniprogram_phone_code("phone-once", phone_client)
+
+    assert identity == wechat_device.MiniProgramIdentity("wx-test", "openid-1", "")
+    assert mobile == "13900000001"
+
+
+@pytest.mark.parametrize("proxy_variable", ("HTTPS_PROXY", "ALL_PROXY"))
+def test_default_wechat_opener_disables_each_sensitive_environment_proxy(
+    monkeypatch, proxy_variable
+):
+    """HTTPS and ALL proxy variables must not alter the default WeChat opener."""
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(proxy_variable, "http://127.0.0.1:9")
+
+    client = wechat_device._WechatHttpClient()
+
+    assert isinstance(client._proxy_handler, ProxyHandler)
+    assert client._proxy_handler.proxies == {}
 
 
 def test_default_wechat_transport_ignores_environment_proxies(settings, monkeypatch):
