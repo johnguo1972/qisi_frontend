@@ -66,6 +66,15 @@ def test_h5_callback_renders_the_binding_code_as_a_native_browser_image():
     assert ':src="wechatWebBindingQrUrl"' in source
 
 
+def test_h5_loads_the_binding_code_with_the_same_origin_browser_session():
+    """The QR fetch must carry the same browser session as binding-status."""
+    source = LOGIN_PAGE.read_text(encoding="utf-8")
+
+    assert "async function loadWechatWebBindingQr" in source
+    assert "credentials: 'same-origin'" in source
+    assert "URL.createObjectURL" in source
+
+
 def test_wechat_web_api_only_exchanges_opaque_session_and_ticket_values():
     """The H5 API client never submits, stores, or models a mobile number."""
     source = API_CLIENT.read_text(encoding="utf-8")

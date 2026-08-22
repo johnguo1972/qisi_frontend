@@ -150,12 +150,36 @@ const wechatWebCompleting = ref(false)
 const wechatWebPhoneAuthorizationConfirmed = ref(false)
 const wechatWebStatusText = ref('请使用微信扫描二维码')
 let wechatWebPollTimer: ReturnType<typeof setInterval> | undefined
-const wechatWebBindingQrUrl = computed(() => {
+const wechatWebBindingQrUrl = ref('')
+let wechatWebBindingQrObjectUrl = ''
+
+function clearWechatWebBindingQr() {
+  if (wechatWebBindingQrObjectUrl) {
+    URL.revokeObjectURL(wechatWebBindingQrObjectUrl)
+    wechatWebBindingQrObjectUrl = ''
+  }
+  wechatWebBindingQrUrl.value = ''
+}
+
+async function loadWechatWebBindingQr() {
   const webSessionId = wechatWebSession.value?.web_session_id
-  return webSessionId
-    ? `/api/v1/auth/wechat-web/binding-qrcode?web_session_id=${encodeURIComponent(webSessionId)}`
-    : ''
-})
+  if (!webSessionId) return
+  clearWechatWebBindingQr()
+  const response = await fetch(
+    `/api/v1/auth/wechat-web/binding-qrcode?web_session_id=${encodeURIComponent(webSessionId)}`,
+    { credentials: 'same-origin' },
+  )
+  if (!response.ok) {
+    throw new Error('小程序授权二维码加载失败')
+  }
+  const objectUrl = URL.createObjectURL(await response.blob())
+  if (wechatWebSession.value?.web_session_id !== webSessionId) {
+    URL.revokeObjectURL(objectUrl)
+    return
+  }
+  wechatWebBindingQrObjectUrl = objectUrl
+  wechatWebBindingQrUrl.value = objectUrl
+}
 
 function stopWechatWebPolling() {
   if (wechatWebPollTimer) {
@@ -166,6 +190,7 @@ function stopWechatWebPolling() {
 
 function resetWechatWebSession() {
   stopWechatWebPolling()
+  clearWechatWebBindingQr()
   wechatWebSession.value = null
   wechatWebBindingComplete.value = false
   wechatWebCompleting.value = false
@@ -181,6 +206,9 @@ function restoreWechatWebSessionFromCallback() {
   wechatWebPhoneAuthorizationConfirmed.value = true
   wechatWebSession.value = { web_session_id: webSessionId, authorization_url: '', expires_in: 0 }
   wechatWebStatusText.value = '已完成扫码，等待小程序手机号授权'
+  void loadWechatWebBindingQr().catch(() => {
+    wechatWebStatusText.value = '小程序授权二维码加载失败，请重新扫码'
+  })
   void pollWechatWebBindingStatus()
   wechatWebPollTimer = setInterval(() => { void pollWechatWebBindingStatus() }, 3000)
   // #endif
@@ -272,7 +300,10 @@ async function startWechatWebLogin() {
 }
 
 onMounted(restoreWechatWebSessionFromCallback)
-onUnmounted(stopWechatWebPolling)
+onUnmounted(() => {
+  stopWechatWebPolling()
+  clearWechatWebBindingQr()
+})
 
 async function sendCode() {
   if (!mobile.value || mobile.value.length !== 11) {
