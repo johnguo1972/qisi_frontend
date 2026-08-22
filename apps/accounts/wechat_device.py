@@ -59,6 +59,13 @@ class DeviceLoginStatus:
     error_code: str | None = None
 
 
+@dataclass(frozen=True)
+class _ConsumedTicket:
+    payload: dict[str, Any]
+    raw_value: Any | None
+    restore_deadline: float
+
+
 def create_device_login_session(
     requested_role: str, browser_session_id: str
 ) -> DeviceLoginSession:
@@ -219,10 +226,11 @@ def complete_device_login(
         except (UserAccount.DoesNotExist, TypeError, ValueError, DeviceLoginError):
             raise DeviceLoginError("DEVICE_TICKET_INVALID") from None
         _require_user_role(user, requested_role)
-        _consume_ticket(ticket)
+        consumed_ticket = _consume_ticket_for_completion(ticket)
         try:
             return user, generate_tokens(user, requested_role)
         except RoleNotGranted:
+            _restore_ticket(ticket, consumed_ticket)
             raise DeviceLoginError("DEVICE_ROLE_CONFLICT") from None
 
 
@@ -317,6 +325,24 @@ def _consume_ticket(ticket: str) -> dict[str, Any]:
     return payload
 
 
+def _consume_ticket_for_completion(ticket: str) -> _ConsumedTicket:
+    payload, raw_value, ttl_millis = _atomic_consume_with_ttl(
+        _ticket_key(ticket), "DEVICE_TICKET_INVALID"
+    )
+    if (
+        not isinstance(payload, dict)
+        or _is_expired(payload)
+        or not isinstance(ttl_millis, int)
+        or ttl_millis <= 0
+    ):
+        raise DeviceLoginError("DEVICE_TICKET_INVALID")
+    return _ConsumedTicket(
+        payload=payload,
+        raw_value=raw_value,
+        restore_deadline=time.monotonic() + ttl_millis / 1000,
+    )
+
+
 def _consume(key: str, error_code: str) -> dict[str, Any]:
     payload = _atomic_consume(key, error_code)
     if not isinstance(payload, dict) or _is_expired(payload):
@@ -360,6 +386,74 @@ def _atomic_consume(key: str, error_code: str) -> Any:
         return None if raw is None else serializer.loads(raw)
     except Exception:
         raise DeviceLoginError(error_code) from None
+
+
+def _atomic_consume_with_ttl(
+    key: str, error_code: str
+) -> tuple[Any, Any | None, int]:
+    consume = getattr(cache, "atomic_consume_with_ttl", None)
+    if callable(consume):
+        try:
+            consumed = consume(key)
+        except Exception:
+            raise DeviceLoginError(error_code) from None
+        if not isinstance(consumed, tuple) or len(consumed) != 2:
+            raise DeviceLoginError(error_code)
+        payload, ttl_millis = consumed
+        return payload, None, ttl_millis
+
+    redis_parts = _redis_parts()
+    if redis_parts is None:
+        raise DeviceLoginError(error_code)
+    client, redis_key, serializer = redis_parts
+    try:
+        raw_value, ttl_millis = client.eval(
+            "local value = redis.call('GET', KEYS[1]); "
+            "if not value then return {false, -2}; end; "
+            "local ttl = redis.call('PTTL', KEYS[1]); "
+            "redis.call('DEL', KEYS[1]); return {value, ttl}",
+            1,
+            redis_key(key),
+        )
+        if raw_value is None:
+            return None, None, int(ttl_millis)
+        return serializer.loads(raw_value), raw_value, int(ttl_millis)
+    except Exception:
+        raise DeviceLoginError(error_code) from None
+
+
+def _restore_ticket(ticket: str, consumed_ticket: _ConsumedTicket) -> None:
+    remaining_millis = math.floor(
+        (consumed_ticket.restore_deadline - time.monotonic()) * 1000
+    )
+    if remaining_millis <= 0:
+        raise DeviceLoginError("DEVICE_TICKET_INVALID")
+    key = _ticket_key(ticket)
+    restore = getattr(cache, "atomic_restore", None)
+    if callable(restore):
+        try:
+            restored = bool(restore(key, consumed_ticket.payload, remaining_millis))
+        except Exception:
+            restored = False
+    else:
+        redis_parts = _redis_parts()
+        if redis_parts is None or consumed_ticket.raw_value is None:
+            restored = False
+        else:
+            client, redis_key, _ = redis_parts
+            try:
+                restored = bool(
+                    client.set(
+                        redis_key(key),
+                        consumed_ticket.raw_value,
+                        nx=True,
+                        px=remaining_millis,
+                    )
+                )
+            except Exception:
+                restored = False
+    if not restored:
+        raise DeviceLoginError("DEVICE_TICKET_INVALID")
 
 
 @contextmanager

@@ -70,6 +70,25 @@ class AtomicClockedCache(ClockedCache):
                 super().delete(key)
             return payload
 
+    def atomic_consume_with_ttl(self, key):
+        with self._mutex:
+            stored = self.values.get(key)
+            if stored is None:
+                return None
+            payload, expires_at = stored
+            if self.now >= expires_at:
+                self.values.pop(key, None)
+                return None
+            self.values.pop(key, None)
+            return payload, int((expires_at - self.now) * 1000)
+
+    def atomic_restore(self, key, payload, ttl_millis):
+        with self._mutex:
+            if super().get(key) is not None or ttl_millis <= 0:
+                return False
+            self.values[key] = (payload, self.now + ttl_millis / 1000)
+            return True
+
     def acquire_lock(self, key, token, timeout):
         with self._mutex:
             stored = self._locks.get(key)
@@ -292,6 +311,34 @@ def test_revoked_role_does_not_consume_ticket_before_regrant(clock):
     completed, tokens = wechat_device.complete_device_login(ticket, "browser-a", "student")
 
     assert revoked.value.code == "DEVICE_ROLE_CONFLICT"
+    assert completed.id == user.id
+    assert tokens["access_token"]
+
+
+@pytest.mark.django_db
+def test_role_revoked_after_precheck_restores_ticket_for_retry(clock, monkeypatch):
+    """A post-precheck revoke must compensate the consumed ticket before failing."""
+    user, ticket = _bound_ticket("13900009007", "mid-flight-revoke-openid")
+    original_generate_tokens = wechat_device.generate_tokens
+    monotonic_clock = [0]
+    monkeypatch.setattr(wechat_device.time, "monotonic", lambda: monotonic_clock[0])
+
+    def revoke_then_generate(account, requested_role):
+        monotonic_clock[0] = 1
+        revoke_user_role(user, "student")
+        return original_generate_tokens(account, requested_role)
+
+    monkeypatch.setattr(wechat_device, "generate_tokens", revoke_then_generate)
+    with pytest.raises(wechat_device.DeviceLoginError) as revoked:
+        wechat_device.complete_device_login(ticket, "browser-a", "student")
+
+    _, restored_expiry = clock.values[wechat_device._ticket_key(ticket)]
+    grant_user_role(user, "student")
+    monkeypatch.setattr(wechat_device, "generate_tokens", original_generate_tokens)
+    completed, tokens = wechat_device.complete_device_login(ticket, "browser-a", "student")
+
+    assert revoked.value.code == "DEVICE_ROLE_CONFLICT"
+    assert restored_expiry == 299
     assert completed.id == user.id
     assert tokens["access_token"]
 
