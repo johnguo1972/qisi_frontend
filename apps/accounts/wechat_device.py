@@ -2,12 +2,15 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import json
 import math
 import secrets
 import time
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-import httpx
 from django.conf import settings
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
@@ -71,31 +74,89 @@ class _ConsumedTicket:
     restore_deadline: float
 
 
+class _WechatTransportError(Exception):
+    """Raised when WeChat cannot return one verified JSON response."""
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+class _WechatHttpClient:
+    """Minimal stdlib transport that never emits credential-bearing URLs to logs."""
+
+    def __init__(self):
+        self._opener = build_opener(_NoRedirectHandler())
+
+    def get_json(
+        self, url: str, *, params: dict[str, str], timeout: float
+    ) -> dict[str, Any]:
+        return self._request_json("GET", url, params=params, json_body=None, timeout=timeout)
+
+    def post_json(
+        self,
+        url: str,
+        *,
+        params: dict[str, str],
+        json: dict[str, str],
+        timeout: float,
+    ) -> dict[str, Any]:
+        return self._request_json("POST", url, params=params, json_body=json, timeout=timeout)
+
+    def _request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, str],
+        json_body: dict[str, str] | None,
+        timeout: float,
+    ) -> dict[str, Any]:
+        query = urlencode(params)
+        request_url = f"{url}?{query}" if query else url
+        body = json.dumps(json_body).encode() if json_body is not None else None
+        headers = {"Accept": "application/json"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        request = Request(request_url, data=body, headers=headers, method=method)
+        try:
+            with self._opener.open(request, timeout=timeout) as response:
+                status_code = response.getcode()
+                if not isinstance(status_code, int) or not 200 <= status_code < 300:
+                    raise _WechatTransportError
+                raw_payload = response.read()
+        except (HTTPError, URLError, OSError, ValueError) as error:
+            raise _WechatTransportError from error
+        try:
+            payload = json.loads(raw_payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise _WechatTransportError from None
+        if not isinstance(payload, dict):
+            raise _WechatTransportError
+        return payload
+
+
 def exchange_miniprogram_login_code(
-    login_code: str, http_client: httpx.Client | Any | None = None
+    login_code: str, http_client: Any | None = None
 ) -> MiniProgramIdentity:
     """Exchange a one-time wx.login code for a server-verified MP identity."""
     error_code = "DEVICE_LOGIN_AUTHORIZATION_FAILED"
     if not isinstance(login_code, str) or not login_code:
         raise DeviceLoginError(error_code)
     appid, app_secret = _get_wechat_miniprogram_configuration(error_code)
-    owns_client = http_client is None
-    client = http_client or httpx.Client()
-    try:
-        payload = _get_wechat_json(
-            client,
-            WECHAT_CODE2SESSION_URL,
-            {
-                "appid": appid,
-                "secret": app_secret,
-                "js_code": login_code,
-                "grant_type": "authorization_code",
-            },
-            error_code,
-        )
-    finally:
-        if owns_client:
-            client.close()
+    client = http_client or _WechatHttpClient()
+    payload = _get_wechat_json(
+        client,
+        WECHAT_CODE2SESSION_URL,
+        {
+            "appid": appid,
+            "secret": app_secret,
+            "js_code": login_code,
+            "grant_type": "authorization_code",
+        },
+        error_code,
+    )
 
     openid = payload.get("openid")
     unionid = payload.get("unionid", "")
@@ -109,42 +170,34 @@ def exchange_miniprogram_login_code(
 
 
 def exchange_miniprogram_phone_code(
-    phone_code: str, http_client: httpx.Client | Any | None = None
+    phone_code: str, http_client: Any | None = None
 ) -> str:
     """Exchange a user-authorized MP phone code for WeChat's trusted mobile."""
     error_code = "DEVICE_PHONE_AUTHORIZATION_FAILED"
     if not isinstance(phone_code, str) or not phone_code:
         raise DeviceLoginError(error_code)
     appid, app_secret = _get_wechat_miniprogram_configuration(error_code)
-    owns_client = http_client is None
-    client = http_client or httpx.Client()
-    try:
-        token_payload = _get_wechat_json(
-            client,
-            WECHAT_TOKEN_URL,
-            {
-                "grant_type": "client_credential",
-                "appid": appid,
-                "secret": app_secret,
-            },
-            error_code,
-        )
-        access_token = token_payload.get("access_token")
-        if not isinstance(access_token, str) or not access_token:
-            raise DeviceLoginError(error_code)
-        try:
-            response = client.post(
-                WECHAT_PHONE_URL,
-                params={"access_token": access_token},
-                json={"code": phone_code},
-                timeout=10.0,
-            )
-            phone_payload = response.json()
-        except (httpx.HTTPError, TypeError, ValueError):
-            raise DeviceLoginError(error_code) from None
-    finally:
-        if owns_client:
-            client.close()
+    client = http_client or _WechatHttpClient()
+    token_payload = _get_wechat_json(
+        client,
+        WECHAT_TOKEN_URL,
+        {
+            "grant_type": "client_credential",
+            "appid": appid,
+            "secret": app_secret,
+        },
+        error_code,
+    )
+    access_token = token_payload.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise DeviceLoginError(error_code)
+    phone_payload = _post_wechat_json(
+        client,
+        WECHAT_PHONE_URL,
+        params={"access_token": access_token},
+        json_body={"code": phone_code},
+        error_code=error_code,
+    )
 
     if not isinstance(phone_payload, dict):
         raise DeviceLoginError(error_code)
@@ -697,11 +750,34 @@ def _get_wechat_json(
     client: Any, url: str, params: dict[str, str], error_code: str
 ) -> dict[str, Any]:
     try:
-        response = client.get(url, params=params, timeout=10.0)
-        payload = response.json()
-    except (httpx.HTTPError, TypeError, ValueError):
+        payload = client.get_json(url, params=params, timeout=10.0)
+    except Exception:
         raise DeviceLoginError(error_code) from None
+    return _require_wechat_success_payload(payload, error_code)
+
+
+def _post_wechat_json(
+    client: Any,
+    url: str,
+    *,
+    params: dict[str, str],
+    json_body: dict[str, str],
+    error_code: str,
+) -> dict[str, Any]:
+    try:
+        payload = client.post_json(
+            url, params=params, json=json_body, timeout=10.0
+        )
+    except Exception:
+        raise DeviceLoginError(error_code)
+    return _require_wechat_success_payload(payload, error_code)
+
+
+def _require_wechat_success_payload(payload: Any, error_code: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
+        raise DeviceLoginError(error_code)
+    errcode = payload.get("errcode")
+    if errcode is not None and (not isinstance(errcode, int) or errcode != 0):
         raise DeviceLoginError(error_code)
     return payload
 

@@ -1,6 +1,8 @@
 from datetime import datetime, timezone as datetime_timezone
+import json
 import logging
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 import pytest
@@ -34,10 +36,76 @@ class FakeWechatClient:
         self.calls.append(("post", url, params, json, timeout))
         return FakeWechatResponse(self.post_payload)
 
+    def get_json(self, url, *, params, timeout):
+        self.calls.append(("get", url, params, timeout))
+        return self.get_payload
+
+    def post_json(self, url, *, params, json, timeout):
+        self.calls.append(("post", url, params, json, timeout))
+        return self.post_payload
+
 
 class UnavailableWechatClient:
     def get(self, *args, **kwargs):
         raise httpx.ConnectError("wechat unavailable")
+
+    def get_json(self, *args, **kwargs):
+        raise httpx.ConnectError("wechat unavailable")
+
+
+class LocalWechatServer:
+    """Real loopback transport for tests that need to observe client logging."""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.server = None
+        self.thread = None
+
+    def __enter__(self):
+        responses = self.responses
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self._respond()
+
+            def do_POST(self):
+                self._respond()
+
+            def log_message(self, format, *args):
+                return
+
+            def _respond(self):
+                status, payload = responses[self.path.split("?", 1)[0]]
+                body = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.start()
+        return f"http://127.0.0.1:{self.server.server_port}"
+
+    def __exit__(self, *args):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+
+def _use_local_wechat_urls(monkeypatch, base_url):
+    monkeypatch.setattr(wechat_device, "WECHAT_CODE2SESSION_URL", f"{base_url}/code2session")
+    monkeypatch.setattr(wechat_device, "WECHAT_TOKEN_URL", f"{base_url}/token")
+    monkeypatch.setattr(wechat_device, "WECHAT_PHONE_URL", f"{base_url}/phone")
+
+
+def _success_responses():
+    return {
+        "/code2session": (200, {"openid": "openid-from-wechat"}),
+        "/token": (200, {"access_token": "access-token-from-wechat"}),
+        "/phone": (200, {"phone_info": {"phoneNumber": "13900000001"}}),
+    }
 
 
 def test_exchange_login_code_returns_server_verified_identity(settings):
@@ -180,6 +248,88 @@ def test_wechat_credential_exchanges_do_not_log_sensitive_values(settings, caplo
 
     for secret in (login_code, phone_code, access_token, openid, mobile):
         assert secret not in caplog.text
+
+
+def test_default_wechat_transport_does_not_log_sensitive_urls(
+    settings, monkeypatch, caplog
+):
+    """A transport INFO log must not expose credential-bearing query strings."""
+    settings.WECHAT_MP_APPID = "appid-must-not-be-logged"
+    settings.WECHAT_MP_APPSECRET = "appsecret-must-not-be-logged"
+    login_code = "login-code-must-not-be-logged-by-transport"
+    phone_code = "phone-code-must-not-be-logged-by-transport"
+    openid = "openid-from-wechat"
+    access_token = "access-token-from-wechat"
+    mobile = "13900000001"
+    caplog.set_level(logging.INFO)
+
+    with LocalWechatServer(_success_responses()) as base_url:
+        _use_local_wechat_urls(monkeypatch, base_url)
+        wechat_device.exchange_miniprogram_login_code(login_code)
+        wechat_device.exchange_miniprogram_phone_code(phone_code)
+
+    for secret in (
+        settings.WECHAT_MP_APPSECRET,
+        login_code,
+        phone_code,
+        access_token,
+        openid,
+        mobile,
+    ):
+        assert secret not in caplog.text
+
+
+@pytest.mark.parametrize("failed_request", ("login", "token", "phone"))
+def test_wechat_exchange_rejects_every_non_success_http_response(
+    settings, monkeypatch, failed_request
+):
+    """Ignoring a 4xx or 5xx status would accept an untrusted WeChat payload."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret"
+    responses = _success_responses()
+    path = {"login": "/code2session", "token": "/token", "phone": "/phone"}[failed_request]
+    responses[path] = (401 if failed_request != "token" else 500, responses[path][1])
+
+    with LocalWechatServer(responses) as base_url:
+        _use_local_wechat_urls(monkeypatch, base_url)
+        with pytest.raises(wechat_device.DeviceLoginError) as error:
+            if failed_request == "login":
+                wechat_device.exchange_miniprogram_login_code("one-time")
+            else:
+                wechat_device.exchange_miniprogram_phone_code("phone-once")
+
+    assert error.value.code == (
+        "DEVICE_LOGIN_AUTHORIZATION_FAILED"
+        if failed_request == "login"
+        else "DEVICE_PHONE_AUTHORIZATION_FAILED"
+    )
+
+
+@pytest.mark.parametrize("failed_response", ("login", "token", "phone"))
+def test_wechat_exchange_rejects_mixed_nonzero_errcode_responses(
+    settings, monkeypatch, failed_response
+):
+    """A nonzero WeChat errcode must win over otherwise plausible payload fields."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret"
+    responses = _success_responses()
+    path = {"login": "/code2session", "token": "/token", "phone": "/phone"}[failed_response]
+    status, payload = responses[path]
+    responses[path] = (status, {**payload, "errcode": 40029})
+
+    with LocalWechatServer(responses) as base_url:
+        _use_local_wechat_urls(monkeypatch, base_url)
+        with pytest.raises(wechat_device.DeviceLoginError) as error:
+            if failed_response == "login":
+                wechat_device.exchange_miniprogram_login_code("one-time")
+            else:
+                wechat_device.exchange_miniprogram_phone_code("phone-once")
+
+    assert error.value.code == (
+        "DEVICE_LOGIN_AUTHORIZATION_FAILED"
+        if failed_response == "login"
+        else "DEVICE_PHONE_AUTHORIZATION_FAILED"
+    )
 
 
 class ClockedCache:
