@@ -1,11 +1,185 @@
 from datetime import datetime, timezone as datetime_timezone
+import logging
 import threading
 
+import httpx
 import pytest
 
 from apps.accounts import wechat_device
 from apps.accounts.models import UserAccount, WechatIdentity
 from apps.accounts.roles import grant_user_role, revoke_user_role
+
+
+class FakeWechatResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def json(self):
+        return self.payload
+
+
+class FakeWechatClient:
+    """External WeChat boundary fake; application behavior remains real."""
+
+    def __init__(self, *, get_payload, post_payload=None):
+        self.get_payload = get_payload
+        self.post_payload = post_payload
+        self.calls = []
+
+    def get(self, url, *, params, timeout):
+        self.calls.append(("get", url, params, timeout))
+        return FakeWechatResponse(self.get_payload)
+
+    def post(self, url, *, params, json, timeout):
+        self.calls.append(("post", url, params, json, timeout))
+        return FakeWechatResponse(self.post_payload)
+
+
+class UnavailableWechatClient:
+    def get(self, *args, **kwargs):
+        raise httpx.ConnectError("wechat unavailable")
+
+
+def test_exchange_login_code_returns_server_verified_identity(settings):
+    """Dropping server-side code2session verification would accept a forged identity."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret"
+    client = FakeWechatClient(
+        get_payload={
+            "openid": "openid-1",
+            "unionid": "unionid-1",
+            "session_key": "hidden",
+        }
+    )
+
+    identity = wechat_device.exchange_miniprogram_login_code("one-time", client)
+
+    assert identity == wechat_device.MiniProgramIdentity(
+        appid="wx-test", openid="openid-1", unionid="unionid-1"
+    )
+    assert client.calls == [
+        (
+            "get",
+            wechat_device.WECHAT_CODE2SESSION_URL,
+            {
+                "appid": "wx-test",
+                "secret": "secret",
+                "js_code": "one-time",
+                "grant_type": "authorization_code",
+            },
+            10.0,
+        )
+    ]
+
+
+def test_exchange_phone_code_returns_wechat_verified_mobile(settings):
+    """Using caller-supplied mobile input instead of WeChat's response would be unsafe."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret"
+    client = FakeWechatClient(
+        get_payload={"access_token": "provider-token"},
+        post_payload={"phone_info": {"phoneNumber": "13900000001"}},
+    )
+
+    mobile = wechat_device.exchange_miniprogram_phone_code("phone-once", client)
+
+    assert mobile == "13900000001"
+    assert client.calls == [
+        (
+            "get",
+            wechat_device.WECHAT_TOKEN_URL,
+            {
+                "grant_type": "client_credential",
+                "appid": "wx-test",
+                "secret": "secret",
+            },
+            10.0,
+        ),
+        (
+            "post",
+            wechat_device.WECHAT_PHONE_URL,
+            {"access_token": "provider-token"},
+            {"code": "phone-once"},
+            10.0,
+        ),
+    ]
+
+
+def test_exchange_phone_code_rejects_wechat_error(settings):
+    """Treating a provider errcode as a phone number response would authorize anyone."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret"
+    client = FakeWechatClient(
+        get_payload={"access_token": "token"},
+        post_payload={"errcode": 40029, "errmsg": "invalid code"},
+    )
+
+    with pytest.raises(wechat_device.DeviceLoginError) as error:
+        wechat_device.exchange_miniprogram_phone_code("bad-code", client)
+
+    assert error.value.code == "DEVICE_PHONE_AUTHORIZATION_FAILED"
+
+
+def test_exchange_login_code_rejects_network_and_incomplete_provider_responses(
+    settings,
+):
+    """A transport failure or response without OpenID must not create an identity."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret"
+
+    for client in (
+        UnavailableWechatClient(),
+        FakeWechatClient(get_payload=[]),
+        FakeWechatClient(get_payload={"unionid": "unionid-1"}),
+    ):
+        with pytest.raises(wechat_device.DeviceLoginError) as error:
+            wechat_device.exchange_miniprogram_login_code("one-time", client)
+
+        assert error.value.code == "DEVICE_LOGIN_AUTHORIZATION_FAILED"
+
+
+def test_exchange_phone_code_rejects_non_json_and_missing_mobile(settings):
+    """A non-JSON payload or incomplete phone_info must not authorize a phone."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret"
+
+    for client in (
+        FakeWechatClient(get_payload={"access_token": "token"}, post_payload=[]),
+        FakeWechatClient(
+            get_payload={"access_token": "token"}, post_payload={"phone_info": {}}
+        ),
+    ):
+        with pytest.raises(wechat_device.DeviceLoginError) as error:
+            wechat_device.exchange_miniprogram_phone_code("phone-once", client)
+
+        assert error.value.code == "DEVICE_PHONE_AUTHORIZATION_FAILED"
+
+
+def test_wechat_credential_exchanges_do_not_log_sensitive_values(settings, caplog):
+    """Logging request codes or provider identities would leak reusable credentials."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret"
+    login_code = "login-code-must-not-be-logged"
+    phone_code = "phone-code-must-not-be-logged"
+    access_token = "access-token-must-not-be-logged"
+    openid = "openid-must-not-be-logged"
+    mobile = "13900000001"
+    caplog.set_level(logging.DEBUG, logger="apps.accounts.wechat_device")
+
+    wechat_device.exchange_miniprogram_login_code(
+        login_code,
+        FakeWechatClient(get_payload={"openid": openid, "session_key": "hidden"}),
+    )
+    wechat_device.exchange_miniprogram_phone_code(
+        phone_code,
+        FakeWechatClient(
+            get_payload={"access_token": access_token},
+            post_payload={"phone_info": {"phoneNumber": mobile}},
+        ),
+    )
+
+    for secret in (login_code, phone_code, access_token, openid, mobile):
+        assert secret not in caplog.text
 
 
 class ClockedCache:

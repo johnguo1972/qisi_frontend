@@ -7,6 +7,8 @@ import secrets
 import time
 from typing import Any
 
+import httpx
+from django.conf import settings
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -24,6 +26,9 @@ from .services import (
 DEVICE_LOGIN_TTL_SECONDS = 300
 DEVICE_LOCK_TTL_SECONDS = 5
 DEVICE_LOCK_WAIT_SECONDS = 0.25
+WECHAT_CODE2SESSION_URL = "https://api.weixin.qq.com/sns/jscode2session"
+WECHAT_TOKEN_URL = "https://api.weixin.qq.com/cgi-bin/token"
+WECHAT_PHONE_URL = "https://api.weixin.qq.com/wxa/business/getuserphonenumber"
 
 
 class DeviceLoginError(Exception):
@@ -64,6 +69,90 @@ class _ConsumedTicket:
     payload: dict[str, Any]
     raw_value: Any | None
     restore_deadline: float
+
+
+def exchange_miniprogram_login_code(
+    login_code: str, http_client: httpx.Client | Any | None = None
+) -> MiniProgramIdentity:
+    """Exchange a one-time wx.login code for a server-verified MP identity."""
+    error_code = "DEVICE_LOGIN_AUTHORIZATION_FAILED"
+    if not isinstance(login_code, str) or not login_code:
+        raise DeviceLoginError(error_code)
+    appid, app_secret = _get_wechat_miniprogram_configuration(error_code)
+    owns_client = http_client is None
+    client = http_client or httpx.Client()
+    try:
+        payload = _get_wechat_json(
+            client,
+            WECHAT_CODE2SESSION_URL,
+            {
+                "appid": appid,
+                "secret": app_secret,
+                "js_code": login_code,
+                "grant_type": "authorization_code",
+            },
+            error_code,
+        )
+    finally:
+        if owns_client:
+            client.close()
+
+    openid = payload.get("openid")
+    unionid = payload.get("unionid", "")
+    if (
+        not isinstance(openid, str)
+        or not openid
+        or not isinstance(unionid, str)
+    ):
+        raise DeviceLoginError(error_code)
+    return MiniProgramIdentity(appid=appid, openid=openid, unionid=unionid)
+
+
+def exchange_miniprogram_phone_code(
+    phone_code: str, http_client: httpx.Client | Any | None = None
+) -> str:
+    """Exchange a user-authorized MP phone code for WeChat's trusted mobile."""
+    error_code = "DEVICE_PHONE_AUTHORIZATION_FAILED"
+    if not isinstance(phone_code, str) or not phone_code:
+        raise DeviceLoginError(error_code)
+    appid, app_secret = _get_wechat_miniprogram_configuration(error_code)
+    owns_client = http_client is None
+    client = http_client or httpx.Client()
+    try:
+        token_payload = _get_wechat_json(
+            client,
+            WECHAT_TOKEN_URL,
+            {
+                "grant_type": "client_credential",
+                "appid": appid,
+                "secret": app_secret,
+            },
+            error_code,
+        )
+        access_token = token_payload.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise DeviceLoginError(error_code)
+        try:
+            response = client.post(
+                WECHAT_PHONE_URL,
+                params={"access_token": access_token},
+                json={"code": phone_code},
+                timeout=10.0,
+            )
+            phone_payload = response.json()
+        except (httpx.HTTPError, TypeError, ValueError):
+            raise DeviceLoginError(error_code) from None
+    finally:
+        if owns_client:
+            client.close()
+
+    if not isinstance(phone_payload, dict):
+        raise DeviceLoginError(error_code)
+    phone_info = phone_payload.get("phone_info")
+    mobile = phone_info.get("phoneNumber") if isinstance(phone_info, dict) else None
+    if not isinstance(mobile, str) or not mobile:
+        raise DeviceLoginError(error_code)
+    return mobile
 
 
 def create_device_login_session(
@@ -592,6 +681,29 @@ def _require_user_role(user: UserAccount, requested_role: str) -> None:
         validate_active_role(user, requested_role)
     except RoleNotGranted:
         raise DeviceLoginError("DEVICE_ROLE_CONFLICT")
+
+
+def _get_wechat_miniprogram_configuration(error_code: str) -> tuple[str, str]:
+    values = (
+        getattr(settings, "WECHAT_MP_APPID", ""),
+        getattr(settings, "WECHAT_MP_APPSECRET", ""),
+    )
+    if not all(isinstance(value, str) and value for value in values):
+        raise DeviceLoginError(error_code)
+    return values
+
+
+def _get_wechat_json(
+    client: Any, url: str, params: dict[str, str], error_code: str
+) -> dict[str, Any]:
+    try:
+        response = client.get(url, params=params, timeout=10.0)
+        payload = response.json()
+    except (httpx.HTTPError, TypeError, ValueError):
+        raise DeviceLoginError(error_code) from None
+    if not isinstance(payload, dict):
+        raise DeviceLoginError(error_code)
+    return payload
 
 
 def _session_key(value: str) -> str:
