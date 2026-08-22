@@ -94,6 +94,40 @@ class LocalWechatServer:
         self.server.server_close()
 
 
+class CapturingProxyServer:
+    """Loopback proxy that makes accidental environment-proxy use observable."""
+
+    def __init__(self):
+        self.requests = []
+        self.server = None
+        self.thread = None
+
+    def __enter__(self):
+        requests = self.requests
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append(self.path)
+                self.send_error(502)
+
+            def do_POST(self):
+                requests.append(self.path)
+                self.send_error(502)
+
+            def log_message(self, format, *args):
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.start()
+        return f"http://127.0.0.1:{self.server.server_port}"
+
+    def __exit__(self, *args):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+
 def _use_local_wechat_urls(monkeypatch, base_url):
     monkeypatch.setattr(wechat_device, "WECHAT_CODE2SESSION_URL", f"{base_url}/code2session")
     monkeypatch.setattr(wechat_device, "WECHAT_TOKEN_URL", f"{base_url}/token")
@@ -330,6 +364,73 @@ def test_wechat_exchange_rejects_mixed_nonzero_errcode_responses(
         if failed_response == "login"
         else "DEVICE_PHONE_AUTHORIZATION_FAILED"
     )
+
+
+@pytest.mark.parametrize("errcode", (False, None, "0", 0.0, 40029))
+@pytest.mark.parametrize("failed_response", ("login", "token", "phone"))
+def test_wechat_exchange_requires_a_strict_zero_errcode(
+    settings, failed_response, errcode
+):
+    """An explicit errcode that is not the integer zero must override valid fields."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret"
+    if failed_response == "login":
+        client = FakeWechatClient(
+            get_payload={"openid": "openid-1", "errcode": errcode}
+        )
+    elif failed_response == "token":
+        client = FakeWechatClient(
+            get_payload={"access_token": "provider-token", "errcode": errcode},
+            post_payload={"phone_info": {"phoneNumber": "13900000001"}},
+        )
+    else:
+        client = FakeWechatClient(
+            get_payload={"access_token": "provider-token"},
+            post_payload={
+                "phone_info": {"phoneNumber": "13900000001"},
+                "errcode": errcode,
+            },
+        )
+
+    with pytest.raises(wechat_device.DeviceLoginError) as error:
+        if failed_response == "login":
+            wechat_device.exchange_miniprogram_login_code("one-time", client)
+        else:
+            wechat_device.exchange_miniprogram_phone_code("phone-once", client)
+
+    assert error.value.code == (
+        "DEVICE_LOGIN_AUTHORIZATION_FAILED"
+        if failed_response == "login"
+        else "DEVICE_PHONE_AUTHORIZATION_FAILED"
+    )
+
+
+def test_default_wechat_transport_ignores_environment_proxies(settings, monkeypatch):
+    """A hostile HTTP(S)/ALL proxy setting must not receive WeChat credentials."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret"
+    with LocalWechatServer(_success_responses()) as base_url:
+        _use_local_wechat_urls(monkeypatch, base_url)
+        proxy = CapturingProxyServer()
+        with proxy as proxy_url:
+            for name in (
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            ):
+                monkeypatch.setenv(name, proxy_url)
+            monkeypatch.delenv("NO_PROXY", raising=False)
+            monkeypatch.delenv("no_proxy", raising=False)
+
+            identity = wechat_device.exchange_miniprogram_login_code("one-time")
+            mobile = wechat_device.exchange_miniprogram_phone_code("phone-once")
+
+        assert proxy.requests == []
+    assert identity.openid == "openid-from-wechat"
+    assert mobile == "13900000001"
 
 
 class ClockedCache:

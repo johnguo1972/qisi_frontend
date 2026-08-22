@@ -9,7 +9,7 @@ import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from django.conf import settings
 from django.core.cache import cache
@@ -87,7 +87,7 @@ class _WechatHttpClient:
     """Minimal stdlib transport that never emits credential-bearing URLs to logs."""
 
     def __init__(self):
-        self._opener = build_opener(_NoRedirectHandler())
+        self._opener = build_opener(ProxyHandler({}), _NoRedirectHandler())
 
     def get_json(
         self, url: str, *, params: dict[str, str], timeout: float
@@ -776,8 +776,9 @@ def _post_wechat_json(
 def _require_wechat_success_payload(payload: Any, error_code: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise DeviceLoginError(error_code)
-    errcode = payload.get("errcode")
-    if errcode is not None and (not isinstance(errcode, int) or errcode != 0):
+    if "errcode" in payload and not (
+        type(payload["errcode"]) is int and payload["errcode"] == 0
+    ):
         raise DeviceLoginError(error_code)
     return payload
 
