@@ -295,8 +295,14 @@ def wechat_web_binding_qrcode(request):
             scene=bridge_code,
             page='pages/auth/web-binding',
             width=430,
+            check_path=True,
         )
-    except (WebBindingError, WebConfigurationError, RuntimeError):
+    except RuntimeError:
+        return binding_error(
+            'WECHAT_MINIPROGRAM_BINDING_PAGE_UNAVAILABLE',
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    except (WebBindingError, WebConfigurationError):
         return binding_error('BINDING_QRCODE_UNAVAILABLE')
     return HttpResponse(content, content_type='image/png')
 

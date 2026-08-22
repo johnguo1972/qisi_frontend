@@ -269,7 +269,13 @@ def test_miniprogram_phone_authorization_binds_the_web_session(monkeypatch):
 def test_binding_qrcode_is_only_available_to_the_originating_browser(monkeypatch):
     browser = APIClient()
     session = _binding_session(_browser_session_id(browser), suffix="qrcode")
-    monkeypatch.setattr(views, "wxacode_png", lambda **kwargs: b"png-data")
+    qrcode_options = {}
+
+    def fake_wxacode_png(**kwargs):
+        qrcode_options.update(kwargs)
+        return b"png-data"
+
+    monkeypatch.setattr(views, "wxacode_png", fake_wxacode_png)
 
     denied = APIClient().get(
         "/api/v1/auth/wechat-web/binding-qrcode",
@@ -284,6 +290,26 @@ def test_binding_qrcode_is_only_available_to_the_originating_browser(monkeypatch
     assert accepted.status_code == 200
     assert accepted["Content-Type"] == "image/png"
     assert accepted.content == b"png-data"
+    assert qrcode_options["check_path"] is True
+
+
+@pytest.mark.django_db
+def test_binding_qrcode_reports_an_unpublished_miniprogram_page(monkeypatch):
+    browser = APIClient()
+    session = _binding_session(_browser_session_id(browser), suffix="missing-page")
+    monkeypatch.setattr(
+        views,
+        "wxacode_png",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("invalid page")),
+    )
+
+    response = browser.get(
+        "/api/v1/auth/wechat-web/binding-qrcode",
+        {"web_session_id": session.value},
+    )
+
+    assert response.status_code == 503
+    assert response.data["code"] == "WECHAT_MINIPROGRAM_BINDING_PAGE_UNAVAILABLE"
 
 
 def test_rewriting_binding_session_never_extends_its_initial_expiry(monkeypatch):

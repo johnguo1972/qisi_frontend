@@ -92,7 +92,7 @@ def analyze_image_blur(file_obj):
         return None, False
 
 
-def wxacode_png(scene, page='pages/student/scan-entry', width=430):
+def wxacode_png(scene, page='pages/student/scan-entry', width=430, check_path=False):
     """Generate a real unlimited mini-program code through the WeChat API."""
     import requests
     appid = getattr(settings, 'WECHAT_MP_APPID', '')
@@ -110,7 +110,12 @@ def wxacode_png(scene, page='pages/student/scan-entry', width=430):
     response = requests.post(
         'https://api.weixin.qq.com/wxa/getwxacodeunlimit',
         params={'access_token': access_token},
-        json={'scene': str(scene)[:32], 'page': page, 'check_path': False, 'width': width},
+        json={
+            'scene': str(scene)[:32],
+            'page': page,
+            'check_path': bool(check_path),
+            'width': width,
+        },
         timeout=15,
     )
     if 'image' not in response.headers.get('Content-Type', ''):

@@ -170,6 +170,10 @@ async function loadWechatWebBindingQr() {
     { credentials: 'same-origin' },
   )
   if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    if (payload?.code === 'WECHAT_MINIPROGRAM_BINDING_PAGE_UNAVAILABLE') {
+      throw new Error('小程序授权页面尚未发布，请联系管理员更新小程序后再试')
+    }
     throw new Error('小程序授权二维码加载失败')
   }
   const objectUrl = URL.createObjectURL(await response.blob())
@@ -206,8 +210,8 @@ function restoreWechatWebSessionFromCallback() {
   wechatWebPhoneAuthorizationConfirmed.value = true
   wechatWebSession.value = { web_session_id: webSessionId, authorization_url: '', expires_in: 0 }
   wechatWebStatusText.value = '已完成扫码，等待小程序手机号授权'
-  void loadWechatWebBindingQr().catch(() => {
-    wechatWebStatusText.value = '小程序授权二维码加载失败，请重新扫码'
+  void loadWechatWebBindingQr().catch((error: any) => {
+    wechatWebStatusText.value = error?.message || '小程序授权二维码加载失败，请重新扫码'
   })
   void pollWechatWebBindingStatus()
   wechatWebPollTimer = setInterval(() => { void pollWechatWebBindingStatus() }, 3000)

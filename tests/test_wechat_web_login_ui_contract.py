@@ -75,6 +75,14 @@ def test_h5_loads_the_binding_code_with_the_same_origin_browser_session():
     assert "URL.createObjectURL" in source
 
 
+def test_h5_explains_when_the_published_miniprogram_binding_page_is_unavailable():
+    """An unusable bridge QR must be reported as a release/configuration problem."""
+    source = LOGIN_PAGE.read_text(encoding="utf-8")
+
+    assert "小程序授权页面尚未发布，请联系管理员更新小程序后再试" in source
+    assert "await response.json()" in source
+
+
 def test_wechat_web_api_only_exchanges_opaque_session_and_ticket_values():
     """The H5 API client never submits, stores, or models a mobile number."""
     source = API_CLIENT.read_text(encoding="utf-8")
