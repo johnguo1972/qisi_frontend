@@ -58,6 +58,14 @@ def test_h5_wechat_qr_view_keeps_the_full_code_visible_and_consent_below_it():
     assert '<iframe' not in source
 
 
+def test_h5_callback_renders_the_binding_code_as_a_native_browser_image():
+    """OAuth callback must issue a real image request for the MP bridge code."""
+    source = LOGIN_PAGE.read_text(encoding="utf-8")
+
+    assert '<img class="wechat-web-binding-qr-image"' in source
+    assert ':src="wechatWebBindingQrUrl"' in source
+
+
 def test_wechat_web_api_only_exchanges_opaque_session_and_ticket_values():
     """The H5 API client never submits, stores, or models a mobile number."""
     source = API_CLIENT.read_text(encoding="utf-8")

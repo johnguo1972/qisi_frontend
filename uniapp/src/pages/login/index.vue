@@ -87,7 +87,7 @@
                 ></view>
               </view>
               <view v-if="wechatWebSession" class="wechat-web-qr">
-                <image class="wechat-web-binding-qr-image" :src="wechatWebBindingQrUrl" mode="aspectFit" />
+                <img class="wechat-web-binding-qr-image" :src="wechatWebBindingQrUrl" alt="微信小程序授权二维码" />
               </view>
               <view class="wechat-web-consent" @click="wechatWebPhoneAuthorizationConfirmed = !wechatWebPhoneAuthorizationConfirmed">
                 <view class="checkbox" :class="{ checked: wechatWebPhoneAuthorizationConfirmed }">
