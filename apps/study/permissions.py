@@ -57,6 +57,8 @@ def effective_student_user(request):
     child_id = cache.get(f'parent_context:{request.user.id}')
     if not child_id:
         return None
+    if str(child_id) == str(request.user.id) and has_user_role(request.user, 'student'):
+        return request.user
     relation = StudentParentBind.objects.filter(
         parent_user_id=request.user, student_user_id=child_id, bind_status='active',
     ).select_related('student_user_id').first()

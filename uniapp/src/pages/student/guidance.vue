@@ -187,6 +187,7 @@ import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
 import { renderWithKatex } from '@/utils/katex-renderer'
 import { getMediaUrl } from '@/utils/media-url'
+import { getQuestionTypeLabel } from '@/utils/question-type'
 
 // 页面核心状态
 const questionId = ref<string>('')
@@ -282,7 +283,11 @@ const questionTypeLabel = computed(() => {
     solution: '解答题', short_answer: '简答题', essay: '论述题',
     true_false: '判断题', computation: '计算题', proof: '证明题',
   }
-  return typeMap[currentQuestion.value.question_type] || currentQuestion.value.question_type || '题目'
+  return getQuestionTypeLabel(
+    currentQuestion.value.question_type,
+    currentQuestion.value.stem,
+    currentQuestion.value.options,
+  )
 })
 const hasPrevQuestion = computed(() => currentIndex.value > 0)
 const hasNextQuestion = computed(() => currentIndex.value < questions.value.length - 1)

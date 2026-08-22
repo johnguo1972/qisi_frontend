@@ -36,6 +36,8 @@ class OptionalJWTAuthentication(JWTAuthentication):
             if 'active_role' in validated_token
             else user.role_type
         )
+        if getattr(user, 'status', None) != 'active':
+            raise AuthenticationFailed('Account is inactive', code='ACCOUNT_INACTIVE')
         if active_role not in VALID_ROLES or not has_user_role(user, active_role):
             raise AuthenticationFailed('Role is no longer granted', code='ROLE_NOT_GRANTED')
 

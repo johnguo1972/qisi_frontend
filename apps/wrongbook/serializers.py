@@ -1,18 +1,26 @@
 from rest_framework import serializers
 from .models import WrongBookItem, MasteryRecord
 from apps.common.media import media_url
+from apps.common.question_display import difficulty_label
 
 
 class WrongBookItemSerializer(serializers.ModelSerializer):
     question_no = serializers.SerializerMethodField()
     question_type = serializers.SerializerMethodField()
+    question_type_label = serializers.SerializerMethodField()
+    difficulty = serializers.SerializerMethodField()
+    difficulty_label = serializers.SerializerMethodField()
+    knowledge_point_labels = serializers.SerializerMethodField()
+    tags = serializers.SerializerMethodField()
     stem = serializers.SerializerMethodField()
     stem_html = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
 
     class Meta:
         model = WrongBookItem
-        fields = ['id', 'question_id', 'question_no', 'question_type', 'stem', 'stem_html', 'images',
+        fields = ['id', 'question_id', 'question_no', 'question_type', 'question_type_label',
+                  'difficulty', 'difficulty_label', 'knowledge_point_labels', 'tags',
+                  'stem', 'stem_html', 'images',
                   'status', 'wrong_reason_type', 'retry_count',
                   'variant_done_count', 'first_wrong_at', 'latest_wrong_at']
 
@@ -35,6 +43,51 @@ class WrongBookItemSerializer(serializers.ModelSerializer):
     def get_question_type(self, obj):
         q = self._get_question(obj)
         return q.question_type if q else ''
+
+    def get_question_type_label(self, obj):
+        q = self._get_question(obj)
+        return q.get_question_type_display_label() if q else ''
+
+    def get_difficulty(self, obj):
+        q = self._get_question(obj)
+        return float(q.difficulty) if q and q.difficulty is not None else None
+
+    def get_difficulty_label(self, obj):
+        q = self._get_question(obj)
+        return difficulty_label(q.difficulty if q else None)
+
+    def get_knowledge_point_labels(self, obj):
+        q = self._get_question(obj)
+        if not q:
+            return []
+        raw = q.knowledge_points
+        if not raw and isinstance(q.ai_knowledge_enrichment, dict):
+            raw = q.ai_knowledge_enrichment.get('knowledge_points')
+        if isinstance(raw, dict):
+            raw = raw.get('points') or raw.get('knowledge_points') or []
+        if not isinstance(raw, (list, tuple)):
+            raw = [raw] if raw else []
+        labels = []
+        for item in raw:
+            if isinstance(item, dict):
+                label = item.get('module') or item.get('name') or item.get('label') or item.get('id')
+            else:
+                label = item
+            label = str(label).strip() if label is not None else ''
+            if label and label not in labels:
+                labels.append(label)
+        return labels
+
+    def get_tags(self, obj):
+        q = self._get_question(obj)
+        raw = q.tags if q else []
+        values = raw if isinstance(raw, (list, tuple)) else ([raw] if raw else [])
+        result = []
+        for value in values:
+            text = str(value).strip()
+            if text and text not in result:
+                result.append(text)
+        return result
 
     def get_stem(self, obj):
         q = self._get_question(obj)

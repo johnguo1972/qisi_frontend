@@ -4,6 +4,7 @@
     <HomePage v-if="currentPage === 'home'" />
     <BindPage v-else-if="currentPage === 'children'" />
     <WrongbookPage v-else-if="currentPage === 'wrongbook'" />
+    <PracticePage v-else-if="currentPage === 'practice'" />
     <GrowthPage v-else-if="currentPage === 'growth'" />
     <KnowledgePage v-else-if="currentPage === 'knowledge'" />
   </ParentShell>
@@ -19,6 +20,7 @@ import BindPage from './bind.vue'
 import WrongbookPage from './wrongbook.vue'
 import GrowthPage from './growth.vue'
 import KnowledgePage from './knowledge.vue'
+import PracticePage from '@/components/ParentPracticeContent.vue'
 
 const currentPage = ref('home')
 
@@ -27,7 +29,7 @@ onShow(() => {
 })
 
 function switchPage(page: string) {
-  if (['home', 'children', 'wrongbook', 'growth', 'knowledge'].includes(page)) {
+  if (['home', 'children', 'wrongbook', 'practice', 'growth', 'knowledge'].includes(page)) {
     currentPage.value = page
   }
 }

@@ -31,12 +31,12 @@ def has_user_role(user, role):
     return role_queryset.filter(status="active").exists()
 
 
-def grant_user_role(user, role):
+def grant_user_role(user, role, grant_source="business"):
     _validate_role(role)
     grant, _ = UserRole.objects.update_or_create(
         user=user,
         role=role,
-        defaults={"status": "active", "grant_source": "business"},
+        defaults={"status": "active", "grant_source": grant_source},
     )
     return grant
 

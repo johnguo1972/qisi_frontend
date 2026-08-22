@@ -1,21 +1,4 @@
-// #ifdef APP-PLUS
-// App 环境（APK）：使用完整域名
-const BASE_URL = 'https://qisi.chengxuelu.com/api/v1'
-// #endif
-// #ifdef MP-WEIXIN
-const BASE_URL = 'https://qisi.chengxuelu.com/api/v1'
-// #endif
-// #ifdef H5
-// H5 环境（浏览器）：使用相对路径，由 Nginx 代理
-const BASE_URL = '/api/v1'
-// #endif
-// #ifndef APP-PLUS
-// #ifndef MP-WEIXIN
-// #ifndef H5
-const BASE_URL = 'https://qisi.chengxuelu.com/api/v1'
-// #endif
-// #endif
-// #endif
+import { apiBaseUrl as BASE_URL } from './api-config'
 
 interface ApiResponse<T = any> {
   code: number
@@ -30,14 +13,6 @@ interface RequestError {
   data?: any
 }
 
-function responseErrorMessage(data: any, statusCode: number): string {
-  if (data && typeof data === 'object') {
-    const detail = data.detail || data.message || data.error
-    if (typeof detail === 'string' && detail.trim()) return detail.trim()
-  }
-  return `请求失败（${statusCode}）`
-}
-
 export interface RequestOptions {
   silentError?: boolean
 }
@@ -45,6 +20,14 @@ export interface RequestOptions {
 // 保存最近的请求日志到全局数组，方便调试时查看
 const requestLogs: Array<{ url: string; method: string; status: string; detail: string }> = []
 ;(globalThis as any).__requestLogs = requestLogs
+
+function responseErrorMessage(data, statusCode) {
+  if (data && typeof data === 'object') {
+    const detail = data.detail || data.message || data.error
+    if (typeof detail === 'string' && detail.trim()) return detail.trim()
+  }
+  return `请求失败（${statusCode}）`
+}
 
 function request<T>(
   url: string,

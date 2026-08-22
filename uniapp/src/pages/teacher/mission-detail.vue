@@ -3,7 +3,7 @@
 
     <!-- 右侧内容区 -->
     <view class="main">
-      <!-- 任务信息卡片 -->
+      <!-- 作业信息卡片 -->
       <view v-if="mission" class="mission-card">
         <text class="page-title">{{ isGrading ? '批改作业' : '作业详情' }}</text>
         <text class="mission-name">{{ mission.mission_name }}</text>
@@ -13,22 +13,19 @@
         <view class="meta-grid">
           <view class="meta-item">
             <text class="meta-label">截止时间</text>
-            <text class="meta-value">{{ mission.end_at || '未设置' }}</text>
+            <text class="meta-value">{{ formatDateOnly(mission.end_at, '未设置') }}</text>
           </view>
           <view class="meta-item">
-            <text class="meta-label">关卡数</text>
-            <text class="meta-value">{{ mission.level_count || 0 }}</text>
+            <text class="meta-label">{{ mission.assignment_mode === 'flat' ? '题目数' : '关卡数' }}</text>
+            <text class="meta-value">{{ mission.assignment_mode === 'flat' ? (questions.length || mission.question_count || 0) : (mission.level_count || 0) }}</text>
           </view>
         </view>
       </view>
       <view v-if="mission" class="action-buttons">
         <button v-if="mission.status === 'draft'" @click="publishMission" class="action-btn publish">
-          发布任务
+          发布作业
         </button>
-        <button v-if="mission.status === 'published'" @click="startMission" class="action-btn start">
-          开始任务
-        </button>
-        <button @click="cloneMission" class="action-btn clone">克隆任务</button>
+        <button @click="cloneMission" class="action-btn clone">克隆作业</button>
         <button @click="exportPdf" class="action-btn export">导出PDF</button>
         <button @click="showQrcode" class="action-btn qrcode">作业二维码</button>
       </view>
@@ -60,8 +57,17 @@
           </view>
         </view>
       </view>
-      <!-- 关卡列表 -->
-      <view v-if="!isGrading" class="levels-panel">
+      <!-- 新作业使用平铺题目，不再展示关卡设置 -->
+      <view v-if="!isGrading && mission?.assignment_mode === 'flat'" class="levels-panel flat-questions-panel">
+        <view class="panel-header"><text class="panel-title">题目列表（{{ questions.length }}题）</text></view>
+        <view v-for="(question, index) in questions" :key="question.id" class="flat-question-row">
+          <text class="flat-question-no">{{ index + 1 }}</text>
+          <text class="flat-question-stem">{{ question.stem_preview || question.stem || '暂无题干' }}</text>
+        </view>
+        <view v-if="questions.length === 0" class="empty">暂无题目</view>
+      </view>
+      <!-- 历史作业继续展示关卡 -->
+      <view v-if="!isGrading && mission?.assignment_mode !== 'flat'" class="levels-panel">
         <view class="panel-header">
           <text class="panel-title">关卡列表</text>
         </view>
@@ -95,9 +101,11 @@ import { ref, onMounted } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { missionApi } from '@/api/index.ts'
 import { type Mission } from '@/api/missions.ts'
+import { formatDateOnly } from '@/utils/display-format'
 
 const mission = ref<Mission | null>(null)
 const levels = ref<any[]>([])
+const questions = ref<any[]>([])
 const missionId = ref<string>('')
 const isGrading = ref(false)
 const gradingLoading = ref(false)
@@ -109,7 +117,7 @@ onLoad((options: any) => {
   const id = String(options?.id || '')
   isGrading.value = options?.mode === 'grading'
   if (!id) {
-    uni.showToast({ title: '缺少任务ID', icon: 'none' })
+    uni.showToast({ title: '缺少作业ID', icon: 'none' })
     return
   }
   missionId.value = id
@@ -125,6 +133,10 @@ async function loadMission() {
     const res = await missionApi.detail(missionId.value)
     mission.value = res.data
     levels.value = res.data?.levels || []
+    if (res.data?.assignment_mode === 'flat') {
+      const questionRes: any = await missionApi.questions(missionId.value)
+      questions.value = Array.isArray(questionRes.data) ? questionRes.data : []
+    }
   } catch (e) {
     uni.showToast({ title: '加载失败', icon: 'none' })
   }
@@ -191,20 +203,16 @@ async function publishMission() {
   }
 }
 
-async function startMission() {
-  try {
-    await missionApi.update(missionId.value, { status: 'running' })
-    uni.showToast({ title: '已开始', icon: 'success' })
-    await loadMission()
-  } catch (e) {
-    uni.showToast({ title: '操作失败', icon: 'none' })
-  }
-}
-
 async function cloneMission() {
   try {
-    await missionApi.clone(missionId.value)
+    const res: any = await missionApi.clone(missionId.value)
     uni.showToast({ title: '克隆成功', icon: 'success' })
+    uni.navigateBack({
+      delta: 1,
+      success: () => {
+        setTimeout(() => uni.$emit('mission-list-refresh', { id: res.data?.id }), 0)
+      },
+    })
   } catch (e) {
     uni.showToast({ title: '克隆失败', icon: 'none' })
   }
@@ -393,6 +401,10 @@ function saveQrcodeImage() {
   color: #fff;
 }
 .publish { background: #4caf50; }
+.flat-questions-panel { padding-bottom: 16px; }
+.flat-question-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid #f0f0f0; }
+.flat-question-no { width: 28px; color: #409eff; font-weight: 600; }
+.flat-question-stem { flex: 1; color: #303133; line-height: 1.5; }
 .qrcode { background: #8e44ad; }
 .qrcode-panel { display: flex; flex-direction: column; align-items: center; gap: 14rpx; background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 20rpx; }
 .qrcode-image { width: 360rpx; max-width: 100%; }

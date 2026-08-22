@@ -15,8 +15,8 @@
       <view class="section-title">已绑定孩子</view>
       <view v-if="!children.length" class="empty">暂无已确认的孩子</view>
       <view v-for="item in children" :key="item.id" class="child-row">
-        <view><text class="student-name">{{ item.display_name || '学生' }}</text><text class="student-status">{{ item.grade_level || '年级未设置' }}</text></view>
-        <button class="remove" :disabled="removing === item.id" @click="remove(item)">解除绑定</button>
+        <view><text class="student-name">{{ item.is_self ? '我的学生身份' : (item.display_name || '学生') }}</text><text class="student-status">{{ item.is_self ? '本账号学生角色' : (item.grade_level || '年级未设置') }}</text></view>
+        <button v-if="!item.is_self" class="remove" :disabled="removing === item.id" @click="remove(item)">解除绑定</button>
       </view>
     </view>
 

@@ -114,7 +114,11 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { authApi, wechatWebApi, type WechatWebSession } from '@/api/index.ts'
+import { authApi } from '@/api/index.ts'
+// 微信网页扫码登录只存在于 H5，不能让小程序主包依赖该模块。
+// #ifdef H5
+import { wechatWebApi, type WechatWebSession } from '@/api/wechat-web'
+// #endif
 import { useUserStore } from '@/store/index.ts'
 import { wxLogin } from '@/utils/wechat-auth'
 import { persistSession, routeForRole, type AppRole } from '@/utils/roles'
@@ -328,7 +332,7 @@ async function handleWechatLogin() {
   if (loading.value) return
   loading.value = true
   try {
-    const result = await wxLogin()
+    const result = await wxLogin(activeTab.value)
     if (result.needBindPhone) {
       uni.navigateTo({ url: `/pages/student/parent-bind?bindToken=${encodeURIComponent(result.bindToken || '')}` })
       return

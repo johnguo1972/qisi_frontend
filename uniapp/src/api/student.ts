@@ -1,4 +1,4 @@
-import { get, post } from '@/utils/request'
+import { del, get, post } from '@/utils/request'
 import type { UUID } from '@/types/uuid'
 
 export const studentApi = {
@@ -32,10 +32,30 @@ export const wrongbookApi = {
     post(`/student/wrong-book/${itemId}/variant-submit/`, data),
 }
 
+export const practiceApi = {
+  wrongbookCandidates: (wrongItemId: UUID) => get(`/practice/wrong-book/${wrongItemId}/candidates/`),
+  pool: (status = 'active') => get('/practice/pool', { status }),
+  addPoolItems: (data: any) => post('/practice/pool/items', data),
+  removePoolItem: (id: UUID) => del(`/practice/pool/items/${id}`),
+  sets: (status?: string) => get('/practice/sets', status ? { status } : undefined),
+  createSet: (data: any) => post('/practice/sets/create', data),
+  detail: (id: UUID) => get(`/practice/sets/${id}/`),
+  questions: (id: UUID) => get(`/practice/sets/${id}/questions`),
+  progress: (id: UUID) => get(`/practice/sets/${id}/progress`),
+  activate: (id: UUID) => post(`/practice/sets/${id}/activate`),
+  submitSet: (id: UUID) => post(`/practice/sets/${id}/submit`),
+  submit: (setId: UUID, itemId: UUID, data: any) => post(`/practice/sets/${setId}/items/${itemId}/attempts`, data),
+  createPhotoDraft: (setId: UUID, itemId: UUID, data: any = {}) => post(`/practice/sets/${setId}/items/${itemId}/attempts/draft`, data),
+  submitPhoto: (attemptId: UUID, data: any = {}) => post(`/practice/attempts/${attemptId}/submit`, data),
+  exportPdf: (setId: UUID, data: any = {}) => post(`/practice/sets/${setId}/export-pdf`, data),
+  pdf: (setId: UUID) => get(`/practice/sets/${setId}/pdf`),
+}
+
 export const exportApi = {
   exportPdf: (data: {
     export_type: string
     item_ids: Array<string | number>
+    source_wrong_item_id?: string
     include_answers: boolean
     watermark_text?: string
   }) =>

@@ -1,6 +1,8 @@
 import os
+import re
 import uuid
 from datetime import timedelta
+from xml.sax.saxutils import escape
 from django.conf import settings
 from django.core.cache import cache
 from django.http import HttpResponse, StreamingHttpResponse
@@ -16,6 +18,8 @@ from apps.parser.models import ExamQuestion
 from apps.parser.models import QuestionImage, QuestionOption
 from apps.common.batch_tasks import PROGRESS_KEY_PREFIX
 from apps.common.media import media_url
+from apps.missions.services import assignment_levels, close_stale_missions
+from apps.missions.pdf_service import _mission_questions, mission_pdf_download_url
 
 
 def make_trace_id():
@@ -41,6 +45,7 @@ def student_home(request):
         scope: date filter — 'today' (end_at covers today) or 'week' (end_at within 7 days)
     """
     from apps.institutions.models import ClassStudent
+    close_stale_missions()
     student = getattr(request, '_effective_student', request.user)
 
     # 获取学生所在的班级ID列表
@@ -117,11 +122,12 @@ def student_home(request):
     for p in progresses:
         mission = p.mission
         class_obj = mission.class_obj
-        level_count = mission.levels.count()
+        visible_levels = assignment_levels(mission)
+        level_count = len(visible_levels)
         question_count = len(_visible_mission_rels(mission, student.id))
 
         # 实时计算各关卡进度，取平均值作为任务整体进度
-        levels = mission.levels.all()
+        levels = visible_levels
         total_progress = 0
         for lv in levels:
             level_q_count = len(_visible_mission_rels(lv, student.id))
@@ -151,11 +157,13 @@ def student_home(request):
             },
             'class_label': class_obj.class_name if class_obj else None,
             'deadline': mission.end_at.isoformat() if mission.end_at else None,
+            'assignment_mode': mission.assignment_mode,
             'level_count': level_count,
             'question_count': question_count,
             'progress_status': p.progress_status,
             'progress_percent': float(overall_progress),
             'current_level_id': p.current_level_id,
+            'pdf_download_url': mission_pdf_download_url(mission),
         })
 
     return Response({
@@ -167,6 +175,7 @@ def student_home(request):
 @permission_classes([IsAuthenticated, IsStudentOrParentContext])
 def student_mission_detail(request, mission_id):
     """S-02: Student mission detail."""
+    close_stale_missions()
     try:
         mission = LearningMission.objects.get(pk=mission_id)
     except LearningMission.DoesNotExist:
@@ -182,7 +191,7 @@ def student_mission_detail(request, mission_id):
 
     levels = []
     total_progress = 0
-    for lv in mission.levels.all():
+    for lv in assignment_levels(mission):
         lp = StudentLevelProgress.objects.filter(
             level=lv, student_user_id=request.user
         ).first()
@@ -230,6 +239,8 @@ def student_mission_detail(request, mission_id):
             'goal_text': mission.goal_text,
             'class_name': class_obj.class_name if class_obj else None,
             'deadline': mission.end_at.isoformat() if mission.end_at else None,
+            'assignment_mode': mission.assignment_mode,
+            'pdf_download_url': mission_pdf_download_url(mission),
             'levels': levels,
         }, 'trace_id': make_trace_id(),
     })
@@ -355,7 +366,12 @@ def _check_export_rate(user_id: int) -> bool:
 
 def _build_html(export_type: str, questions: list, include_answers: bool) -> str:
     """Build a simple HTML page as PDF placeholder."""
-    type_label = '错题本' if export_type == 'wrongbook' else '任务题目'
+    type_label = (
+        '精练作业' if export_type == 'practice'
+        else '同类题练习' if export_type == 'variants'
+        else '错题本' if export_type == 'wrongbook'
+        else '任务题目'
+    )
     rows = []
     for i, q in enumerate(questions, 1):
         qtype = ExamQuestion.QUESTION_TYPE_LABELS.get(q['question_type'], q['question_type'])
@@ -386,8 +402,157 @@ img {{ max-width: 100%; }}
 </body></html>'''
 
 
+_LATEX_BLOCK_PATTERN = re.compile(
+    r'\$\$(?P<display_dollar>[\s\S]*?)\$\$|'
+    r'(?<!\$)\$(?!\$)(?P<inline>[\s\S]+?)(?<!\$)\$(?!\$)|'
+    r'\\\[(?P<display_bracket>[\s\S]*?)\\\]|'
+    r'\\\((?P<inline_paren>[\s\S]*?)\\\)'
+)
+
+_LATEX_SYMBOLS = {
+    'alpha': 'α', 'beta': 'β', 'gamma': 'γ', 'delta': 'δ',
+    'epsilon': 'ε', 'theta': 'θ', 'lambda': 'λ', 'mu': 'μ',
+    'pi': 'π', 'sigma': 'σ', 'phi': 'φ', 'omega': 'ω',
+    'times': '×', 'cdot': '·', 'div': '÷', 'pm': '±',
+    'le': '≤', 'leq': '≤', 'ge': '≥', 'geq': '≥',
+    'neq': '≠', 'ne': '≠', 'approx': '≈', 'infty': '∞',
+    'rightarrow': '→', 'leftarrow': '←', 'Rightarrow': '⇒',
+    'Leftarrow': '⇐', 'to': '→', 'in': '∈', 'notin': '∉',
+    'subset': '⊂', 'supset': '⊃', 'cup': '∪', 'cap': '∩',
+    'parallel': '∥', 'perp': '⊥', 'angle': '∠', 'triangle': '△',
+    'sqrt': '√',
+}
+
+
+def _latex_to_reportlab(formula: str) -> str:
+    """Convert common LaTeX math to safe ReportLab paragraph markup."""
+    formula = str(formula or '')
+    # Accept both normal LaTeX and JSON-escaped values from imported papers.
+    formula = formula.replace('\\\\', '\\')
+
+    def read_argument(text, position):
+        while position < len(text) and text[position].isspace():
+            position += 1
+        if position >= len(text):
+            return '', position
+        if text[position] == '{':
+            return read_sequence(text, position + 1, stop='}')
+        return read_atom(text, position)
+
+    def read_atom(text, position):
+        if position >= len(text):
+            return '', position
+        if text[position] == '{':
+            return read_sequence(text, position + 1, stop='}')
+        if text[position] == '\\':
+            return read_command(text, position + 1)
+        return escape(text[position]), position + 1
+
+    def read_command(text, position):
+        if position >= len(text):
+            return '', position
+        if text[position].isalpha():
+            start = position
+            while position < len(text) and text[position].isalpha():
+                position += 1
+            name = text[start:position]
+        else:
+            name = text[position]
+            position += 1
+
+        if name in {'mathrm', 'mathbf', 'mathit', 'text', 'textrm', 'operatorname'}:
+            return read_argument(text, position)
+        if name == 'underline':
+            value, position = read_argument(text, position)
+            return f'<u>{value}</u>', position
+        if name in {'frac', 'dfrac', 'tfrac'}:
+            numerator, position = read_argument(text, position)
+            denominator, position = read_argument(text, position)
+            return f'({numerator})/({denominator})', position
+        if name == 'sqrt':
+            if position < len(text) and text[position] == '[':
+                closing = text.find(']', position + 1)
+                position = len(text) if closing < 0 else closing + 1
+            value, position = read_argument(text, position)
+            return f'√({value})', position
+        if name == 'hspace':
+            value, position = read_argument(text, position)
+            match = re.search(r'(\d+(?:\.\d+)?)', re.sub(r'<[^>]+>', '', value))
+            count = max(3, min(12, round(float(match.group(1)) * 4))) if match else 5
+            return '_' * count, position
+        if name in {'left', 'right', 'displaystyle', 'textstyle', 'limits'}:
+            return '', position
+        if name in {'quad', 'qquad', ',', ';', '!', ':'}:
+            return ' ', position
+        if name in _LATEX_SYMBOLS:
+            return escape(_LATEX_SYMBOLS[name]), position
+        return escape(name), position
+
+    def read_sequence(text, position, stop=None):
+        result = []
+        while position < len(text):
+            char = text[position]
+            if stop and char == stop:
+                return ''.join(result), position + 1
+            if char == '\\':
+                value, position = read_command(text, position + 1)
+                result.append(value)
+                continue
+            if char in '^_':
+                value, position = read_atom(text, position + 1)
+                tag = 'super' if char == '^' else 'sub'
+                result.append(f'<{tag}>{value}</{tag}>')
+                continue
+            if char == '{':
+                value, position = read_sequence(text, position + 1, stop='}')
+                result.append(value)
+                continue
+            result.append(' ' if char == '~' else escape(char))
+            position += 1
+        return ''.join(result), position
+
+    return read_sequence(formula, 0)[0]
+
+
+def _pdf_text_with_formulas(value: object) -> str:
+    """Escape normal text and convert embedded math delimiters."""
+    from xml.sax.saxutils import escape
+
+    text = str(value or '')
+    result = []
+    position = 0
+    for match in _LATEX_BLOCK_PATTERN.finditer(text):
+        result.append(escape(text[position:match.start()]))
+        groups = match.groupdict()
+        formula = next(content for content in groups.values() if content is not None)
+        is_display = groups['display_dollar'] is not None or groups['display_bracket'] is not None
+        rendered = _latex_to_reportlab(formula.strip())
+        result.append(f'<br/>{rendered}<br/>' if is_display else rendered)
+        position = match.end()
+    result.append(escape(text[position:]))
+    return ''.join(result)
+
+
+def _export_question_type(q: dict, infer_unknown: bool = False) -> str:
+    """Return a displayable type, inferring legacy ``unknown`` questions."""
+    question_type = str(q.get('question_type') or '').strip().lower()
+    if not infer_unknown or question_type not in {'', 'unknown'}:
+        return question_type
+
+    stem = str(q.get('stem') or '').replace('\\\\', '\\')
+    if re.search(r'选填|填空|\\underline|_{2,}', stem, re.IGNORECASE):
+        return 'fill_blank'
+
+    options = q.get('options_html') or q.get('options') or []
+    if options or re.search(r'\\mathrm\s*\{[A-D]\}|(?:^|[\n])\s*[A-D][.．、]', stem, re.IGNORECASE):
+        answer = str(q.get('answer') or '').upper()
+        answer_letters = re.findall(r'(?<![A-Z])[A-D](?![A-Z])', answer)
+        return 'multiple_choice' if len(set(answer_letters)) > 1 else 'single_choice'
+    return 'unknown'
+
+
 def _build_pdf(export_type: str, questions: list, include_answers: bool,
-               watermark_text: str = "") -> bytes:
+               watermark_text: str = "", render_formulas: bool = False) -> bytes:
     """增强版 PDF 生成：水印、知识点标签、页码、图片。"""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -449,6 +614,8 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
         """Escape user/imported text before passing it to ReportLab Paragraph."""
         return escape(str(value or ''))
 
+    content_text = _pdf_text_with_formulas if render_formulas else pdf_text
+
     def option_text(option, index):
         """Accept both API-shaped options and raw QuestionOption values."""
         if not isinstance(option, dict):
@@ -459,14 +626,18 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
             content = option.get('text', '')
         return str(label), str(content or '')
 
-    type_label = '错题本' if export_type == 'wrongbook' else '任务题目'
+    type_label = '同类题练习' if export_type == 'variants' else ('错题本' if export_type == 'wrongbook' else '任务题目')
     story.append(Paragraph(type_label, h1))
     story.append(Spacer(1, 6*mm))
     story.append(Paragraph(f'导出时间：{timezone.now().strftime("%Y-%m-%d %H:%M:%S")}　题目数：{len(questions)}', body))
     story.append(Spacer(1, 6*mm))
 
+    # Only short-answer questions reserve handwritten answer space. Choice,
+    # true/false and fill-in-the-blank questions keep the compact layout.
+    short_answer_types = {'short_answer'}
     for i, q in enumerate(questions, 1):
-        qtype = ExamQuestion.QUESTION_TYPE_LABELS.get(q['question_type'], q['question_type'])
+        effective_type = _export_question_type(q, infer_unknown=render_formulas)
+        qtype = ExamQuestion.QUESTION_TYPE_LABELS.get(effective_type, '未识别题型' if render_formulas else effective_type)
         header_label = f'第{i}题（{qtype}）'
         header_width = max(
             15 * mm,
@@ -475,7 +646,7 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
         question_header = Table([
             [
                 Paragraph(pdf_text(header_label), question_number),
-                Paragraph(pdf_text(q.get('stem')), body),
+                Paragraph(content_text(q.get('stem')), body),
             ]
         ], colWidths=[header_width, doc.width - header_width])
         question_header.setStyle(TableStyle([
@@ -513,14 +684,16 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
 
         for option_index, opt in enumerate(q.get('options_html', [])):
             label, content = option_text(opt, option_index)
-            story.append(Paragraph(f'{pdf_text(label)}. {pdf_text(content)}', body))
+            story.append(Paragraph(f'{pdf_text(label)}. {content_text(content)}', body))
 
         if include_answers:
             if q.get('answer'):
-                story.append(Paragraph(f'<b>答案：</b>{pdf_text(q["answer"])}', body))
+                story.append(Paragraph(f'<b>答案：</b>{content_text(q["answer"])}', body))
             if q.get('analysis'):
-                story.append(Paragraph(f'<b>解析：</b>{pdf_text(q["analysis"])}', body))
+                story.append(Paragraph(f'<b>解析：</b>{content_text(q["analysis"])}', body))
         story.append(Spacer(1, 4*mm))
+        if q.get('question_type') in short_answer_types:
+            story.append(Spacer(1, 50*mm))
 
     doc.build(story)
     return buf.getvalue()
@@ -529,10 +702,10 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsStudentOnly])
 def export_pdf(request):
-    """导出错题本或任务题目为 PDF（当前返回 HTML 占位，待 reportlab 可用后替换）。
+    """导出错题本、同类题或任务题目为 PDF。
 
     Request body:
-        export_type: 'wrongbook' | 'mission'
+        export_type: 'wrongbook' | 'variants' | 'mission'
         item_ids: list of question IDs (for wrongbook) or mission ID (for mission, single int)
         include_answers: bool (default false)
     """
@@ -546,12 +719,13 @@ def export_pdf(request):
 
     export_type = request.data.get('export_type')
     item_ids = request.data.get('item_ids')
+    source_wrong_item_id = request.data.get('source_wrong_item_id')
     include_answers = request.data.get('include_answers', False)
     watermark_text = request.data.get('watermark_text', '')
 
-    if export_type not in ('wrongbook', 'mission'):
+    if export_type not in ('wrongbook', 'variants', 'mission'):
         return Response({
-            'code': 400, 'message': 'export_type 必须为 wrongbook 或 mission', 'data': None, 'trace_id': trace_id,
+            'code': 400, 'message': 'export_type 必须为 wrongbook、variants 或 mission', 'data': None, 'trace_id': trace_id,
         }, status=400)
     if not item_ids or not isinstance(item_ids, list):
         return Response({
@@ -560,16 +734,73 @@ def export_pdf(request):
 
     # --- fetch questions ---
     questions_data = []
-    if export_type == 'wrongbook':
+    render_export_type = export_type
+    if export_type in ('wrongbook', 'variants'):
         from apps.wrongbook.models import WrongBookItem
-        items = WrongBookItem.objects.filter(
-            student_user_id=request.user, question_id__in=item_ids
-        ).values_list('question_id', flat=True)
-        qs = ExamQuestion.objects.filter(id__in=list(items)).values(
+        from apps.wrongbook.services import find_variant_questions
+        if export_type == 'wrongbook':
+            items = WrongBookItem.objects.filter(
+                student_user_id=request.user, question_id__in=item_ids
+            ).values_list('question_id', flat=True)
+            export_question_ids = [str(question_id) for question_id in items]
+            # Backward compatibility for an already-opened old variants page:
+            # it sent variant question IDs while declaring export_type=wrongbook.
+            # If none are original wrong-book questions, authorize the IDs
+            # against this student's variant candidates instead of returning a
+            # false 404. Valid original wrong-book export behavior is unchanged.
+            if not export_question_ids:
+                allowed_ids = set()
+                for original_id in WrongBookItem.objects.filter(
+                    student_user_id=request.user,
+                ).values_list('question_id', flat=True):
+                    allowed_ids.update(
+                        str(question.get('id'))
+                        for question in find_variant_questions(original_id, limit=3)
+                    )
+                export_question_ids = [
+                    str(question_id) for question_id in item_ids
+                    if str(question_id) in allowed_ids
+                ]
+                if export_question_ids:
+                    render_export_type = 'variants'
+        else:
+            # The legacy variants page sends recommended question IDs, not
+            # WrongBookItem IDs. Re-run recommendation and authorize only
+            # questions belonging to this student's selected wrong item.
+            source_item = WrongBookItem.objects.filter(
+                pk=source_wrong_item_id, student_user_id=request.user,
+            ).first()
+            if source_item is not None:
+                allowed_ids = {
+                    str(question.get('id'))
+                    for question in find_variant_questions(source_item.question_id, limit=3)
+                }
+            else:
+                # New clients normally send source_wrong_item_id.  The
+                # fallback keeps old deep links functional while still
+                # authorizing only candidates of the current student.
+                allowed_ids = set()
+                for original_id in WrongBookItem.objects.filter(
+                    student_user_id=request.user,
+                ).values_list('question_id', flat=True):
+                    allowed_ids.update(
+                        str(question.get('id'))
+                        for question in find_variant_questions(original_id, limit=3)
+                    )
+            export_question_ids = [
+                str(question_id) for question_id in item_ids
+                if str(question_id) in allowed_ids
+            ]
+
+        qs = ExamQuestion.objects.filter(id__in=export_question_ids).values(
             'id', 'question_no', 'question_type', 'stem', 'stem_html',
             'answer', 'analysis', 'knowledge_points',
         )
-        for q in qs:
+        question_map = {str(question['id']): question for question in qs}
+        for question_id in export_question_ids:
+            q = question_map.get(question_id)
+            if q is None:
+                continue
             options = list(QuestionOption.objects.filter(question_id=q['id']).values(
                 'option_label', 'content'
             ).order_by('sort_order'))
@@ -590,23 +821,16 @@ def export_pdf(request):
             return Response({
                 'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': trace_id,
             }, status=404)
-        rels = [rel.question_id for rel in _visible_mission_rels(mission, request.user.id)]
-        qs = ExamQuestion.objects.filter(id__in=rels).values(
-            'id', 'question_no', 'question_type', 'stem', 'stem_html',
-            'answer', 'analysis', 'knowledge_points',
-        )
-        for q in qs:
-            options = list(QuestionOption.objects.filter(question_id=q['id']).values(
-                'option_label', 'content'
-            ).order_by('sort_order'))
-            images = list(QuestionImage.objects.filter(
-                question_id=q['id'],
-            ).exclude(image_type='formula').values('file_path').order_by('sort_order'))
-            questions_data.append({
-                **q,
-                'options_html': [{'label': o['option_label'], 'content': o['content']} for o in options],
-                'image_urls': [img['file_path'] for img in images],
-            })
+        visible_ids = {
+            str(rel.question_id)
+            for rel in _visible_mission_rels(mission, request.user.id)
+        }
+        # Reuse the mission relation order instead of relying on an unordered
+        # question_id__in query.
+        questions_data = [
+            question for question in _mission_questions(mission)
+            if str(question['id']) in visible_ids
+        ]
 
     if not questions_data:
         return Response({
@@ -617,10 +841,16 @@ def export_pdf(request):
     questions_data = questions_data[:50]  # max 50 题/PDF
     export_dir = os.path.join(settings.MEDIA_ROOT, 'exports')
     os.makedirs(export_dir, exist_ok=True)
-    filename = f'{export_type}_{uuid.uuid4().hex[:12]}.pdf'
+    filename = f'{render_export_type}_{uuid.uuid4().hex[:12]}.pdf'
     filepath = os.path.join(export_dir, filename)
 
-    pdf_bytes = _build_pdf(export_type, questions_data, include_answers, watermark_text)
+    if render_export_type == 'variants':
+        pdf_bytes = _build_pdf(
+            render_export_type, questions_data, include_answers, watermark_text,
+            render_formulas=True,
+        )
+    else:
+        pdf_bytes = _build_pdf(render_export_type, questions_data, include_answers, watermark_text)
     with open(filepath, 'wb') as f:
         f.write(pdf_bytes)
 

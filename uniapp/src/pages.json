@@ -16,9 +16,10 @@
     { "path": "pages/teacher/review-list", "style": { "navigationBarTitleText": "试卷审阅" } },
     { "path": "pages/teacher/question-edit", "style": { "navigationBarTitleText": "题目编辑" } },
     { "path": "pages/teacher/photo-upload", "style": { "navigationBarTitleText": "拍照新增试题" } },
-    { "path": "pages/teacher/mission-create", "style": { "navigationBarTitleText": "创建任务" } },
+    { "path": "pages/teacher/mission-create", "style": { "navigationBarTitleText": "创建作业" } },
     { "path": "pages/teacher/mission-list", "style": { "navigationBarTitleText": "作业列表" } },
-    { "path": "pages/teacher/mission-detail", "style": { "navigationBarTitleText": "任务详情" } },
+    { "path": "pages/teacher/mission-detail", "style": { "navigationBarTitleText": "作业详情" } },
+    { "path": "pages/teacher/mission-progress", "style": { "navigationBarTitleText": "学生完成进度" } },
     { "path": "pages/teacher/learning-stats", "style": { "navigationBarTitleText": "学情统计" } },
     { "path": "pages/teacher/level-practice", "style": { "navigationBarTitleText": "关卡练习" } },
     { "path": "pages/teacher/class-create", "style": { "navigationBarTitleText": "创建班级" } },
@@ -30,20 +31,23 @@
     { "path": "pages/teacher/course-practice", "style": { "navigationBarTitleText": "课程练习" } },
     { "path": "pages/teacher/course-material-import", "style": { "navigationBarTitleText": "从资料导入习题" } },
 
-    { "path": "pages/student/home", "style": { "navigationBarTitleText": "今日任务" } },
+    { "path": "pages/student/home", "style": { "navigationBarTitleText": "今日作业" } },
     { "path": "pages/student/join-class", "style": { "navigationBarTitleText": "加入班级" } },
     { "path": "pages/student/mission", "style": { "navigationBarTitleText": "关卡" } },
     { "path": "pages/student/answer", "style": { "navigationBarTitleText": "做题" } },
     { "path": "pages/student/guidance", "style": { "navigationBarTitleText": "引导式解题" } },
     { "path": "pages/student/knowledge-graph", "style": { "navigationBarTitleText": "知识图谱" } },
     { "path": "pages/student/wrongbook", "style": { "navigationBarTitleText": "错题本" } },
+    { "path": "pages/student/practice", "style": { "navigationBarTitleText": "精练题" } },
+    { "path": "pages/student/practice-set-detail", "style": { "navigationBarTitleText": "精练作业" } },
     { "path": "pages/student/wrongbook-variants", "style": { "navigationBarTitleText": "同类题练习" } },
+    { "path": "pages/student/wrongbook-practice-candidates", "style": { "navigationBarTitleText": "加入精练题" } },
     { "path": "pages/student/variant-practice", "style": { "navigationBarTitleText": "同类题练习" } },
     { "path": "pages/student/export", "style": { "navigationBarTitleText": "导出 PDF" } },
-    { "path": "pages/student/mp-home", "style": { "navigationBarTitleText": "今日任务" } }
+    { "path": "pages/student/mp-home", "style": { "navigationBarTitleText": "今日作业" } }
     ,{ "path": "pages/parent/layout", "style": { "navigationBarTitleText": "家长端" } }
     ,{ "path": "pages/parent/home", "style": { "navigationBarTitleText": "家长端" } }
-    ,{ "path": "pages/parent/mission", "style": { "navigationBarTitleText": "任务详情" } }
+    ,{ "path": "pages/parent/mission", "style": { "navigationBarTitleText": "作业详情" } }
     ,{ "path": "pages/student/growth", "style": { "navigationBarTitleText": "成长" } }
     ,{ "path": "pages/student/scan-entry", "style": { "navigationBarTitleText": "作业入口" } }
     ,{ "path": "pages/student/practice-sheet", "style": { "navigationBarTitleText": "错题练习" } }
@@ -54,6 +58,7 @@
     ,{ "path": "pages/parent/wrongbook", "style": { "navigationBarTitleText": "错题分析" } }
     ,{ "path": "pages/parent/growth", "style": { "navigationBarTitleText": "成长分析" } }
     ,{ "path": "pages/parent/knowledge", "style": { "navigationBarTitleText": "知识掌握" } }
+    ,{ "path": "pages/parent/practice", "style": { "navigationBarTitleText": "精练题" } }
   ],
   "tabBar": {
     "color": "#999999", "selectedColor": "#409eff", "backgroundColor": "#ffffff", "borderStyle": "white",

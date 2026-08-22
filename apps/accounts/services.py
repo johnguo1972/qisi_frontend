@@ -3,12 +3,12 @@ import logging
 import random
 
 from django.core.cache import cache
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.conf import settings
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import UserAccount
+from .models import UserAccount, UserRole
 from .roles import grant_user_role, has_user_role
 
 logger = logging.getLogger(__name__)
@@ -110,32 +110,60 @@ def login_with_trusted_mobile(
     if user is None:
         if active_role not in ("student", "parent"):
             raise RoleNotGranted(active_role)
-        user, _ = get_or_create_user(mobile, initial_role=active_role)
+        user, _ = get_or_create_user(
+            mobile, initial_role=active_role, grant_source="wechat_web"
+        )
     else:
         if not has_user_role(user, active_role):
             raise RoleNotGranted(active_role)
-        user, _ = get_or_create_user(mobile, initial_role=active_role)
+        user, _ = get_or_create_user(
+            mobile, initial_role=active_role, grant_source="wechat_web"
+        )
 
     return user, generate_tokens(user, active_role)
 
 
 @transaction.atomic
+def ensure_parent_role_for_login(user: UserAccount) -> UserAccount:
+    """Grant the first parent role after verified login, but never restore a revoke."""
+    locked_user = UserAccount.objects.select_for_update().get(pk=user.pk)
+    if locked_user.status != "active":
+        raise RoleNotGranted("parent")
+
+    grant = UserRole.objects.select_for_update().filter(
+        user=locked_user, role="parent"
+    ).first()
+    if grant is not None:
+        if grant.status != "active":
+            raise RoleNotGranted("parent")
+        return locked_user
+
+    grant_user_role(locked_user, "parent", grant_source="self_login")
+    return locked_user
+
+
+@transaction.atomic
 def get_or_create_user(
-    mobile: str, initial_role: str = 'student'
+    mobile: str, initial_role: str = 'student', grant_source: str = 'business'
 ) -> tuple[UserAccount, bool]:
     """Create a new account with one safe initial grant; never change an existing account's roles."""
-    user = UserAccount.objects.filter(mobile=mobile).first()
+    user = UserAccount.objects.select_for_update().filter(mobile=mobile).first()
     if user is None:
         display_name = f"User{mobile[-4:]}"
-        user = UserAccount.objects.create(
-            mobile=mobile,
-            role_type=initial_role,
-            display_name=display_name,
-            status='active',
-            password='',
-        )
-        grant_user_role(user, initial_role)
-        created = True
+        try:
+            with transaction.atomic():
+                user = UserAccount.objects.create(
+                    mobile=mobile,
+                    role_type=initial_role,
+                    display_name=display_name,
+                    status='active',
+                    password='',
+                )
+                grant_user_role(user, initial_role, grant_source=grant_source)
+            created = True
+        except IntegrityError:
+            user = UserAccount.objects.select_for_update().get(mobile=mobile)
+            created = False
     else:
         created = False
 
@@ -146,6 +174,8 @@ def get_or_create_user(
 
 def generate_tokens(user: UserAccount, active_role: str) -> dict:
     """Generate a JWT pair bound to one currently authorized role."""
+    if user.status != "active":
+        raise RoleNotGranted(active_role)
     try:
         granted = has_user_role(user, active_role)
     except ValueError as exc:

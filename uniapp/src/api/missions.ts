@@ -9,16 +9,24 @@ export interface Mission {
   start_at?: string
   end_at?: string
   status: string
+  assignment_mode?: 'flat' | 'levels'
   level_count?: number
   class_name?: string
   question_count?: number
+  unfinished_count?: number
+  completion_progress?: {
+    completed: number
+    total: number
+    unfinished: number
+    percent: number
+  }
   subject?: string
   creator_teacher_id?: UUID
 }
 
 export const missionApi = {
   // GET /api/v1/missions/
-  list: (params?: { class_id?: UUID; subject?: string }) => get<Mission[]>('/missions/', params),
+  list: (params?: { class_id?: UUID; subject?: string; unfinished?: boolean }) => get<Mission[]>('/missions/', params),
 
   // POST /api/v1/missions/
   create: (data: { mission_name: string; goal_text?: string; start_at?: string; end_at?: string; class_id?: UUID | null; course_id?: UUID | null; target_student_ids?: UUID[] }) =>
@@ -38,6 +46,10 @@ export const missionApi = {
 
   // GET /api/v1/missions/{id}/questions/
   questions: (id: UUID) => get<any[]>(`/missions/${id}/questions/`),
+
+  // POST /api/v1/missions/{id}/questions/ - replace the flat question order
+  saveQuestions: (id: UUID, question_ids: UUID[]) =>
+    post<{ question_count: number }>(`/missions/${id}/questions/`, { question_ids }),
 
   // GET /api/v1/missions/{id}/levels/<level_id>/
   levelDetail: (id: UUID, levelId: UUID) => get<any>(`/missions/${id}/levels/${levelId}/`),
@@ -62,6 +74,7 @@ export const missionApi = {
   exportPdf: (id: UUID) => get<any>(`/missions/${id}/export-pdf/`),
 
   grading: (id: UUID) => get<any>(`/missions/${id}/grading/`),
+  progress: (id: UUID) => get<any>(`/missions/${id}/progress/`),
   gradeAttempt: (id: UUID, attemptId: UUID, data: { score: number; feedback?: string }) =>
     patch<any>(`/missions/${id}/grading/attempts/${attemptId}/`, data),
   generateVariant: (id: UUID, data: { question_id: UUID; level_id: UUID; student_id: UUID; variant_mode?: string }) =>

@@ -32,7 +32,7 @@
             <button class="btn-action" size="mini" type="primary" @click="batchAiProcess" :disabled="selectedIds.length === 0 || batchAiProcessing" :loading="batchAiProcessing">{{ batchAiProcessing ? `AI ${batchAiProgress.completed}/${batchAiProgress.total}` : '批量AI处理' }}</button>
             <button class="btn-action" size="mini" type="success" @click="batchGenerateVariant" :disabled="!canBatchGenerateVariant">批量生成变式题</button>
             <button class="btn-action refresh-action" size="mini" @click="refreshQuestions" :loading="loading">刷新</button>
-            <button class="btn-action" size="mini" type="warning" @click="showGenerateMission">生成任务</button>
+            <button class="btn-action" size="mini" type="warning" @click="showGenerateMission">生成作业</button>
           </view>
         </view>
 
@@ -212,8 +212,8 @@
       <view class="modal">
         <text class="modal-title">生成任务关卡</text>
         <view class="form-group">
-          <text class="form-label">任务名称</text>
-          <input class="form-input" v-model="missionForm.name" placeholder="请输入任务名称" />
+          <text class="form-label">作业名称</text>
+          <input class="form-input" v-model="missionForm.name" placeholder="请输入作业名称" />
         </view>
         <view class="form-group">
           <text class="form-label">关卡类型</text>
@@ -1135,7 +1135,7 @@ const classList = ref<any[]>([])
 
 function showGenerateMission() {
   missionForm.value = {
-    name: `${courseName.value} - 任务`,
+    name: `${courseName.value} - 作业`,
     levelType: 'practice',
     levelTypeLabel: '练习',
     correctRate: '0.6',
@@ -1200,14 +1200,14 @@ async function confirmGenerateMission() {
 
     const data = await response.json()
     if (!response.ok) {
-      throw new Error(data.message || '生成任务失败')
+      throw new Error(data.message || '生成作业失败')
     }
 
-    uni.showToast({ title: data.message || '任务生成成功', icon: 'success' })
+    uni.showToast({ title: data.message || '作业生成成功', icon: 'success' })
     missionDialogVisible.value = false
   } catch (e: any) {
-    console.error('生成任务失败:', e)
-    uni.showToast({ title: e?.message || '生成任务失败', icon: 'none' })
+    console.error('生成作业失败:', e)
+    uni.showToast({ title: e?.message || '生成作业失败', icon: 'none' })
   }
 }
 

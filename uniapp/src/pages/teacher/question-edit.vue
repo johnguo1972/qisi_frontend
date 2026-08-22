@@ -149,7 +149,7 @@ type KpSemester = { id: string; name: string; chapters: KpChapter[] }
 type KpGrade = { id: string; name: string; semesters: KpSemester[] }
 
 const IMAGE_DEFAULT_WIDTH = 420
-const QUESTION_TYPE_LABELS: Record<string, string> = { single_choice: '单选题', multiple_choice: '多选题', fill_blank: '填空题', short_answer: '简答题', solution: '解答题', essay: '论述题', true_false: '判断题', computation: '计算题', proof: '证明题', experiment: '实验题' }
+const QUESTION_TYPE_LABELS: Record<string, string> = { single_choice: '单选题', multiple_choice: '多选题', fill_blank: '填空题', short_answer: '简答题', solution: '解答题', essay: '论述题', true_false: '判断题', computation: '计算题', proof: '证明题', experiment: '实验题', unknown: '未识别题型' }
 const QUESTION_TYPE_OPTIONS = [
   { value: 'single_choice', label: '单选题' },
   { value: 'multiple_choice', label: '多选题' },

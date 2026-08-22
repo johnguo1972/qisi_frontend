@@ -17,11 +17,14 @@
         <view class="subject-select">{{ subjectLabel }}</view>
       </picker>
       <button v-if="selectedSubject" class="btn-reset" size="mini" @click="resetSubject">重置</button>
+      <button class="unfinished-filter" :class="{ active: unfinishedOnly }" size="mini" @click="toggleUnfinished">
+        {{ unfinishedOnly ? '显示全部作业' : '只看未完成作业' }}
+      </button>
     </view>
 
     <view v-if="loading" class="loading">加载中...</view>
     <view v-else-if="missions.length === 0" class="empty">
-      <text>{{ selectedSubject ? '当前科目暂无作业' : '暂无任务，点击“创建任务”开始' }}</text>
+      <text>{{ selectedSubject ? '当前科目暂无作业' : '暂无作业，点击“创建作业”开始' }}</text>
     </view>
     <view v-else class="mission-list">
       <view v-for="m in missions" :key="m.id" class="mission-card" @click="goMissionDetail(m.id)">
@@ -34,6 +37,8 @@
           <text class="mission-subject">科目: {{ subjectText(m.subject) }}</text>
           <text v-if="m.goal_text" class="mission-goal">{{ m.goal_text }}</text>
           <text v-if="m.level_count" class="mission-levels">关卡数: {{ m.level_count }}</text>
+          <text class="mission-progress progress-link" @click.stop="goMissionProgress(m.id)">完成进度: {{ completionText(m) }}</text>
+          <text v-if="m.unfinished_count" class="mission-unfinished">未完成: {{ m.unfinished_count }} 人</text>
         </view>
         <view v-if="m.end_at" class="card-footer">
           <text class="mission-start" v-if="m.start_at">开始: {{ formatMissionDate(m.start_at) }}</text>
@@ -51,11 +56,13 @@
 import { computed, ref, onMounted } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { missionApi, type Mission } from '@/api/missions'
+import { formatDateOnly } from '@/utils/display-format'
 
 const missions = ref<Mission[]>([])
 const loading = ref(false)
 const classId = ref<string | undefined>()
 const selectedSubject = ref('')
+const unfinishedOnly = ref(false)
 const subjectOptions = [
   { value: '', label: '全部科目' },
   { value: 'math', label: '数学' },
@@ -77,14 +84,15 @@ onMounted(() => {
 async function loadMissions() {
   loading.value = true
   try {
-    const params: { class_id?: string; subject?: string } = {}
+    const params: { class_id?: string; subject?: string; unfinished?: boolean } = {}
     if (classId.value) params.class_id = classId.value
     if (selectedSubject.value) params.subject = selectedSubject.value
+    if (unfinishedOnly.value) params.unfinished = true
     const res: any = await missionApi.list(Object.keys(params).length ? params : undefined)
     missions.value = (res.data || []) as Mission[]
   } catch (e) {
-    console.error('加载任务列表失败:', e)
-    uni.showToast({ title: '加载任务列表失败', icon: 'none' })
+    console.error('加载作业列表失败:', e)
+    uni.showToast({ title: '加载作业列表失败', icon: 'none' })
   } finally {
     loading.value = false
   }
@@ -101,25 +109,31 @@ function resetSubject() {
   loadMissions()
 }
 
+function toggleUnfinished() {
+  unfinishedOnly.value = !unfinishedOnly.value
+  loadMissions()
+}
+
 function subjectText(subject?: string): string {
   return subject || '未设置'
 }
 
 function formatMissionDate(value?: string): string {
-  if (!value) return ''
-  const text = String(value).trim()
-  const iso = text.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/)
-  if (iso) return `${iso[1]} ${iso[2]}`
-  const date = new Date(text)
-  if (Number.isNaN(date.getTime())) return text.replace('T', ' ').replace(/([+-]\d{2}:\d{2}|Z)$/, '')
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return formatDateOnly(value, '')
+}
+
+function completionText(m: Mission): string {
+  if (m.status === 'draft') return '未发布'
+  const progress = m.completion_progress
+  if (!progress || !progress.total) return '0/0（0%）'
+  return `${progress.completed}/${progress.total}（${progress.percent}%）`
 }
 
 function statusText(status: string): string {
   const map: Record<string, string> = {
     draft: '草稿',
     published: '已发布',
+    running: '进行中',
     closed: '已结束',
   }
   return map[status] || status
@@ -131,6 +145,10 @@ function goCreateMission() {
 
 function goMissionDetail(id: string) {
   uni.navigateTo({ url: `/pages/teacher/mission-detail?id=${id}` })
+}
+
+function goMissionProgress(id: string) {
+  uni.navigateTo({ url: `/pages/teacher/mission-progress?id=${id}` })
 }
 
 function goGradeMission(id: string) {
@@ -204,6 +222,8 @@ function goGradeMission(id: string) {
   background: #f4f4f5;
   border: 1px solid #dcdfe6;
 }
+.unfinished-filter { margin: 0; color: #606266; background: #f4f4f5; border: 1px solid #dcdfe6; }
+.unfinished-filter.active { color: #fff; background: #e6a23c; border-color: #e6a23c; }
 .loading, .empty {
   text-align: center;
   color: #909399;
@@ -274,6 +294,9 @@ function goGradeMission(id: string) {
   font-size: 12px;
   color: #e6a23c;
 }
+.mission-unfinished { font-size: 13px; color: #e6a23c; }
+.mission-progress { font-size: 13px; color: #409eff; }
+.progress-link { cursor: pointer; }
 .mission-start {
   margin-right: 18px;
   font-size: 12px;

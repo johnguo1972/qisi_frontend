@@ -108,6 +108,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { renderWithKatex } from '@/utils/katex-renderer'
 import { getMediaUrl } from '@/utils/media-url'
+import { getQuestionTypeLabel } from '@/utils/question-type'
 
 const props = defineProps<{
   question: any
@@ -159,9 +160,11 @@ const QUESTION_TYPE_LABELS: Record<string, string> = {
   unknown: '未知',
 }
 
-const questionTypeLabel = computed(() =>
-  QUESTION_TYPE_LABELS[props.question.question_type] || props.question.question_type || ''
-)
+const questionTypeLabel = computed(() => getQuestionTypeLabel(
+  props.question.question_type,
+  props.question.stem,
+  props.question.options,
+))
 
 const difficultyStars = computed(() => {
   const level = Math.max(0, Math.min(5, Math.round(Number(props.question.difficulty || 0))))

@@ -5,10 +5,13 @@
     <view class="main">
       <!-- Step 1: 基本信息 -->
       <view v-if="step === 1" class="form">
-        <view class="form-title">基本信息</view>
+        <view class="form-title">作业信息</view>
         <view class="form-item">
-          <text class="label">任务名称 *</text>
-          <input v-model="form.mission_name" placeholder="如：二次函数练习" />
+          <text class="label">作业名称 *</text>
+          <view class="name-builder">
+            <text class="name-prefix">{{ selectedClassName || '选择班级' }} {{ assignmentDate }}</text>
+            <input v-model="assignmentTitle" placeholder="作业" class="name-input" />
+          </view>
         </view>
         <view class="form-item">
           <text class="label">选择班级 *</text>
@@ -30,25 +33,42 @@
           </view>
         </view>
         <view class="form-item">
-          <text class="label">任务目标</text>
-          <textarea v-model="form.goal_text" placeholder="描述任务目标..." class="form-textarea" />
+          <text class="label">作业说明</text>
+          <textarea
+            v-model="form.goal_text"
+            class="form-textarea"
+            placeholder="请输入作业说明（可选）"
+            maxlength="255"
+          />
         </view>
         <view class="form-item">
-          <text class="label">开始时间</text>
-          <view class="date-picker" @click="openStartDatePicker">
-            <text class="date-value">{{ formatDateTime(form.start_at) || '请选择开始时间' }}</text>
-            <text class="date-arrow">📅</text>
+          <text class="label">开始日期（自动）</text>
+          <view class="date-picker readonly-date-picker">
+            <text class="date-value">{{ editMode && form.start_at ? formatDateOnly(form.start_at) : assignmentDate }}</text>
+            <text class="date-hint">布置作业当天</text>
           </view>
         </view>
         <view class="form-item">
-          <text class="label">截止时间 *</text>
+          <text class="label">完成日期 *</text>
           <view class="date-picker" @click="openDatePicker">
-            <text class="date-value">{{ formatDateTime(form.end_at) || '请选择截止时间' }}</text>
+            <text class="date-value">{{ formatDateOnly(form.end_at, '') || '请选择截止时间' }}</text>
             <text class="date-arrow">📅</text>
           </view>
         </view>
-        <view v-if="form.class_id" class="form-item target-students-item">
-          <text class="label">指定学生（不选择则布置给全班）</text>
+        <view class="form-item target-students-item">
+          <text class="label">布置对象</text>
+          <view class="target-mode-group">
+            <view class="target-mode" :class="{ active: targetMode === 'class' }" @click="setTargetMode('class')">全班</view>
+            <view
+              class="target-mode"
+              :class="{ active: targetMode === 'students', disabled: !form.class_id }"
+              @click="setTargetMode('students')"
+            >指定学生</view>
+          </view>
+          <text v-if="!form.class_id" class="target-hint">请先选择班级，才能指定学生</text>
+        </view>
+        <view v-if="form.class_id && targetMode === 'students'" class="form-item target-students-item">
+          <text class="label">选择需要精练的学生</text>
           <view class="target-students">
             <view v-for="student in classStudents" :key="student.student || student.id"
                   :class="['target-student', { selected: targetStudentIds.includes(String(student.student || student.id)) }]"
@@ -161,6 +181,20 @@
                   </view>
                 </view>
               </view>
+              <view class="filter-item filter-type-item">
+                <text class="filter-label">题型</text>
+                <picker
+                  mode="selector"
+                  :range="questionTypeRange"
+                  :value="questionTypeIndex"
+                  @change="onQuestionTypeChange"
+                >
+                  <view class="multi-select type-select">
+                    <text class="multi-select-text">{{ questionTypeLabel }}</text>
+                    <text class="dropdown-arrow">▼</text>
+                  </view>
+                </picker>
+              </view>
             </view>
             <view class="filter-row">
               <view class="filter-item">
@@ -205,9 +239,9 @@
                 <text>{{ isAllSelected ? '☑ 取消全选' : '☐ 全选' }}</text>
               </view>
               <button class="batch-add-btn" @click="batchAddSelected">批量加入列表</button>
-              <button class="back-btn step2-back-btn" @click="prevStep">上一步：创建任务</button>
+              <button class="back-btn step2-back-btn" @click="prevStep">上一步：创建作业</button>
               <button v-if="selectedIds.length > 0" class="create-task-btn" @click="goToStep3">
-                下一步：编排序号并创建任务 ({{ selectedIds.length }}题)
+                下一步：编排序号并创建作业 ({{ selectedIds.length }}题)
               </button>
             </view>
             <view class="action-right">
@@ -228,6 +262,7 @@
               <text class="col col-check">☐</text>
               <text class="col col-no">序号</text>
               <text class="col col-stem">题干预览</text>
+              <text class="col col-type">题型</text>
               <text class="col col-diff">难度</text>
               <text class="col col-kp">知识点</text>
               <text class="col col-attempts">做题数</text>
@@ -243,6 +278,7 @@
                 </view>
                 <text class="col col-no">{{ (currentPage - 1) * pageSize + idx + 1 }}</text>
                 <text class="col col-stem" @click.stop="showQuestionDetail(q)">{{ q.stem_preview || '(无预览)' }}</text>
+                <text class="col col-type">{{ questionTypeText(q) }}</text>
                 <text :class="['col col-diff', 'diff-' + getDifficultyInt(q)]">
                   {{ '★'.repeat(getDifficultyInt(q)) }}
                   <text v-if="q.difficulty" class="diff-score">{{ Number(q.difficulty).toFixed(1) }}</text>
@@ -278,7 +314,7 @@
         </view>
       </view>
 
-      <!-- Step 3: 编排题目序号 + 配置关卡 -->
+      <!-- Step 3: 编排题目序号 -->
       <view v-if="step === 3" class="step3-container">
         <!-- 题目编排区 -->
         <view class="step3-section">
@@ -298,51 +334,9 @@
           </scroll-view>
         </view>
 
-        <!-- 关卡配置区 -->
-        <view class="step3-section">
-          <view class="section-header">
-            <text class="section-title">配置关卡</text>
-            <text class="section-hint">为每个关卡分配不同的题目，难度递进</text>
-          </view>
-          <scroll-view scroll-y class="level-list">
-            <view v-for="(level, i) in levels" :key="i" class="level-config">
-              <view class="level-header">
-                <text class="level-title">第 {{ i + 1 }} 关</text>
-                <text class="remove-btn" @click="removeLevel(i)">删除</text>
-              </view>
-              <input v-model="level.name" placeholder="关卡名称" />
-              <view class="level-options">
-                <picker :range="levelTypes" range-key="label" @change="level.type = levelTypes[$event.detail.value].value">
-                  <view class="picker-display">类型: {{ levelTypeText(level.type || 'practice') }}</view>
-                </picker>
-                <picker :range="modePolicies" range-key="label" @change="level.mode = modePolicies[$event.detail.value].value">
-                  <view class="picker-display">模式: {{ modePolicyText(level.mode || 'block_a') }}</view>
-                </picker>
-              </view>
-              <!-- 题目分配区 -->
-              <view class="level-questions">
-                <view class="level-q-header">
-                  <text class="level-q-title">题目 ({{ level.questionIds?.length || 0 }}道)</text>
-                  <text class="level-q-assign-btn" @click="openQuestionAssign(i)">分配题目</text>
-                </view>
-                <view v-if="level.questionIds && level.questionIds.length > 0" class="level-q-list">
-                  <view v-for="(qid, j) in level.questionIds" :key="qid" class="level-q-item">
-                    <text class="level-q-no">#{{ j + 1 }}</text>
-                    <text class="level-q-stem">{{ getQuestionPreview(qid) }}</text>
-                    <view class="level-q-actions">
-                      <text class="level-q-move" :class="{disabled: j === 0}" @click="moveQuestion(i, j, -1)">↑</text>
-                      <text class="level-q-move" :class="{disabled: j === level.questionIds.length - 1}" @click="moveQuestion(i, j, 1)">↓</text>
-                      <text class="level-q-remove" @click="removeQuestionFromLevel(qid, i)">✕</text>
-                    </view>
-                  </view>
-                </view>
-                <view v-else class="level-q-empty">
-                  <text>点击"分配题目"为该关卡选择题目</text>
-                </view>
-              </view>
-            </view>
-          </scroll-view>
-          <button @click="addLevel" class="add-level-btn">+ 添加关卡</button>
+        <view class="step3-section flat-assignment-hint">
+          <text class="section-title">作业题目</text>
+          <text class="section-hint">已取消关卡设置，所有题目将按当前顺序组成一份作业。</text>
         </view>
 
         <view class="nav-btns">
@@ -351,8 +345,8 @@
         </view>
       </view>
 
-      <!-- 题目分配弹窗 -->
-      <view v-if="showQuestionAssign" class="assign-modal" @click="closeQuestionAssign">
+      <!-- 历史关卡分配弹窗（保留兼容，不在新流程中展示） -->
+      <view v-if="false && showQuestionAssign" class="assign-modal" @click="closeQuestionAssign">
         <view class="assign-panel" @click.stop>
           <view class="assign-header">
             <text class="assign-title">为"{{ levels[currentAssignLevel]?.name }}"分配题目</text>
@@ -383,10 +377,10 @@
       <view v-if="step === 4" class="preview">
         <view class="form-title">预览</view>
         <view class="preview-card">
-          <text class="preview-name">{{ form.mission_name || '未命名任务' }}</text>
+          <text class="preview-name">{{ previewMissionName }}</text>
           <view class="preview-row"><text class="preview-label">题目数量</text><text class="preview-value">{{ orderedQuestions.length }} 道</text></view>
-          <view class="preview-row"><text class="preview-label">关卡数量</text><text class="preview-value">{{ levels.length }} 个</text></view>
-          <view class="preview-row"><text class="preview-label">截止时间</text><text class="preview-value">{{ form.end_at || '未设置' }}</text></view>
+          <view class="preview-row"><text class="preview-label">布置对象</text><text class="preview-value">{{ assignmentTargetLabel }}</text></view>
+          <view class="preview-row"><text class="preview-label">截止日期</text><text class="preview-value">{{ formatDateOnly(form.end_at, '未设置') }}</text></view>
           <!-- 题目序号预览 -->
           <view class="preview-questions">
             <text class="preview-questions-title">题目列表：</text>
@@ -399,7 +393,8 @@
         </view>
         <view class="nav-btns">
           <button class="back-btn" @click="prevStep">上一步</button>
-          <button class="publish-btn" @click="publish">发布任务</button>
+          <button class="save-btn" @click="saveDraft">保存草稿</button>
+          <button class="publish-btn" @click="publish">保存并发布</button>
         </view>
       </view>
     </view>
@@ -413,24 +408,8 @@
         </view>
         <picker mode="date" :value="tempDate" @change="onDateChange">
           <view class="date-picker-input">
-            <text class="date-picker-label">截止日期</text>
+            <text class="date-picker-label">完成日期</text>
             <text class="date-picker-value">{{ tempDate }}</text>
-          </view>
-        </picker>
-      </view>
-    </view>
-
-    <!-- 开始日期选择弹窗 -->
-    <view v-if="showStartDatePicker" class="date-modal" @click="showStartDatePicker = false">
-      <view class="date-panel" @click.stop>
-        <view class="date-panel-header">
-          <text class="date-close-btn" @click="showStartDatePicker = false">取消</text>
-          <text class="date-confirm-btn" @click="confirmStartDate">确定</text>
-        </view>
-        <picker mode="date" :value="tempStartDate" @change="onStartDateChange">
-          <view class="date-picker-input">
-            <text class="date-picker-label">开始日期</text>
-            <text class="date-picker-value">{{ tempStartDate }}</text>
           </view>
         </picker>
       </view>
@@ -541,6 +520,7 @@ import { questionApi } from '@/api/questions.ts'
 import { knowledgeApi } from '@/api/knowledge.ts'
 import { classApi } from '@/api/institutions.ts'
 import { useUserStore } from '@/store/index.ts'
+import { formatDateOnly } from '@/utils/display-format'
 
 const userStore = useUserStore()
 
@@ -550,6 +530,8 @@ const editMode = ref(false)
 const editMissionId = ref<string>('')
 
 const form = ref({ mission_name: '', goal_text: '', start_at: '', end_at: '', class_id: null as string | null })
+const assignmentTitle = ref('作业')
+const targetMode = ref<'class' | 'students'>('class')
 const courseId = ref<number | null>(null)
 const pendingFavoriteQuestionIds = ref<Array<string | number>>([])
 const levels = ref([{ name: '基础练习', type: 'practice', mode: 'block_a', questionIds: [] as string[] }])
@@ -557,7 +539,22 @@ const subjectOptions = [
   { value: 'physics', label: '物理' },
   { value: 'math', label: '数学' },
 ]
+const questionTypeOptions = [
+  { value: '', label: '全部题型' },
+  { value: 'single_choice', label: '单选' },
+  { value: 'multiple_choice', label: '多选' },
+  { value: 'true_false', label: '判断' },
+  { value: 'fill_blank', label: '填空' },
+  { value: 'short_answer', label: '简答' },
+  { value: 'essay', label: '作文' },
+  { value: 'computation', label: '计算' },
+  { value: 'proof', label: '证明' },
+]
 const selectedSubject = ref(String(userStore.userInfo?.subject || 'physics'))
+const selectedQuestionType = ref('')
+const questionTypeRange = questionTypeOptions.map(item => item.label)
+const questionTypeIndex = computed(() => Math.max(0, questionTypeOptions.findIndex(item => item.value === selectedQuestionType.value)))
+const questionTypeLabel = computed(() => questionTypeOptions[questionTypeIndex.value]?.label || '全部题型')
 const sortNos = ref<Record<string, number>>({})
 const draggingIndex = ref(-1)
 const searchQuery = ref('')
@@ -572,6 +569,23 @@ const showClassDropdown = ref(false)
 const selectedClassName = ref('')
 const classStudents = ref<any[]>([])
 const targetStudentIds = ref<string[]>([])
+
+function localDateString(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+const assignmentDate = computed(() => localDateString())
+const previewMissionName = computed(() => {
+  if (editMode.value && form.value.mission_name) return form.value.mission_name
+  return `${selectedClassName.value || '指定学生'} ${assignmentDate.value} ${assignmentTitle.value.trim() || '作业'}`
+})
+const assignmentTargetLabel = computed(() => {
+  if (targetMode.value === 'students' && targetStudentIds.value.length) {
+    return `${selectedClassName.value}（指定 ${targetStudentIds.value.length} 人）`
+  }
+  return selectedClassName.value || '指定学生'
+})
 
 // === Step 2: 知识树 ===
 const treeData = ref<any[]>([])
@@ -708,11 +722,6 @@ function extractQuestionKnowledgePointIds(q: any): string[] {
 }
 
 const subjectLabel = computed(() => subjectOptions.find(item => item.value === selectedSubject.value)?.label || selectedSubject.value)
-function formatDateTime(value: string) {
-  if (!value) return ''
-  const normalized = String(value).replace('T', ' ')
-  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? `${normalized} 00:00:00` : normalized.length === 16 ? `${normalized}:00` : normalized
-}
 function isSelected(id: string | number) { return selectedIds.value.includes(String(id)) }
 
 // 日期选择
@@ -760,6 +769,20 @@ function confirmDate() {
 
 // Step 导航
 function nextStep() {
+  if (step.value === 1) {
+    if (!form.value.class_id) {
+      uni.showToast({ title: '请先选择班级', icon: 'none' })
+      return
+    }
+    if (!form.value.end_at) {
+      uni.showToast({ title: '请先选择完成日期', icon: 'none' })
+      return
+    }
+    if (targetMode.value === 'students' && targetStudentIds.value.length === 0) {
+      uni.showToast({ title: '请至少选择一名指定学生', icon: 'none' })
+      return
+    }
+  }
   if (step.value === 2 && selectedIds.value.length === 0) {
     uni.showToast({ title: '请先选择至少一道题目', icon: 'none' })
     return
@@ -822,6 +845,7 @@ async function loadQuestions() {
     if (filterKpIds.value.length) params.knowledge_point_id = filterKpIds.value.join(',')
     if (filterDifficulty.value.length) params.difficulty = filterDifficulty.value.join(',')
     if (selectedStages.value.length) params.stages = selectedStages.value.join(',')
+    if (selectedQuestionType.value) params.question_type = selectedQuestionType.value
     if (searchQuery.value.trim()) params.question_no = searchQuery.value.trim()
 
     const res: any = await questionApi.list(params)
@@ -858,6 +882,7 @@ function resetFilters() {
   filterKpIds.value = []
   filterDifficulty.value = []
   selectedStages.value = []
+  selectedQuestionType.value = ''
   filterKpCountMin.value = null
   filterKpCountMax.value = null
   filterAttemptMin.value = null
@@ -971,6 +996,27 @@ function getDifficultyInt(q: any): number {
   return q.difficulty != null ? Math.round(Number(q.difficulty)) : 1
 }
 
+function onQuestionTypeChange(event: any) {
+  const index = Number(event?.detail?.value)
+  selectedQuestionType.value = questionTypeOptions[index]?.value || ''
+}
+
+function questionTypeText(q: any): string {
+  const type = String(q?.question_type || '').trim().toLowerCase()
+  const labels: Record<string, string> = {
+    single_choice: '单选',
+    multiple_choice: '多选',
+    true_false: '判断',
+    fill_blank: '填空',
+    short_answer: '简答',
+    essay: '作文',
+    computation: '计算',
+    proof: '证明',
+    unknown: '未知',
+  }
+  return q?.question_type_label || labels[type] || (type || '未知')
+}
+
 // 题目详情
 function showQuestionDetail(q: any) {
   currentQuestion.value = q
@@ -1076,121 +1122,93 @@ function getQuestionPreview(qid: string | number): string {
 }
 
 async function publish() {
-  // 校验任务名称
-  if (!form.value.mission_name.trim()) {
-    uni.showToast({ title: '请填写任务名称', icon: 'none' })
+  // Keep the publish request explicit: an empty start value is sent as null
+  // and the backend applies the assignment date as the default.
+  const createForPublish = (payload: any) => missionApi.create({
+    ...payload,
+    start_at: form.value.start_at || null,
+  })
+  await saveMission(true, createForPublish)
+}
+
+async function saveDraft() {
+  await saveMission(false)
+}
+
+async function saveMission(
+  shouldPublish: boolean,
+  createMission: (payload: any) => Promise<any> = (payload) => missionApi.create(payload),
+) {
+  if (!form.value.class_id && targetStudentIds.value.length === 0) {
+    uni.showToast({ title: '请选择班级或指定学生', icon: 'none' })
     step.value = 1
     return
   }
-
-  // 校验班级
-  if (!form.value.class_id) {
-    uni.showToast({ title: '请选择班级', icon: 'none' })
+  if (targetMode.value === 'students' && targetStudentIds.value.length === 0) {
+    uni.showToast({ title: '请选择至少一名学生', icon: 'none' })
     step.value = 1
     return
   }
-
-  // 校验截止时间
   if (!form.value.end_at) {
-    uni.showToast({ title: '请选择截止时间', icon: 'none' })
+    uni.showToast({ title: '请选择完成日期', icon: 'none' })
     step.value = 1
     return
   }
-
-  // 校验题目数量
   if (selectedIds.value.length === 0) {
     uni.showToast({ title: '请先选择至少一道题目', icon: 'none' })
     step.value = 2
     return
   }
 
-  // 校验每个关卡都有题目
-  for (let i = 0; i < levels.value.length; i++) {
-    const level = levels.value[i]
-    if (!level.questionIds || level.questionIds.length === 0) {
-      uni.showToast({ title: `请为"${level.name || `第${i+1}关`}"分配至少一道题目`, icon: 'none' })
-      step.value = 3
-      return
-    }
-  }
+  const fullName = editMode.value && form.value.mission_name
+    ? form.value.mission_name
+    : `${selectedClassName.value || '指定学生'} ${assignmentDate.value} ${assignmentTitle.value.trim() || '作业'}`
+  const orderedIds = orderedQuestions.value
+    .sort((a: any, b: any) => Number(a.sort_no) - Number(b.sort_no))
+    .map((question: any) => String(question.id))
 
   try {
-    uni.showLoading({ title: editMode.value ? '保存中...' : '发布中...' })
-
+    uni.showLoading({ title: shouldPublish ? '发布中...' : '保存中...' })
     let missionId: string
+    const payload = {
+      mission_name: fullName,
+      goal_text: form.value.goal_text,
+      start_at: form.value.start_at || new Date().toISOString(),
+      end_at: form.value.end_at,
+      class_id: form.value.class_id,
+      course_id: courseId.value,
+      target_student_ids: targetMode.value === 'students' ? targetStudentIds.value : [],
+      assignment_mode: 'flat',
+    }
 
     if (editMode.value) {
-      // 编辑模式：更新任务
       missionId = editMissionId.value
-      await missionApi.update(missionId, {
-        mission_name: form.value.mission_name,
-        goal_text: form.value.goal_text,
-        start_at: form.value.start_at,
-        end_at: form.value.end_at,
-        class_id: form.value.class_id,
-        course_id: courseId.value,
-        target_student_ids: targetStudentIds.value,
-      })
-
-      // 重新创建关卡和题目
-      await missionApi.addLevelsBatch(missionId, {
-        levels: levels.value.map((level, i) => ({
-          name: level.name || `第${i + 1}关`,
-          type: level.type,
-          mode: level.mode,
-          questionIds: level.questionIds || [],
-        })),
-      })
+      await missionApi.update(missionId, payload)
     } else {
-      // 新建模式
-      // 1. 创建任务
-      const res = await missionApi.create({
-        mission_name: form.value.mission_name,
-        goal_text: form.value.goal_text,
-        start_at: form.value.start_at || null,
-        end_at: form.value.end_at,
-        class_id: form.value.class_id,
-        course_id: courseId.value,
-        target_student_ids: targetStudentIds.value,
-      })
+      const res = await createMission(payload)
       missionId = res.data?.id
-      if (!missionId) {
-        uni.hideLoading()
-        uni.showToast({ title: '任务创建失败', icon: 'none' })
-        return
-      }
+      if (!missionId) throw new Error('作业创建失败')
       if (pendingFavoriteQuestionIds.value.length) {
         await missionApi.addFavorites(missionId, pendingFavoriteQuestionIds.value)
       }
-
-      // 2. 批量创建关卡和题目（一次请求完成）
-      await missionApi.addLevelsBatch(missionId, {
-        levels: levels.value.map((level, i) => ({
-          name: level.name || `第${i + 1}关`,
-          type: level.type,
-          mode: level.mode,
-          questionIds: level.questionIds || [],
-        })),
-      })
     }
 
-    // 3. 发布（仅新建模式）
-    if (!editMode.value) {
-      await missionApi.publish(missionId)
-    }
+    await missionApi.saveQuestions(missionId, orderedIds)
+    if (shouldPublish) await missionApi.publish(missionId)
 
     uni.hideLoading()
-    uni.showToast({ title: editMode.value ? '保存成功' : '发布成功', icon: 'success' })
-    setTimeout(() => uni.navigateTo({ url: '/pages/teacher/layout' }), 1500)
+    uni.showToast({ title: shouldPublish ? '发布成功' : '草稿已保存', icon: 'success' })
+    setTimeout(() => uni.navigateTo({ url: '/pages/teacher/layout' }), 1200)
   } catch (e: any) {
     uni.hideLoading()
-    console.error('发布任务失败:', e)
-    const msg = e?.data?.message || e?.message || '发布失败，请重试'
+    console.error('保存作业失败:', e)
+    const msg = e?.data?.message || e?.message || '保存失败，请重试'
     uni.showToast({ title: msg, icon: 'none' })
   }
 }
 
 onMounted(async () => {
+  form.value.start_at = new Date().toISOString()
   // 先加载班级列表（编辑模式需要用到）
   await loadClasses()
 
@@ -1203,7 +1221,7 @@ onMounted(async () => {
   }
 
   if (id) {
-    // 编辑模式：加载已有任务数据
+    // 编辑模式：加载已有作业数据
     editMode.value = true
     editMissionId.value = id
     await loadMissionData(id)
@@ -1213,7 +1231,7 @@ onMounted(async () => {
   await loadQuestions()
 })
 
-// 加载已有任务数据（编辑模式）
+// 加载已有作业数据（编辑模式）
 async function loadMissionData(id: string) {
   try {
     const res: any = await missionApi.detail(id)
@@ -1226,6 +1244,8 @@ async function loadMissionData(id: string) {
     form.value.end_at = data.end_at || ''
     form.value.class_id = data.class_obj || null
     targetStudentIds.value = (data.target_student_ids || []).map((value: any) => String(value))
+    targetMode.value = targetStudentIds.value.length ? 'students' : 'class'
+    assignmentTitle.value = data.mission_name || '作业'
     if (data.class_obj) await loadClassStudents(data.class_obj)
 
     // 加载班级名称（此时 classList 已加载）
@@ -1234,39 +1254,17 @@ async function loadMissionData(id: string) {
       if (cls) selectedClassName.value = cls.class_name
     }
 
-    // 加载关卡和题目
-    if (data.levels && Array.isArray(data.levels)) {
-      levels.value = data.levels.map((lv: any) => ({
-        name: lv.level_name,
-        type: lv.level_type,
-        mode: lv.mode_policy,
-        questionIds: [], // 关卡题目需要从 mission_questions 接口加载
-      }))
-
-      // 加载每个关卡的题目（同时填充 selectedIds）
-      for (let i = 0; i < data.levels.length; i++) {
-        const lv = data.levels[i]
-        if (lv.id) {
-          try {
-            const qRes: any = await missionApi.levelDetail(id, lv.id)
-            const qData = qRes.data
-            if (qData && qData.questions) {
-              levels.value[i].questionIds = qData.questions.map((q: any) => String(q.id))
-              // 同时将题目加入 selectedIds（避免重复）
-              for (const q of qData.questions) {
-                if (!isSelected(q.id)) {
-                  selectedIds.value.push(String(q.id))
-                }
-              }
-            }
-          } catch (e) {
-            console.error(`加载关卡${i + 1}题目失败:`, e)
-          }
-        }
-      }
+    // 平铺读取题目，兼容历史作业的关卡关联顺序。
+    try {
+      const qRes: any = await missionApi.questions(id)
+      const questions = Array.isArray(qRes.data) ? qRes.data : []
+      allQuestions.value = questions
+      selectedIds.value = questions.map((q: any) => String(q.id))
+    } catch (e) {
+      console.error('加载作业题目失败:', e)
     }
   } catch (e) {
-    console.error('加载任务数据失败:', e)
+    console.error('加载作业数据失败:', e)
   }
 }
 
@@ -1284,8 +1282,18 @@ function selectClass(cls: any) {
   form.value.class_id = cls.id
   selectedClassName.value = cls.class_name
   showClassDropdown.value = false
+  targetMode.value = 'class'
   targetStudentIds.value = []
   loadClassStudents(cls.id)
+}
+
+function setTargetMode(mode: 'class' | 'students') {
+  if (mode === 'students' && !form.value.class_id) {
+    uni.showToast({ title: '请先选择班级', icon: 'none' })
+    return
+  }
+  targetMode.value = mode
+  if (mode === 'class') targetStudentIds.value = []
 }
 
 async function loadClassStudents(classId: number) {
@@ -1322,6 +1330,16 @@ function toggleTargetStudent(studentId: string) {
 .target-student { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border: 1px solid #dcdfe6; border-radius: 4px; color: #606266; cursor: pointer; }
 .target-student.selected { color: #409eff; border-color: #409eff; background: #ecf5ff; }
 .target-empty { color: #909399; font-size: 12px; }
+.target-mode-group { display: flex; gap: 12px; margin-top: 8px; }
+.target-mode { padding: 8px 18px; border: 1px solid #dcdfe6; border-radius: 6px; color: #606266; background: #fff; cursor: pointer; }
+.target-mode.active { color: #409eff; border-color: #409eff; background: #ecf5ff; }
+.target-mode.disabled { color: #c0c4cc; border-color: #ebeef5; background: #f5f7fa; cursor: not-allowed; }
+.target-hint { display: block; margin-top: 8px; color: #909399; font-size: 24rpx; }
+.name-builder { display: flex; align-items: center; gap: 8px; }
+.name-prefix { color: #606266; white-space: nowrap; }
+.name-input { flex: 1; }
+.save-btn { background: #909399; color: #fff; }
+.flat-assignment-hint { display: flex; flex-direction: column; gap: 12px; }
 .form-title {
   font-size: 32rpx;
   font-weight: bold;
@@ -1366,6 +1384,8 @@ input, .form-textarea {
   min-height: 88rpx;
   cursor: pointer;
 }
+.readonly-date-picker { cursor: default; background: #f5f7fa; }
+.date-hint { color: #909399; font-size: 24rpx; }
 .class-picker {
   display: flex;
   align-items: center;
@@ -1580,6 +1600,8 @@ input, .form-textarea {
 .filter-stage-item {
   position: relative;
 }
+.filter-type-item { flex: 0 0 auto; }
+.type-select { width: 220rpx; }
 .filter-label {
   font-size: 22rpx;
   color: #666;
@@ -1745,12 +1767,14 @@ input, .form-textarea {
 }
 .range-sep { color: #999; font-size: 22rpx; }
 .search-input {
-  width: 160rpx;
+  width: 240rpx;
   max-width: 100%;
   box-sizing: border-box;
-  flex: 1 1 160rpx;
-  height: 56rpx;
-  min-height: 56rpx;
+  flex: 0 1 240rpx;
+  display: block;
+  height: 56rpx !important;
+  min-height: 56rpx !important;
+  max-height: 56rpx;
   padding: 0 12rpx;
   border: 1rpx solid #ddd;
   border-radius: 4rpx;
@@ -1876,26 +1900,37 @@ input, .form-textarea {
 .table-row:hover { background: #f9f9f9; }
 .table-row.row-selected { background: #e8f5e9; }
 .col { padding: 0 8rpx; box-sizing: border-box; flex-shrink: 0; }
-.col-check { width: 52rpx; text-align: center; cursor: pointer; font-size: 24rpx; }
+.col-check {
+  width: 64rpx;
+  min-height: 44rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  cursor: pointer;
+  font-size: 36rpx;
+  line-height: 1;
+}
 .col-no { width: 72rpx; text-align: center; color: #999; font-size: 22rpx; }
 .col-stem { flex: 1 1 auto; min-width: 0; color: #333; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-stem:hover { color: #409eff; }
-.col-diff { width: 124rpx; text-align: center; }
+.col-type { width: 140rpx; text-align: center; color: #606266; white-space: nowrap; }
+.col-diff { width: 160rpx; text-align: center; }
 .diff-1 { color: #4caf50; }
 .diff-2 { color: #8bc34a; }
 .diff-3 { color: #ff9800; }
 .diff-4 { color: #f44336; }
 .diff-5 { color: #9c27b0; }
 .diff-score { font-size: 18rpx; color: #999; margin-left: 4rpx; }
-.col-kp { width: 92rpx; text-align: center; color: #666; font-size: 22rpx; }
-.col-attempts { width: 104rpx; text-align: center; color: #666; font-size: 22rpx; }
-.col-errors { width: 104rpx; text-align: center; color: #666; font-size: 22rpx; }
-.col-error-rate { width: 116rpx; text-align: center; font-weight: bold; font-size: 22rpx; }
+.col-kp { width: 110rpx; text-align: center; color: #666; font-size: 22rpx; }
+.col-attempts { width: 120rpx; text-align: center; color: #666; font-size: 22rpx; }
+.col-errors { width: 120rpx; text-align: center; color: #666; font-size: 22rpx; }
+.col-error-rate { width: 140rpx; text-align: center; font-weight: bold; font-size: 22rpx; }
 .error-rate-high { color: #f44336; }
 .error-rate-mid { color: #ff9800; }
 .error-rate-low { color: #4caf50; }
-.col-actions { width: 150rpx; display: flex; gap: 8rpx; justify-content: center; }
-.action-link { color: #409eff; cursor: pointer; font-size: 22rpx; padding: 4rpx 6rpx; border-radius: 4rpx; }
+.col-actions { width: 240rpx; display: flex; gap: 16rpx; justify-content: center; align-items: center; flex-wrap: nowrap; white-space: nowrap; }
+.action-link { flex: 0 0 auto; color: #409eff; cursor: pointer; font-size: 22rpx; padding: 4rpx 8rpx; border-radius: 4rpx; white-space: nowrap; }
 .action-link:hover { background: #ecf5ff; }
 .action-add { color: #4caf50; }
 .action-added { color: #999; cursor: default; }
@@ -1934,7 +1969,16 @@ input, .form-textarea {
 .page-picker, .page-size-select { display: flex; align-items: center; justify-content: center; min-width: 0; line-height: 1.2; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .page-picker { width: 190rpx; padding: 0 10rpx; }
 .page-size-select { width: 124rpx; padding: 0 10rpx; }
-.jump-page-input { width: 88rpx; padding: 0 10rpx; line-height: 46rpx; text-align: center; margin: 0; }
+.jump-page-input {
+  width: 88rpx;
+  height: 48rpx !important;
+  min-height: 48rpx !important;
+  max-height: 48rpx;
+  padding: 0 10rpx;
+  line-height: 46rpx;
+  text-align: center;
+  margin: 0;
+}
 
 @media screen and (max-width: 900px) {
   .pagination { align-items: flex-start; flex-direction: column; }

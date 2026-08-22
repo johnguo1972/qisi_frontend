@@ -60,7 +60,12 @@
             </view>
             <view class="wrong-footer">
               <text class="retry-count">重做 {{ item.retry_count }} 次</text>
-              <button class="btn-variants" @click.stop="goVariants(item.id)">练同类题</button>
+              <view class="question-meta">
+                <text class="meta-chip">🔖 {{ item.difficulty_label || '难度未标注' }}</text>
+                <text v-for="point in (item.knowledge_point_labels || [])" :key="`kp-${item.id}-${point}`" class="meta-chip">💡 {{ point }}</text>
+                <text v-for="tag in (item.tags || [])" :key="`tag-${item.id}-${tag}`" class="meta-chip">🏷️ {{ tag }}</text>
+              </view>
+              <view class="footer-actions"><button class="btn-variants" @click.stop="goVariants(item.id)">练同类题</button><button class="btn-practice" @click.stop="goPractice(item.id)">加入精练</button></view>
             </view>
           </view>
           <view v-if="items.length === 0" class="empty">
@@ -181,6 +186,10 @@ async function goVariants(id: number) {
     uni.showToast({ title: '获取失败，请重试', icon: 'none' })
   }
 }
+
+function goPractice(id: string) {
+  uni.navigateTo({ url: `/pages/student/wrongbook-practice-candidates?id=${id}` })
+}
 </script>
 
 <style scoped>
@@ -257,6 +266,7 @@ async function goVariants(id: number) {
   justify-content: space-between;
   margin-bottom: 12rpx;
 }
+
 .q-no {
   flex: 0 0 auto;
   white-space: nowrap;
@@ -317,8 +327,14 @@ async function goVariants(id: number) {
 .status-tag.mastered { background: #e8f5e9; color: #4caf50; }
 .wrong-footer {
   display: flex;
+  align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12rpx;
 }
+.question-meta { display: flex; flex: 1; min-width: 260rpx; flex-wrap: wrap; align-items: center; gap: 8rpx; }
+.meta-chip { padding: 4rpx 10rpx; border-radius: 999rpx; background: #f4f4f5; color: #606266; font-size: 21rpx; }
+.footer-actions { display: flex; gap: 10rpx; }
 .retry-count {
   font-size: 22rpx;
   color: #999;
@@ -361,6 +377,7 @@ async function goVariants(id: number) {
     min-width: calc(33% - 14rpx);
   }
 }
+.btn-practice { margin: 0; padding: 6rpx 20rpx; color: #fff; background: #67c23a; border-radius: 8rpx; font-size: 22rpx; line-height: 1.4; }
 
 /* #ifdef MP-WEIXIN */
 .wrongbook,

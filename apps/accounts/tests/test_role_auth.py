@@ -5,7 +5,7 @@ from django.test import override_settings
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
-from apps.accounts.models import UserAccount, WechatIdentity
+from apps.accounts.models import UserAccount, UserRole, WechatIdentity
 from apps.accounts.roles import (
     get_user_roles,
     grant_user_role,
@@ -193,6 +193,69 @@ def test_new_sms_account_can_create_as_parent_for_binding(api_client, sms_code):
     assert user.role_type == "parent"
     assert has_user_role(user, "parent")
     assert response.data["data"]["user"]["active_role"] == "parent"
+
+
+@pytest.mark.django_db
+def test_existing_student_can_self_create_parent_role_on_sms_login(api_client, student_user, sms_code):
+    grant_user_role(student_user, "student")
+    _set_sms_code(student_user, sms_code)
+
+    response = api_client.post(
+        "/api/v1/auth/login",
+        {
+            "mobile": student_user.mobile,
+            "verify_code": sms_code,
+            "role_type": "parent",
+        },
+    )
+
+    student_user.refresh_from_db()
+    assert response.status_code == 200
+    assert student_user.role_type == "student"
+    assert get_user_roles(student_user) == ["parent", "student"]
+    assert UserRole.objects.filter(
+        user=student_user, role="parent", status="active", grant_source="self_login"
+    ).exists()
+    assert response.data["data"]["user"]["active_role"] == "parent"
+    assert response.data["data"]["user"]["roles"] == ["parent", "student"]
+
+
+@pytest.mark.django_db
+def test_revoked_parent_role_is_not_restored_by_sms_login(api_client, student_user, sms_code):
+    grant_user_role(student_user, "student")
+    grant_user_role(student_user, "parent")
+    revoke_user_role(student_user, "parent")
+    _set_sms_code(student_user, sms_code)
+
+    response = api_client.post(
+        "/api/v1/auth/login",
+        {
+            "mobile": student_user.mobile,
+            "verify_code": sms_code,
+            "role_type": "parent",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.data["code"] == "ROLE_NOT_GRANTED"
+    assert not has_user_role(student_user, "parent")
+
+
+@pytest.mark.django_db
+def test_three_granted_roles_switch_without_reauth(api_client, student_user):
+    for role in ("student", "parent", "teacher"):
+        grant_user_role(student_user, role)
+
+    _authenticate(api_client, generate_tokens(student_user, "student")["access_token"])
+    parent_response = api_client.post("/api/v1/auth/switch-role", {"role": "parent"})
+    assert parent_response.status_code == 200
+    assert parent_response.data["data"]["user"]["roles"] == ["teacher", "parent", "student"]
+    assert parent_response.data["data"]["user"]["active_role"] == "parent"
+
+    _authenticate(api_client, parent_response.data["data"]["access_token"])
+    teacher_response = api_client.post("/api/v1/auth/switch-role", {"role": "teacher"})
+    assert teacher_response.status_code == 200
+    assert teacher_response.data["data"]["user"]["active_role"] == "teacher"
 
 
 @pytest.mark.django_db
@@ -448,13 +511,18 @@ def test_existing_wechat_identity_selects_only_a_granted_session_role(
     assert response.data["data"]["user"]["active_role"] == "teacher"
     assert AccessToken(response.data["data"]["access_token"])["active_role"] == "teacher"
 
-    denied = api_client.post(
+    parent_login = api_client.post(
         "/api/v1/auth/wechat-login",
         {"code": "another-code", "role_type": "parent"},
     )
 
-    assert denied.status_code == 403
-    assert denied.data["code"] == "ROLE_NOT_GRANTED"
+    assert parent_login.status_code == 200
+    admin_teacher.refresh_from_db()
+    assert has_user_role(admin_teacher, "parent")
+    assert parent_login.data["data"]["user"]["active_role"] == "parent"
+    assert parent_login.data["data"]["user"]["roles"] == [
+        "admin", "teacher", "parent"
+    ]
 
 
 @pytest.mark.django_db
@@ -487,3 +555,29 @@ def test_wechat_binding_existing_account_defaults_to_its_legacy_granted_role(
     assert response.status_code == 200
     assert response.data["data"]["user"]["active_role"] == "parent"
     assert parent.role_type == "parent"
+
+
+@pytest.mark.django_db
+def test_wechat_binding_existing_student_can_open_parent_role(api_client, student_user, sms_code):
+    grant_user_role(student_user, "student")
+    cache.set("wechat_pending:bind-existing-student", {
+        "appid": "wx-test",
+        "openid": "openid-existing-student",
+        "unionid": "",
+    })
+    cache.set(f"sms_code:{student_user.mobile}", sms_code, timeout=180)
+
+    response = api_client.post(
+        "/api/v1/auth/wechat-bind",
+        {
+            "bind_token": "bind-existing-student",
+            "mobile": student_user.mobile,
+            "verify_code": sms_code,
+            "role_type": "parent",
+        },
+    )
+
+    assert response.status_code == 200
+    assert has_user_role(student_user, "student")
+    assert has_user_role(student_user, "parent")
+    assert response.data["data"]["user"]["active_role"] == "parent"

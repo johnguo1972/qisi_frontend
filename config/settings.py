@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     'apps.institutions',
     'apps.courses',
     'apps.qrcode',
+    'apps.practice',
 ]
 
 MIDDLEWARE = [
@@ -194,6 +195,19 @@ WECHAT_WEB_APP_ID = os.environ.get('WECHAT_WEB_APP_ID', '')
 WECHAT_WEB_APP_SECRET = os.environ.get('WECHAT_WEB_APP_SECRET', '')
 WECHAT_WEB_REDIRECT_URI = os.environ.get('WECHAT_WEB_REDIRECT_URI', '')
 PUBLIC_WEB_URL = os.environ.get('PUBLIC_WEB_URL', 'https://qisi.chengxuelu.com')
+
+# Practice is off by default in non-debug deployments.  A rollout must opt in
+# and provide a comma-separated beta mobile allowlist; setting the flag to 0
+# is the emergency rollback switch.
+PRACTICE_FEATURE_ENABLED = os.environ.get(
+    'PRACTICE_FEATURE_ENABLED', 'true' if DEBUG else 'false'
+).lower() in ('1', 'true', 'yes', 'on')
+PRACTICE_BETA_MOBILES = tuple(
+    mobile.strip()
+    for mobile in os.environ.get('PRACTICE_BETA_MOBILES', '').split(',')
+    if mobile.strip()
+)
+PRACTICE_RELEASE_VERSION = os.environ.get('PRACTICE_RELEASE_VERSION', 'phase5')
 
 # Aliyun OSS Configuration
 ALIYUN_OSS_ACCESS_KEY_ID = os.environ.get('ALIYUN_OSS_ACCESS_KEY_ID', '')

@@ -12,6 +12,8 @@ from apps.wrongbook.models import WrongBookItem
 from .models import AnswerAttempt, StudentLevelProgress, StudentMissionProgress
 from .permissions import IsParentReadContext
 from .student_views import _visible_mission_rels
+from apps.missions.services import assignment_levels, close_stale_missions
+from apps.missions.pdf_service import mission_pdf_download_url
 
 
 def make_trace_id():
@@ -27,6 +29,7 @@ def _active_class_ids(student):
 
 
 def _mission_queryset(student, scope=None):
+    close_stale_missions()
     class_ids = _active_class_ids(student)
     queryset = LearningMission.objects.filter(
         status='published', class_obj_id__in=class_ids,
@@ -68,7 +71,7 @@ def _level_payload(level, student):
 
 
 def _mission_payload(mission, student, include_levels=False):
-    levels = [_level_payload(level, student) for level in mission.levels.all()]
+    levels = [_level_payload(level, student) for level in assignment_levels(mission)]
     overall = round(
         sum(float(level['progress_percent']) for level in levels) / max(len(levels), 1),
         2,
@@ -89,6 +92,8 @@ def _mission_payload(mission, student, include_levels=False):
         'goal_text': mission.goal_text,
         'class_name': mission.class_obj.class_name if mission.class_obj else None,
         'deadline': mission.end_at,
+        'assignment_mode': mission.assignment_mode,
+        'pdf_download_url': mission_pdf_download_url(mission),
         'level_count': len(levels),
         'question_count': sum(level['question_count'] for level in levels),
         'progress_status': status,

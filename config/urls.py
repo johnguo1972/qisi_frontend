@@ -22,6 +22,7 @@ urlpatterns = [
     path('api/v1/questions/', include('apps.study.urls')),
     path('api/v1/missions/', include('apps.missions.urls')),
     path('api/v1/missions', include('apps.missions.urls', namespace='missions-no-slash')),  # No-slash compatibility
+    path('api/v1/practice/', include('apps.practice.urls')),
     path('api/v1/', include('apps.qrcode.urls')),
     path('api/v1/student/', include('apps.study.student_urls')),
     path('api/v1/parent/', include('apps.study.parent_urls')),

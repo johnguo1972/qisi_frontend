@@ -3,7 +3,7 @@
     <!-- 右侧内容区 -->
     <view class="main">
       <view class="panel-header">
-        <text class="panel-title">我的任务</text>
+        <text class="panel-title">我的作业</text>
       </view>
 
       <!-- 班级选择器 -->
@@ -19,7 +19,7 @@
       />
 
       <view v-if="sortedMissions.length === 0" class="empty">
-        <text>暂无任务，等待老师发布吧</text>
+        <text>暂无作业，等待老师发布吧</text>
       </view>
       <view class="mission-grid">
         <view v-for="m in sortedMissions" :key="m.mission.id" class="mission-card"
@@ -36,7 +36,8 @@
           <view class="mission-meta">
             <text class="meta-item">
               <text class="meta-icon">📋</text>
-              <text>{{ m.level_count || 0 }} 关卡</text>
+              <text v-if="m.assignment_mode === 'flat'">作业题目</text>
+              <text v-else>{{ m.level_count || 0 }} 关卡</text>
             </text>
             <text class="meta-item">
               <text class="meta-icon"></text>
@@ -52,6 +53,7 @@
             </view>
             <text class="progress-text">{{ m.progress_percent }}%</text>
           </view>
+          <button v-if="m.pdf_download_url" class="pdf-button" @click.stop="downloadPdf(m.pdf_download_url)">下载PDF作业</button>
         </view>
       </view>
     </view>
@@ -63,6 +65,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { studentApi } from '@/api/student.ts'
 import ClassSelector from '@/components/ClassSelector.vue'
 import TimeFilterBar from '@/components/TimeFilterBar.vue'
+import { formatDateOnly } from '@/utils/display-format'
+import { getPublicMediaUrl } from '@/utils/media-url'
 
 const missions = ref<any[]>([])
 
@@ -72,7 +76,7 @@ const selectedClassId = ref(0)
 // 时间筛选状态
 const selectedScope = ref('all')
 
-// 按 deadline 升序排序后的任务
+// 按 deadline 升序排序后的作业
 const sortedMissions = computed(() => {
   return [...missions.value].sort((a, b) => {
     const aDeadline = a.mission?.deadline || '9999-12-31'
@@ -81,7 +85,7 @@ const sortedMissions = computed(() => {
   })
 })
 
-// 加载任务数据
+    // 加载作业数据
 async function loadMissions() {
   try {
     // “全部班级”使用 0 作为前端占位值，接口只接受真实 UUID，因此不要把 0 发送到后端。
@@ -130,6 +134,19 @@ function goMission(id: number) {
   uni.navigateTo({ url: `/pages/student/mission?id=${id}` })
 }
 
+function downloadPdf(path: string) {
+  const url = getPublicMediaUrl(path)
+  if (typeof window !== 'undefined' && window.open) {
+    window.open(url, '_blank')
+    return
+  }
+  uni.downloadFile({
+    url,
+    success: (result) => uni.openDocument({ filePath: result.tempFilePath, fileType: 'pdf', showMenu: true }),
+    fail: () => uni.showToast({ title: 'PDF下载失败', icon: 'none' }),
+  })
+}
+
 // 班级角标颜色
 function getClassBadgeColor(classLabel: string): string {
   const colors: Record<string, string> = {
@@ -144,18 +161,10 @@ function getClassBadgeColor(classLabel: string): string {
 
 // 格式化截止日期
 function formatDeadline(deadline: string): string {
-  if (!deadline) return ''
-  try {
-    const d = new Date(deadline)
-    const month = d.getMonth() + 1
-    const day = d.getDate()
-    return `${month}月${day}日`
-  } catch {
-    return deadline
-  }
+  return formatDateOnly(deadline, '')
 }
 
-// 任务状态中文映射
+// 作业状态中文映射
 function statusText(status: string): string {
   const map: Record<string, string> = {
     'not_started': '未开始',
@@ -285,6 +294,18 @@ function statusText(status: string): string {
   min-width: 50rpx;
   text-align: right;
 }
+.pdf-button {
+  margin: 18rpx 0 0;
+  padding: 0 20rpx;
+  height: 58rpx;
+  line-height: 58rpx;
+  color: #409eff;
+  background: #ecf5ff;
+  border: 1rpx solid #b3d8ff;
+  border-radius: 10rpx;
+  font-size: 23rpx;
+}
+.pdf-button::after { border: none; }
 .empty {
   text-align: center;
   padding: 100rpx;

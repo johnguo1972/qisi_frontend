@@ -1,7 +1,6 @@
 import { del, get, post, put } from '@/utils/request'
 export { qrcodeApi } from './qrcode'
 export { wechatApi } from './wechat'
-export { wechatWebApi, type WechatWebSession } from './wechat-web'
 
 export const authApi = {
   login: (mobile: string, verifyCode: string, roleType?: string) => {
@@ -19,6 +18,7 @@ export const authApi = {
 export { institutionApi, classApi, studentClassApi, teacherApi } from './institutions'
 export { questionApi } from './questions'
 export { missionApi } from './missions'
+export { practiceApi } from './student'
 export const wechatLogin = (code: string) => post<any>('/auth/wechat-login', { code })
 export const wechatBind = (data: any) => post<any>('/auth/wechat-bind', data)
 export const parentApi = {

@@ -40,6 +40,7 @@ const items = [
   { key: 'home', label: '学习概览', icon: '📊' },
   { key: 'children', label: '孩子管理', icon: '👨‍👩‍👧' },
   { key: 'wrongbook', label: '错题分析', icon: '📝' },
+  { key: 'practice', label: '精练题', icon: '📝' },
   { key: 'growth', label: '成长分析', icon: '📈' },
   { key: 'knowledge', label: '知识掌握', icon: '🧠' },
 ]

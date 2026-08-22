@@ -9,7 +9,7 @@
       <button v-if="isWechat && mission" class="wechat-button" @click="openMiniProgram">打开微信小程序</button>
       <view v-if="mission" class="mission">
         <text class="name">{{ mission.mission_name }}</text>
-        <text>截止：{{ mission.end_at || '未设置' }}</text>
+        <text>截止：{{ formatDateOnly(mission.end_at, '未设置') }}</text>
         <button type="primary" @click="enter">进入作业</button>
       </view>
     </view>
@@ -20,6 +20,7 @@
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { qrcodeApi } from '@/api/index'
+import { formatDateOnly } from '@/utils/display-format'
 
 const shortCode = ref('')
 const mission = ref<any>(null)

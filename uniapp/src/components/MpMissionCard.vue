@@ -5,30 +5,60 @@
       <text class="name">{{ missionName }}</text>
       <text :class="`status-${status}`">{{ statusLabel(status, '未开始') }}</text>
     </view>
-    <view class="meta">📋 {{ levelCount }} 关卡　{{ questionCount }} 题目</view>
-    <text v-if="endAt" class="deadline">截止：{{ formatDateTime(endAt) }}</text>
+    <view class="meta">
+      <text v-if="assignmentMode === 'flat'">📋 作业题目　{{ questionCount }} 题目</text>
+      <text v-else>📋 {{ levelCount }} 关卡　{{ questionCount }} 题目</text>
+    </view>
+    <text v-if="endAt" class="deadline">截止：{{ formatDateOnly(endAt) }}</text>
     <view class="progress">
       <view class="fill" :style="{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }" />
       <text>{{ progressPercent }}%</text>
     </view>
+    <button v-if="pdfDownloadUrl" class="pdf-button" @click.stop="downloadPdf">下载PDF作业</button>
   </view>
 </template>
 
 <script setup lang="ts">
-import { formatDateTime, statusLabel } from '@/utils/display-format'
+import { formatDateOnly, statusLabel } from '@/utils/display-format'
+import { getPublicMediaUrl } from '@/utils/media-url'
 
-defineProps<{
+const props = defineProps<{
   missionId: string
   missionName: string
   classLabel?: string
   status: string
   levelCount: number
   questionCount: number
+  assignmentMode?: 'flat' | 'levels'
   endAt?: string
   progressPercent: number
+  pdfDownloadUrl?: string
 }>()
 
 defineEmits<{ click: [id: string] }>()
+
+function downloadPdf() {
+  const url = getPublicMediaUrl(props.pdfDownloadUrl)
+  if (!url) {
+    uni.showToast({ title: 'PDF尚未生成', icon: 'none' })
+    return
+  }
+  if (typeof window !== 'undefined' && window.open) {
+    window.open(url, '_blank')
+    return
+  }
+  uni.downloadFile({
+    url,
+    success: (result) => {
+      if (result.statusCode !== 200) {
+        uni.showToast({ title: 'PDF下载失败', icon: 'none' })
+        return
+      }
+      uni.openDocument({ filePath: result.tempFilePath, fileType: 'pdf', showMenu: true })
+    },
+    fail: () => uni.showToast({ title: 'PDF下载失败', icon: 'none' }),
+  })
+}
 </script>
 
 <style scoped>
@@ -43,4 +73,6 @@ defineEmits<{ click: [id: string] }>()
 .progress { display: flex; align-items: center; gap: 14rpx; color: #666; font-size: 22rpx; }
 .progress > view { height: 12rpx; flex: 1; border-radius: 8rpx; background: #eee; }
 .fill { height: 100%; border-radius: 8rpx; background: linear-gradient(90deg, #409eff, #6366f1); }
+.pdf-button { margin: 18rpx 0 0; padding: 0 20rpx; height: 58rpx; line-height: 58rpx; color: #409eff; background: #ecf5ff; border: 1rpx solid #b3d8ff; border-radius: 10rpx; font-size: 23rpx; }
+.pdf-button::after { border: none; }
 </style>

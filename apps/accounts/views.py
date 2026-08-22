@@ -24,9 +24,9 @@ from .serializers import (
     serialize_user_session,
 )
 from .services import (
-    verify_code, get_or_create_user, generate_tokens,
+    verify_code, get_or_create_user, generate_tokens, ensure_parent_role_for_login,
     generate_verify_code, send_sms_code, ensure_fixed_test_account,
-    is_fixed_test_account_code,
+    is_fixed_test_account_code, RoleNotGranted,
 )
 from .wechat_web import (
     WebAuthorizationError,
@@ -120,13 +120,27 @@ def login(request):
                 return role_error(
                     'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
                 )
-            user, _ = get_or_create_user(mobile, initial_role=active_role)
+            user, _ = get_or_create_user(
+                mobile, initial_role=active_role, grant_source='self_login'
+            )
         else:
-            if not has_user_role(user, active_role):
+            if active_role == 'parent':
+                try:
+                    user = ensure_parent_role_for_login(user)
+                except RoleNotGranted:
+                    return role_error(
+                        'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
+                    )
+            elif not has_user_role(user, active_role):
                 return role_error(
                     'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
                 )
             user, _ = get_or_create_user(mobile, initial_role=active_role)
+
+    if user.status != 'active':
+        return role_error(
+            'ACCOUNT_INACTIVE', 'Account is inactive', status.HTTP_403_FORBIDDEN
+        )
 
     tokens = generate_tokens(user, active_role)
 
@@ -328,6 +342,10 @@ def refresh_token_view(request):
     try:
         token = RefreshToken(refresh_token)
         user = UserAccount.objects.get(pk=token['user_id'])
+        if user.status != 'active':
+            return role_error(
+                'ACCOUNT_INACTIVE', 'Account is inactive', status.HTTP_403_FORBIDDEN
+            )
         active_role = token['active_role'] if 'active_role' in token else user.role_type
         if active_role not in VALID_ROLES or not has_user_role(user, active_role):
             return role_error(
@@ -424,6 +442,10 @@ def switch_role(request):
     active_role = request.data.get('role')
     if active_role not in VALID_ROLES:
         return role_error('INVALID_ROLE', 'Invalid role', status.HTTP_400_BAD_REQUEST)
+    if request.user.status != 'active':
+        return role_error(
+            'ACCOUNT_INACTIVE', 'Account is inactive', status.HTTP_403_FORBIDDEN
+        )
     if not has_user_role(request.user, active_role):
         return role_error(
             'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN

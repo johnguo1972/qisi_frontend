@@ -179,7 +179,7 @@ function typeLabel(type: string): string {
     short_answer: '简答', essay: '论述', true_false: '判断',
     computation: '计算', proof: '证明',
   }
-  return map[type] || type
+  return map[type] || '未识别题型'
 }
 
 function truncate(str: string, len: number): string {

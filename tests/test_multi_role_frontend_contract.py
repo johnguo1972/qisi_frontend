@@ -57,6 +57,26 @@ def test_all_required_surfaces_include_role_switcher():
         assert "RoleSwitcher" in read(relative_path), relative_path
 
 
+def test_student_role_switcher_is_available_on_h5_and_app_but_not_duplicated_in_mp():
+    source = read("components/StudentSidebar.vue")
+
+    assert "#ifndef MP-WEIXIN" in source
+    assert "#ifdef H5" not in source
+
+
+def test_wechat_login_and_bind_preserve_the_selected_role_route():
+    wechat_api = read("api/wechat.ts")
+    wechat_auth = read("utils/wechat-auth.ts")
+    login = read("pages/login/index.vue")
+    bind = read("pages/student/parent-bind.vue")
+
+    assert "role_type: roleType" in wechat_api
+    assert "wxLogin(activeTab.value)" in login
+    assert "wechatApi.login(code, roleType)" in wechat_auth
+    assert "routeForRole" in bind
+    assert "response.data.user.active_role" in bind
+
+
 def test_app_uses_shared_server_active_role_route():
     source = read("App.vue")
 

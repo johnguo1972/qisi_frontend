@@ -13,6 +13,9 @@ class LearningMission(models.Model):
     start_at = models.DateTimeField(blank=True, null=True)
     end_at = models.DateTimeField(blank=True, null=True)
     status = models.CharField(max_length=20, default='draft')
+    # New assignments use one flat question list.  The legacy level mode is
+    # retained so existing assignments can continue to be answered and graded.
+    assignment_mode = models.CharField(max_length=20, default='levels')
     class_obj = models.ForeignKey(
         'institutions.Class', on_delete=models.SET_NULL,
         null=True, blank=True, db_column='class_id',
@@ -25,6 +28,9 @@ class LearningMission(models.Model):
         'courses.Course', on_delete=models.SET_NULL, null=True, blank=True,
         db_column='course_id', related_name='learning_missions',
     )
+    # The worksheet PDF generated when a mission is published.  Keep the
+    # storage-relative path so all clients can receive a stable media URL.
+    pdf_file_path = models.CharField(max_length=500, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
