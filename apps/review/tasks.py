@@ -110,7 +110,7 @@ def recover_and_dispatch_ai_items():
 def execute_ai_job_item(self, item_id: str):
     """Execute one durable queue item using the unchanged full AI pipeline."""
     from .ai_queue import RedisLeasePool
-    from .models import AIProcessingJobItem
+    from .models import AIProcessingJob, AIProcessingJobItem
 
     item = AIProcessingJobItem.objects.select_related('question').get(id=item_id)
     if item.status != AIProcessingJobItem.Status.DISPATCHED:
@@ -144,6 +144,7 @@ def execute_ai_job_item(self, item_id: str):
         )
         item.finished_at = timezone.now()
         item.save(update_fields=['status', 'error_code', 'finished_at'])
+        AIProcessingJob.sync_status_from_items(item.job_id)
         return {'status': 'partial' if results.get('errors') else 'complete', 'question_id': str(item.question_id)}
     except Exception as error:
         item.status = AIProcessingJobItem.Status.FAILED
@@ -151,6 +152,7 @@ def execute_ai_job_item(self, item_id: str):
         item.error_code = f'processing_failed_{error_category}'
         item.finished_at = timezone.now()
         item.save(update_fields=['status', 'error_code', 'finished_at'])
+        AIProcessingJob.sync_status_from_items(item.job_id)
         logger.exception(
             'AI queue item processing failed',
             extra={

@@ -9,6 +9,7 @@ import uuid_utils.compat as uuid_compat
 from django.conf import settings
 from django.db import models, transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from apps.parser.models import ExamQuestion
 
@@ -106,6 +107,52 @@ class AIProcessingJob(models.Model):
                 for question in accepted_questions
             ])
             return JobCreateResult(job, len(accepted_questions), duplicate_question_ids)
+
+    @classmethod
+    def sync_status_from_items(cls, job_id: object) -> str:
+        """Persist the durable job state derived from its item states.
+
+        Queue dispatch only considers a bounded window of jobs.  Keeping a
+        finished job marked queued would otherwise let it occupy that window
+        forever and starve newer queued work.
+        """
+        with transaction.atomic():
+            job = cls.objects.select_for_update().get(id=job_id)
+            item_statuses = list(job.items.values_list("status", flat=True))
+            active_statuses = AIProcessingJobItem.active_statuses()
+            if not item_statuses or not any(
+                status in active_statuses for status in item_statuses
+            ):
+                status = (
+                    cls.Status.CANCELLED
+                    if job.cancel_requested
+                    else cls.Status.COMPLETED
+                )
+            elif any(
+                status in {
+                    AIProcessingJobItem.Status.DISPATCHED,
+                    AIProcessingJobItem.Status.RUNNING,
+                }
+                for status in item_statuses
+            ):
+                status = cls.Status.RUNNING
+            else:
+                status = cls.Status.QUEUED
+
+            update_fields: list[str] = []
+            if job.status != status:
+                job.status = status
+                update_fields.append("status")
+            if status in {cls.Status.COMPLETED, cls.Status.CANCELLED}:
+                if job.finished_at is None:
+                    job.finished_at = timezone.now()
+                    update_fields.append("finished_at")
+            elif status == cls.Status.RUNNING and job.started_at is None:
+                job.started_at = timezone.now()
+                update_fields.append("started_at")
+            if update_fields:
+                job.save(update_fields=update_fields)
+            return status
 
     class Meta:
         db_table = "review_ai_processing_job"

@@ -85,7 +85,8 @@ def reserve_queued_item_ids(*, limit: int | None = None) -> list[str]:
     jobs = list(AIProcessingJob.objects.filter(
         status__in=(AIProcessingJob.Status.QUEUED, AIProcessingJob.Status.RUNNING),
         cancel_requested=False,
-    ).order_by('created_at')[:3])
+        items__status=AIProcessingJobItem.Status.QUEUED,
+    ).distinct().order_by('created_at')[:3])
     candidates = select_fair_item_ids(
         [
             (str(job.id), job.items.filter(status=AIProcessingJobItem.Status.QUEUED)
