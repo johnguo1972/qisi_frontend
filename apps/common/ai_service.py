@@ -40,7 +40,13 @@ from apps.common.ai.question_context import (
     question_context_hash,
     question_context_payload,
 )
-from apps.common.ai.schemas import ModeAResponse, ModeBResponse, ModeCResponse
+from apps.common.ai.schemas import (
+    ModeAResponse,
+    ModeBResponse,
+    ModeCResponse,
+    mode_response_schema,
+    multipart_true_false_labels,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -729,6 +735,9 @@ class AIReviewService:
             answer,
             question_type=payload.get("question_type", ""),
             option_labels=option_labels,
+            subquestion_labels=multipart_true_false_labels(
+                payload.get("question_type", ""), payload.get("subquestions", ())
+            ),
         )
         if normalized.valid:
             return normalized.value
@@ -890,9 +899,14 @@ class AIReviewService:
                     cached_verification=cached_verification,
                 )
                 try:
-                    validated_answer = _MODE_RESPONSE_SCHEMAS[
-                        normalized_mode
-                    ].model_validate(outcome.answer)
+                    response_schema = mode_response_schema(
+                        normalized_mode,
+                        question_type=context.metadata.get("question_type", ""),
+                        subquestions=context.metadata.get("subquestions", ()),
+                    )
+                    if response_schema is None:
+                        raise ValidationError.from_exception_data("mode schema", [])
+                    validated_answer = response_schema.model_validate(outcome.answer)
                 except ValidationError:
                     raise ArbitrationProviderError() from None
                 public_answer = _project_schema_value(validated_answer)
@@ -997,9 +1011,14 @@ class AIReviewService:
             final_review=final_review,
         ).process_unanswered(normalized_mode, context, baseline=baseline)
         try:
-            validated_answer = _MODE_RESPONSE_SCHEMAS[normalized_mode].model_validate(
-                outcome.answer
+            response_schema = mode_response_schema(
+                normalized_mode,
+                question_type=context.metadata.get("question_type", ""),
+                subquestions=context.metadata.get("subquestions", ()),
             )
+            if response_schema is None:
+                raise ValidationError.from_exception_data("mode schema", [])
+            validated_answer = response_schema.model_validate(outcome.answer)
         except ValidationError:
             raise ArbitrationProviderError() from None
         public_answer = _project_schema_value(validated_answer)

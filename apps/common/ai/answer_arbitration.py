@@ -21,6 +21,7 @@ from apps.common.status import (
 )
 
 from .answer_validation import AnswerNormalizer, ModeContentValidator
+from .schemas import multipart_true_false_labels
 from .components.base import QuestionInput
 from .question_context import question_context_hash, question_context_payload
 from .schemas import has_visible_text
@@ -257,15 +258,22 @@ class ModeAnswerArbitrator:
             for item in payload.get("options", ())
             if isinstance(item, Mapping)
         )
+        subquestion_labels = multipart_true_false_labels(
+            question_type, payload.get("subquestions", ())
+        )
 
         qwen = self._call_generate(normalized_mode, context)
         normalized_reference = self._normalizer.normalize(
-            context.answer, question_type=question_type, option_labels=option_labels
+            context.answer,
+            question_type=question_type,
+            option_labels=option_labels,
+            subquestion_labels=subquestion_labels,
         )
         normalized_qwen = self._normalizer.normalize(
             qwen.get("final_answer"),
             question_type=question_type,
             option_labels=option_labels,
+            subquestion_labels=subquestion_labels,
         )
         qwen_content = self._content_validator.validate(
             normalized_mode,
@@ -307,6 +315,7 @@ class ModeAnswerArbitrator:
             independent["independent_answer"],
             question_type=question_type,
             option_labels=option_labels,
+            subquestion_labels=subquestion_labels,
         )
         if normalized_deepseek.reason == "missing_conditions" or _missing_conditions(independent):
             raise HumanReviewRequired()
@@ -523,10 +532,14 @@ class ModeAnswerArbitrator:
             for item in payload.get("options", ())
             if isinstance(item, Mapping)
         )
+        subquestion_labels = multipart_true_false_labels(
+            question_type, payload.get("subquestions", ())
+        )
         trusted = self._normalizer.normalize(
             baseline_data["canonical_answer"],
             question_type=question_type,
             option_labels=option_labels,
+            subquestion_labels=subquestion_labels,
         )
         if not trusted.valid:
             raise ArbitrationProviderError("baseline_invalid")
@@ -537,6 +550,7 @@ class ModeAnswerArbitrator:
                 qwen.get("final_answer"),
                 question_type=question_type,
                 option_labels=option_labels,
+                subquestion_labels=subquestion_labels,
             )
             qwen_content = self._content_validator.validate(
                 normalized_mode,
@@ -567,6 +581,7 @@ class ModeAnswerArbitrator:
                 final["trusted_answer"],
                 question_type=question_type,
                 option_labels=option_labels,
+                subquestion_labels=subquestion_labels,
             )
             # The final reviewer explicitly accepts Qwen only when it confirms
             # Qwen's final answer.  Its generated teaching content is not used.
@@ -726,10 +741,14 @@ class ModeAnswerArbitrator:
             for item in payload.get("options", ())
             if isinstance(item, Mapping)
         )
+        subquestion_labels = multipart_true_false_labels(
+            payload.get("question_type", ""), payload.get("subquestions", ())
+        )
         trusted = self._normalizer.normalize(
             final["trusted_answer"],
             question_type=payload.get("question_type", ""),
             option_labels=option_labels,
+            subquestion_labels=subquestion_labels,
         )
         mode_content = _plain_mapping(final["mode_content"])
         if mode_content is None or not trusted.valid:

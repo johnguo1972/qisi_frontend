@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import unicodedata
 import re
+import unicodedata
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 from urllib.parse import parse_qsl, unquote, urlsplit
 
@@ -140,6 +141,25 @@ class ModeAResponse(_StrictResponseModel):
     missing_conditions: list[NonBlankStr] = Field(default_factory=list)
 
 
+class ModeATrueFalseStepResponse(_StrictResponseModel):
+    """One explanatory step for one child statement of a multipart judgment item."""
+
+    step: int = Field(ge=1)
+    subquestion_label: NonBlankStr
+    judgment: Literal["TRUE", "FALSE"]
+    content: NonBlankStr
+
+
+class ModeATrueFalseResponse(_StrictResponseModel):
+    """Mode A contract: explain every child judgment independently."""
+
+    mode: Literal["A"]
+    steps: list[ModeATrueFalseStepResponse] = Field(min_length=1)
+    final_answer: NonBlankStr
+    summary: NonBlankStr
+    missing_conditions: list[NonBlankStr] = Field(default_factory=list)
+
+
 class ModeBOptionsResponse(_StrictResponseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -203,6 +223,87 @@ class ModeBResponse(_StrictResponseModel):
     summary: NonBlankStr
 
 
+class ModeBTrueFalseQuestionResponse(_StrictResponseModel):
+    """One guided judgment for one child statement of a multipart true/false item."""
+
+    subquestion_label: NonBlankStr
+    question: NonBlankStr
+    correct_option: Literal["TRUE", "FALSE"]
+    reference_answer: Literal["TRUE", "FALSE"]
+    analysis: NonBlankStr
+    correct_answer: Literal["TRUE", "FALSE"]
+    explanation: NonBlankStr
+
+    @model_validator(mode="after")
+    def require_locally_consistent_judgment(self):
+        if not (
+            self.correct_option
+            == self.reference_answer
+            == self.correct_answer
+        ):
+            raise ValueError("Mode B true/false answer fields must agree")
+        return self
+
+
+class ModeBTrueFalseResponse(_StrictResponseModel):
+    """Mode B contract for a true/false question with child statements."""
+
+    mode: Literal["B"]
+    questions: list[ModeBTrueFalseQuestionResponse] = Field(min_length=1)
+    final_answer: NonBlankStr
+    summary: NonBlankStr
+
+
+_TRUE_FALSE_QUESTION_TYPES = frozenset(
+    {"true_false", "judgement", "judgment", "判断题"}
+)
+
+
+def multipart_true_false_labels(
+    question_type: object, subquestions: object
+) -> tuple[str, ...]:
+    """Return ordered child labels only for a multipart true/false question."""
+    if not isinstance(question_type, str) or question_type.strip().casefold() not in _TRUE_FALSE_QUESTION_TYPES:
+        return ()
+    if not isinstance(subquestions, (list, tuple)):
+        return ()
+    labels: list[str] = []
+    for child in subquestions:
+        if not isinstance(child, Mapping):
+            return ()
+        label = child.get("label")
+        stem = child.get("stem", child.get("question", ""))
+        if not isinstance(label, str) or not has_visible_text(label):
+            return ()
+        if not isinstance(stem, str) or not has_visible_text(stem):
+            return ()
+        labels.append(label.strip())
+    return tuple(labels)
+
+
+def mode_response_schema(
+    mode: object, *, question_type: object = "", subquestions: object = ()
+) -> type[_StrictResponseModel] | None:
+    """Select the response contract from the mode and immutable question shape."""
+    normalized_mode = mode.strip().upper() if isinstance(mode, str) else ""
+    has_multipart_true_false = bool(
+        multipart_true_false_labels(question_type, subquestions)
+    )
+    if normalized_mode == "A":
+        if has_multipart_true_false:
+            return ModeATrueFalseResponse
+        return ModeAResponse
+    if normalized_mode == "B":
+        if has_multipart_true_false:
+            return ModeBTrueFalseResponse
+        return ModeBResponse
+    if normalized_mode == "C":
+        if has_multipart_true_false:
+            return ModeCTrueFalseResponse
+        return ModeCResponse
+    return None
+
+
 class ModeCQuestionResponse(_StrictResponseModel):
     question: NonBlankStr
     reference_answer: NonBlankStr
@@ -213,6 +314,25 @@ class ModeCQuestionResponse(_StrictResponseModel):
 class ModeCResponse(_StrictResponseModel):
     mode: Literal["C"]
     questions: list[ModeCQuestionResponse] = Field(min_length=3, max_length=5)
+    final_answer: NonBlankStr
+    summary: NonBlankStr
+
+
+class ModeCTrueFalseQuestionResponse(_StrictResponseModel):
+    """One reflective question for one child statement of a multipart judgment item."""
+
+    subquestion_label: NonBlankStr
+    question: NonBlankStr
+    reference_answer: Literal["TRUE", "FALSE"]
+    key_points: list[NonBlankStr] = Field(min_length=1)
+    followup_hint: NonBlankStr
+
+
+class ModeCTrueFalseResponse(_StrictResponseModel):
+    """Mode C contract: ask one reflection prompt for every child judgment."""
+
+    mode: Literal["C"]
+    questions: list[ModeCTrueFalseQuestionResponse] = Field(min_length=1)
     final_answer: NonBlankStr
     summary: NonBlankStr
 

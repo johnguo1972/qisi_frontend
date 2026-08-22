@@ -122,11 +122,12 @@ class QuestionAIComponent(ABC):
                         "AI question component response must be an object"
                     )
                 normalized = self.normalize(dict(parsed))
-                if self.response_schema is None:
+                response_schema = self.response_schema_for(question)
+                if response_schema is None:
                     validated_result = normalized
                 else:
                     try:
-                        validated = self.response_schema.model_validate(normalized)
+                        validated = response_schema.model_validate(normalized)
                     except ValidationError:
                         raise AIResponseError(
                             f"AI response failed {self.task_key} schema validation"
@@ -147,6 +148,10 @@ class QuestionAIComponent(ABC):
         if not callable(get_retry_count):
             return 0
         return get_retry_count(self.task_key)
+
+    def response_schema_for(self, _question: QuestionInput) -> type[BaseModel] | None:
+        """Return a question-aware response schema; fixed components use the class schema."""
+        return self.response_schema
 
     @abstractmethod
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:

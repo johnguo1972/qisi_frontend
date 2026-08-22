@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import re
 import unicodedata
 
+from apps.common.ai.schemas import multipart_true_false_labels
+
 
 @dataclass(frozen=True)
 class NormalizedAnswer:
@@ -108,7 +110,7 @@ class AnswerNormalizer:
     """Normalize only established answer notation; preserve all other text."""
 
     def normalize(
-        self, raw: object, *, question_type: object, option_labels=()
+        self, raw: object, *, question_type: object, option_labels=(), subquestion_labels=()
     ) -> NormalizedAnswer:
         value = _trimmed_text(raw)
         if value is None:
@@ -124,6 +126,20 @@ class AnswerNormalizer:
         if kind == "multiple_choice":
             return self._normalize_multiple(value, _allowed_labels(option_labels))
         if kind == "true_false":
+            labels = tuple(
+                label for label in subquestion_labels if isinstance(label, str) and label.strip()
+            )
+            if labels:
+                tokens = [part.strip() for part in re.split(r"[;；]", value) if part.strip()]
+                if len(tokens) != len(labels):
+                    return NormalizedAnswer(value, False, "true_false_item_count_mismatch")
+                values = []
+                for token in tokens:
+                    canonical = _TRUE_FALSE_ALIASES.get(token.casefold())
+                    if canonical is None:
+                        return NormalizedAnswer(value, False, "unrecognized_true_false")
+                    values.append(canonical)
+                return NormalizedAnswer(";".join(values), True)
             phrase = _TRUE_FALSE_PHRASE.fullmatch(value)
             candidate = phrase.group(1) if phrase else value
             canonical = _TRUE_FALSE_ALIASES.get(candidate.casefold())
@@ -319,7 +335,45 @@ def _valid_steps(value: object) -> bool:
     return True
 
 
-def _valid_mode_b_questions(value: object) -> bool:
+def _valid_mode_a_true_false_steps(value: object, *, true_false_labels=()) -> bool:
+    if not isinstance(value, (list, tuple)) or len(value) != len(true_false_labels):
+        return False
+    for index, (expected_label, item) in enumerate(
+        zip(true_false_labels, value, strict=True), start=1
+    ):
+        step = _plain_mapping(item)
+        if step is None:
+            return False
+        if step.get("step") != index or step.get("subquestion_label") != expected_label:
+            return False
+        if step.get("judgment") not in {"TRUE", "FALSE"}:
+            return False
+        if not _nonblank_string(step.get("content")):
+            return False
+    return True
+
+
+def _valid_mode_b_questions(value: object, *, true_false_labels=()) -> bool:
+    if true_false_labels:
+        if not isinstance(value, (list, tuple)) or len(value) != len(true_false_labels):
+            return False
+        for expected_label, item in zip(true_false_labels, value, strict=True):
+            question = _plain_mapping(item)
+            if question is None or question.get("subquestion_label") != expected_label:
+                return False
+            if not all(
+                _nonblank_string(question.get(field))
+                for field in ("question", "reference_answer", "analysis", "explanation")
+            ):
+                return False
+            if not (
+                question.get("correct_option")
+                == question.get("reference_answer")
+                == question.get("correct_answer")
+                in {"TRUE", "FALSE"}
+            ):
+                return False
+        return True
     if not isinstance(value, (list, tuple)) or not 3 <= len(value) <= 4:
         return False
     required = (
@@ -346,7 +400,27 @@ def _valid_mode_b_questions(value: object) -> bool:
     return True
 
 
-def _valid_mode_c_questions(value: object) -> bool:
+def _valid_mode_c_questions(value: object, *, true_false_labels=()) -> bool:
+    if true_false_labels:
+        if not isinstance(value, (list, tuple)) or len(value) != len(true_false_labels):
+            return False
+        for expected_label, item in zip(true_false_labels, value, strict=True):
+            question = _plain_mapping(item)
+            if question is None or question.get("subquestion_label") != expected_label:
+                return False
+            if question.get("reference_answer") not in {"TRUE", "FALSE"}:
+                return False
+            if not all(
+                _nonblank_string(question.get(field))
+                for field in ("question", "followup_hint")
+            ):
+                return False
+            key_points = question.get("key_points")
+            if not isinstance(key_points, (list, tuple)) or not key_points or not all(
+                _nonblank_string(point) for point in key_points
+            ):
+                return False
+        return True
     if not isinstance(value, (list, tuple)) or not 3 <= len(value) <= 5:
         return False
     for item in value:
@@ -366,18 +440,38 @@ def _valid_mode_c_questions(value: object) -> bool:
     return True
 
 
-def _schema_complete(mode: str, result: Mapping[object, object]) -> bool:
+def _schema_complete(mode: str, result: Mapping[object, object], *, context: Mapping[object, object]) -> bool:
     if result.get("mode") != mode or not _nonblank_string(result.get("final_answer")) or not _nonblank_string(result.get("summary")):
         return False
     if mode == "A":
+        true_false_labels = multipart_true_false_labels(
+            context.get("question_type", ""), context.get("subquestions", ())
+        )
         missing = result.get("missing_conditions", ())
-        return _valid_steps(result.get("steps")) and isinstance(missing, (list, tuple)) and all(
+        valid_steps = (
+            _valid_mode_a_true_false_steps(
+                result.get("steps"), true_false_labels=true_false_labels
+            )
+            if true_false_labels
+            else _valid_steps(result.get("steps"))
+        )
+        return valid_steps and isinstance(missing, (list, tuple)) and all(
             _nonblank_string(item) for item in missing
         )
     if mode == "B":
-        return _valid_mode_b_questions(result.get("questions"))
+        return _valid_mode_b_questions(
+            result.get("questions"),
+            true_false_labels=multipart_true_false_labels(
+                context.get("question_type", ""), context.get("subquestions", ())
+            ),
+        )
     if mode == "C":
-        return _valid_mode_c_questions(result.get("questions"))
+        return _valid_mode_c_questions(
+            result.get("questions"),
+            true_false_labels=multipart_true_false_labels(
+                context.get("question_type", ""), context.get("subquestions", ())
+            ),
+        )
     return False
 
 
@@ -411,15 +505,20 @@ class ModeContentValidator:
             "question_type", plain_context.get("question_style", "")
         )
         labels = _option_labels_from_context(plain_context)
+        subquestion_labels = multipart_true_false_labels(
+            question_type, plain_context.get("subquestions", ())
+        )
         final = self._normalizer.normalize(
             plain_result.get("final_answer"),
             question_type=question_type,
             option_labels=labels,
+            subquestion_labels=subquestion_labels,
         )
         trusted = self._normalizer.normalize(
             trusted_answer,
             question_type=question_type,
             option_labels=labels,
+            subquestion_labels=subquestion_labels,
         )
         complete_choice = _complete_choice_context(plain_context)
         observed = set()
@@ -445,7 +544,7 @@ class ModeContentValidator:
             observed.add("false_missing_conditions")
         if complete_choice and _has_option_missing_claim(plain_result):
             observed.add("claims_options_missing")
-        if not _schema_complete(normalized_mode, plain_result):
+        if not _schema_complete(normalized_mode, plain_result, context=plain_context):
             observed.add("mode_schema_incomplete")
         issues = tuple(issue for issue in self._ISSUE_ORDER if issue in observed)
         return ContentValidation(not issues, issues)

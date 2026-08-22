@@ -11,6 +11,7 @@ from apps.common.ai.schemas import (
     ModeBResponse,
     ModeCResponse,
     has_visible_text,
+    mode_response_schema,
 )
 from apps.common.ai.exceptions import AIResponseError
 
@@ -159,12 +160,35 @@ def _contains_corrupted_latex_control(value: object) -> bool:
 class _ModeAnswerComponent(QuestionAIComponent):
     mode: str
 
+    def response_schema_for(self, question: QuestionInput):
+        return mode_response_schema(
+            self.mode,
+            question_type=question.metadata.get("question_type", ""),
+            subquestions=question.metadata.get("subquestions", ()),
+        )
+
     def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
         from apps.common.ai.question_context import question_context_payload
 
         vision = question.metadata.get("vision_result", {})
         context = question_context_payload(question)
         normalized_text = question.metadata.get("normalized_text") or question.stem
+        subquestions = context["subquestions"]
+        child_lines = []
+        if isinstance(subquestions, list):
+            for child in subquestions:
+                if not isinstance(child, Mapping):
+                    continue
+                label = child.get("label", "")
+                stem = child.get("stem", child.get("question", ""))
+                if isinstance(stem, str) and has_visible_text(stem):
+                    prefix = f"{label} " if isinstance(label, str) and label.strip() else ""
+                    child_lines.append(f"{prefix}{stem}")
+        if child_lines:
+            normalized_text = "{}\n{}".format(
+                normalized_text,
+                "\n".join(child_lines),
+            )
         options = context["options"]
         if options:
             normalized_text = "{}\n\n完整选项：\n{}".format(

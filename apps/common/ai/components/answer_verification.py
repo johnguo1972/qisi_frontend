@@ -18,6 +18,7 @@ from apps.common.ai.schemas import (
     ModeBResponse,
     ModeCResponse,
     has_visible_text,
+    mode_response_schema,
 )
 
 from .base import QuestionAIComponent, QuestionInput
@@ -125,8 +126,15 @@ def _target_mode(question: QuestionInput) -> str:
     return mode
 
 
-def _mode_schema_json(target_mode: str) -> str:
-    return _json_text(_MODE_SCHEMAS[target_mode].model_json_schema())
+def _mode_schema_json(target_mode: str, question: QuestionInput) -> str:
+    schema = mode_response_schema(
+        target_mode,
+        question_type=question.metadata.get("question_type", ""),
+        subquestions=question.metadata.get("subquestions", ()),
+    )
+    if schema is None:  # pragma: no cover - target mode is already validated
+        raise AIResponseError("Unsupported mode schema")
+    return _json_text(schema.model_json_schema())
 
 
 def _clean_question_context(question: QuestionInput) -> dict[str, object]:
@@ -173,9 +181,14 @@ def _validate_mode_content(
 ) -> dict:
     target_mode = _target_mode(question)
     try:
-        validated = _MODE_SCHEMAS[target_mode].model_validate(
-            result.get("mode_content")
+        schema = mode_response_schema(
+            target_mode,
+            question_type=question.metadata.get("question_type", ""),
+            subquestions=question.metadata.get("subquestions", ()),
         )
+        if schema is None:  # pragma: no cover - target mode is already validated
+            raise AIResponseError("Unsupported mode schema")
+        validated = schema.model_validate(result.get("mode_content"))
     except ValidationError:
         raise AIResponseError(
             f"Verification mode_content failed target mode {target_mode} validation"
@@ -222,7 +235,7 @@ class DeepSeekIndependentVerifierComponent(QuestionAIComponent):
         return {
             "question_context_json": _json_text(_clean_question_context(question)),
             "target_mode": target_mode,
-            "mode_schema_json": _mode_schema_json(target_mode),
+            "mode_schema_json": _mode_schema_json(target_mode, question),
         }
 
     def run(self, question: QuestionInput) -> dict:
@@ -318,5 +331,5 @@ class DeepSeekFinalReviewComponent(QuestionAIComponent):
                 }
             ),
             "conflicts_json": _json_text(conflicts if conflicts is not _DROP else []),
-            "mode_schema_json": _mode_schema_json(target_mode),
+            "mode_schema_json": _mode_schema_json(target_mode, question),
         }
