@@ -191,6 +191,7 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 WECHAT_MP_APPID = os.environ.get('WECHAT_MP_APPID', '')
 WECHAT_MP_APPSECRET = os.environ.get('WECHAT_MP_APPSECRET', '')
+WECHAT_MP_ENV_VERSION = os.environ.get('WECHAT_MP_ENV_VERSION', 'release').strip().lower()
 WECHAT_WEB_APP_ID = os.environ.get('WECHAT_WEB_APP_ID', '')
 WECHAT_WEB_APP_SECRET = os.environ.get('WECHAT_WEB_APP_SECRET', '')
 WECHAT_WEB_REDIRECT_URI = os.environ.get('WECHAT_WEB_REDIRECT_URI', '')

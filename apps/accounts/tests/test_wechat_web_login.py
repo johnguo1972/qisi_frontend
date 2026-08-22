@@ -266,7 +266,10 @@ def test_miniprogram_phone_authorization_binds_the_web_session(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_binding_qrcode_is_only_available_to_the_originating_browser(monkeypatch):
+def test_binding_qrcode_is_only_available_to_the_originating_browser(
+    monkeypatch, settings
+):
+    settings.WECHAT_MP_ENV_VERSION = "trial"
     browser = APIClient()
     session = _binding_session(_browser_session_id(browser), suffix="qrcode")
     qrcode_options = {}
@@ -291,6 +294,7 @@ def test_binding_qrcode_is_only_available_to_the_originating_browser(monkeypatch
     assert accepted["Content-Type"] == "image/png"
     assert accepted.content == b"png-data"
     assert qrcode_options["check_path"] is True
+    assert qrcode_options["env_version"] == "trial"
 
 
 @pytest.mark.django_db

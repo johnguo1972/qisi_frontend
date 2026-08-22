@@ -92,9 +92,18 @@ def analyze_image_blur(file_obj):
         return None, False
 
 
-def wxacode_png(scene, page='pages/student/scan-entry', width=430, check_path=False):
+def wxacode_png(
+    scene,
+    page='pages/student/scan-entry',
+    width=430,
+    check_path=False,
+    env_version='release',
+):
     """Generate a real unlimited mini-program code through the WeChat API."""
     import requests
+    env_version = str(env_version).strip().lower()
+    if env_version not in {'release', 'trial', 'develop'}:
+        raise RuntimeError('invalid miniprogram env_version')
     appid = getattr(settings, 'WECHAT_MP_APPID', '')
     secret = getattr(settings, 'WECHAT_MP_APPSECRET', '')
     if not appid or not secret:
@@ -114,6 +123,7 @@ def wxacode_png(scene, page='pages/student/scan-entry', width=430, check_path=Fa
             'scene': str(scene)[:32],
             'page': page,
             'check_path': bool(check_path),
+            'env_version': env_version,
             'width': width,
         },
         timeout=15,

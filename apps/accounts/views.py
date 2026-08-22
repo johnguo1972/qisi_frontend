@@ -296,6 +296,7 @@ def wechat_web_binding_qrcode(request):
             page='pages/auth/web-binding',
             width=430,
             check_path=True,
+            env_version=getattr(settings, 'WECHAT_MP_ENV_VERSION', 'release'),
         )
     except RuntimeError:
         return binding_error(
