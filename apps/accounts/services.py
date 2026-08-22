@@ -114,7 +114,11 @@ def login_with_trusted_mobile(
             mobile, initial_role=active_role, grant_source="wechat_web"
         )
     else:
-        if not has_user_role(user, active_role):
+        if active_role == "parent":
+            user = ensure_parent_role_for_login(user)
+        elif active_role == "student" and has_user_role(user, "teacher"):
+            user = ensure_student_role_for_login(user)
+        elif not has_user_role(user, active_role):
             raise RoleNotGranted(active_role)
         user, _ = get_or_create_user(
             mobile, initial_role=active_role, grant_source="wechat_web"
@@ -139,6 +143,30 @@ def ensure_parent_role_for_login(user: UserAccount) -> UserAccount:
         return locked_user
 
     grant_user_role(locked_user, "parent", grant_source="self_login")
+    return locked_user
+
+
+@transaction.atomic
+def ensure_student_role_for_login(user: UserAccount) -> UserAccount:
+    """Allow an authenticated teacher to self-enable the student role.
+
+    The role is opened only after the user explicitly selects the student
+    login entry.  Existing inactive student grants are not restored, which
+    keeps role revocation effective.
+    """
+    locked_user = UserAccount.objects.select_for_update().get(pk=user.pk)
+    if locked_user.status != "active" or not has_user_role(locked_user, "teacher"):
+        raise RoleNotGranted("student")
+
+    grant = UserRole.objects.select_for_update().filter(
+        user=locked_user, role="student"
+    ).first()
+    if grant is not None:
+        if grant.status != "active":
+            raise RoleNotGranted("student")
+        return locked_user
+
+    grant_user_role(locked_user, "student", grant_source="self_login")
     return locked_user
 
 

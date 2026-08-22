@@ -24,6 +24,7 @@ from apps.accounts.serializers import serialize_user_session
 from apps.accounts.services import (
     RoleNotGranted,
     ensure_parent_role_for_login,
+    ensure_student_role_for_login,
     generate_tokens,
     get_or_create_user,
     verify_code,
@@ -250,6 +251,11 @@ def wechat_login(request):
                 user = ensure_parent_role_for_login(user)
             except RoleNotGranted:
                 return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
+        elif active_role == 'student' and has_user_role(user, 'teacher'):
+            try:
+                user = ensure_student_role_for_login(user)
+            except RoleNotGranted:
+                return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
         elif not has_user_role(user, active_role):
             return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
         return Response({'code': 0, 'message': '登录成功', 'data': {**generate_tokens(user, active_role), 'user': serialize_user_session(user, active_role)}, 'trace_id': trace_id()})
@@ -279,6 +285,11 @@ def wechat_bind(request):
         if active_role == 'parent':
             try:
                 existing_user = ensure_parent_role_for_login(existing_user)
+            except RoleNotGranted:
+                return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
+        elif active_role == 'student' and has_user_role(existing_user, 'teacher'):
+            try:
+                existing_user = ensure_student_role_for_login(existing_user)
             except RoleNotGranted:
                 return Response({'code': 'ROLE_NOT_GRANTED', 'message': 'Role is not granted', 'data': None, 'trace_id': trace_id()}, status=403)
         elif not has_user_role(existing_user, active_role):

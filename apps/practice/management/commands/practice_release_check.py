@@ -41,8 +41,6 @@ class Command(BaseCommand):
         feature = practice_feature_state()
         if not feature['enabled']:
             warnings.append('精练 feature flag 当前关闭（可作为回滚状态）')
-        elif not settings.DEBUG and not feature['beta_allowlist_configured']:
-            errors.append('非 DEBUG 环境开启精练时必须配置 PRACTICE_BETA_MOBILES')
 
         media_root = Path(settings.MEDIA_ROOT)
         if not media_root.exists():

@@ -221,6 +221,51 @@ def test_existing_student_can_self_create_parent_role_on_sms_login(api_client, s
 
 
 @pytest.mark.django_db
+def test_existing_teacher_can_self_create_student_role_on_sms_login(api_client, teacher_user, sms_code):
+    grant_user_role(teacher_user, "teacher")
+    _set_sms_code(teacher_user, sms_code)
+
+    response = api_client.post(
+        "/api/v1/auth/login",
+        {
+            "mobile": teacher_user.mobile,
+            "verify_code": sms_code,
+            "role_type": "student",
+        },
+    )
+
+    teacher_user.refresh_from_db()
+    assert response.status_code == 200
+    assert teacher_user.role_type == "teacher"
+    assert get_user_roles(teacher_user) == ["teacher", "student"]
+    assert UserRole.objects.filter(
+        user=teacher_user, role="student", status="active", grant_source="self_login"
+    ).exists()
+    assert response.data["data"]["user"]["active_role"] == "student"
+
+
+@pytest.mark.django_db
+def test_existing_teacher_can_self_create_parent_role_on_sms_login(api_client, teacher_user, sms_code):
+    grant_user_role(teacher_user, "teacher")
+    _set_sms_code(teacher_user, sms_code)
+
+    response = api_client.post(
+        "/api/v1/auth/login",
+        {
+            "mobile": teacher_user.mobile,
+            "verify_code": sms_code,
+            "role_type": "parent",
+        },
+    )
+
+    teacher_user.refresh_from_db()
+    assert response.status_code == 200
+    assert teacher_user.role_type == "teacher"
+    assert get_user_roles(teacher_user) == ["teacher", "parent"]
+    assert response.data["data"]["user"]["active_role"] == "parent"
+
+
+@pytest.mark.django_db
 def test_revoked_parent_role_is_not_restored_by_sms_login(api_client, student_user, sms_code):
     grant_user_role(student_user, "student")
     grant_user_role(student_user, "parent")
@@ -239,6 +284,27 @@ def test_revoked_parent_role_is_not_restored_by_sms_login(api_client, student_us
     assert response.status_code == 403
     assert response.data["code"] == "ROLE_NOT_GRANTED"
     assert not has_user_role(student_user, "parent")
+
+
+@pytest.mark.django_db
+def test_revoked_student_role_is_not_restored_for_teacher_on_sms_login(api_client, teacher_user, sms_code):
+    grant_user_role(teacher_user, "teacher")
+    grant_user_role(teacher_user, "student")
+    revoke_user_role(teacher_user, "student")
+    _set_sms_code(teacher_user, sms_code)
+
+    response = api_client.post(
+        "/api/v1/auth/login",
+        {
+            "mobile": teacher_user.mobile,
+            "verify_code": sms_code,
+            "role_type": "student",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.data["code"] == "ROLE_NOT_GRANTED"
+    assert not has_user_role(teacher_user, "student")
 
 
 @pytest.mark.django_db
