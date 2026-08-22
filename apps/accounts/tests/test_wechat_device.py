@@ -5,7 +5,7 @@ import pytest
 
 from apps.accounts import wechat_device
 from apps.accounts.models import UserAccount, WechatIdentity
-from apps.accounts.roles import grant_user_role
+from apps.accounts.roles import grant_user_role, revoke_user_role
 
 
 class ClockedCache:
@@ -246,6 +246,53 @@ def test_invalid_completion_request_does_not_consume_the_completion_ticket(clock
     assert invalid_role.value.code == "DEVICE_TICKET_INVALID"
     assert invalid_browser.value.code == "DEVICE_TICKET_INVALID"
     assert user.mobile == "13900009004"
+    assert tokens["access_token"]
+
+
+def _bound_ticket(mobile, openid):
+    session = wechat_device.create_device_login_session("student", "browser-a")
+    bridge = wechat_device.get_or_create_device_bridge(session.value, "browser-a")
+    pending = wechat_device.confirm_device_identity(
+        bridge,
+        wechat_device.MiniProgramIdentity("wx-test", openid, ""),
+    )
+    wechat_device.bind_device_identity_phone(pending.phone_binding_token, mobile)
+    ticket = wechat_device.get_device_login_status(session.value, "browser-a").ticket
+    user = UserAccount.objects.get(mobile=mobile)
+    return user, ticket
+
+
+@pytest.mark.django_db
+def test_disabled_account_does_not_consume_ticket_before_reactivation(clock):
+    """Consuming before active-state validation locks out a restored account."""
+    user, ticket = _bound_ticket("13900009005", "disabled-openid")
+    user.status = "inactive"
+    user.save(update_fields=["status"])
+
+    with pytest.raises(wechat_device.DeviceLoginError) as disabled:
+        wechat_device.complete_device_login(ticket, "browser-a", "student")
+    user.status = "active"
+    user.save(update_fields=["status"])
+    completed, tokens = wechat_device.complete_device_login(ticket, "browser-a", "student")
+
+    assert disabled.value.code == "DEVICE_ROLE_CONFLICT"
+    assert completed.id == user.id
+    assert tokens["access_token"]
+
+
+@pytest.mark.django_db
+def test_revoked_role_does_not_consume_ticket_before_regrant(clock):
+    """Consuming before role validation locks out a role restored by an admin."""
+    user, ticket = _bound_ticket("13900009006", "revoked-role-openid")
+    revoke_user_role(user, "student")
+
+    with pytest.raises(wechat_device.DeviceLoginError) as revoked:
+        wechat_device.complete_device_login(ticket, "browser-a", "student")
+    grant_user_role(user, "student")
+    completed, tokens = wechat_device.complete_device_login(ticket, "browser-a", "student")
+
+    assert revoked.value.code == "DEVICE_ROLE_CONFLICT"
+    assert completed.id == user.id
     assert tokens["access_token"]
 
 

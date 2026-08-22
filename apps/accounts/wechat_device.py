@@ -12,8 +12,13 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .models import UserAccount, WechatIdentity
-from .roles import VALID_ROLES, has_user_role
-from .services import RoleNotGranted, generate_tokens, login_with_trusted_mobile
+from .roles import VALID_ROLES
+from .services import (
+    RoleNotGranted,
+    generate_tokens,
+    login_with_trusted_mobile,
+    validate_active_role,
+)
 
 
 DEVICE_LOGIN_TTL_SECONDS = 300
@@ -213,6 +218,7 @@ def complete_device_login(
             user = UserAccount.objects.get(pk=ticket_payload.get("user_id"))
         except (UserAccount.DoesNotExist, TypeError, ValueError, DeviceLoginError):
             raise DeviceLoginError("DEVICE_TICKET_INVALID") from None
+        _require_user_role(user, requested_role)
         _consume_ticket(ticket)
         try:
             return user, generate_tokens(user, requested_role)
@@ -487,7 +493,9 @@ def _validate_identity(identity: MiniProgramIdentity) -> None:
 
 
 def _require_user_role(user: UserAccount, requested_role: str) -> None:
-    if user.status != "active" or not has_user_role(user, requested_role):
+    try:
+        validate_active_role(user, requested_role)
+    except RoleNotGranted:
         raise DeviceLoginError("DEVICE_ROLE_CONFLICT")
 
 
