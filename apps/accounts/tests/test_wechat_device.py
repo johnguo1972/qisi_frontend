@@ -447,11 +447,28 @@ def test_default_wechat_opener_disables_each_sensitive_environment_proxy(
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv(proxy_variable, "http://127.0.0.1:9")
+    original_build_opener = wechat_device.build_opener
+    captured_handlers = []
+
+    def capture_then_build(*handlers):
+        captured_handlers.extend(handlers)
+        return original_build_opener(*handlers)
+
+    monkeypatch.setattr(wechat_device, "build_opener", capture_then_build)
 
     client = wechat_device._WechatHttpClient()
+    proxy_handlers = [
+        handler for handler in captured_handlers if isinstance(handler, ProxyHandler)
+    ]
 
-    assert isinstance(client._proxy_handler, ProxyHandler)
-    assert client._proxy_handler.proxies == {}
+    assert not hasattr(client, "_proxy_handler")
+    assert len(proxy_handlers) == 1
+    assert proxy_handlers[0].proxies == {}
+    assert any(
+        isinstance(handler, wechat_device._NoRedirectHandler)
+        for handler in captured_handlers
+    )
+    assert callable(client._opener.open)
 
 
 def test_default_wechat_transport_ignores_environment_proxies(settings, monkeypatch):

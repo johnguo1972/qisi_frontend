@@ -87,8 +87,7 @@ class _WechatHttpClient:
     """Minimal stdlib transport that never emits credential-bearing URLs to logs."""
 
     def __init__(self):
-        self._proxy_handler = ProxyHandler({})
-        self._opener = build_opener(self._proxy_handler, _NoRedirectHandler())
+        self._opener = build_opener(ProxyHandler({}), _NoRedirectHandler())
 
     def get_json(
         self, url: str, *, params: dict[str, str], timeout: float
