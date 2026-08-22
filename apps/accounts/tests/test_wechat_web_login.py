@@ -293,7 +293,10 @@ def test_binding_qrcode_is_only_available_to_the_originating_browser(
     assert accepted.status_code == 200
     assert accepted["Content-Type"] == "image/png"
     assert accepted.content == b"png-data"
-    assert qrcode_options["check_path"] is True
+    # WeChat's check_path validation only accepts pages already present in
+    # the released package.  Trial-only pages must therefore skip that
+    # release-path validation while still targeting env_version=trial.
+    assert qrcode_options["check_path"] is False
     assert qrcode_options["env_version"] == "trial"
 
 

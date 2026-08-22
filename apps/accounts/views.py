@@ -291,12 +291,16 @@ def wechat_web_binding_qrcode(request):
         # sessions without exposing a ticket in the QR image response.
         get_web_binding_status(web_session_id, browser_session_id(request))
         bridge_code = create_web_binding_bridge_code(web_session_id)
+        env_version = getattr(settings, 'WECHAT_MP_ENV_VERSION', 'release')
         content = wxacode_png(
             scene=bridge_code,
             page='pages/auth/web-binding',
             width=430,
-            check_path=True,
-            env_version=getattr(settings, 'WECHAT_MP_ENV_VERSION', 'release'),
+            # WeChat only validates check_path against pages already present
+            # in the released package. Trial/develop pages may legitimately
+            # exist before release, so the environment selects that policy.
+            check_path=env_version == 'release',
+            env_version=env_version,
         )
     except RuntimeError:
         return binding_error(
