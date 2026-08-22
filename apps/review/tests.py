@@ -1006,6 +1006,38 @@ class AIQueueSchedulerTest(TestCase):
             AIProcessingJobItem.objects.filter(job=cancelled, status='queued').count(), 1,
         )
 
+    def test_reserve_skips_stale_terminal_jobs_and_reaches_a_later_queued_job(self):
+        """Stale job rows must never consume the three-job dispatch scan window."""
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.ai_queue import reserve_queued_item_ids
+
+        teacher = UserAccount.objects.create(
+            mobile='13900009016', display_name='Stale Queue Teacher', role_type='teacher',
+        )
+        paper = ExamPaper.objects.create(title='Stale Queue Paper', subject='physics')
+        questions = [
+            ExamQuestion.objects.create(
+                paper=paper, stem=f'Stale queue {index}', answer='A', question_type='single_choice',
+            )
+            for index in range(4)
+        ]
+        for question in questions[:3]:
+            stale = AIProcessingJob.create_for_questions(
+                creator=teacher, question_ids=[question.id], source='batch', model=None,
+            ).job
+            stale_item = stale.items.get()
+            stale_item.status = AIProcessingJobItem.Status.SUCCEEDED
+            stale_item.save(update_fields=['status'])
+        target = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[questions[3].id], source='batch', model=None,
+        ).job
+
+        with patch('apps.review.ai_queue.RedisLeasePool.acquire', return_value=True):
+            reserved = reserve_queued_item_ids(limit=1)
+
+        self.assertEqual(reserved, [str(target.items.get().id)])
+        self.assertEqual(target.items.get().status, AIProcessingJobItem.Status.DISPATCHED)
+
 
 class AIQueueExecutionTaskTest(TestCase):
     def test_execute_item_persists_completed_steps_before_full_pipeline_returns(self):
@@ -1077,6 +1109,32 @@ class AIQueueExecutionTaskTest(TestCase):
         self.assertEqual(result['status'], 'complete')
         self.assertEqual(item.status, AIProcessingJobItem.Status.SUCCEEDED)
         release.assert_called_once_with(str(item.id))
+
+    def test_execute_last_item_marks_its_job_completed(self):
+        """A terminal last item must persist the parent job terminal state."""
+        from apps.review.models import AIProcessingJob, AIProcessingJobItem
+        from apps.review.tasks import execute_ai_job_item
+
+        teacher = UserAccount.objects.create(mobile='13900009017', display_name='Job Completion Teacher', role_type='teacher')
+        paper = ExamPaper.objects.create(title='Job Completion Paper', subject='physics')
+        question = ExamQuestion.objects.create(paper=paper, stem='Job completion stem', answer='A', question_type='single_choice')
+        job = AIProcessingJob.create_for_questions(
+            creator=teacher, question_ids=[question.id], source='batch', model=None,
+        ).job
+        item = job.items.get()
+        item.status = AIProcessingJobItem.Status.DISPATCHED
+        item.save(update_fields=['status'])
+
+        with (
+            patch('apps.review.tasks.AIReviewService.process_question_full_v2', return_value={'errors': {}}),
+            patch('apps.review.tasks.AIReviewService.save_results_to_question'),
+            patch('apps.review.ai_queue.RedisLeasePool.release', return_value=True),
+        ):
+            execute_ai_job_item.run(str(item.id))
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, AIProcessingJob.Status.COMPLETED)
+        self.assertIsNotNone(job.finished_at)
 
     def test_execute_item_records_a_safe_failure_category_for_unhandled_errors(self):
         """Operational jobs retain the reason category instead of opaque processing_failed."""
