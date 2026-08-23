@@ -13,5 +13,8 @@ export function normalizeRoles(roles: unknown, fallbackRole: unknown = 'teacher'
 }
 
 export function normalizeMember<T extends Record<string, any>>(member: T): T & { roles: NormalizedInstitutionRole[] } {
-  return { ...member, roles: normalizeRoles(member.roles, member.role) }
+  const userSubjects = Array.isArray(member.user_subjects)
+    ? member.user_subjects.filter((subject): subject is string => typeof subject === 'string' && subject.length > 0)
+    : (typeof member.user_subject === 'string' && member.user_subject.length > 0 ? [member.user_subject] : [])
+  return { ...member, roles: normalizeRoles(member.roles, member.role), user_subjects: userSubjects }
 }

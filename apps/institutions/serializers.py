@@ -13,6 +13,25 @@ from apps.institutions.models import (
 )
 
 
+SUBJECT_CODE_ALIASES = {
+    'math': 'math', 'physics': 'physics', 'chinese': 'chinese',
+    'english': 'english', 'chemistry': 'chemistry', 'biology': 'biology',
+    'geography': 'geography', 'history': 'history',
+    '数学': 'math', '物理': 'physics', '语文': 'chinese', '英语': 'english',
+    '化学': 'chemistry', '生物': 'biology', '地理': 'geography', '历史': 'history',
+}
+
+
+def normalize_subject_codes(value):
+    raw_values = value if isinstance(value, list) else [value]
+    normalized = []
+    for raw in raw_values:
+        subject = SUBJECT_CODE_ALIASES.get(str(raw or '').strip(), '')
+        if subject and subject not in normalized:
+            normalized.append(subject)
+    return normalized
+
+
 # ──────────────────────────────────────────────
 # Institution serializers
 # ──────────────────────────────────────────────
@@ -77,12 +96,13 @@ class InstitutionMemberSerializer(serializers.ModelSerializer):
     user_mobile = serializers.SerializerMethodField()
     user_role_type = serializers.SerializerMethodField()
     user_subject = serializers.SerializerMethodField()
+    user_subjects = serializers.SerializerMethodField()
     stages = serializers.SerializerMethodField()
 
     class Meta:
         model = InstitutionMember
         fields = ['id', 'institution', 'user', 'user_id', 'role', 'roles', 'status',
-                  'joined_at', 'user_name', 'user_mobile', 'user_role_type', 'user_subject', 'stages']
+                  'joined_at', 'user_name', 'user_mobile', 'user_role_type', 'user_subject', 'user_subjects', 'stages']
 
     def get_roles(self, obj):
         roles_by_user = self.context.get('roles_by_user', {})
@@ -107,6 +127,11 @@ class InstitutionMemberSerializer(serializers.ModelSerializer):
     def get_user_subject(self, obj):
         return obj.user.subject if obj.user else None
 
+    def get_user_subjects(self, obj):
+        if not obj.user:
+            return []
+        return normalize_subject_codes(obj.user.subjects or obj.user.subject)
+
     def get_stages(self, obj):
         return obj.user.stages if obj.user and obj.user.stages else []
 
@@ -116,6 +141,7 @@ class AddMemberSerializer(serializers.Serializer):
     display_name = serializers.CharField(max_length=64, required=False)
     role = serializers.ChoiceField(choices=['admin', 'teacher'])
     subject = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    subjects = serializers.ListField(child=serializers.CharField(max_length=20), required=False)
     stages = serializers.ListField(child=serializers.CharField(), required=False, default=list)
 
     @transaction.atomic
@@ -125,6 +151,7 @@ class AddMemberSerializer(serializers.Serializer):
         display_name = validated_data.get('display_name', '')
         role = validated_data['role']
         subject = validated_data.get('subject', '')
+        subjects = normalize_subject_codes(validated_data.get('subjects', subject))
         stages = validated_data.get('stages', [])
 
         # Get or create the UserAccount
@@ -133,15 +160,24 @@ class AddMemberSerializer(serializers.Serializer):
             defaults={
                 'display_name': display_name or mobile,
                 'role_type': role,
-                'subject': subject if subject else None,
+                'subject': subjects[0] if subjects else None,
+                'subjects': subjects or None,
                 'stages': stages if stages else None,
             },
         )
 
         # Update stages if user already existed
-        if not created and stages:
-            user.stages = stages
-            user.save(update_fields=['stages'])
+        if not created:
+            update_fields = []
+            if stages:
+                user.stages = stages
+                update_fields.append('stages')
+            if subjects:
+                user.subjects = subjects
+                user.subject = subjects[0]
+                update_fields.extend(['subjects', 'subject'])
+            if update_fields:
+                user.save(update_fields=update_fields)
 
         member, _ = InstitutionMember.objects.update_or_create(
             institution=institution,
