@@ -4,6 +4,20 @@ from .models import UserAccount
 from .roles import VALID_ROLES, get_user_roles
 
 
+def normalize_teacher_subjects(user) -> list[str]:
+    """Return configured teacher subjects, preserving legacy single-subject users."""
+    raw_subjects = getattr(user, 'subjects', None)
+    if isinstance(raw_subjects, list):
+        normalized = []
+        for value in raw_subjects:
+            subject = str(value or '').strip()
+            if subject and subject not in normalized:
+                normalized.append(subject)
+        if normalized:
+            return normalized
+    return [user.subject] if user.subject else []
+
+
 class LoginSerializer(serializers.Serializer):
     mobile = serializers.CharField(max_length=20)
     verify_code = serializers.CharField(max_length=6)
@@ -12,7 +26,7 @@ class LoginSerializer(serializers.Serializer):
 class ProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserAccount
-        fields = ['id', 'role_type', 'login_name', 'mobile', 'display_name', 'avatar_url', 'status', 'subject', 'stages', 'grade_level']
+        fields = ['id', 'role_type', 'login_name', 'mobile', 'display_name', 'avatar_url', 'status', 'subject', 'subjects', 'stages', 'grade_level']
 
 
 class ProfileUpdateSerializer(serializers.Serializer):
@@ -62,6 +76,7 @@ def serialize_user_session(user, active_role):
     """Serialize account data with session-scoped role compatibility fields."""
     data = ProfileSerializer(user).data
     data.update({
+        'subjects': normalize_teacher_subjects(user),
         'roles': get_user_roles(user),
         'active_role': active_role,
         'role_type': active_role,
