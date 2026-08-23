@@ -23,12 +23,9 @@ import { persistSession, routeForRole, type AppRole } from '@/utils/roles'
 const userStore = useUserStore()
 const switching = ref(false)
 const userInfo = computed(() => userStore.userInfo || uni.getStorageSync('userInfo') || {})
-const roles = computed<AppRole[]>(() => {
-  const granted = Array.isArray(userInfo.value.roles) ? userInfo.value.roles : []
-  // 学生兼家长账号在用户端只显示学生和家长入口，不显示教师入口。
-  const isLearnerAccount = userInfo.value.role_type === 'student' || userInfo.value.role_type === 'parent'
-  return (isLearnerAccount ? granted.filter((role: AppRole) => role !== 'teacher') : granted) as AppRole[]
-})
+const roles = computed<AppRole[]>(() =>
+  Array.isArray(userInfo.value.roles) ? userInfo.value.roles : []
+)
 
 function roleLabel(role: AppRole): string {
   return { admin: '管理员', teacher: '教师', parent: '家长', student: '学生' }[role]

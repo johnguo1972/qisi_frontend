@@ -78,6 +78,13 @@
               >
                 {{ wechatWebLoading ? '正在创建扫码会话...' : '开始微信扫码' }}
               </button>
+              <view class="wechat-web-process-notice">
+                <text class="wechat-web-process-title">微信扫码登录说明</text>
+                <text>1. 点击“开始微信扫码”，使用微信完成网页授权。</text>
+                <text>2. 首次使用或尚未绑定时，请再扫描页面二维码。</text>
+                <text>3. 在小程序点击“授权手机号并登录”，使用平台账号手机号完成绑定。</text>
+                <text class="wechat-web-process-tip">已绑定过的微信会自动登录，无需重复绑定。</text>
+              </view>
               <view v-if="false" class="wechat-web-qr">
                 <view v-if="false"
                   class="wechat-web-qr-frame"
@@ -95,7 +102,14 @@
                 </view>
                 <text class="remember-text">手机号绑定授权确认</text>
               </view>
-              <text v-if="wechatWebSession" class="wechat-web-status">{{ wechatWebStatusText }}</text>
+              <view
+                v-if="wechatWebSession"
+                class="wechat-web-status-card"
+                :class="`is-${wechatWebStatusKind}`"
+              >
+                <text class="wechat-web-status-title">{{ wechatWebStatusTitle }}</text>
+                <text class="wechat-web-status">{{ wechatWebStatusText }}</text>
+              </view>
               <view v-if="wechatWebSession && !wechatWebBindingComplete" class="wechat-web-binding-guide">
                 <text>请在微信小程序完成手机号授权</text>
                 <text class="wechat-web-guide-desc">完成后此页面会自动继续登录，请勿关闭页面。</text>
@@ -149,6 +163,13 @@ const wechatWebBindingComplete = ref(false)
 const wechatWebCompleting = ref(false)
 const wechatWebPhoneAuthorizationConfirmed = ref(false)
 const wechatWebStatusText = ref('请使用微信扫描二维码')
+const wechatWebStatusKind = ref<'info' | 'warning' | 'error' | 'success'>('info')
+const wechatWebStatusTitle = computed(() => {
+  if (wechatWebStatusKind.value === 'success') return '绑定成功'
+  if (wechatWebStatusKind.value === 'error') return '微信扫码登录失败'
+  if (wechatWebStatusKind.value === 'warning') return '需要完成微信绑定'
+  return '等待微信扫码'
+})
 let wechatWebPollTimer: ReturnType<typeof setInterval> | undefined
 const wechatWebBindingQrUrl = ref('')
 let wechatWebBindingQrObjectUrl = ''
@@ -199,6 +220,7 @@ function resetWechatWebSession() {
   wechatWebBindingComplete.value = false
   wechatWebCompleting.value = false
   wechatWebStatusText.value = '请使用微信扫描二维码'
+  wechatWebStatusKind.value = 'info'
 }
 
 function restoreWechatWebSessionFromCallback() {
@@ -209,8 +231,10 @@ function restoreWechatWebSessionFromCallback() {
   loginMode.value = 'wechat'
   wechatWebPhoneAuthorizationConfirmed.value = true
   wechatWebSession.value = { web_session_id: webSessionId, authorization_url: '', expires_in: 0 }
-  wechatWebStatusText.value = '已完成扫码，等待小程序手机号授权'
+  wechatWebStatusKind.value = 'warning'
+  wechatWebStatusText.value = '网页扫码已成功，但当前微信尚未绑定平台账号。请扫描下方二维码，在小程序中授权手机号。'
   void loadWechatWebBindingQr().catch((error: any) => {
+    wechatWebStatusKind.value = 'error'
     wechatWebStatusText.value = error?.message || '小程序授权二维码加载失败，请重新扫码'
   })
   void pollWechatWebBindingStatus()
@@ -238,12 +262,15 @@ function switchRole(role: string) {
 async function completeWechatWebLogin(ticket: string) {
   stopWechatWebPolling()
   wechatWebCompleting.value = true
+  wechatWebStatusKind.value = 'info'
   wechatWebStatusText.value = '正在完成登录...'
   const res = await wechatWebApi.complete(ticket, activeTab.value)
   if (res.code !== 0 || !res.data) {
     throw new Error(res.message || '微信扫码登录失败')
   }
   wechatWebBindingComplete.value = true
+  wechatWebStatusKind.value = 'success'
+  wechatWebStatusText.value = '微信已绑定，正在进入系统首页...'
   persistSession(res.data)
   userStore.setUserInfo(res.data.user)
   uni.reLaunch({ url: routeForRole(res.data.user.active_role as AppRole) })
@@ -253,14 +280,21 @@ async function pollWechatWebBindingStatus(): Promise<boolean> {
   if (!wechatWebSession.value || wechatWebCompleting.value) return false
   try {
     const res = await wechatWebApi.bindingStatus(wechatWebSession.value.web_session_id)
-    if (res.code !== 0 || !res.data) return false
+    if (res.code !== 0 || !res.data) {
+      wechatWebStatusKind.value = 'error'
+      wechatWebStatusText.value = res.message || '绑定状态异常，请返回后重新扫码。'
+      return false
+    }
     if (res.data.bound && res.data.ticket) {
       await completeWechatWebLogin(res.data.ticket)
       return true
     }
-    wechatWebStatusText.value = '扫码后，请在小程序完成授权'
+    wechatWebStatusKind.value = 'warning'
+    wechatWebStatusText.value = '网页扫码已成功，但尚未完成绑定。请扫描下方二维码，在小程序中授权手机号。'
   } catch (e) {
     console.error('查询微信绑定状态失败:', e)
+    wechatWebStatusKind.value = 'error'
+    wechatWebStatusText.value = '暂时无法查询绑定状态，请检查网络后重试。'
   }
   return false
 }
@@ -273,6 +307,7 @@ async function startWechatWebLogin() {
   }
   resetWechatWebSession()
   wechatWebLoading.value = true
+  wechatWebStatusKind.value = 'info'
   wechatWebStatusText.value = '正在创建扫码会话...'
   try {
     const res = await wechatWebApi.createSession(
@@ -289,13 +324,15 @@ async function startWechatWebLogin() {
       window.location.assign(res.data.authorization_url)
       return
     }
-    wechatWebStatusText.value = '请使用微信扫描二维码'
+    wechatWebStatusKind.value = 'info'
+    wechatWebStatusText.value = '请使用微信扫描二维码完成网页授权。'
     const loginCompleted = await pollWechatWebBindingStatus()
     if (!loginCompleted) {
       wechatWebPollTimer = setInterval(() => { void pollWechatWebBindingStatus() }, 3000)
     }
   } catch (e: any) {
     console.error('创建微信扫码会话失败:', e)
+    wechatWebStatusKind.value = 'error'
     wechatWebStatusText.value = '二维码创建失败，请重试'
     uni.showToast({ title: e?.message || '创建微信扫码会话失败', icon: 'none' })
   } finally {
@@ -626,10 +663,59 @@ input:focus {
 .wechat-web-login {
   text-align: center;
 }
-.wechat-web-status, .wechat-web-guide-desc {
+.wechat-web-process-notice {
+  margin-top: 18rpx;
+  padding: 18rpx 20rpx;
+  border: 1rpx solid #dbeafe;
+  border-radius: 8rpx;
+  background: #eff6ff;
+  color: #374151;
+  text-align: left;
+  font-size: 22rpx;
+  line-height: 1.7;
+}
+.wechat-web-process-notice text {
   display: block;
+}
+.wechat-web-process-title {
+  margin-bottom: 4rpx;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+.wechat-web-process-tip {
+  margin-top: 4rpx;
+  color: #6b7280;
+}
+.wechat-web-status-card {
+  margin-top: 16rpx;
+  padding: 16rpx 20rpx;
+  border-radius: 8rpx;
+  text-align: left;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.wechat-web-status-card.is-warning {
+  background: #fff7e6;
+  color: #8a5a00;
+}
+.wechat-web-status-card.is-error {
+  background: #fff1f2;
+  color: #b42318;
+}
+.wechat-web-status-card.is-success {
+  background: #ecfdf3;
+  color: #087443;
+}
+.wechat-web-status-title,
+.wechat-web-status {
+  display: block;
+}
+.wechat-web-status-title {
+  font-size: 24rpx;
+  font-weight: 600;
+}
+.wechat-web-status, .wechat-web-guide-desc {
   margin-top: 10rpx;
-  color: #888;
   font-size: 22rpx;
 }
 .wechat-web-start {

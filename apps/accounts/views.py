@@ -25,7 +25,7 @@ from .serializers import (
 )
 from .services import (
     verify_code, get_or_create_user, generate_tokens, ensure_parent_role_for_login,
-    generate_verify_code, send_sms_code, ensure_fixed_test_account,
+    ensure_student_role_for_login, generate_verify_code, send_sms_code, ensure_fixed_test_account,
     is_fixed_test_account_code, RoleNotGranted,
 )
 from .wechat_web import (
@@ -127,6 +127,13 @@ def login(request):
             if active_role == 'parent':
                 try:
                     user = ensure_parent_role_for_login(user)
+                except RoleNotGranted:
+                    return role_error(
+                        'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
+                    )
+            elif active_role == 'student' and has_user_role(user, 'teacher'):
+                try:
+                    user = ensure_student_role_for_login(user)
                 except RoleNotGranted:
                     return role_error(
                         'ROLE_NOT_GRANTED', 'Role is not granted', status.HTTP_403_FORBIDDEN
