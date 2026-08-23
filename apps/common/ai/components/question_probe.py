@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from apps.common.ai.schemas import (
     KnowledgeAnalysisResponse,
     QuestionProbeResponse,
@@ -100,6 +102,51 @@ def _normalize_scalar_alias_pair(
     result[legacy] = selected
 
 
+def _enum_token(value: object) -> str:
+    return str(_normalize_scalar_token(value) or "").lower()
+
+
+def _normalize_probe_knowledge_points(value: object) -> list[str]:
+    if isinstance(value, str):
+        values = re.split(r"[,，;；、\n]+", value)
+    elif isinstance(value, (list, tuple)):
+        values = value
+    else:
+        return []
+
+    normalized: list[str] = []
+    for item in values:
+        if isinstance(item, dict):
+            item = next(
+                (
+                    item.get(key)
+                    for key in ("module", "name", "knowledge_point", "title")
+                    if _is_nonempty(item.get(key))
+                ),
+                "",
+            )
+        token = str(_normalize_scalar_token(item) or "")
+        normalized.append(token)
+    return normalized
+
+
+def _normalize_probe_bool(value: object) -> object:
+    if isinstance(value, bool):
+        return value
+    token = _enum_token(value)
+    if token in {"true", "1", "yes", "y", "是", "多问", "多小题"}:
+        return True
+    if token in {"false", "0", "no", "n", "否", "单题"}:
+        return False
+    return value
+
+
+def _normalize_probe_score(value: object) -> object:
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return value
+
+
 class QuestionProbeComponent(QuestionAIComponent):
     task_key = "question_probe"
     response_schema = QuestionProbeResponse
@@ -113,6 +160,12 @@ class QuestionProbeComponent(QuestionAIComponent):
 
     def normalize(self, result: dict) -> dict:
         normalized = dict(result)
+        subject = _enum_token(normalized.get("subject"))
+        normalized["subject"] = {
+            "数学": "math",
+            "數學": "math",
+            "物理": "physics",
+        }.get(subject, subject)
         normalized.setdefault("subject", "")
         normalized.setdefault("grade", "")
         normalized.setdefault("semester", "")
@@ -126,7 +179,63 @@ class QuestionProbeComponent(QuestionAIComponent):
         _normalize_alias_pair(
             normalized, "knowledge_points", "topic_tags_top3", []
         )
+        normalized["knowledge_points"] = _normalize_probe_knowledge_points(
+            normalized["knowledge_points"]
+        )
+        normalized["topic_tags_top3"] = normalized["knowledge_points"]
+
+        difficulty = normalized.get("difficulty")
+        if (
+            not isinstance(difficulty, bool)
+            and isinstance(difficulty, (int, float))
+            and int(difficulty) == difficulty
+        ):
+            difficulty = f"L{int(difficulty)}"
+        elif isinstance(difficulty, str):
+            token = difficulty.strip().upper()
+            difficulty = f"L{token}" if token.isdigit() else token
+        normalized["difficulty"] = difficulty
+        normalized["difficulty_est"] = difficulty
+
+        normalized["multi_part"] = _normalize_probe_bool(
+            normalized.get("multi_part")
+        )
+        proof_or_calc = _enum_token(normalized.get("proof_or_calc"))
+        normalized["proof_or_calc"] = {
+            "计算": "calc",
+            "計算": "calc",
+            "calculation": "calc",
+            "证明": "proof",
+            "證明": "proof",
+        }.get(proof_or_calc, proof_or_calc)
+        normalized["visual_risk_score"] = _normalize_probe_score(
+            normalized.get("visual_risk_score")
+        )
+        normalized["reasoning_risk_score"] = _normalize_probe_score(
+            normalized.get("reasoning_risk_score")
+        )
+        normalized["recommended_route"] = str(
+            normalized.get("recommended_route") or ""
+        ).strip().upper()
         return normalized
+
+    def response_correction_messages(
+        self,
+        _question: QuestionInput,
+        *,
+        system: str,
+        user: str,
+        error,
+    ) -> tuple[str, str]:
+        correction = (
+            "\n\nSTRICT_SCHEMA_CORRECTION: 上一次响应无法通过结构校验。"
+            "请只返回一个 JSON 对象；不得使用 Markdown。subject 只能是 math/physics；"
+            "difficulty 只能是 L1-L5；knowledge_points 必须是 1-5 个非空字符串；"
+            "multi_part 必须是布尔值；proof_or_calc 只能是 proof/calc；"
+            "两个 risk_score 必须是 0-100 的整数；recommended_route 只能是 "
+            "VISION_LIGHT/STANDARD/DEEP；normalized_text 必须为非空字符串。"
+        )
+        return system, user + correction
 
 
 class KnowledgeAnalysisComponent(QuestionAIComponent):

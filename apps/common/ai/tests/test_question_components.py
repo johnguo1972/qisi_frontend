@@ -341,6 +341,21 @@ def test_question_component_raises_after_exhausting_response_contract_retries():
     assert len(client.calls) == 2
 
 
+def test_probe_schema_retry_adds_explicit_correction_contract():
+    client = SequencedAIClient(
+        ["not valid JSON", json.dumps(_valid_probe_payload())]
+    )
+    components = _components()
+
+    result = components.QuestionProbeComponent(
+        client, prompt_registry=RetryPromptRegistry(1)
+    ).run(components.QuestionInput(stem="solve x+1=2"))
+
+    assert result["subject"] == "math"
+    assert client.calls[0]["user"] == "user"
+    assert "STRICT_SCHEMA_CORRECTION" in client.calls[1]["user"]
+
+
 def test_question_component_shares_budget_for_request_error_then_valid_response():
     """Legacy fakes without complete_once still use one combined component budget."""
     client = SequencedAIClient(
@@ -653,6 +668,36 @@ def test_probe_routes_fixed_task_and_normalizes_taxonomy_with_multiple_images():
     assert result["question_type"] == "single_choice"
     assert result["difficulty"] == "L2"
     assert result["knowledge_points"] == ["一元一次方程"]
+
+
+def test_probe_normalizes_common_provider_scalar_and_collection_variants():
+    components = _components()
+    payload = _valid_probe_payload(
+        subject="物理",
+        difficulty=3,
+        knowledge_points=[{"module": "欧姆定律"}, "串联电路"],
+        multi_part="true",
+        proof_or_calc="计算",
+        visual_risk_score="45",
+        reasoning_risk_score="70",
+        recommended_route="deep",
+    )
+    client = RecordingAIClient(
+        {"question_probe": json.dumps(payload, ensure_ascii=False)}
+    )
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="分析电路")
+    )
+
+    assert result["subject"] == "physics"
+    assert result["difficulty"] == "L3"
+    assert result["knowledge_points"] == ["欧姆定律", "串联电路"]
+    assert result["multi_part"] is True
+    assert result["proof_or_calc"] == "calc"
+    assert result["visual_risk_score"] == 45
+    assert result["reasoning_risk_score"] == 70
+    assert result["recommended_route"] == "DEEP"
 
 
 def test_probe_preserves_legacy_aliases_when_provider_returns_canonical_fields():
@@ -1911,6 +1956,57 @@ def test_knowledge_vision_and_verifier_use_their_fixed_configured_tasks():
         "retry_needed": False,
         "retry_reason": "",
     }
+
+
+def test_probe_service_builds_bounded_structured_fallback_when_stem_is_blank():
+    from apps.common.ai_service import AIReviewService
+
+    component = MagicMock()
+    component.run.return_value = _valid_probe_payload()
+    service = AIReviewService(component_factory=MagicMock(return_value=component))
+    question = SimpleNamespace(
+        stem="",
+        raw_text="原始复合题题面",
+        material="阅读材料",
+        options={"A": "选项一"},
+        answer="",
+        solution="",
+        analysis="",
+        question_type="true_false",
+        subject="physics",
+        tables=[{"rows": [["电压", "6V"]]}],
+        subquestions=[{"label": "(1)", "stem": "判断电流是否增大"}],
+    )
+
+    service.probe_and_norm(question, [])
+
+    probe_input = component.run.call_args.args[0]
+    assert "原始复合题题面" in probe_input.stem
+    assert "判断电流是否增大" in probe_input.stem
+    assert "6V" in probe_input.stem
+    assert "physics" in probe_input.stem
+    assert len(probe_input.stem) <= 30000
+
+
+def test_probe_service_preserves_nonblank_stem_without_raw_fallback_noise():
+    from apps.common.ai_service import AIReviewService
+
+    component = MagicMock()
+    component.run.return_value = _valid_probe_payload()
+    service = AIReviewService(component_factory=MagicMock(return_value=component))
+    question = SimpleNamespace(
+        stem="正式题干",
+        raw_text="不应覆盖正式题干",
+        options=None,
+        answer="",
+        solution="",
+        analysis="",
+    )
+
+    service.probe_and_norm(question, [])
+
+    probe_input = component.run.call_args.args[0]
+    assert probe_input.stem == "正式题干"
 
 
 def test_legacy_service_factory_keeps_mode_a_shape_without_own_http_path():

@@ -136,7 +136,17 @@ class QuestionAIComponent(ABC):
                         by_alias=True, exclude_none=True
                     )
                 return self.validate_result(validated_result, question)
-            except (AIRequestError, AIResponseError):
+            except AIResponseError as error:
+                if attempt == retry_count:
+                    raise
+                system, user = self.response_correction_messages(
+                    question,
+                    system=system,
+                    user=user,
+                    error=error,
+                )
+                continue
+            except AIRequestError:
                 if attempt == retry_count:
                     raise
                 continue
@@ -159,6 +169,17 @@ class QuestionAIComponent(ABC):
 
     def normalize(self, result: dict) -> dict:
         return result
+
+    def response_correction_messages(
+        self,
+        _question: QuestionInput,
+        *,
+        system: str,
+        user: str,
+        error: AIResponseError,
+    ) -> tuple[str, str]:
+        """Return retry prompts after a response-contract failure."""
+        return system, user
 
     def request_images(self, question: QuestionInput) -> tuple[str, ...]:
         """Return image inputs supported by this component's configured provider."""

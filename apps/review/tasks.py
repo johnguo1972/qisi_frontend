@@ -1,6 +1,12 @@
 """Celery tasks for single question AI processing."""
 import json
 import logging
+import uuid
+from collections import Counter
+from copy import deepcopy
+from decimal import Decimal
+
+from celery import chord, group
 from celery import shared_task
 from django.conf import settings
 from celery.exceptions import SoftTimeLimitExceeded
@@ -19,6 +25,8 @@ from .ai_queue import dispatch_queued_ai_items, recover_stale_ai_items
 logger = logging.getLogger(__name__)
 
 PROGRESS_KEY_PREFIX = 'single_ai_progress:'
+COURSE_RECONCILE_KEY_PREFIX = 'course_ai_reconcile:'
+COURSE_RECONCILE_STATUS_TTL = 7 * 24 * 60 * 60
 _ARBITRATION_FAILURE_STAGES = frozenset({
     'baseline_invalid',
     'qwen_generate',
@@ -80,6 +88,315 @@ def classify_ai_failure(error: BaseException) -> str:
             return 'provider_unavailable'
         current = current.__cause__
     return 'unknown_error'
+
+
+def _valid_ai_payload(value) -> bool:
+    return isinstance(value, dict) and bool(value) and not value.get('error')
+
+
+def is_ai_probe_complete(question) -> bool:
+    """The probe is complete only when routing-critical attributes exist."""
+    probe = getattr(question, 'ai_probe_result', None)
+    if not _valid_ai_payload(probe):
+        return False
+    return all(
+        isinstance(probe.get(key), str) and probe[key].strip()
+        for key in (
+            'grade', 'semester', 'subject', 'question_type', 'normalized_text',
+        )
+    )
+
+
+def is_ai_knowledge_complete(question) -> bool:
+    """Knowledge analysis needs at least one point and a usable difficulty."""
+    knowledge = getattr(question, 'ai_knowledge_enrichment', None)
+    if not _valid_ai_payload(knowledge):
+        return False
+    points = knowledge.get('knowledge_points')
+    if not isinstance(points, list) or not points:
+        return False
+    difficulty = knowledge.get('difficulty')
+    if isinstance(difficulty, str) and difficulty in {'L1', 'L2', 'L3', 'L4', 'L5'}:
+        return True
+    stored = getattr(question, 'difficulty', None)
+    try:
+        return Decimal(str(stored)) in {Decimal(i) for i in range(1, 6)}
+    except (TypeError, ValueError, ArithmeticError):
+        return False
+
+
+def is_ai_mode_complete(question, mode: str) -> bool:
+    normalized_mode = str(mode).strip().upper()
+    if normalized_mode not in {'A', 'B', 'C'}:
+        return False
+    return _valid_ai_payload(
+        getattr(question, f'ai_answer_{normalized_mode.lower()}', None)
+    )
+
+
+def _load_reconcile_question(question_id):
+    return ExamQuestion.objects.get(id=question_id)
+
+
+def _run_reconcile_probe(question_id):
+    service = create_ai_review_service()
+    try:
+        question = _load_reconcile_question(question_id)
+        result = service.probe_and_norm(
+            question,
+            service._get_question_image_urls(question),
+        )
+        service.save_results_to_question(
+            question_id, {'probe': result, 'errors': {}}
+        )
+        return {'status': 'complete'}
+    except Exception as error:
+        return {'status': 'failed', 'error': classify_ai_failure(error)}
+    finally:
+        service.close()
+
+
+def _run_reconcile_knowledge(question_id):
+    service = create_ai_review_service()
+    try:
+        question = _load_reconcile_question(question_id)
+        probe = question.ai_probe_result or {}
+        result = service.analyze_knowledge_points(
+            question,
+            probe.get('normalized_text', question.stem or ''),
+            subject_hint=probe.get('subject', ''),
+        )
+        service.save_results_to_question(
+            question_id, {'knowledge': result, 'errors': {}}
+        )
+        return {'status': 'complete'}
+    except Exception as error:
+        return {'status': 'failed', 'error': classify_ai_failure(error)}
+    finally:
+        service.close()
+
+
+def _run_reconcile_mode(question_id, mode):
+    return single_mode_ai_process_question.run(str(question_id), mode)
+
+
+def _attempt_reconcile_step(question_id, runner, validator):
+    last_error = 'result_incomplete'
+    for attempt in (1, 2):
+        try:
+            result = runner(question_id) or {}
+            last_error = result.get('error') or 'result_incomplete'
+        except Exception as error:
+            last_error = classify_ai_failure(error)
+        question = _load_reconcile_question(question_id)
+        if validator(question):
+            return (
+                {'status': 'complete', 'attempts': attempt, 'error': None},
+                question,
+            )
+    return (
+        {'status': 'failed', 'attempts': 2, 'error': last_error},
+        question,
+    )
+
+
+@shared_task(bind=True, max_retries=0, soft_time_limit=1200, time_limit=1260)
+def reconcile_course_probe_only_task(self, question_id):
+    """Repair one missing probe with one retry, without starting A/B/C."""
+    question = _load_reconcile_question(question_id)
+    if is_ai_probe_complete(question):
+        detail = {'status': 'skipped', 'attempts': 0, 'error': None}
+    else:
+        detail, _question = _attempt_reconcile_step(
+            question_id, _run_reconcile_probe, is_ai_probe_complete
+        )
+    return {'question_id': str(question_id), 'step': detail}
+
+
+def reconcile_course_question_ai(question_id, round_no=1):
+    """Fill only missing probe/knowledge/A/B/C fields for one question."""
+    question = _load_reconcile_question(question_id)
+    steps = {}
+
+    if is_ai_probe_complete(question):
+        steps['probe'] = {'status': 'skipped', 'attempts': 0, 'error': None}
+    else:
+        steps['probe'], question = _attempt_reconcile_step(
+            question_id, _run_reconcile_probe, is_ai_probe_complete
+        )
+
+    if is_ai_knowledge_complete(question):
+        steps['knowledge'] = {'status': 'skipped', 'attempts': 0, 'error': None}
+    elif is_ai_probe_complete(question):
+        steps['knowledge'], question = _attempt_reconcile_step(
+            question_id, _run_reconcile_knowledge, is_ai_knowledge_complete
+        )
+    else:
+        steps['knowledge'] = {
+            'status': 'failed', 'attempts': 0, 'error': 'probe_incomplete',
+        }
+
+    prerequisites_complete = (
+        is_ai_probe_complete(question) and is_ai_knowledge_complete(question)
+    )
+    for mode in 'ABC':
+        if is_ai_mode_complete(question, mode):
+            steps[mode] = {'status': 'skipped', 'attempts': 0, 'error': None}
+            continue
+        if not prerequisites_complete:
+            missing = (
+                'probe_incomplete'
+                if not is_ai_probe_complete(question)
+                else 'knowledge_incomplete'
+            )
+            steps[mode] = {'status': 'failed', 'attempts': 0, 'error': missing}
+            continue
+        steps[mode], question = _attempt_reconcile_step(
+            question_id,
+            lambda qid, current_mode=mode: _run_reconcile_mode(
+                qid, current_mode
+            ),
+            lambda current, current_mode=mode: is_ai_mode_complete(
+                current, current_mode
+            ),
+        )
+
+    return {
+        'question_id': str(question_id),
+        'round': int(round_no),
+        'steps': steps,
+    }
+
+
+def _course_reconcile_cache_key(batch_id):
+    return f'{COURSE_RECONCILE_KEY_PREFIX}{batch_id}'
+
+
+def _set_course_reconcile_status(batch_id, payload):
+    cache.set(
+        _course_reconcile_cache_key(batch_id),
+        deepcopy(payload),
+        timeout=COURSE_RECONCILE_STATUS_TTL,
+    )
+
+
+def get_course_reconcile_status(batch_id):
+    return cache.get(_course_reconcile_cache_key(batch_id))
+
+
+def _course_question_ids(course_id):
+    from apps.courses.models import CourseQuestionLink
+
+    return [
+        str(value)
+        for value in CourseQuestionLink.objects.filter(
+            course_id=course_id,
+            is_deleted=False,
+        ).order_by('created_at', 'id').values_list('question_id', flat=True)
+    ]
+
+
+def _aggregate_reconcile_results(results):
+    counts = Counter()
+    failures = []
+    for result in results:
+        question_id = result.get('question_id')
+        for step, detail in result.get('steps', {}).items():
+            status = detail.get('status', 'failed')
+            counts[f'{step}:{status}'] += 1
+            if status == 'failed':
+                failures.append({
+                    'question_id': question_id,
+                    'step': step,
+                    'error': detail.get('error') or 'unknown_error',
+                })
+    return {'counts': dict(counts), 'failures': failures}
+
+
+def _course_reconcile_completion(course_id):
+    questions = ExamQuestion.objects.filter(
+        course_links__course_id=course_id,
+        course_links__is_deleted=False,
+    ).distinct()
+    values = list(questions)
+    return {
+        'total': len(values),
+        'probe_complete': sum(is_ai_probe_complete(q) for q in values),
+        'knowledge_complete': sum(is_ai_knowledge_complete(q) for q in values),
+        'a_complete': sum(is_ai_mode_complete(q, 'A') for q in values),
+        'b_complete': sum(is_ai_mode_complete(q, 'B') for q in values),
+        'c_complete': sum(is_ai_mode_complete(q, 'C') for q in values),
+    }
+
+
+def _enqueue_course_reconcile_round(course_id, batch_id, round_no):
+    question_ids = _course_question_ids(course_id)
+    header = group(
+        reconcile_course_question_ai_task.s(question_id, round_no).set(
+            queue='ai.batch'
+        )
+        for question_id in question_ids
+    )
+    callback = course_ai_reconcile_round_finished.s(
+        str(course_id), str(batch_id), int(round_no)
+    ).set(queue='ai.batch')
+    return str(chord(header)(callback).id)
+
+
+@shared_task(bind=True, max_retries=0, soft_time_limit=30000, time_limit=31200)
+def reconcile_course_question_ai_task(self, question_id, round_no=1):
+    return reconcile_course_question_ai(question_id, round_no=round_no)
+
+
+@shared_task(bind=True, max_retries=0)
+def start_course_ai_reconcile(self, course_id, batch_id=None):
+    batch_id = str(batch_id or uuid.uuid4())
+    question_ids = _course_question_ids(course_id)
+    payload = {
+        'batch_id': batch_id,
+        'course_id': str(course_id),
+        'status': 'round_1_queued',
+        'total_questions': len(question_ids),
+        'rounds': {},
+        'created_at': timezone.now().isoformat(),
+    }
+    _set_course_reconcile_status(batch_id, payload)
+    round_task_id = _enqueue_course_reconcile_round(course_id, batch_id, 1)
+    payload['round_task_id'] = round_task_id
+    _set_course_reconcile_status(batch_id, payload)
+    return payload
+
+
+@shared_task(bind=True, max_retries=0)
+def course_ai_reconcile_round_finished(
+    self, results, course_id, batch_id, round_no,
+):
+    payload = get_course_reconcile_status(batch_id) or {
+        'batch_id': str(batch_id),
+        'course_id': str(course_id),
+        'rounds': {},
+    }
+    payload.setdefault('rounds', {})[str(round_no)] = (
+        _aggregate_reconcile_results(results)
+    )
+    if int(round_no) == 1:
+        payload['status'] = 'round_2_queued'
+        _set_course_reconcile_status(batch_id, payload)
+        payload['round_2_task_id'] = _enqueue_course_reconcile_round(
+            course_id, batch_id, 2
+        )
+        _set_course_reconcile_status(batch_id, payload)
+        return {'status': 'round_2_queued', 'batch_id': str(batch_id)}
+
+    payload['status'] = 'completed'
+    payload['completed_at'] = timezone.now().isoformat()
+    payload['final'] = _course_reconcile_completion(course_id)
+    _set_course_reconcile_status(batch_id, payload)
+    return {
+        'status': 'completed',
+        'batch_id': str(batch_id),
+        'final': payload['final'],
+    }
 
 # Step labels for progress reporting
 STEP_LABELS = {

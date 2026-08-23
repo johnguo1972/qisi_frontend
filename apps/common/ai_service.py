@@ -1,5 +1,6 @@
 """Backward-compatible facade for the shared question AI components."""
 from copy import deepcopy
+import json
 import logging
 import time
 import os
@@ -436,6 +437,35 @@ class AIReviewService:
             },
         )
 
+    @staticmethod
+    def _probe_source_text(question) -> str:
+        """Use structured source fields when an imported question has no stem."""
+        stem = str(getattr(question, "stem", "") or "")
+        if stem.strip():
+            return stem
+
+        context = QuestionContextBuilder.build(question)
+        payload = {
+            "raw_text": str(getattr(question, "raw_text", "") or ""),
+            "material": str(getattr(question, "material", "") or ""),
+            "subject": str(getattr(question, "subject", "") or ""),
+            "question_type": str(
+                getattr(question, "question_type", "")
+                or getattr(question, "source_question_type", "")
+                or ""
+            ),
+            "options": context.options,
+            "tables": context.metadata.get("tables", ()),
+            "subquestions": context.metadata.get("subquestions", ()),
+        }
+        rendered = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+        return rendered[:30000]
+
     def _processing_input_hash(self, question, image_urls, model: str | None) -> str:
         """Return the cache identity for AI preprocessing inputs only."""
         context = QuestionContextBuilder.build(
@@ -647,6 +677,16 @@ class AIReviewService:
     def probe_and_norm(self, question, image_urls: list, model: str = None) -> dict:
         """Step 1: Probe & Norm — 轻量探查 + 规范化."""
         question_input = self._question_input(question, image_urls)
+        probe_text = self._probe_source_text(question)
+        if probe_text != question_input.stem:
+            question_input = QuestionInput(
+                stem=probe_text,
+                options=question_input.options,
+                answer=question_input.answer,
+                solution=question_input.solution,
+                image_urls=question_input.image_urls,
+                metadata=question_input.metadata,
+            )
         return self._run_component(
             self._component(QuestionProbeComponent), question_input
         )
