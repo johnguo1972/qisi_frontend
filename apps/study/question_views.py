@@ -120,6 +120,16 @@ def question_list(request):
         else:
             kp_query = Q()
             for value in kp_values:
+                # Knowledge-point IDs in the current production data are UUID
+                # strings.  JSON containment must be applied before attempting
+                # the legacy BIGINT KnowledgePoint lookup, otherwise UUID
+                # requests leave kp_query empty and silently return all items.
+                kp_query |= (
+                    Q(knowledge_points__contains=[{'id': value}])
+                    | Q(ai_knowledge_enrichment__contains={
+                        'knowledge_points': [{'id': value}]
+                    })
+                )
                 try:
                     kp_id = int(value)
                     kp_query |= (

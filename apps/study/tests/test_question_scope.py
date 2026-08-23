@@ -102,3 +102,38 @@ def test_knowledge_point_filter_matches_any_array_item_and_legacy_module(
     question_ids = {item['id'] for item in response.data['data']['items']}
     assert str(multi_point_question.id) in question_ids
     assert str(legacy_module_question.id) in question_ids
+
+
+@pytest.mark.django_db
+def test_knowledge_point_filter_matches_uuid_id_inside_multi_point_array(
+    teacher_client, junior_physics_paper
+):
+    selected_knowledge_point_id = '019fb217-3a21-75c3-b261-c2f4f68f41d6'
+    matching_question = ExamQuestion.objects.create(
+        paper=junior_physics_paper,
+        question_no='uuid-multi-point',
+        question_type='single_choice',
+        subject='physics',
+        stem='Question whose second knowledge point is selected',
+        knowledge_points=[
+            {'id': '019fb217-37ff-7a41-9172-8598f4b2b7fa'},
+            {'id': selected_knowledge_point_id},
+        ],
+    )
+    unrelated_question = ExamQuestion.objects.create(
+        paper=junior_physics_paper,
+        question_no='uuid-unrelated',
+        question_type='single_choice',
+        subject='physics',
+        stem='Question without the selected knowledge point',
+        knowledge_points=[{'id': '019fb217-3a2f-7e90-a52f-d6560031f07d'}],
+    )
+
+    response = teacher_client.get(
+        '/api/v1/questions/', {'knowledge_point_id': selected_knowledge_point_id}
+    )
+
+    assert response.status_code == 200
+    question_ids = {item['id'] for item in response.data['data']['items']}
+    assert str(matching_question.id) in question_ids
+    assert str(unrelated_question.id) not in question_ids
