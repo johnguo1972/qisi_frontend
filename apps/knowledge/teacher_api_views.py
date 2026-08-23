@@ -6,6 +6,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from apps.knowledge.models import KnowledgePoint
 from apps.parser.models import ExamQuestion
+from apps.knowledge.teacher_scope import (
+    TeachingScopeForbidden,
+    apply_stage_scope,
+    resolve_teacher_question_scope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +78,28 @@ def knowledge_tree(request):
     Returns hierarchical structure: grades -> semesters(上学期/下学期) -> chapters -> knowledge_points
     (module level is removed, knowledge points are directly under chapters)
     """
+    try:
+        scope = resolve_teacher_question_scope(
+            request,
+            requested_subject=request.query_params.get('subject', ''),
+            requested_stages=request.query_params.get('stages', '') or request.query_params.get('stage', ''),
+        )
+    except TeachingScopeForbidden:
+        return Response({
+            'code': 'TEACHING_SCOPE_FORBIDDEN',
+            'message': 'Requested subject or stage is outside the teacher teaching scope.',
+            'data': None,
+        }, status=403)
+
+    if scope is not None and not scope.configured:
+        return Response({'success': True, 'data': {
+            'grades': [],
+            'allowed_subjects': list(scope.subjects),
+            'allowed_stages': list(scope.stages),
+            'selected_subject': None,
+            'scope_configured': False,
+        }})
+
     subject = request.query_params.get('subject', '')
     stage = request.query_params.get('stage', '')
 
@@ -93,6 +120,10 @@ def knowledge_tree(request):
         if mapped in {'primary', 'junior', 'senior'}:
             db_stages.append(mapped)
 
+    if scope is not None:
+        db_subject = scope.selected_subject
+        db_stages = list(scope.stages)
+
     # Term display mapping: up -> 上学期, down -> 下学期
     TERM_DISPLAY = {'up': '上学期', 'down': '下学期'}
 
@@ -100,7 +131,12 @@ def knowledge_tree(request):
     kp_counts = {}
     unclassified_count = 0
     try:
-        qs_questions = ExamQuestion.objects.filter(knowledge_points__isnull=False).values_list('knowledge_points', flat=True)
+        qs_questions = ExamQuestion.objects.filter(knowledge_points__isnull=False)
+        if db_subject:
+            qs_questions = qs_questions.filter(subject=db_subject)
+        if db_stages:
+            qs_questions = apply_stage_scope(qs_questions, tuple(db_stages))
+        qs_questions = qs_questions.values_list('knowledge_points', flat=True)
         for kps in qs_questions:
             if not kps:
                 unclassified_count += 1
@@ -177,4 +213,12 @@ def knowledge_tree(request):
             grade_obj['question_count'] += sem_obj['question_count']
         result.append(grade_obj)
 
-    return Response({'success': True, 'data': {'grades': result}})
+    data = {'grades': result}
+    if scope is not None:
+        data.update({
+            'allowed_subjects': list(scope.subjects),
+            'allowed_stages': list(scope.stages),
+            'selected_subject': scope.selected_subject,
+            'scope_configured': True,
+        })
+    return Response({'success': True, 'data': data})

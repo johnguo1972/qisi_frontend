@@ -1,5 +1,7 @@
 """Tests for knowledge app."""
 from django.test import SimpleTestCase, TransactionTestCase
+from rest_framework.test import APIClient
+from apps.accounts.models import UserAccount
 from apps.knowledge.models import KnowledgePoint
 from apps.knowledge.teacher_api_views import _deduplicate_knowledge_points
 
@@ -181,3 +183,47 @@ class KnowledgePointEndpointTest(TransactionTestCase):
             KnowledgePoint.objects.filter(id=point_id).exists(),
             'Point should be deleted'
         )
+
+    def test_single_subject_teacher_tree_rejects_other_subject(self):
+        teacher = UserAccount.objects.create(
+            role_type='teacher',
+            mobile='13900009601',
+            display_name='Physics Teacher',
+            subject='physics',
+            subjects=['physics'],
+            stages=['junior'],
+        )
+        client = APIClient()
+        client.force_authenticate(user=teacher)
+
+        response = client.get(
+            '/api/v1/teacher/knowledge-tree/',
+            {'subject': 'math', 'stages': 'senior'},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()['code'], 'TEACHING_SCOPE_FORBIDDEN')
+
+    def test_multi_subject_teacher_tree_returns_selected_authorized_subject(self):
+        teacher = UserAccount.objects.create(
+            role_type='teacher',
+            mobile='13900009602',
+            display_name='Multi Subject Teacher',
+            subject='physics',
+            subjects=['physics', 'math'],
+            stages=['primary', 'junior'],
+        )
+        client = APIClient()
+        client.force_authenticate(user=teacher)
+
+        response = client.get(
+            '/api/v1/teacher/knowledge-tree/',
+            {'subject': 'math'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()['data']
+        self.assertEqual(payload['allowed_subjects'], ['physics', 'math'])
+        self.assertEqual(payload['allowed_stages'], ['primary', 'junior'])
+        self.assertEqual(payload['selected_subject'], 'math')
+        self.assertTrue(payload['scope_configured'])
