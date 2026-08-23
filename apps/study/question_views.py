@@ -6,6 +6,11 @@ from django.db.models import Q, CharField
 from django.db.models.functions import Cast
 from apps.parser.models import ExamQuestion
 from apps.knowledge.models import KnowledgePoint
+from apps.knowledge.teacher_scope import (
+    TeachingScopeForbidden,
+    apply_stage_scope,
+    resolve_teacher_question_scope,
+)
 from .serializers import QuestionListSerializer, QuestionDetailSerializer
 
 
@@ -24,6 +29,34 @@ def question_list(request):
     paper_id = request.GET.get('paper_id')
     knowledge_point_id = request.GET.get('knowledge_point_id', '')
     stages = request.GET.get('stages', '')
+
+    try:
+        scope = resolve_teacher_question_scope(
+            request,
+            requested_subject=subject or '',
+            requested_stages=stages,
+        )
+    except TeachingScopeForbidden:
+        return Response({
+            'code': 'TEACHING_SCOPE_FORBIDDEN',
+            'message': 'Requested subject or stage is outside the teacher teaching scope.',
+            'data': None,
+            'trace_id': '',
+        }, status=403)
+
+    if scope is not None and not scope.configured:
+        page = int(request.GET.get('page', 1))
+        page_size = min(int(request.GET.get('page_size', 20)), 100)
+        return Response({
+            'code': 0, 'message': 'success', 'trace_id': '',
+            'data': {
+                'items': [], 'total': 0, 'page_no': page, 'page_size': page_size,
+                'scope_configured': False,
+            }
+        })
+
+    if scope is not None:
+        subject = scope.selected_subject
 
     qs = ExamQuestion.objects.select_related('paper').all()
 
@@ -65,7 +98,9 @@ def question_list(request):
     if knowledge:
         qs = qs.filter(ai_knowledge_enrichment__contains=[{'code': knowledge}])
 
-    if stages:
+    if scope is not None:
+        qs = apply_stage_scope(qs, scope.stages)
+    elif stages:
         stage_query = Q()
         for value in stages.split(','):
             # The teacher page displays a combined grade/term label while
@@ -92,6 +127,11 @@ def question_list(request):
                         Q(knowledge_points__contains=[{'id': str(kp_id)}]) |
                         Q(ai_knowledge_enrichment__contains=[{'id': kp_id}])
                     )
+                    try:
+                        kp = KnowledgePoint.objects.get(pk=kp_id)
+                        kp_query |= Q(knowledge_points__contains=[{'module': kp.module}])
+                    except KnowledgePoint.DoesNotExist:
+                        pass
                 except (ValueError, TypeError):
                     try:
                         kp = KnowledgePoint.objects.get(pk=value)

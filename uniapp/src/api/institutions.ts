@@ -13,6 +13,7 @@ export interface InstitutionMemberItem {
   roles: InstitutionRole[]
   status: string
   user_subject?: string | null
+  user_subjects?: string[]
   stages: string[]
 }
 
@@ -22,6 +23,7 @@ export interface UpdateInstitutionMemberPayload {
   display_name?: string
   mobile?: string
   subject?: string
+  subjects?: string[]
   stages?: string[]
 }
 
@@ -30,6 +32,7 @@ export interface AddInstitutionMemberRolesPayload {
   display_name: string
   roles: InstitutionRole[]
   subject?: string
+  subjects?: string[]
   stages?: string[]
 }
 
@@ -45,7 +48,7 @@ export const institutionApi = {
   update: (id: UUID, data: any) => put(`/admin/institutions/${id}`, data),
   updateStatus: (id: UUID, status: string) => put(`/admin/institutions/${id}/status`, { status }),
   remove: (id: UUID) => del(`/admin/institutions/${id}`),
-  addMember: (institutionId: UUID, data: { mobile: string; display_name: string; role: InstitutionRole; subject?: string; stages?: string[] }) =>
+  addMember: (institutionId: UUID, data: { mobile: string; display_name: string; role: InstitutionRole; subject?: string; subjects?: string[]; stages?: string[] }) =>
     post(`/institutions/${institutionId}/members`, data),
   addMemberRoles: async (institutionId: UUID, data: AddInstitutionMemberRolesPayload) => {
     const selectedRoles = (['admin', 'teacher'] as InstitutionRole[]).filter(role => data.roles.includes(role))
@@ -58,6 +61,7 @@ export const institutionApi = {
           display_name: data.display_name,
           role,
           subject: data.subject,
+          subjects: data.subjects,
           stages: data.stages,
         })
       } catch (requestError: any) {

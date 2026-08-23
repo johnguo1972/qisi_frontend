@@ -71,6 +71,23 @@ class InstitutionMemberMultiRoleAPITest(TestCase):
         self.assertTrue(has_user_role(self.platform_admin, 'admin'))
         self.assertTrue(has_user_role(self.platform_admin, 'teacher'))
 
+    def test_admin_can_save_multiple_teacher_subjects(self):
+        response = self.client.post(self.members_url, {
+            'mobile': '13800001234',
+            'display_name': 'Multi Subject Teacher',
+            'role': 'teacher',
+            'subjects': ['physics', 'math'],
+            'stages': ['junior'],
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        user = UserAccount.objects.get(mobile='13800001234')
+        self.assertEqual(user.subjects, ['physics', 'math'])
+        self.assertEqual(user.subject, 'physics')
+        self.assertEqual(
+            response.json()['data']['user_subjects'], ['physics', 'math']
+        )
+
     def test_member_list_aggregates_roles_in_fixed_order(self):
         InstitutionMember.objects.create(
             institution=self.institution,

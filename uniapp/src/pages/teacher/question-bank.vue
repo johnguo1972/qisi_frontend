@@ -4,7 +4,8 @@
       <!-- 左侧：知识树 -->
       <view class="left-panel">
         <view class="subject-selector">
-          <picker mode="selector" :range="subjectRange" :value="subjectIndex" @change="onSubjectChange"><view class="subject-select">{{ selectedSubject === 'physics' ? '物理' : '数学' }}</view></picker>
+          <picker v-if="allowedSubjects.length > 1" mode="selector" :range="subjectRange" :value="subjectIndex" @change="onSubjectChange"><view class="subject-select">{{ selectedSubjectLabel }}</view></picker>
+          <view v-else class="subject-select">{{ selectedSubjectLabel }}</view>
         </view>
 
         <view class="tree-header">
@@ -46,7 +47,7 @@
                       <view
                         v-for="kp in ch.knowledge_points"
                         :key="kp.id"
-                        :class="['tree-node kp-node', { active: selectedKP === kp.id }]"
+                        :class="['tree-node kp-node', { active: String(activeKnowledgePoint) === String(kp.id) }]"
                         @click.stop="selectKP(kp)"
                       >
                         <text class="label">{{ kp.name }}</text>
@@ -187,19 +188,16 @@ import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
 import { questionApi, aiProcessProbe, importJsonPackage, getQuestionTags, addQuestionTag, removeQuestionTag, getTagList } from '@/api/questions'
 import { knowledgeApi } from '@/api/knowledge'
 import { favoriteApi } from '@/api/favorites'
-import { useUserStore } from '@/store/index.ts'
 
 import QuestionDetailCard from '@/components/QuestionDetailCard.vue'
 import AddMenuModal from '@/components/AddMenuModal.vue'
 import RightActionPanel from '@/components/RightActionPanel.vue'
 import AiAnswerModal from '@/components/AiAnswerModal.vue'
 
-const userStore = useUserStore()
-
 // === 状态 ===
-const selectedSubject = ref('physics')
-const selectedKP = ref<number | null>(null)
+const selectedSubject = ref('')
 const activeKnowledgePoint = ref('')
+const allowedSubjects = ref<string[]>([])
 const tagSearch = ref('')
 const allTags = ref<any[]>([])
 const tagLoading = ref(false)
@@ -218,8 +216,13 @@ const totalCount = ref(0)
 const pageSize = ref(20)
 const pageSizeOptions = [10, 20, 30, 50]
 const pageNumbers = computed(() => Array.from({ length: totalPages.value }, (_, index) => index + 1))
-const subjectRange = ['物理', '数学']
-const subjectIndex = computed(() => selectedSubject.value === 'math' ? 1 : 0)
+const subjectLabels: Record<string, string> = {
+  chinese: '语文', math: '数学', english: '英语', physics: '物理',
+  chemistry: '化学', biology: '生物', geography: '地理', history: '历史',
+}
+const subjectRange = computed(() => allowedSubjects.value.map((subject) => subjectLabels[subject] || subject))
+const subjectIndex = computed(() => Math.max(0, allowedSubjects.value.indexOf(selectedSubject.value)))
+const selectedSubjectLabel = computed(() => subjectLabels[selectedSubject.value] || selectedSubject.value || '未配置科目')
 const pageRangeLabels = computed(() => pageNumbers.value.map(pageOptionLabel))
 const pageSizeRange = pageSizeOptions.map((size) => `${size} 个 / 页`)
 
@@ -326,9 +329,14 @@ onShow(() => {
 async function loadKnowledgeTree() {
   treeLoading.value = true
   try {
-    const subject = userStore.userInfo?.subject || selectedSubject.value
-    const res: any = await knowledgeApi.getTree({ subject })
-    const grades = res.data?.grades || res.data || []
+    const res: any = await knowledgeApi.getTree(selectedSubject.value ? { subject: selectedSubject.value } : undefined)
+    const treeData = res.data || {}
+    const returnedSubjects = Array.isArray(treeData.allowed_subjects) ? treeData.allowed_subjects.filter((subject: unknown): subject is string => typeof subject === 'string' && subject.length > 0) : []
+    if (returnedSubjects.length) allowedSubjects.value = returnedSubjects
+    const returnedSubject = typeof treeData.selected_subject === 'string' ? treeData.selected_subject : ''
+    const nextSubject = returnedSubject || allowedSubjects.value[0] || selectedSubject.value
+    if (nextSubject) selectedSubject.value = nextSubject
+    const grades = treeData.grades || (Array.isArray(treeData) ? treeData : [])
     knowledgeTree.value = grades.map((g: any) => ({
       ...g,
       expanded: false,
@@ -346,11 +354,18 @@ async function loadKnowledgeTree() {
 }
 
 function toggleNode(node: any) { node.expanded = !node.expanded }
-function selectKP(kp: any) { selectedKP.value = kp.id; currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
+function selectKnowledgePoint(knowledgePointId: unknown) {
+  activeKnowledgePoint.value = knowledgePointId === null || knowledgePointId === undefined ? '' : String(knowledgePointId)
+  currentPage.value = 1
+  jumpPage.value = 1
+  loadQuestions()
+}
+function selectKP(kp: any) { selectKnowledgePoint(kp.id) }
 function onTreeSearch() { /* 过滤树节点 */ }
 function toggleSelectMode() { selectMode.value = !selectMode.value }
 function onSubjectChange(event?: any) {
-  selectedSubject.value = Number(event?.detail?.value ?? subjectIndex.value) === 1 ? 'math' : 'physics'
+  selectedSubject.value = allowedSubjects.value[Number(event?.detail?.value ?? subjectIndex.value)] || selectedSubject.value
+  activeKnowledgePoint.value = ''
   loadKnowledgeTree()
   loadQuestions()
 }
@@ -386,14 +401,12 @@ async function loadQuestions() {
   loading.value = true
   try {
     const params: any = { page: currentPage.value, page_size: pageSize.value }
-    if (selectedKP.value) params.knowledge_point_id = selectedKP.value
     if (activeType.value) params.question_type = activeType.value
     if (activeDifficulty.value) params.difficulty = activeDifficulty.value
     if (activeKnowledgePoint.value) params.knowledge_point_id = activeKnowledgePoint.value
     if (tagSearch.value.trim()) params.tag = tagSearch.value.trim()
     if (uuidSearch.value.trim()) params.uuid = uuidSearch.value.trim()
-    const subject = userStore.userInfo?.subject || selectedSubject.value
-    if (subject) params.subject = subject
+    if (selectedSubject.value) params.subject = selectedSubject.value
 
     const res: any = await questionApi.list(params)
     const data = res.data
@@ -442,14 +455,13 @@ function onDifficultyChange(event: any) {
 }
 
 function onKnowledgePointChange(event: any) {
-  activeKnowledgePoint.value = knowledgeOptions.value[Number(event?.detail?.value ?? 0) - 1]?.id || ''
+  selectKnowledgePoint(knowledgeOptions.value[Number(event?.detail?.value ?? 0) - 1]?.id)
 }
 
 // === 筛选 ===
 function applyFilters() { currentPage.value = 1; jumpPage.value = 1; loadQuestions() }
 
 function resetFilters() {
-  selectedKP.value = null
   activeType.value = ''
   activeDifficulty.value = ''
   activeKnowledgePoint.value = ''

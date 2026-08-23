@@ -15,6 +15,7 @@ from apps.accounts.models import UserAccount
 from apps.institutions.serializers import (
     InstitutionMemberSerializer,
     AddMemberSerializer,
+    normalize_subject_codes,
 )
 
 
@@ -248,10 +249,19 @@ def update_member(request, institution_id, user_id):
         if new_name and new_name != user.display_name:
             user.display_name = new_name
             user_changed = True
-    if 'subject' in request.data:
-        new_subject = request.data['subject'].strip()
-        if new_subject != user.subject:
-            user.subject = new_subject if new_subject else None
+    if 'subjects' in request.data:
+        new_subjects = normalize_subject_codes(request.data['subjects'])
+        new_subject = new_subjects[0] if new_subjects else None
+        if new_subjects != (user.subjects or []) or new_subject != user.subject:
+            user.subjects = new_subjects or None
+            user.subject = new_subject
+            user_changed = True
+    elif 'subject' in request.data:
+        new_subjects = normalize_subject_codes(request.data['subject'])
+        new_subject = new_subjects[0] if new_subjects else None
+        if new_subjects != (user.subjects or []) or new_subject != user.subject:
+            user.subjects = new_subjects or None
+            user.subject = new_subject
             user_changed = True
     if 'stages' in request.data:
         new_stages = request.data['stages']

@@ -13,6 +13,7 @@ class UserAccount(AbstractBaseUser):
     mobile = models.CharField(max_length=20, unique=True)
     display_name = models.CharField(max_length=64)
     subject = models.CharField(max_length=20, blank=True, null=True)  # teacher subject
+    subjects = models.JSONField(blank=True, null=True)  # teacher subjects, e.g. ['physics', 'math']
     stages = models.JSONField(blank=True, null=True)  # teacher stages: ['小学', '初中', '高中']
     avatar_url = models.CharField(max_length=255, blank=True, null=True)
     grade_level = models.CharField(max_length=20, blank=True, null=True)  # student current grade: 一年级/二年级/.../九年级/高一/高二/高三

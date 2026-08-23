@@ -58,9 +58,12 @@
           </view>
           <view v-if="memberForm.roles.includes('teacher')" class="form-item">
             <text class="label">科目</text>
-            <picker mode="selector" :range="subjectLabelsAdd" :value="addSubjectIndex" @change="memberForm.subject = subjectOptions[$event.detail.value].value">
-              <view class="picker-display">{{ selectedSubjectLabel }}</view>
-            </picker>
+            <view class="checkbox-group">
+              <view v-for="opt in subjectOptions.filter(option => option.value)" :key="opt.value" class="checkbox-item" @click="toggleSubject(opt.value)">
+                <text class="checkbox-icon" :class="{ checked: memberForm.subjects.includes(opt.value) }">{{ memberForm.subjects.includes(opt.value) ? '✓' : '○' }}</text>
+                <text class="checkbox-label">{{ opt.label }}</text>
+              </view>
+            </view>
           </view>
         </view>
         <view v-if="memberForm.roles.includes('teacher')" class="form-row">
@@ -86,7 +89,7 @@
           <view class="member-main" @click="openEditModal(m)">
             <text class="member-name">{{ m.user_name || m.display_name || '-' }}</text>
             <text class="member-phone">{{ m.user_mobile || m.mobile || '-' }}</text>
-            <text v-if="m.roles.includes('teacher') && m.user_subject" class="member-subject">{{ subjectText(m.user_subject) }}</text>
+            <text v-if="m.roles.includes('teacher') && m.user_subjects?.length" class="member-subject">{{ subjectTexts(m.user_subjects) }}</text>
             <view v-if="m.roles.includes('teacher') && m.stages && m.stages.length > 0" class="member-stages">
               <text v-for="s in m.stages" :key="s" class="stage-tag">{{ s }}</text>
             </view>
@@ -134,9 +137,12 @@
             </view>
             <view v-if="editForm.roles.includes('teacher')" class="edit-item">
               <text class="edit-label">科目</text>
-              <picker mode="selector" :range="subjectLabels" :value="editSubjectIndex" @change="editForm.subject = subjectOptions[$event.detail.value].value">
-                <view class="picker-display">{{ editSubjectLabel }}</view>
-              </picker>
+              <view class="checkbox-group">
+                <view v-for="opt in subjectOptions.filter(option => option.value)" :key="opt.value" class="checkbox-item" @click="toggleEditSubject(opt.value)">
+                  <text class="checkbox-icon" :class="{ checked: editForm.subjects.includes(opt.value) }">{{ editForm.subjects.includes(opt.value) ? '✓' : '○' }}</text>
+                  <text class="checkbox-label">{{ opt.label }}</text>
+                </view>
+              </view>
             </view>
             <view v-if="editForm.roles.includes('teacher')" class="edit-item">
               <text class="edit-label">学段（可多选）</text>
@@ -159,7 +165,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
 import { institutionApi, type InstitutionRole } from '@/api/institutions.ts'
 import { normalizeMember } from '@/utils/institution-members'
@@ -176,14 +182,14 @@ const roleOptions: Array<{ label: string; value: InstitutionRole }> = [
 
 const subjectOptions = [
   { label: '未设置', value: '' },
-  { label: '语文', value: '语文' },
-  { label: '数学', value: '数学' },
-  { label: '英语', value: '英语' },
-  { label: '物理', value: '物理' },
-  { label: '化学', value: '化学' },
-  { label: '生物', value: '生物' },
-  { label: '地理', value: '地理' },
-  { label: '历史', value: '历史' },
+  { label: '语文', value: 'chinese' },
+  { label: '数学', value: 'math' },
+  { label: '英语', value: 'english' },
+  { label: '物理', value: 'physics' },
+  { label: '化学', value: 'chemistry' },
+  { label: '生物', value: 'biology' },
+  { label: '地理', value: 'geography' },
+  { label: '历史', value: 'history' },
 ]
 
 const stageOptions = [
@@ -192,12 +198,13 @@ const stageOptions = [
   { label: '高中', value: '高中' },
 ]
 
-const memberForm = ref({ mobile: '', display_name: '', roles: ['teacher'] as InstitutionRole[], subject: '', stages: [] as string[] })
+const memberForm = ref({ mobile: '', display_name: '', roles: ['teacher'] as InstitutionRole[], subjects: [] as string[], stages: [] as string[] })
 
 // Edit modal state
 const showEditModal = ref(false)
-const editForm = ref({ user_id: '', display_name: '', mobile: '', roles: [] as InstitutionRole[], subject: '', stages: [] as string[] })
+const editForm = ref({ user_id: '', display_name: '', mobile: '', roles: [] as InstitutionRole[], subjects: [] as string[], stages: [] as string[] })
 
+/* Legacy single-subject picker state retained only as a disabled source note.
 const selectedSubjectLabel = computed(() => {
   const opt = subjectOptions.find(o => o.value === memberForm.value.subject)
   return opt?.label || '未设置'
@@ -223,6 +230,8 @@ const editSubjectLabel = computed(() => {
 
 // Simple string arrays for picker range (more reliable than object arrays)
 const subjectLabels = computed(() => subjectOptions.map(o => o.label))
+
+*/
 
 onLoad((options: any) => {
   const id = String(options?.id || '')
@@ -266,6 +275,22 @@ async function loadData() {
 function subjectText(subject: string): string {
   const opt = subjectOptions.find(o => o.value === subject)
   return opt?.label || ''
+}
+
+function subjectTexts(subjects: string[]): string {
+  return subjects.map(subjectText).filter(Boolean).join('、')
+}
+
+function toggleSubject(value: string) {
+  const idx = memberForm.value.subjects.indexOf(value)
+  if (idx >= 0) memberForm.value.subjects.splice(idx, 1)
+  else memberForm.value.subjects.push(value)
+}
+
+function toggleEditSubject(value: string) {
+  const idx = editForm.value.subjects.indexOf(value)
+  if (idx >= 0) editForm.value.subjects.splice(idx, 1)
+  else editForm.value.subjects.push(value)
 }
 
 function toggleStage(value: string) {
@@ -342,11 +367,11 @@ async function handleAddMember() {
       mobile: memberForm.value.mobile.trim(),
       display_name: memberForm.value.display_name.trim(),
       roles: [...memberForm.value.roles],
-      subject: memberForm.value.roles.includes('teacher') ? memberForm.value.subject : '',
+      subjects: memberForm.value.roles.includes('teacher') ? [...memberForm.value.subjects] : [],
       stages: memberForm.value.roles.includes('teacher') ? memberForm.value.stages : [],
     })
     uni.showToast({ title: '添加成功', icon: 'success' })
-    memberForm.value = { mobile: '', display_name: '', roles: ['teacher'], subject: '', stages: [] }
+    memberForm.value = { mobile: '', display_name: '', roles: ['teacher'], subjects: [], stages: [] }
     await loadData()
   } catch (e: any) {
     const message = e?.completedRoles?.length ? '部分角色添加失败，列表已刷新' : (e?.message || '添加失败')
@@ -364,7 +389,7 @@ function openEditModal(member: any) {
     display_name: member.user_name || '',
     mobile: member.user_mobile || '',
     roles: Array.isArray(member.roles) ? [...member.roles] : [member.role || 'teacher'],
-    subject: member.user_subject || '',
+    subjects: Array.isArray(member.user_subjects) ? [...member.user_subjects] : [],
     stages: Array.isArray(stages) ? stages : [],
   }
   showEditModal.value = true
@@ -393,7 +418,7 @@ async function handleSaveEdit() {
       display_name: editForm.value.display_name.trim(),
       mobile: editForm.value.mobile.trim(),
       roles: [...editForm.value.roles],
-      subject: editForm.value.subject,
+      subjects: editForm.value.roles.includes('teacher') ? [...editForm.value.subjects] : [],
       stages: editForm.value.stages,
     })
     if (res.code === 0) {
