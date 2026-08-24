@@ -14,6 +14,10 @@ from .auth import get_request_role
 from .models import UserAccount
 from .roles import VALID_ROLES, has_user_role
 from .serializers import (
+    DeviceCompleteSerializer,
+    DevicePhoneSerializer,
+    DeviceScanSerializer,
+    DeviceSessionSerializer,
     LoginSerializer,
     ProfileUpdateSerializer,
     RefreshTokenSerializer,
@@ -22,6 +26,17 @@ from .serializers import (
     WebBindingPhoneSerializer,
     WebBindingSessionSerializer,
     serialize_user_session,
+)
+from .wechat_device import (
+    DeviceLoginError,
+    bind_device_identity_phone,
+    complete_device_login,
+    confirm_device_identity,
+    create_device_login_session,
+    exchange_miniprogram_login_code,
+    exchange_miniprogram_phone_code as exchange_device_phone_code,
+    get_device_login_status,
+    get_or_create_device_bridge,
 )
 from .services import (
     verify_code, get_or_create_user, generate_tokens, ensure_parent_role_for_login,
@@ -47,7 +62,7 @@ from .wechat_web import (
     prepare_web_login_session,
 )
 from django.conf import settings
-from apps.qrcode.services import wxacode_png
+from apps.qrcode.services import wxacode_image
 
 
 def make_trace_id() -> str:
@@ -67,6 +82,16 @@ def binding_error(code, http_status=status.HTTP_400_BAD_REQUEST):
     return Response({
         'code': code,
         'message': '微信网页绑定无效或已过期',
+        'data': None,
+        'trace_id': make_trace_id(),
+    }, status=http_status)
+
+
+def device_error(code, http_status=status.HTTP_400_BAD_REQUEST):
+    """Return the standard API envelope without exposing device credentials."""
+    return Response({
+        'code': code,
+        'message': '微信设备登录无效、已过期或暂时不可用',
         'data': None,
         'trace_id': make_trace_id(),
     }, status=http_status)
@@ -292,7 +317,7 @@ def wechat_web_binding_qrcode(request):
         get_web_binding_status(web_session_id, browser_session_id(request))
         bridge_code = create_web_binding_bridge_code(web_session_id)
         env_version = getattr(settings, 'WECHAT_MP_ENV_VERSION', 'release')
-        content = wxacode_png(
+        image = wxacode_image(
             scene=bridge_code,
             page='pages/auth/web-binding',
             width=430,
@@ -309,7 +334,7 @@ def wechat_web_binding_qrcode(request):
         )
     except (WebBindingError, WebConfigurationError):
         return binding_error('BINDING_QRCODE_UNAVAILABLE')
-    return HttpResponse(content, content_type='image/png')
+    return HttpResponse(image.content, content_type=image.content_type)
 
 
 @api_view(['POST'])
@@ -332,6 +357,171 @@ def wechat_web_binding_phone(request):
         'code': 0,
         'message': '绑定已确认',
         'data': {'bound': binding.bound},
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_device_session(request):
+    """Create a browser-bound device login session without credentials."""
+    serializer = DeviceSessionSerializer(data=request.data)
+    if not serializer.is_valid():
+        return device_error('INVALID_ROLE')
+    try:
+        session = create_device_login_session(
+            serializer.validated_data['requested_role'], browser_session_id(request)
+        )
+    except DeviceLoginError as error:
+        return device_error(error.code)
+    return Response({
+        'code': 0,
+        'message': 'success',
+        'data': {
+            'web_session_id': session.value,
+            'qrcode_url': (
+                '/api/v1/auth/wechat-device/qrcode?'
+                + urlencode({'web_session_id': session.value})
+            ),
+            'expires_in': session.expires_in,
+        },
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def wechat_device_qrcode(request):
+    """Return the opaque Mini Program code only to its initiating browser."""
+    web_session_id = request.query_params.get('web_session_id', '')
+    try:
+        bridge_code = get_or_create_device_bridge(
+            web_session_id, browser_session_id(request)
+        )
+        env_version = getattr(settings, 'WECHAT_MP_ENV_VERSION', 'release')
+        image = wxacode_image(
+            scene=bridge_code,
+            page='pages/auth/web-binding',
+            width=430,
+            check_path=env_version == 'release',
+            env_version=env_version,
+        )
+    except RuntimeError:
+        return device_error(
+            'WECHAT_MINIPROGRAM_BINDING_PAGE_UNAVAILABLE',
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    except DeviceLoginError as error:
+        return device_error(error.code)
+    return HttpResponse(image.content, content_type=image.content_type)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_device_scan(request):
+    """Confirm a scanned Mini Program identity; this endpoint never issues JWTs."""
+    serializer = DeviceScanSerializer(data=request.data)
+    if not serializer.is_valid():
+        return device_error('DEVICE_SCAN_INVALID')
+    try:
+        identity = exchange_miniprogram_login_code(
+            serializer.validated_data['login_code']
+        )
+        result = confirm_device_identity(
+            serializer.validated_data['bridge_code'], identity
+        )
+    except DeviceLoginError as error:
+        return device_error(
+            error.code,
+            status.HTTP_503_SERVICE_UNAVAILABLE
+            if error.code == 'DEVICE_LOGIN_AUTHORIZATION_FAILED'
+            else status.HTTP_400_BAD_REQUEST,
+        )
+    data = {'status': result.status}
+    if result.phone_binding_token:
+        data['phone_binding_token'] = result.phone_binding_token
+    return Response({
+        'code': 0,
+        'message': 'success',
+        'data': data,
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_device_phone(request):
+    """Complete first-time binding from WeChat's trusted phone exchange only."""
+    serializer = DevicePhoneSerializer(data=request.data)
+    if not serializer.is_valid():
+        return device_error('DEVICE_PHONE_TOKEN_INVALID')
+    try:
+        mobile = exchange_device_phone_code(serializer.validated_data['phone_code'])
+        bind_device_identity_phone(
+            serializer.validated_data['phone_binding_token'], mobile
+        )
+    except DeviceLoginError as error:
+        return device_error(
+            error.code,
+            status.HTTP_503_SERVICE_UNAVAILABLE
+            if error.code == 'DEVICE_PHONE_AUTHORIZATION_FAILED'
+            else status.HTTP_400_BAD_REQUEST,
+        )
+    return Response({
+        'code': 0,
+        'message': '绑定已确认',
+        'data': {'status': 'login_confirmed'},
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def wechat_device_status(request):
+    """Expose only status and the opaque ticket to the original browser."""
+    try:
+        device_status = get_device_login_status(
+            request.query_params.get('web_session_id', ''), browser_session_id(request)
+        )
+    except DeviceLoginError as error:
+        return device_error(error.code)
+    data = {'status': device_status.status, 'bound': device_status.bound}
+    if device_status.ticket:
+        data['ticket'] = device_status.ticket
+    if device_status.error_code:
+        data['error_code'] = device_status.error_code
+    return Response({
+        'code': 0,
+        'message': 'success',
+        'data': data,
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_device_complete(request):
+    """Consume the original-browser ticket and issue the normal web JWT pair."""
+    serializer = DeviceCompleteSerializer(data=request.data)
+    if not serializer.is_valid():
+        return device_error('DEVICE_TICKET_INVALID')
+    try:
+        user, tokens = complete_device_login(
+            serializer.validated_data['ticket'],
+            browser_session_id(request),
+            serializer.validated_data['requested_role'],
+        )
+    except DeviceLoginError as error:
+        return device_error(error.code)
+    return Response({
+        'code': 0,
+        'message': '登录成功',
+        'data': {
+            **tokens,
+            'user': serialize_user_session(
+                user, serializer.validated_data['requested_role']
+            ),
+        },
         'trace_id': make_trace_id(),
     })
 

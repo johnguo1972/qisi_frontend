@@ -1,16 +1,39 @@
 from datetime import datetime, timezone as datetime_timezone
 import json
 import logging
+from pathlib import Path
 import threading
+from types import SimpleNamespace
+from unittest.mock import Mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import ProxyHandler
 
 import httpx
 import pytest
+from rest_framework.test import APIClient
 
-from apps.accounts import wechat_device
+from apps.accounts import services, views, wechat_device
 from apps.accounts.models import UserAccount, WechatIdentity
 from apps.accounts.roles import grant_user_role, revoke_user_role
+
+
+def test_h5_qr_login_uses_direct_miniprogram_device_session_without_oauth_redirect():
+    """The H5 QR entry must show the MP code itself instead of navigating to OAuth."""
+    login_page = (
+        Path(__file__).resolve().parents[3]
+        / "uniapp"
+        / "src"
+        / "pages"
+        / "login"
+        / "index.vue"
+    ).read_text(encoding="utf-8")
+
+    assert "wechatDeviceApi.createSession" in login_page
+    assert "wechatDeviceSession.qrcode_url" in login_page
+    assert "wechatDeviceApi.status" in login_page
+    assert "wechatDeviceApi.complete" in login_page
+    assert "window.location.assign" not in login_page
+    assert "void createWechatDeviceSession()" in login_page
 
 
 class FakeWechatResponse:
@@ -1050,3 +1073,167 @@ def test_phone_binding_rejects_second_wechat_identity_for_same_user(clock):
 
     assert conflict.value.code == "DEVICE_IDENTITY_CONFLICT"
     assert WechatIdentity.objects.get(user=student).openid == "original-openid"
+
+
+@pytest.mark.django_db
+def test_device_api_known_identity_completes_in_original_browser(
+    clock, monkeypatch, settings
+):
+    """Removing a device route or browser completion breaks the H5 login flow."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    student = _user("13900009011", "student")
+    WechatIdentity.objects.create(
+        user=student, appid="wx-test", openid="known-api-openid"
+    )
+    browser = APIClient()
+
+    created = browser.post(
+        "/api/v1/auth/wechat-device/session", {"requested_role": "student"},
+        format="json",
+    )
+    assert created.status_code == 200
+    web_session_id = created.data["data"]["web_session_id"]
+    assert created.data["data"]["qrcode_url"] == (
+        f"/api/v1/auth/wechat-device/qrcode?web_session_id={web_session_id}"
+    )
+
+    captured_qr = {}
+    monkeypatch.setattr(
+        views,
+        "wxacode_image",
+        lambda **kwargs: (
+            captured_qr.update(kwargs)
+            or SimpleNamespace(content=b"jpeg", content_type="image/jpeg")
+        ),
+        raising=False,
+    )
+    qrcode_response = browser.get(
+        "/api/v1/auth/wechat-device/qrcode", {"web_session_id": web_session_id}
+    )
+    assert qrcode_response.status_code == 200
+    assert qrcode_response["Content-Type"] == "image/jpeg"
+    assert qrcode_response.content == b"jpeg"
+    assert captured_qr["page"] == "pages/auth/web-binding"
+
+    monkeypatch.setattr(
+        views,
+        "exchange_miniprogram_login_code",
+        lambda code: wechat_device.MiniProgramIdentity(
+            "wx-test", "known-api-openid", ""
+        ),
+        raising=False,
+    )
+    scanned = APIClient().post(
+        "/api/v1/auth/wechat-device/scan",
+        {"bridge_code": captured_qr["scene"], "login_code": "wx-login-code"},
+        format="json",
+    )
+    assert scanned.status_code == 200
+    assert scanned.data["data"] == {"status": "login_confirmed"}
+
+    status_response = browser.get(
+        "/api/v1/auth/wechat-device/status", {"web_session_id": web_session_id}
+    )
+    assert status_response.status_code == 200
+    ticket = status_response.data["data"]["ticket"]
+    completed = browser.post(
+        "/api/v1/auth/wechat-device/complete",
+        {"ticket": ticket, "requested_role": "student"},
+        format="json",
+    )
+    assert completed.status_code == 200
+    assert completed.data["data"]["user"]["active_role"] == "student"
+    assert completed.data["data"]["access_token"]
+
+
+@pytest.mark.django_db
+def test_device_api_phone_binding_is_one_time_and_status_is_browser_bound(
+    clock, monkeypatch, settings
+):
+    """Accepting replayed phone codes or another browser would transfer a login."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    browser = APIClient()
+    created = browser.post(
+        "/api/v1/auth/wechat-device/session", {"requested_role": "student"},
+        format="json",
+    )
+    assert created.status_code == 200
+    web_session_id = created.data["data"]["web_session_id"]
+
+    captured_qr = {}
+    monkeypatch.setattr(
+        views,
+        "wxacode_image",
+        lambda **kwargs: (
+            captured_qr.update(kwargs)
+            or SimpleNamespace(content=b"png", content_type="image/png")
+        ),
+        raising=False,
+    )
+    assert browser.get(
+        "/api/v1/auth/wechat-device/qrcode", {"web_session_id": web_session_id}
+    ).status_code == 200
+    monkeypatch.setattr(
+        views,
+        "exchange_miniprogram_login_code",
+        lambda code: wechat_device.MiniProgramIdentity("wx-test", "new-api-openid", ""),
+        raising=False,
+    )
+    phone_required = APIClient().post(
+        "/api/v1/auth/wechat-device/scan",
+        {"bridge_code": captured_qr["scene"], "login_code": "wx-login-code"},
+        format="json",
+    )
+    assert phone_required.status_code == 200
+    assert phone_required.data["data"]["status"] == "phone_authorization_required"
+    phone_binding_token = phone_required.data["data"]["phone_binding_token"]
+    assert "access_token" not in phone_required.data["data"]
+
+    sms_sender = Mock()
+    monkeypatch.setattr(services, "send_sms_code", sms_sender)
+    monkeypatch.setattr(
+        views,
+        "exchange_device_phone_code",
+        lambda code: "13900009012",
+        raising=False,
+    )
+    phone_bound = APIClient().post(
+        "/api/v1/auth/wechat-device/phone",
+        {"phone_binding_token": phone_binding_token, "phone_code": "wx-phone-code"},
+        format="json",
+    )
+    assert phone_bound.status_code == 200
+    assert phone_bound.data["data"] == {"status": "login_confirmed"}
+    assert "access_token" not in phone_bound.data["data"]
+    assert not sms_sender.called
+
+    cross_browser_status = APIClient().get(
+        "/api/v1/auth/wechat-device/status", {"web_session_id": web_session_id}
+    )
+    assert cross_browser_status.status_code == 400
+    assert cross_browser_status.data["code"] == "DEVICE_BROWSER_MISMATCH"
+    replay_phone = APIClient().post(
+        "/api/v1/auth/wechat-device/phone",
+        {"phone_binding_token": phone_binding_token, "phone_code": "wx-phone-code"},
+        format="json",
+    )
+    assert replay_phone.status_code == 400
+    assert replay_phone.data["code"] == "DEVICE_PHONE_TOKEN_INVALID"
+
+    status_response = browser.get(
+        "/api/v1/auth/wechat-device/status", {"web_session_id": web_session_id}
+    )
+    ticket = status_response.data["data"]["ticket"]
+    first_complete = browser.post(
+        "/api/v1/auth/wechat-device/complete",
+        {"ticket": ticket, "requested_role": "student"},
+        format="json",
+    )
+    assert first_complete.status_code == 200
+    replay_ticket = browser.post(
+        "/api/v1/auth/wechat-device/complete",
+        {"ticket": ticket, "requested_role": "student"},
+        format="json",
+    )
+    assert replay_ticket.status_code == 400
+    assert replay_ticket.data["code"] == "DEVICE_TICKET_INVALID"
