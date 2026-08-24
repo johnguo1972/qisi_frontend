@@ -72,6 +72,25 @@ class WebBindingPhoneSerializer(serializers.Serializer):
     phone_code = serializers.CharField(max_length=256)
 
 
+class DeviceSessionSerializer(serializers.Serializer):
+    requested_role = serializers.ChoiceField(choices=VALID_ROLES)
+
+
+class DeviceScanSerializer(serializers.Serializer):
+    bridge_code = serializers.CharField(max_length=32)
+    login_code = serializers.CharField(max_length=256)
+
+
+class DevicePhoneSerializer(serializers.Serializer):
+    phone_binding_token = serializers.CharField(max_length=128)
+    phone_code = serializers.CharField(max_length=256)
+
+
+class DeviceCompleteSerializer(serializers.Serializer):
+    ticket = serializers.CharField(max_length=128)
+    requested_role = serializers.ChoiceField(choices=VALID_ROLES)
+
+
 def serialize_user_session(user, active_role):
     """Serialize account data with session-scoped role compatibility fields."""
     data = ProfileSerializer(user).data

@@ -2,8 +2,10 @@ import io
 import secrets
 import string
 import time
+from dataclasses import dataclass
 from datetime import timedelta
 
+import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
@@ -92,15 +94,20 @@ def analyze_image_blur(file_obj):
         return None, False
 
 
-def wxacode_png(
+@dataclass(frozen=True)
+class WechatCodeImage:
+    content: bytes
+    content_type: str
+
+
+def wxacode_image(
     scene,
     page='pages/student/scan-entry',
     width=430,
     check_path=False,
     env_version='release',
 ):
-    """Generate a real unlimited mini-program code through the WeChat API."""
-    import requests
+    """Generate a real unlimited mini-program code with its actual MIME type."""
     env_version = str(env_version).strip().lower()
     if env_version not in {'release', 'trial', 'develop'}:
         raise RuntimeError('invalid miniprogram env_version')
@@ -128,13 +135,31 @@ def wxacode_png(
         },
         timeout=15,
     )
-    if 'image' not in response.headers.get('Content-Type', ''):
+    content_type = response.headers.get('Content-Type', '').split(';', 1)[0].lower()
+    if content_type not in {'image/jpeg', 'image/png'}:
         try:
             message = response.json().get('errmsg', '生成微信小程序码失败')
         except ValueError:
             message = '生成微信小程序码失败'
         raise RuntimeError(message)
-    return response.content
+    return WechatCodeImage(content=response.content, content_type=content_type)
+
+
+def wxacode_png(
+    scene,
+    page='pages/student/scan-entry',
+    width=430,
+    check_path=False,
+    env_version='release',
+):
+    """Compatibility wrapper for legacy callers that only need bytes."""
+    return wxacode_image(
+        scene=scene,
+        page=page,
+        width=width,
+        check_path=check_path,
+        env_version=env_version,
+    ).content
 
 
 def wechat_url_link(scene, path='pages/student/scan-entry'):

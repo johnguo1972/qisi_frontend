@@ -11,6 +11,7 @@ from apps.accounts.services import generate_tokens
 from apps.institutions.models import Class, ClassStudent, Institution
 from apps.missions.models import LearningMission
 from apps.qrcode import views
+from apps.qrcode import services as qrcode_services
 from apps.qrcode.services import analyze_image_blur, ensure_mission_short_code, ensure_student_short_code
 
 
@@ -26,6 +27,28 @@ def test_blur_detector_rejects_flat_image():
     score, blurry = analyze_image_blur(stream)
     assert score == 0
     assert blurry is True
+
+
+def test_wxacode_image_returns_wechat_content_type(monkeypatch, settings):
+    """Labelling WeChat JPEG bytes as PNG corrupts the device QR response."""
+    settings.WECHAT_MP_APPID = "wx-test"
+    settings.WECHAT_MP_APPSECRET = "secret-test"
+
+    class Response:
+        headers = {"Content-Type": "image/jpeg; charset=binary"}
+        content = b"jpeg-bytes"
+
+    monkeypatch.setattr(
+        "requests.get", lambda *args, **kwargs: type("Token", (), {
+            "json": lambda self: {"access_token": "token"}
+        })()
+    )
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: Response())
+
+    image = qrcode_services.wxacode_image("bridge-code", "pages/auth/web-binding")
+
+    assert image.content == b"jpeg-bytes"
+    assert image.content_type == "image/jpeg"
 
 
 def _client_for(user, active_role):

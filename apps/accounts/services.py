@@ -93,7 +93,7 @@ class RoleNotGranted(Exception):
 
 @transaction.atomic
 def login_with_trusted_mobile(
-    mobile: str, active_role: str
+    mobile: str, active_role: str, *, issue_tokens: bool = True
 ) -> tuple[UserAccount, dict]:
     """Create or sign in an account from a server-verified phone number.
 
@@ -124,7 +124,7 @@ def login_with_trusted_mobile(
             mobile, initial_role=active_role, grant_source="wechat_web"
         )
 
-    return user, generate_tokens(user, active_role)
+    return user, generate_tokens(user, active_role) if issue_tokens else {}
 
 
 @transaction.atomic
@@ -200,8 +200,8 @@ def get_or_create_user(
     return user, created
 
 
-def generate_tokens(user: UserAccount, active_role: str) -> dict:
-    """Generate a JWT pair bound to one currently authorized role."""
+def validate_active_role(user: UserAccount, active_role: str) -> None:
+    """Raise when an account cannot currently act with the requested role."""
     if user.status != "active":
         raise RoleNotGranted(active_role)
     try:
@@ -210,6 +210,11 @@ def generate_tokens(user: UserAccount, active_role: str) -> dict:
         raise RoleNotGranted(active_role) from exc
     if not granted:
         raise RoleNotGranted(active_role)
+
+
+def generate_tokens(user: UserAccount, active_role: str) -> dict:
+    """Generate a JWT pair bound to one currently authorized role."""
+    validate_active_role(user, active_role)
 
     refresh = RefreshToken.for_user(user)
     refresh['active_role'] = active_role
