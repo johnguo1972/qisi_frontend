@@ -1,10 +1,23 @@
 <template>
   <view class="course-materials">
-    <TeacherSidebar activeItem="course-list" />
+    <TeacherSidebar activeItem="course-list" @navigate="handleSidebarNavigate" />
 
     <view class="main">
       <!-- Breadcrumb + Upload button -->
       <view class="page-header">
+        <!-- #ifndef MP-WEIXIN -->
+        <view class="breadcrumb-area">
+          <button class="back-btn" @click="goCourseList">返回课程管理</button>
+          <view class="breadcrumb">
+            <text class="breadcrumb-item" @click="goCourseList">课程管理</text>
+            <text class="breadcrumb-sep">/</text>
+            <text class="breadcrumb-current">{{ courseName }}</text>
+            <text class="breadcrumb-sep">/</text>
+            <text class="breadcrumb-current">课程资料</text>
+          </view>
+        </view>
+        <!-- #endif -->
+        <!-- #ifdef MP-WEIXIN -->
         <view class="breadcrumb">
           <text class="breadcrumb-item" @click="goCourseList">课程管理</text>
           <text class="breadcrumb-sep">/</text>
@@ -12,6 +25,7 @@
           <text class="breadcrumb-sep">/</text>
           <text class="breadcrumb-current">课程资料</text>
         </view>
+        <!-- #endif -->
         <button class="upload-btn" size="small" @click="triggerFileUpload">
           <text class="btn-icon">+</text> 上传资料
         </button>
@@ -90,6 +104,27 @@
 import { ref, onMounted } from 'vue'
 import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import { materialApi, courseApi } from '@/api/courses'
+import { navigateRoleSection } from '@/utils/role-navigation'
+
+const TEACHER_ROUTES: Record<string, string> = {
+  workbench: '/pages/teacher/layout',
+  'question-bank': '/pages/teacher/question-bank',
+  favorites: '/pages/teacher/favorites',
+  'student-management': '/pages/teacher/my-classes',
+  'assignment-list': '/pages/teacher/mission-list',
+  'learning-stats': '/pages/teacher/learning-stats',
+  'course-list': '/pages/teacher/course-list',
+}
+
+function handleSidebarNavigate(page: string) {
+  // #ifndef MP-WEIXIN
+  navigateRoleSection('teacher', page)
+  // #endif
+  // #ifdef MP-WEIXIN
+  const url = TEACHER_ROUTES[page]
+  if (url) uni.redirectTo({ url })
+  // #endif
+}
 
 // ============================================================
 // Course info
@@ -372,10 +407,16 @@ function fileTypeClass(type: string): string {
 // Navigation
 // ============================================================
 function goCourseList() {
-  uni.navigateTo({
-    url: '/pages/teacher/course-list',
-    fail: () => uni.showToast({ title: '返回课程列表失败', icon: 'none' }),
-  })
+  const pages = getCurrentPages()
+  if (pages.length > 1) uni.navigateBack()
+  else {
+    // #ifndef MP-WEIXIN
+    navigateRoleSection('teacher', 'course-list')
+    // #endif
+    // #ifdef MP-WEIXIN
+    uni.redirectTo({ url: '/pages/teacher/course-list' })
+    // #endif
+  }
 }
 
 // ============================================================
@@ -421,6 +462,10 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 24rpx;
 }
+
+.breadcrumb-area { display: flex; align-items: center; gap: 16rpx; min-width: 0; }
+.back-btn { margin: 0; padding: 8rpx 16rpx; color: #606266; background: #fff; border: 1rpx solid #dcdfe6; border-radius: 6rpx; font-size: 22rpx; }
+.back-btn::after { border: none; }
 
 .breadcrumb {
   display: flex;

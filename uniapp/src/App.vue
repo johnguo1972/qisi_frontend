@@ -17,6 +17,14 @@ onLaunch(() => {
   const browserRoute = typeof window !== 'undefined' ? window.location.hash : ''
   if (currentRoute.includes('student/scan-entry') || browserRoute.includes('/pages/student/scan-entry')) return
 
+  // #ifndef MP-WEIXIN
+  const isLoginEntry =
+    currentRoute.includes('pages/index/index') ||
+    currentRoute.includes('pages/login/index') ||
+    browserRoute.includes('/pages/index/index') ||
+    browserRoute.includes('/pages/login/index')
+  // #endif
+
   // 检查保持登录状态
   const token = uni.getStorageSync('accessToken')
   const tokenExpiry = uni.getStorageSync('tokenExpiry')
@@ -37,7 +45,15 @@ onLaunch(() => {
     // 没有 tokenExpiry 的微信登录态同样视为有效登录态，避免冷启动停留在入口页。
     const userInfo = uni.getStorageSync('userInfo')
     const role = (userInfo?.active_role || userInfo?.role_type) as AppRole | undefined
+    // #ifdef MP-WEIXIN
     if (role) uni.reLaunch({ url: routeForRole(role) })
+    // #endif
+    // #ifndef MP-WEIXIN
+    // 仅从登录/入口页进入角色工作台，不覆盖用户直接打开的业务详情页。
+    if (role && (isLoginEntry || (!currentRoute && !browserRoute))) {
+      uni.reLaunch({ url: routeForRole(role) })
+    }
+    // #endif
   } else if (!currentRoute.includes('login/index') && !currentRoute.includes('pages/index/index')) {
     // 通过外部入口进入受保护页面时，未登录用户必须先进入登录页。
     uni.reLaunch({ url: '/pages/login/index' })

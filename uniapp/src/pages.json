@@ -27,6 +27,7 @@
     { "path": "pages/teacher/class-detail", "style": { "navigationBarTitleText": "班级详情" } },
     { "path": "pages/teacher/class-requests", "style": { "navigationBarTitleText": "申请审批" } },
     { "path": "pages/teacher/course-list", "style": { "navigationBarTitleText": "课程列表" } },
+    { "path": "pages/teacher/course-detail", "style": { "navigationBarTitleText": "课程详情" } },
     { "path": "pages/teacher/course-materials", "style": { "navigationBarTitleText": "课程资料" } },
     { "path": "pages/teacher/course-practice", "style": { "navigationBarTitleText": "课程练习" } },
     { "path": "pages/teacher/course-material-import", "style": { "navigationBarTitleText": "从资料导入习题" } },

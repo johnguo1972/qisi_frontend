@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import Course, CourseMaterial, CourseTree, CourseQuestionLink, VariantTask
 from apps.common.media import media_url
 from apps.common.question_display import difficulty_label, normalize_tables, preview_text
+from apps.common.subject_codes import normalize_subject_code
 
 
 class CourseSerializer(serializers.ModelSerializer):
@@ -17,10 +18,17 @@ class CourseSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'description', 'subject', 'grade_level',
             'cover_image', 'teacher', 'teacher_name',
+            'institution',
             'material_count', 'question_count', 'class_count',
             'is_deleted', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'teacher', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'teacher', 'institution', 'created_at', 'updated_at']
+
+    def validate_subject(self, value):
+        normalized = normalize_subject_code(value)
+        if not normalized:
+            raise serializers.ValidationError('学科必须使用受支持的英文编码')
+        return normalized
 
     def get_material_count(self, obj):
         return obj.materials.filter(is_deleted=False).count()
@@ -33,6 +41,9 @@ class CourseSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data['teacher'] = self.context['request'].user
+        institution = self.context.get('course_institution')
+        if institution is not None:
+            validated_data['institution'] = institution
         return super().create(validated_data)
 
 

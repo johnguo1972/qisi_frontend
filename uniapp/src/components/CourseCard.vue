@@ -3,6 +3,7 @@
     <!-- Cover with subject-based gradient -->
     <view class="card-cover" :style="{ background: subjectGradient }">
       <text class="subject-icon">{{ subjectIcon }}</text>
+      <text class="subject-label">{{ subjectLabel }}</text>
       <text class="grade-badge">{{ course.grade_level }}</text>
     </view>
 
@@ -60,7 +61,7 @@ defineEmits<{
 }>()
 
 // Subject-to-color mapping for gradient covers
-const subjectColors: Record<string, [string, string]> = {
+const legacySubjectColors: Record<string, [string, string]> = {
   '数学': ['#667eea', '#764ba2'],
   '语文': ['#f093fb', '#f5576c'],
   '英语': ['#4facfe', '#00f2fe'],
@@ -71,6 +72,19 @@ const subjectColors: Record<string, [string, string]> = {
   '地理': ['#89f7fe', '#66a6ff'],
   '政治': ['#ffecd2', '#fcb69f'],
 }
+
+const subjectLabels: Record<string, string> = {
+  chinese: '\u8bed\u6587', math: '\u6570\u5b66', english: '\u82f1\u8bed', physics: '\u7269\u7406',
+  chemistry: '\u5316\u5b66', biology: '\u751f\u7269', geography: '\u5730\u7406', history: '\u5386\u53f2',
+}
+
+const subjectColors: Record<string, [string, string]> = {
+  chinese: ['#f093fb', '#f5576c'], math: ['#667eea', '#764ba2'], english: ['#4facfe', '#00f2fe'],
+  physics: ['#43e97b', '#38f9d7'], chemistry: ['#fa709a', '#fee140'], biology: ['#a8edea', '#fed6e3'],
+  geography: ['#89f7fe', '#66a6ff'], history: ['#d299c2', '#fef9d7'],
+}
+
+const subjectLabel = computed(() => subjectLabels[props.course.subject] || props.course.subject)
 
 const subjectGradient = computed(() => {
   const colors = subjectColors[props.course.subject] || ['#667eea', '#764ba2']
@@ -89,7 +103,11 @@ const subjectIcon = computed(() => {
     '地理': '🌍',
     '政治': '⚖️',
   }
-  return icons[props.course.subject] || '📚'
+  const canonicalIcons: Record<string, string> = {
+    math: '\ud83d\udcbb', chinese: '\ud83d\udcd6', english: '\ud83d\udd0a', physics: '\u26a1',
+    chemistry: '\ud83e\uddea', biology: '\ud83e\uddec', history: '\ud83d\udcdc', geography: '\ud83c\udf0d',
+  }
+  return canonicalIcons[props.course.subject] || icons[props.course.subject] || '📚'
 })
 </script>
 
@@ -121,6 +139,12 @@ const subjectIcon = computed(() => {
 .subject-icon {
   font-size: 56rpx;
   filter: drop-shadow(0 2rpx 4rpx rgba(0, 0, 0, 0.2));
+}
+
+.subject-label {
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 22rpx;
+  font-weight: 600;
 }
 
 .grade-badge {

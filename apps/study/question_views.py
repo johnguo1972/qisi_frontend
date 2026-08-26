@@ -4,7 +4,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Q, CharField
 from django.db.models.functions import Cast
+from apps.accounts.auth import get_request_role
 from apps.parser.models import ExamQuestion
+from apps.study.models import QuestionTagRelation
 from apps.knowledge.models import KnowledgePoint
 from apps.knowledge.teacher_scope import (
     TeachingScopeForbidden,
@@ -14,6 +16,15 @@ from apps.knowledge.teacher_scope import (
 from .serializers import QuestionListSerializer, QuestionDetailSerializer
 
 
+SUBJECT_LABELS = {
+    'math': '数学',
+    'physics': '物理',
+    'chinese': '语文',
+    'english': '英语',
+    'chemistry': '化学',
+}
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def question_list(request):
@@ -21,6 +32,7 @@ def question_list(request):
     subject = request.GET.get('subject')
     difficulty = request.GET.get('difficulty')
     question_type = request.GET.get('question_type')
+    keyword = request.GET.get('keyword', '').strip()
     tag = request.GET.get('tag', '').strip()
     question_uuid = request.GET.get('uuid', '').strip()
     knowledge = request.GET.get('knowledge')
@@ -45,8 +57,11 @@ def question_list(request):
         }, status=403)
 
     if scope is not None and not scope.configured:
-        page = int(request.GET.get('page', 1))
-        page_size = min(int(request.GET.get('page_size', 20)), 100)
+        try:
+            page = max(int(request.GET.get('page', 1)), 1)
+            page_size = min(max(int(request.GET.get('page_size', 20)), 1), 100)
+        except (TypeError, ValueError):
+            return Response({'code': 400, 'message': 'page/page_size 参数无效', 'data': None}, status=400)
         return Response({
             'code': 0, 'message': 'success', 'trace_id': '',
             'data': {
@@ -63,7 +78,10 @@ def question_list(request):
     if review_status:
         qs = qs.filter(review_status=review_status)
     if subject:
-        qs = qs.filter(subject=subject)
+        if scope is not None:
+            qs = qs.filter(subject__in=[subject, SUBJECT_LABELS.get(subject, subject)])
+        else:
+            qs = qs.filter(subject=subject)
     if difficulty:
         diff_values = [value.strip() for value in difficulty.split(',') if value.strip()]
         try:
@@ -75,9 +93,23 @@ def question_list(request):
         except (ValueError, TypeError):
             pass
     if question_type:
-        qs = qs.filter(question_type=question_type)
+        question_types = [value.strip() for value in question_type.split(',') if value.strip()]
+        if len(question_types) == 1:
+            qs = qs.filter(question_type=question_types[0])
+        elif question_types:
+            qs = qs.filter(question_type__in=question_types)
     if tag:
-        qs = qs.filter(tags__contains=[tag])
+        tag_question_ids = QuestionTagRelation.objects.filter(tag__name=tag).values('question_id')
+        qs = qs.filter(Q(tags__contains=[tag]) | Q(id__in=tag_question_ids))
+    if keyword:
+        qs = qs.filter(
+            Q(stem__icontains=keyword)
+            | Q(stem_html__icontains=keyword)
+            | Q(question_no__icontains=keyword)
+            | Q(paper_question_no__icontains=keyword)
+            | Q(system_id__icontains=keyword)
+            | Q(options__content__icontains=keyword)
+        ).distinct()
     if question_uuid:
         # UUID 字段不能直接使用字符串 icontains；转换为文本后支持输入完整 UUID
         # 或任意片段的模糊查询，例如前 8 位、后 6 位等。
@@ -151,9 +183,11 @@ def question_list(request):
             if kp_query:
                 qs = qs.filter(kp_query)
 
-    page = int(request.GET.get('page', 1))
-    page_size = int(request.GET.get('page_size', 20))
-    page_size = min(page_size, 100)  # cap
+    try:
+        page = max(int(request.GET.get('page', 1)), 1)
+        page_size = min(max(int(request.GET.get('page_size', 20)), 1), 100)
+    except (TypeError, ValueError):
+        return Response({'code': 400, 'message': 'page/page_size 参数无效', 'data': None}, status=400)
 
     total = qs.count()
     start = (page - 1) * page_size
@@ -171,6 +205,41 @@ def question_list(request):
     })
 
 
+def _teacher_question_scope_error(request, question):
+    """Apply the same teaching scope to UUID-based question operations."""
+    if get_request_role(request) != 'teacher':
+        return None
+    try:
+        scope = resolve_teacher_question_scope(
+            request,
+            requested_subject=question.subject or '',
+        )
+    except TeachingScopeForbidden:
+        return Response({
+            'code': 'TEACHING_SCOPE_FORBIDDEN',
+            'message': 'Question is outside the teacher teaching scope.',
+            'data': None,
+            'trace_id': '',
+        }, status=403)
+    if scope is None or not scope.configured:
+        return Response({
+            'code': 'TEACHING_SCOPE_FORBIDDEN',
+            'message': 'Teacher teaching scope is not configured.',
+            'data': None,
+            'trace_id': '',
+        }, status=403)
+    if not apply_stage_scope(
+        ExamQuestion.objects.filter(pk=question.pk), scope.stages
+    ).exists():
+        return Response({
+            'code': 'TEACHING_SCOPE_FORBIDDEN',
+            'message': 'Question is outside the teacher teaching scope.',
+            'data': None,
+            'trace_id': '',
+        }, status=403)
+    return None
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def similar_questions(request, question_id):
@@ -179,6 +248,10 @@ def similar_questions(request, question_id):
         question = ExamQuestion.objects.get(pk=question_id)
     except ExamQuestion.DoesNotExist:
         return Response({'code': 404, 'message': '题目不存在', 'data': None}, status=404)
+
+    scope_error = _teacher_question_scope_error(request, question)
+    if scope_error:
+        return scope_error
 
     raw_points = question.knowledge_points or []
     if isinstance(raw_points, dict):
@@ -196,6 +269,9 @@ def similar_questions(request, question_id):
     if not modules and not ids:
         return Response({'code': 0, 'data': []})
     candidates = candidates.filter(query)
+    if get_request_role(request) == 'teacher':
+        scope = resolve_teacher_question_scope(request, requested_subject=question.subject)
+        candidates = apply_stage_scope(candidates, scope.stages)
     if question.difficulty is not None:
         candidates = candidates.filter(
             difficulty__gte=max(0, float(question.difficulty) - 1),
@@ -218,6 +294,10 @@ def question_detail(request, question_id):
             status=404
         )
 
+    scope_error = _teacher_question_scope_error(request, q)
+    if scope_error:
+        return scope_error
+
     if request.method == 'GET':
         return Response({
             'code': 0, 'message': 'success',
@@ -230,6 +310,19 @@ def question_detail(request, question_id):
                 'difficulty', 'subject', 'review_status',
                 'stem', 'stem_html', 'answer', 'analysis', 'solution',
                 'knowledge_points', 'tags', 'need_review', 'formula_need_review']
+    if get_request_role(request) == 'teacher' and 'subject' in request.data:
+        try:
+            resolve_teacher_question_scope(
+                request,
+                requested_subject=request.data.get('subject') or '',
+            )
+        except TeachingScopeForbidden:
+            return Response({
+                'code': 'TEACHING_SCOPE_FORBIDDEN',
+                'message': 'Subject is outside the teacher teaching scope.',
+                'data': None,
+                'trace_id': '',
+            }, status=403)
     for field in editable:
         if field in request.data:
             setattr(q, field, request.data[field])
@@ -243,6 +336,9 @@ def question_publish(request, question_id):
     """Q-09: Publish (confirm) a question."""
     try:
         q = ExamQuestion.objects.get(pk=question_id)
+        scope_error = _teacher_question_scope_error(request, q)
+        if scope_error:
+            return scope_error
         q.review_status = 'confirmed'
         q.need_review = False
         q.save()

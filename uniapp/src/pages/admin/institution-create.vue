@@ -1,5 +1,11 @@
 <template>
   <view class="create-page">
+    <!-- #ifndef MP-WEIXIN -->
+    <view class="page-header">
+      <button class="back-btn" @click="handleCancel">返回机构管理</button>
+      <text class="page-title">创建机构</text>
+    </view>
+    <!-- #endif -->
     <view class="form">
       <view class="form-title">创建机构</view>
 
@@ -95,7 +101,9 @@ async function handleSubmit() {
 }
 
 function handleCancel() {
-  uni.navigateBack()
+  const pages = getCurrentPages()
+  if (pages.length > 1) uni.navigateBack()
+  else uni.redirectTo({ url: '/pages/admin/home' })
 }
 </script>
 
@@ -105,6 +113,10 @@ function handleCancel() {
   background: #f0f2f5;
   padding: 30rpx 40rpx;
 }
+.page-header { display: flex; align-items: center; gap: 24rpx; margin-bottom: 24rpx; }
+.back-btn { margin: 0; padding: 10rpx 20rpx; color: #606266; background: #fff; border: 1rpx solid #dcdfe6; border-radius: 8rpx; font-size: 24rpx; }
+.back-btn::after { border: none; }
+.page-title { color: #303133; font-size: 34rpx; font-weight: 600; }
 .form {
   background: #fff;
   border-radius: 12rpx;

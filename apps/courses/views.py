@@ -13,8 +13,18 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
 from apps.accounts.roles import has_user_role
+from apps.common.subject_codes import normalize_subject_codes
+from apps.institutions.models import Institution, InstitutionMember
 
-from .models import Course, CourseMaterial, CourseTree, CourseQuestionLink, VariantTask
+from .models import (
+    Course,
+    CourseAuditLog,
+    CourseCollaborator,
+    CourseMaterial,
+    CourseTree,
+    CourseQuestionLink,
+    VariantTask,
+)
 from .serializers import (
     CourseSerializer,
     CourseMaterialSerializer,
@@ -173,23 +183,140 @@ def _course_stage(grade_level):
     return None
 
 
+def _active_role(user):
+    """Return the role selected for this authenticated request when present."""
+    return getattr(user, '_active_role', None) or getattr(user, 'role_type', None)
+
+
+def _is_teacher(user):
+    active_role = getattr(user, '_active_role', None)
+    if active_role is None:
+        return getattr(user, 'role_type', None) == 'teacher' and has_user_role(user, 'teacher')
+    return active_role == 'teacher' and has_user_role(user, 'teacher')
+
+
+def _is_admin(user):
+    active_role = getattr(user, '_active_role', None)
+    if active_role is None:
+        return has_user_role(user, 'admin')
+    return active_role == 'admin' and has_user_role(user, 'admin')
+
+
+def _teacher_institution_ids(user):
+    return list(
+        InstitutionMember.objects.filter(
+            user=user,
+            role__in=['admin', 'teacher'],
+            status='active',
+        ).values_list('institution_id', flat=True).distinct()
+    )
+
+
+def _resolve_course_institution(request, *, required=True):
+    """Resolve and authorize the institution used for a course operation."""
+    requested = request.query_params.get('institution_id') or request.data.get('institution_id')
+    if requested:
+        if _is_admin(request.user):
+            try:
+                return Institution.objects.get(id=requested, status='active')
+            except Institution.DoesNotExist:
+                raise ValidationError('机构不存在或已停用')
+        membership = InstitutionMember.objects.filter(
+            institution_id=requested,
+            user=request.user,
+            role__in=['admin', 'teacher'],
+            status='active',
+        ).select_related('institution').first()
+        if membership is None:
+            raise PermissionDenied('您不是该机构的有效教师')
+        return membership.institution
+
+    institution_ids = _teacher_institution_ids(request.user)
+    if len(institution_ids) == 1:
+        return Institution.objects.get(id=institution_ids[0])
+    if required and len(institution_ids) == 0:
+        raise PermissionDenied('教师尚未加入有效机构')
+    if required and len(institution_ids) > 1:
+        raise ValidationError('您属于多个机构，请先指定 institution_id')
+    return None
+
+
+def _course_subjects(user):
+    return normalize_subject_codes(user.subjects or user.subject)
+
+
+def _same_scope_course(course, user):
+    if not _is_teacher(user) or not course.institution_id:
+        return False
+    if not InstitutionMember.objects.filter(
+        institution_id=course.institution_id,
+        user=user,
+        role__in=['admin', 'teacher'],
+        status='active',
+    ).exists():
+        return False
+    return (
+        course.subject in _course_subjects(user)
+        and _course_stage(course.grade_level) in (user.stages or [])
+    )
+
+
+def _active_course_collaborator(course, user):
+    if not _is_teacher(user) or not course.institution_id:
+        return None
+    if not InstitutionMember.objects.filter(
+        institution_id=course.institution_id,
+        user=user,
+        role='teacher',
+        status='active',
+    ).exists():
+        return None
+    return CourseCollaborator.objects.filter(
+        course=course, user=user, status='active',
+    ).first()
+
+
 def _can_access_shared_course(course, user):
-    """课程对同学段、同学科教师开放协作；管理员全量访问。"""
-    if has_user_role(user, 'admin'):
+    """Apply one consistent read rule to course and all child resources."""
+    if _is_admin(user):
         return True
     if course.teacher_id == user.id:
         return True
-    return (
-        user.role_type == 'teacher'
-        and user.subject == course.subject
-        and _course_stage(course.grade_level) in (user.stages or [])
+    if _active_course_collaborator(course, user) is not None:
+        return True
+    return _same_scope_course(course, user)
+
+
+def _can_edit_course(course, user):
+    if _is_admin(user) or course.teacher_id == user.id:
+        return True
+    collaborator = _active_course_collaborator(course, user)
+    if collaborator and collaborator.role == 'editor':
+        return True
+    # Existing business behavior allows same-institution subject/stage peers
+    # to collaborate.  Explicit viewer grants remain read-only.
+    return _same_scope_course(course, user)
+
+
+def _audit(course, actor, action, target_user=None, metadata=None):
+    CourseAuditLog.objects.create(
+        course=course,
+        actor=actor,
+        action=action,
+        target_user=target_user,
+        metadata=metadata or {},
     )
 
 
 def _check_course_owner(course, user):
     """验证用户是否可以协作操作课程。"""
-    if not _can_access_shared_course(course, user):
+    if not _can_edit_course(course, user):
         raise PermissionDenied('您没有权限操作此课程')
+
+
+def _check_course_access(course, user):
+    if not _can_access_shared_course(course, user):
+        raise PermissionDenied('您没有权限访问此课程')
 
 
 def _get_course_or_404(course_id):
@@ -209,10 +336,19 @@ def _get_course_or_404(course_id):
 def course_list_or_create(request):
     """课程列表（GET）和创建（POST）"""
     if request.method == 'GET':
-        if has_user_role(request.user, 'admin'):
-            courses = Course.objects.filter(is_deleted=False).order_by('-created_at')
+        if _is_admin(request.user):
+            courses = Course.objects.filter(is_deleted=False)
+            institution_id = request.query_params.get('institution_id')
+            if institution_id:
+                courses = courses.filter(institution_id=institution_id)
+            courses = courses.order_by('-created_at')
         else:
+            if not _is_teacher(request.user):
+                raise PermissionDenied('只有教师或管理员可以访问课程管理')
+            institution = _resolve_course_institution(request, required=False)
+            institution_ids = [institution.id] if institution else _teacher_institution_ids(request.user)
             stages = request.user.stages or []
+            subjects = _course_subjects(request.user)
             grade_levels = [
                 grade for grade in Course.objects.values_list('grade_level', flat=True).distinct()
                 if _course_stage(grade) in stages
@@ -220,20 +356,29 @@ def course_list_or_create(request):
             courses = Course.objects.filter(is_deleted=False).filter(
                 db_models.Q(teacher=request.user)
                 | db_models.Q(
-                    subject=request.user.subject,
+                    collaborators__user=request.user,
+                    collaborators__status='active',
+                    institution_id__in=institution_ids,
+                )
+                | db_models.Q(
+                    institution_id__in=institution_ids,
+                    subject__in=subjects,
                     grade_level__in=grade_levels,
                 )
-            ).order_by('-created_at')
+            ).distinct().order_by('-created_at')
         serializer = CourseSerializer(courses, many=True, context={'request': request})
         return Response({'success': True, 'data': serializer.data})
 
-    # POST - 创建课程
+    if not (_is_teacher(request.user) or _is_admin(request.user)):
+        raise PermissionDenied('只有教师或管理员可以创建课程')
+    course_institution = _resolve_course_institution(request, required=True)
     serializer = CourseSerializer(
         data=request.data,
-        context={'request': request}
+        context={'request': request, 'course_institution': course_institution},
     )
     serializer.is_valid(raise_exception=True)
     course = serializer.save()
+    _audit(course, request.user, 'course.create')
     return Response(
         {'success': True, 'data': CourseSerializer(course, context={'request': request}).data, 'message': '课程创建成功'},
         status=status.HTTP_201_CREATED,
@@ -245,22 +390,97 @@ def course_list_or_create(request):
 def course_detail_update_delete(request, course_id):
     """课程详情（GET）、更新（PUT）、软删除（DELETE）"""
     course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
 
     if request.method == 'GET':
+        _check_course_access(course, request.user)
         serializer = CourseSerializer(course, context={'request': request})
         return Response({'success': True, 'data': serializer.data})
+
+    _check_course_owner(course, request.user)
 
     if request.method == 'PUT':
         serializer = CourseSerializer(course, data=request.data, partial=True, context={'request': request})
         serializer.is_valid(raise_exception=True)
         course = serializer.save()
+        _audit(course, request.user, 'course.update')
         return Response({'success': True, 'data': CourseSerializer(course, context={'request': request}).data, 'message': '课程更新成功'})
 
     # DELETE - 软删除
     course.is_deleted = True
     course.save(update_fields=['is_deleted'])
+    _audit(course, request.user, 'course.delete')
     return Response({'success': True, 'message': '课程已删除'})
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def course_collaborators(request, course_id):
+    """List or grant explicit read/edit access to teachers in the course institution."""
+    course = _get_course_or_404(course_id)
+    _check_course_access(course, request.user)
+
+    if request.method == 'GET':
+        items = list(
+            CourseCollaborator.objects.filter(course=course, status='active')
+            .select_related('user')
+            .values('user_id', 'user__display_name', 'user__mobile', 'role', 'created_at')
+        )
+        return Response({'success': True, 'data': items})
+
+    if not (_is_admin(request.user) or course.teacher_id == request.user.id):
+        raise PermissionDenied('只有课程创建者或管理员可以管理协作者')
+    target_id = request.data.get('user_id')
+    role = request.data.get('role', 'viewer')
+    if role not in {'viewer', 'editor'}:
+        raise ValidationError('协作者权限必须是 viewer 或 editor')
+    if not target_id or not course.institution_id:
+        raise ValidationError('课程必须归属机构且必须提供协作者 user_id')
+    target_membership = InstitutionMember.objects.filter(
+        institution_id=course.institution_id,
+        user_id=target_id,
+        role='teacher',
+        status='active',
+    ).first()
+    if target_membership is None:
+        raise ValidationError('协作者必须是课程所属机构的有效教师')
+    collaborator, _ = CourseCollaborator.objects.update_or_create(
+        course=course,
+        user_id=target_id,
+        defaults={'role': role, 'status': 'active', 'granted_by': request.user},
+    )
+    _audit(
+        course,
+        request.user,
+        'course.collaborator.grant',
+        target_user=collaborator.user,
+        metadata={'role': role},
+    )
+    return Response({
+        'success': True,
+        'data': {
+            'user_id': collaborator.user_id,
+            'role': collaborator.role,
+            'status': collaborator.status,
+        },
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def course_collaborator_delete(request, course_id, user_id):
+    course = _get_course_or_404(course_id)
+    _check_course_access(course, request.user)
+    if not (_is_admin(request.user) or course.teacher_id == request.user.id):
+        raise PermissionDenied('只有课程创建者或管理员可以管理协作者')
+    collaborator = CourseCollaborator.objects.filter(
+        course=course, user_id=user_id, status='active',
+    ).first()
+    if collaborator is None:
+        raise NotFound('协作者不存在')
+    collaborator.status = 'revoked'
+    collaborator.save(update_fields=['status', 'updated_at'])
+    _audit(course, request.user, 'course.collaborator.revoke', target_user=collaborator.user)
+    return Response({'success': True, 'message': '协作者权限已撤销'})
 
 
 # ============================================================
@@ -272,7 +492,7 @@ def course_detail_update_delete(request, course_id):
 def material_list(request, course_id):
     """课程资料列表（排除软删除）"""
     course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
+    _check_course_access(course, request.user)
     materials = CourseMaterial.objects.filter(
         course=course,
         is_deleted=False,
@@ -342,7 +562,7 @@ def material_upload(request, course_id):
 def material_download(request, course_id, material_id):
     """下载课程资料"""
     course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
+    _check_course_access(course, request.user)
 
     try:
         material = CourseMaterial.objects.get(id=material_id, course=course, is_deleted=False)
@@ -366,7 +586,7 @@ def material_download(request, course_id, material_id):
 def material_preview(request, course_id, material_id):
     """预览课程资料（所有类型直接返回文件内容，Word自动转为PDF）"""
     course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
+    _check_course_access(course, request.user)
 
     try:
         material = CourseMaterial.objects.get(id=material_id, course=course, is_deleted=False)
@@ -435,15 +655,16 @@ def material_delete(request, course_id, material_id):
 def tree_list_or_create(request, course_id):
     """目录树列表（GET）和新增节点（POST）"""
     course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
-
     if request.method == 'GET':
+        _check_course_access(course, request.user)
         root_nodes = CourseTree.objects.filter(
             course=course,
             parent=None,
         ).order_by('sort_order')
         serializer = CourseTreeNestedSerializer(root_nodes, many=True, context={'request': request})
         return Response({'success': True, 'data': serializer.data})
+
+    _check_course_owner(course, request.user)
 
     # POST - 新增树节点
     parent_id = request.data.get('parent')
@@ -560,7 +781,7 @@ def tree_node_move(request, course_id, node_id):
 def variant_task_detail(request, course_id, task_id):
     """查询变式任务状态"""
     course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
+    _check_course_access(course, request.user)
 
     try:
         task = VariantTask.objects.get(id=task_id)
@@ -580,7 +801,7 @@ def variant_task_detail(request, course_id, task_id):
 def question_list(request, course_id):
     """课程习题列表（按 tree_node_id 筛选）"""
     course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
+    _check_course_access(course, request.user)
 
     links = CourseQuestionLink.objects.filter(
         course=course,
@@ -1070,7 +1291,7 @@ def generate_mission(request, course_id):
 def material_pages(request, course_id, material_id):
     """获取资料文档的页面图片列表（用于预览）"""
     course = _get_course_or_404(course_id)
-    _check_course_owner(course, request.user)
+    _check_course_access(course, request.user)
 
     try:
         material = CourseMaterial.objects.get(id=material_id, course=course, is_deleted=False)
@@ -1109,7 +1330,12 @@ def material_pages(request, course_id, material_id):
             from apps.parser.services.convert_service import word_to_pdf, pdf_to_images
             pdf_path = word_to_pdf(full_path, output_dir=pages_dir)
             if pdf_path:
-                images = pdf_to_images(pdf_path, output_dir=pages_dir)
+                # parser.word_to_pdf returns a path relative to MEDIA_ROOT;
+                # pdf_to_images requires a filesystem path.
+                pdf_full_path = pdf_path
+                if not os.path.isabs(pdf_full_path):
+                    pdf_full_path = os.path.join(settings.MEDIA_ROOT, pdf_full_path)
+                images = pdf_to_images(pdf_full_path, output_dir=pages_dir)
                 for img in images:
                     img_path = img.get('path') if isinstance(img, dict) else img
                     img_path = img_path.replace('\\', '/')
@@ -1253,7 +1479,7 @@ def import_question(request, course_id):
             course=course,
             tree_node_id=tree_node_id,
             question=question,
-            source='imported_from_material',
+            source='import',
             source_course_name=course.name,
         )
 

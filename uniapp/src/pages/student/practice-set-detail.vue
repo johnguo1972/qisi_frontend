@@ -1,5 +1,5 @@
 <template>
-  <view class="page"><view class="top"><view><text class="title">{{ detail?.title || '精练作业' }}</text><text class="meta">{{ detail?.question_count || questions.length }} 题 · 进度 {{ progress }}%</text></view><view class="actions"><button v-if="detail?.status === 'draft' && !readonly" size="mini" @click="activate">开始练习</button><button v-if="detail?.status === 'active' && !readonly" size="mini" type="primary" @click="submitSet">提交作业</button><button size="mini" @click="exportPdf">导出 PDF</button></view></view>
+  <view class="page"><view class="top"><!-- #ifndef MP-WEIXIN --><button class="back-btn" @click="goBack">返回精练题</button><!-- #endif --><view><text class="title">{{ detail?.title || '精练作业' }}</text><text class="meta">{{ detail?.question_count || questions.length }} 题 · 进度 {{ progress }}%</text></view><view class="actions"><button v-if="detail?.status === 'draft' && !readonly" size="mini" @click="activate">开始练习</button><button v-if="detail?.status === 'active' && !readonly" size="mini" type="primary" @click="submitSet">提交作业</button><button size="mini" @click="exportPdf">导出 PDF</button></view></view>
     <view v-if="!questions.length" class="empty">暂无题目</view>
     <view v-for="(item, index) in questions" :key="item.id" class="question-card">
       <view class="q-head"><text>第 {{ index + 1 }} 题</text><text class="tag">{{ typeLabel(item.display_snapshot?.question_type) }}</text><text class="state">{{ item.latest_attempt?.status ? statusLabel(item.latest_attempt.status) : '未作答' }}</text></view>
@@ -110,9 +110,16 @@ async function exportPdf() { const response: any = await practiceApi.exportPdf(s
   uni.downloadFile({ url, success: result => { if (result.statusCode === 200) uni.openDocument({ filePath: result.tempFilePath, showMenu: true }) } })
   // #endif
 }
+function goBack() {
+  const pages = getCurrentPages()
+  if (pages.length > 1) uni.navigateBack()
+  else uni.reLaunch({ url: '/pages/student/layout?section=practice' })
+}
 </script>
 
 <style scoped>
+.back-btn { margin: 0; padding: 8rpx 16rpx; color: #606266; background: #fff; border: 1rpx solid #dcdfe6; border-radius: 6rpx; font-size: 22rpx; }
+.back-btn::after { border: none; }
 .page { min-height: 100vh; padding: 24rpx; background: #f0f2f5; box-sizing: border-box; }.top { display: flex; justify-content: space-between; align-items: center; gap: 16rpx; margin-bottom: 20rpx; }.title { display: block; color: #303133; font-size: 34rpx; font-weight: 700; }.meta,.state { color: #909399; font-size: 22rpx; }.actions,.q-actions { display: flex; gap: 12rpx; }.question-card { margin-bottom: 20rpx; padding: 24rpx; background: #fff; border-radius: 14rpx; }.q-head { display: flex; align-items: center; gap: 14rpx; margin-bottom: 14rpx; color: #303133; font-size: 26rpx; font-weight: 600; }.tag { padding: 4rpx 10rpx; color: #409eff; background: #ecf5ff; border-radius: 6rpx; font-size: 20rpx; }.state { margin-left: auto; }.stem { display: block; margin-bottom: 18rpx; color: #303133; font-size: 28rpx; line-height: 1.65; }.options { display: flex; flex-direction: column; gap: 12rpx; margin-bottom: 20rpx; }.option { display: flex; gap: 14rpx; padding: 18rpx; border: 1rpx solid #dcdfe6; border-radius: 10rpx; color: #303133; font-size: 25rpx; }.option.selected { border-color: #409eff; background: #ecf5ff; }.option-label { font-weight: 700; }.textarea { width: 100%; min-height: 190rpx; margin-bottom: 18rpx; padding: 16rpx; border: 1rpx solid #dcdfe6; border-radius: 10rpx; box-sizing: border-box; }.empty { padding: 80rpx; color: #909399; text-align: center; }
 .question-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8rpx; margin: 0 0 16rpx; }
 .meta-chip { padding: 4rpx 10rpx; border-radius: 999rpx; background: #f4f4f5; color: #606266; font-size: 21rpx; }

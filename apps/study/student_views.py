@@ -627,7 +627,11 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
         return str(label), str(content or '')
 
     type_label = '同类题练习' if export_type == 'variants' else ('错题本' if export_type == 'wrongbook' else '任务题目')
-    story.append(Paragraph(type_label, h1))
+    type_label = next(
+        (str(q.get('_pdf_title')) for q in questions if q.get('_pdf_title')),
+        type_label,
+    )
+    story.append(Paragraph(pdf_text(type_label), h1))
     story.append(Spacer(1, 6*mm))
     story.append(Paragraph(f'导出时间：{timezone.now().strftime("%Y-%m-%d %H:%M:%S")}　题目数：{len(questions)}', body))
     story.append(Spacer(1, 6*mm))
@@ -667,13 +671,30 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
             )
             story.append(Paragraph(f'<font color="#666666" size="9">{kp_text}</font>', body))
 
-        # Formula images come from solutions/analysis; keep only question figures.
-        for img_url in q.get('image_urls', []):
-            img_path = str(settings.MEDIA_ROOT / img_url)
-            if os.path.exists(img_path):
+        image_items = q.get('image_items') or [
+            {'file_path': img_url, 'placement': 'stem'}
+            for img_url in q.get('image_urls', [])
+        ]
+
+        def append_images(items):
+            for item in items:
+                img_url = item.get('file_path') if isinstance(item, dict) else item
+                if not img_url:
+                    continue
+                img_path = str(img_url)
+                if not os.path.isabs(img_path):
+                    img_path = str(settings.MEDIA_ROOT / img_path.lstrip('/'))
+                if img_path.startswith(('http://', 'https://')):
+                    continue
+                img_path = os.path.normpath(img_path)
+                if not os.path.exists(img_path):
+                    continue
                 try:
                     image_width, image_height = ImageReader(img_path).getSize()
                     max_width, max_height = doc.width, 100 * mm
+                    requested_width = item.get('display_width') if isinstance(item, dict) else None
+                    if requested_width:
+                        max_width = min(max_width, float(requested_width) * mm)
                     scale = min(max_width / image_width, max_height / image_height, 1)
                     story.append(Spacer(1, 2 * mm))
                     story.append(RLImage(img_path, width=image_width * scale,
@@ -682,9 +703,20 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
                 except Exception:
                     pass
 
+        stem_images = [
+            item for item in image_items
+            if (item.get('placement') if isinstance(item, dict) else 'stem') != 'options'
+        ]
+        option_images = [
+            item for item in image_items
+            if (item.get('placement') if isinstance(item, dict) else 'stem') == 'options'
+        ]
+        append_images(stem_images)
+
         for option_index, opt in enumerate(q.get('options_html', [])):
             label, content = option_text(opt, option_index)
             story.append(Paragraph(f'{pdf_text(label)}. {content_text(content)}', body))
+        append_images(option_images)
 
         if include_answers:
             if q.get('answer'):

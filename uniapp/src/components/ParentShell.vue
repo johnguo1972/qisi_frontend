@@ -35,6 +35,7 @@ import { authApi } from '@/api/index'
 import { useUserStore } from '@/store/index'
 import ParentSidebar from '@/components/ParentSidebar.vue'
 import MpDrawer from '@/components/MpDrawer.vue'
+import { navigateRoleSection } from '@/utils/role-navigation'
 
 const props = withDefaults(defineProps<{ activeItem: string; inline?: boolean }>(), { inline: false })
 const emit = defineEmits<{ sectionChange: [key: string] }>()
@@ -55,7 +56,7 @@ const drawerItems = [
 
 function navigate(key: string) {
   drawerVisible.value = false
-  if (key === props.activeItem) return
+  if (props.inline && key === props.activeItem) return
   if (props.inline) {
     emit('sectionChange', key)
     return
@@ -68,8 +69,13 @@ function navigate(key: string) {
     growth: '/pages/parent/growth',
     knowledge: '/pages/parent/knowledge',
   }
+  // #ifndef MP-WEIXIN
+  navigateRoleSection('parent', key)
+  // #endif
+  // #ifdef MP-WEIXIN
   if (!routes[key]) return
   uni.navigateTo({ url: routes[key] })
+  // #endif
 }
 
 provide('parentLayoutEmbedded', props.inline || embedded)

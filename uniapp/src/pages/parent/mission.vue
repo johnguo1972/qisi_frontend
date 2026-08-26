@@ -2,6 +2,9 @@
   <ParentShell active-item="home">
   <view class="page">
     <view class="header">
+      <!-- #ifndef MP-WEIXIN -->
+      <button class="back-btn" @click="goBack">返回学习概览</button>
+      <!-- #endif -->
       <text class="title">作业详情</text>
     </view>
     <MpChildSwitcher :visible="true" @changed="onChildChanged" />
@@ -76,11 +79,19 @@ async function loadMission() {
   }
 }
 
+function goBack() {
+  const pages = getCurrentPages()
+  if (pages.length > 1) uni.navigateBack()
+  else uni.reLaunch({ url: '/pages/parent/layout?section=home' })
+}
+
 </script>
 
 <style scoped>
 .page { min-height: 100vh; padding: 28rpx 22rpx 60rpx; box-sizing: border-box; background: #f0f2f5; }
-.header { display: flex; align-items: center; justify-content: space-between; padding: 18rpx 4rpx 8rpx; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; padding: 18rpx 4rpx 8rpx; }
+.back-btn { margin: 0; padding: 8rpx 16rpx; color: #606266; background: #fff; border: 1rpx solid #dcdfe6; border-radius: 6rpx; font-size: 22rpx; }
+.back-btn::after { border: none; }
 .title { color: #303133; font-size: 38rpx; font-weight: 700; }
 .state-card { margin-top: 24rpx; padding: 70rpx 30rpx; border-radius: 18rpx; background: #fff; color: #909399; text-align: center; font-size: 25rpx; }
 .error { color: #f56c6c; }

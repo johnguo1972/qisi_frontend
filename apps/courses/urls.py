@@ -6,6 +6,8 @@ urlpatterns = [
     # 课程 CRUD（合并视图：GET/POST 共用一个 path）
     path('courses/', views.course_list_or_create, name='course-list-create'),
     path('courses/<uuid:course_id>/', views.course_detail_update_delete, name='course-detail-update-delete'),
+    path('courses/<uuid:course_id>/collaborators/', views.course_collaborators, name='course-collaborators'),
+    path('courses/<uuid:course_id>/collaborators/<uuid:user_id>/', views.course_collaborator_delete, name='course-collaborator-delete'),
 
     # 课程资料
     path('courses/<uuid:course_id>/materials/', views.material_list, name='material-list'),

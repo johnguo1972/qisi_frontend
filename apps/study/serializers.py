@@ -155,6 +155,8 @@ class QuestionListSerializer(serializers.ModelSerializer):
                 'url': media_url(img.file_path),
                 'description': img.description or '',
                 'image_type': img.image_type,
+                'placement': img.placement,
+                'sort_order': img.sort_order,
                 'display_width': img.display_width,
             }
             for img in obj.images.filter(image_type='diagram').order_by('sort_order')[:5]  # 仅返回题目插图，排除公式裁剪图
@@ -223,6 +225,8 @@ class QuestionDetailSerializer(serializers.ModelSerializer):
                 'url': media_url(image.file_path),
                 'description': image.description or '',
                 'image_type': image.image_type,
+                'placement': image.placement,
+                'sort_order': image.sort_order,
                 'display_width': image.display_width,
             }
             for image in obj.images.order_by('image_type', 'sort_order', 'id')
