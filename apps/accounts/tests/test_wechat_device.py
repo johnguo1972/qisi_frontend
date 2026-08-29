@@ -36,6 +36,21 @@ def test_h5_qr_login_uses_direct_miniprogram_device_session_without_oauth_redire
     assert "void createWechatDeviceSession()" in login_page
 
 
+def test_h5_pending_device_status_does_not_claim_the_code_was_scanned():
+    """A pending browser session means the Mini Program has not confirmed yet."""
+    login_page = (
+        Path(__file__).resolve().parents[3]
+        / "uniapp"
+        / "src"
+        / "pages"
+        / "login"
+        / "index.vue"
+    ).read_text(encoding="utf-8")
+
+    assert "response.data.status === 'pending'" in login_page
+    assert "请使用微信扫描二维码并在小程序中确认。" in login_page
+
+
 class FakeWechatResponse:
     def __init__(self, payload):
         self.payload = payload

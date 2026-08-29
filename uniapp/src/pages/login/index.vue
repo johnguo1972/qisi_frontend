@@ -146,9 +146,13 @@ async function pollWechatDeviceStatus(): Promise<boolean> {
       await completeWechatDeviceLogin(response.data.ticket)
       return true
     }
-    wechatDeviceStatusText.value = response.data.status === 'phone_authorization_required'
-      ? '请在小程序中点击授权手机号，网页会自动完成登录。'
-      : '已扫码，正在等待小程序确认。'
+    if (response.data.status === 'pending') {
+      wechatDeviceStatusText.value = '请使用微信扫描二维码并在小程序中确认。'
+    } else if (response.data.status === 'phone_authorization_required') {
+      wechatDeviceStatusText.value = '请在小程序中点击授权手机号，网页会自动完成登录。'
+    } else {
+      wechatDeviceStatusText.value = '正在等待小程序确认。'
+    }
   } catch (error) {
     console.warn('查询微信扫码状态失败', error)
   }
