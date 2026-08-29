@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone as datetime_timezone
+from types import SimpleNamespace
 
 import pytest
 from django.core.cache import cache
@@ -274,11 +275,11 @@ def test_binding_qrcode_is_only_available_to_the_originating_browser(
     session = _binding_session(_browser_session_id(browser), suffix="qrcode")
     qrcode_options = {}
 
-    def fake_wxacode_png(**kwargs):
+    def fake_wxacode_image(**kwargs):
         qrcode_options.update(kwargs)
-        return b"png-data"
+        return SimpleNamespace(content=b"png-data", content_type="image/png")
 
-    monkeypatch.setattr(views, "wxacode_png", fake_wxacode_png)
+    monkeypatch.setattr(views, "wxacode_image", fake_wxacode_image)
 
     denied = APIClient().get(
         "/api/v1/auth/wechat-web/binding-qrcode",
@@ -306,7 +307,7 @@ def test_binding_qrcode_reports_an_unpublished_miniprogram_page(monkeypatch):
     session = _binding_session(_browser_session_id(browser), suffix="missing-page")
     monkeypatch.setattr(
         views,
-        "wxacode_png",
+        "wxacode_image",
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("invalid page")),
     )
 

@@ -16,10 +16,10 @@ def test_login_uses_server_active_role_and_shared_route_helper():
     source = read("pages/login/index.vue")
 
     assert "routeForRole" in source
-    assert "res.data.user.active_role" in source
+    assert "response.data.user.active_role" in source
     assert "res.data.user.role_type" not in source
     assert "function navigateByRole" not in source
-    assert "该账号未开通此角色" in source
+    assert "该帐号未开通此角色" in source
     assert "ROLE_NOT_GRANTED" in source
 
 
