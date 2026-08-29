@@ -38,11 +38,11 @@
         <text class="nav-icon">&#128221;</text>
         <text class="nav-text">精练题</text>
       </view>
-      <view class="nav-item" @click="goParentBind">
+      <view class="nav-item" :class="{ active: activeItem === 'parent-bind' }" @click="goParentBind">
         <text class="nav-icon">&#128106;</text>
         <text class="nav-text">家长绑定</text>
       </view>
-      <view class="nav-item" @click="goScanEntry">
+      <view class="nav-item" :class="{ active: activeItem === 'scan-entry' }" @click="goScanEntry">
         <text class="nav-icon">&#128247;</text>
         <text class="nav-text">扫码作业</text>
       </view>
@@ -135,11 +135,11 @@ onMounted(async () => {
 function goHome() { emit('navigate', 'home') }
 function goWrongBook() { emit('navigate', 'wrongbook') }
 function goPractice() { emit('navigate', 'practice') }
-function goKnowledgeGraph() { uni.navigateTo({ url: '/pages/student/knowledge-graph' }) }
+function goKnowledgeGraph() { emit('navigate', 'knowledge') }
 function goGrowth() { emit('navigate', 'growth') }
 function goJoinClass() { emit('navigate', 'join-class') }
-function goParentBind() { uni.navigateTo({ url: '/pages/student/parent-bind-requests' }) }
-function goScanEntry() { uni.navigateTo({ url: '/pages/student/scan-entry' }) }
+function goParentBind() { emit('navigate', 'parent-bind') }
+function goScanEntry() { emit('navigate', 'scan-entry') }
 
 async function handleLogout() {
   uni.showModal({

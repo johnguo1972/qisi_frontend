@@ -1,6 +1,7 @@
 """Generate and locate the published worksheet PDF for a learning mission."""
 
 import os
+import re
 from pathlib import Path
 
 from django.conf import settings
@@ -33,20 +34,26 @@ def _mission_questions(mission):
         ).values('option_label', 'content').order_by('sort_order')
         images = QuestionImage.objects.filter(
             question_id=question['id'],
-        ).exclude(image_type='formula').values('file_path').order_by('sort_order')
+        ).exclude(image_type='formula').values(
+            'file_path', 'placement', 'sort_order', 'display_width'
+        ).order_by('sort_order')
         questions.append({
             **question,
+            '_pdf_title': mission.mission_name,
             'options_html': [
                 {'label': option['option_label'], 'content': option['content']}
                 for option in options
             ],
             'image_urls': [item['file_path'] for item in images],
+            'image_items': list(images),
         })
     return questions
 
 
 def mission_pdf_relative_path(mission):
-    return f'exports/mission_{mission.id}.pdf'
+    title = re.sub(r'[\\/:*?"<>|]+', '_', str(mission.mission_name or '')).strip(' ._')[:60]
+    title = title or 'mission'
+    return f'exports/{title}_mission_{mission.id}.pdf'
 
 
 def mission_pdf_download_url(mission):

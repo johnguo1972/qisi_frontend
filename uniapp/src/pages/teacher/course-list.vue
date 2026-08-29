@@ -3,6 +3,9 @@
     <view class="main">
       <!-- Header with create button -->
       <view class="page-header">
+        <picker v-if="institutionOptions.length > 1" :range="institutionNames" :value="institutionIndex" @change="changeInstitution">
+          <view class="institution-picker">{{ institutionNames[institutionIndex] }}</view>
+        </picker>
         <text class="page-title">课程管理</text>
         <button class="create-btn" @click="showCreateDialog = true">+ 新建课程</button>
       </view>
@@ -117,6 +120,7 @@
 import { computed, ref, onMounted } from 'vue'
 import CourseCard from '@/components/CourseCard.vue'
 import { courseApi } from '@/api/courses'
+import { teacherApi } from '@/api/institutions'
 
 // ============================================================
 // Course list
@@ -133,11 +137,28 @@ interface Course {
 
 const courses = ref<Course[]>([])
 const loading = ref(false)
+const institutionId = ref<string | undefined>()
+const institutionOptions = ref<Array<{ id: string; institution_name: string }>>([])
+const institutionIndex = ref(0)
+const institutionNames = computed(() => institutionOptions.value.map(item => item.institution_name))
+
+async function loadInstitutionScope() {
+  const response: any = await teacherApi.institutions()
+  const institutions = response?.data ?? response ?? []
+  institutionOptions.value = institutions
+  institutionId.value = institutions[0]?.id
+}
+
+function changeInstitution(event: any) {
+  institutionIndex.value = Number(event.detail.value)
+  institutionId.value = institutionOptions.value[institutionIndex.value]?.id
+  loadCourses()
+}
 
 async function loadCourses() {
   loading.value = true
   try {
-    const res = await courseApi.list()
+    const res = await courseApi.list(institutionId.value as any)
     courses.value = res.data || []
   } catch (e: any) {
     console.error('加载课程列表失败:', e)
@@ -156,7 +177,7 @@ async function loadCourses() {
 function handleCourseClick(course: Course) {
   uni.navigateTo({
     url: `/pages/teacher/course-detail?id=${course.id}`,
-    fail: () => uni.showToast({ title: '课程详情页开发中', icon: 'none' }),
+    fail: () => uni.showToast({ title: '课程详情打开失败，请重试', icon: 'none' }),
   })
 }
 
@@ -183,9 +204,21 @@ const subjectDropdownOpen = ref(false)
 const gradeDropdownOpen = ref(false)
 const createForm = ref({ name: '', subject: '', grade_level: '', description: '' })
 
-const subjectOptions = [
+const legacySubjectOptions = [
   { value: '数学', label: '数学' },
   { value: '物理', label: '物理' },
+]
+
+// API/database values are English codes; labels remain Chinese in the UI.
+const subjectOptions = [
+  { value: 'math', label: '\u6570\u5b66' },
+  { value: 'physics', label: '\u7269\u7406' },
+  { value: 'chinese', label: '\u8bed\u6587' },
+  { value: 'english', label: '\u82f1\u8bed' },
+  { value: 'chemistry', label: '\u5316\u5b66' },
+  { value: 'biology', label: '\u751f\u7269' },
+  { value: 'geography', label: '\u5730\u7406' },
+  { value: 'history', label: '\u5386\u53f2' },
 ]
 
 const gradeOptions = [
@@ -251,6 +284,7 @@ async function handleCreate() {
       subject,
       grade_level,
       description: createForm.value.description.trim() || undefined,
+      institution_id: institutionId.value as any,
     })
     uni.showToast({ title: '创建成功', icon: 'success' })
     closeCreateDialog()
@@ -300,8 +334,13 @@ async function handleDelete() {
 // ============================================================
 // Lifecycle
 // ============================================================
-onMounted(() => {
-  loadCourses()
+onMounted(async () => {
+  try {
+    await loadInstitutionScope()
+  } catch (error) {
+    console.error('加载教师机构失败:', error)
+  }
+  await loadCourses()
 })
 </script>
 
@@ -324,6 +363,7 @@ onMounted(() => {
 /* Page header */
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24rpx; }
 .page-title { font-size: 32rpx; font-weight: 600; color: #303133; }
+.institution-picker { color: #409eff; font-size: 24rpx; margin-left: auto; margin-right: 20rpx; }
 .create-btn { background: #409eff; color: #fff; border: none; border-radius: 4px; padding: 6px 16px; font-size: 13px; cursor: pointer; }
 
 /* Loading / Empty */

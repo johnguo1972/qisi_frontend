@@ -1,14 +1,18 @@
 <template>
   <view class="import-page">
-    <TeacherSidebar activeItem="course-practice" />
+    <TeacherSidebar activeItem="course-list" @navigate="handleSidebarNavigate" />
 
     <view class="main">
       <!-- Header -->
       <view class="page-header">
-        <text class="page-title">从课程资料导入习题</text>
+        <view class="header-title">
+          <!-- #ifndef MP-WEIXIN -->
+          <button class="back-btn" @click="goBack">返回课程资料</button>
+          <!-- #endif -->
+          <text class="page-title">从课程资料导入习题</text>
+        </view>
         <view class="header-actions">
           <text class="doc-name">{{ materialName }}</text>
-          <button size="mini" @click="goBack">返回</button>
         </view>
       </view>
 
@@ -182,6 +186,27 @@
 import { ref, computed, onMounted } from 'vue'
 import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import { materialApi, importApi, treeApi } from '@/api/courses'
+import { navigateRoleSection } from '@/utils/role-navigation'
+
+const TEACHER_ROUTES: Record<string, string> = {
+  workbench: '/pages/teacher/layout',
+  'question-bank': '/pages/teacher/question-bank',
+  favorites: '/pages/teacher/favorites',
+  'student-management': '/pages/teacher/my-classes',
+  'assignment-list': '/pages/teacher/mission-list',
+  'learning-stats': '/pages/teacher/learning-stats',
+  'course-list': '/pages/teacher/course-list',
+}
+
+function handleSidebarNavigate(page: string) {
+  // #ifndef MP-WEIXIN
+  navigateRoleSection('teacher', page)
+  // #endif
+  // #ifdef MP-WEIXIN
+  const url = TEACHER_ROUTES[page]
+  if (url) uni.redirectTo({ url })
+  // #endif
+}
 
 // Page state
 const courseId = ref<string>('')
@@ -571,6 +596,10 @@ function goBack() {
   font-weight: 600;
   color: #303133;
 }
+
+.header-title { display: flex; align-items: center; gap: 16px; }
+.back-btn { margin: 0; padding: 8px 16px; color: #606266; background: #fff; border: 1px solid #dcdfe6; border-radius: 6px; font-size: 13px; }
+.back-btn::after { border: none; }
 
 .header-actions {
   display: flex;

@@ -12,7 +12,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
+import { onLoad, onShow } from '@dcloudio/uni-app'
 import { ensurePageRole } from '@/utils/roles'
 import ParentShell from '@/components/ParentShell.vue'
 import HomePage from './home.vue'
@@ -23,14 +23,18 @@ import KnowledgePage from './knowledge.vue'
 import PracticePage from '@/components/ParentPracticeContent.vue'
 
 const currentPage = ref('home')
+const validPages = new Set(['home', 'children', 'wrongbook', 'practice', 'growth', 'knowledge'])
+
+function switchPage(page: string) {
+  if (validPages.has(page)) currentPage.value = page
+}
+
+onLoad((options: any) => {
+  switchPage(String(options?.section || 'home'))
+})
 
 onShow(() => {
   ensurePageRole('parent')
 })
 
-function switchPage(page: string) {
-  if (['home', 'children', 'wrongbook', 'practice', 'growth', 'knowledge'].includes(page)) {
-    currentPage.value = page
-  }
-}
 </script>

@@ -30,7 +30,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { studentParentApi } from '@/api/index'
 
@@ -93,6 +93,7 @@ function relationLabel(value: string) {
   return ({ father: '父亲', mother: '母亲', guardian: '监护人' } as Record<string, string>)[value] || '监护人'
 }
 
+onMounted(loadRequests)
 onShow(loadRequests)
 </script>
 

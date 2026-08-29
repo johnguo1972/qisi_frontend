@@ -143,3 +143,43 @@ def test_member_load_path_normalizes_before_template_rendering():
 
     assert "normalizeMember" in source
     assert ".map(normalizeMember)" in source
+
+
+def test_teacher_course_cards_have_a_registered_detail_page():
+    course_list = read("pages/teacher/course-list.vue")
+    course_detail = read("pages/teacher/course-detail.vue")
+    pages = read("pages.json")
+
+    assert "pages/teacher/course-detail?id=${course.id}" in course_list
+    assert "pages/teacher/course-detail" in pages
+    assert "courseApi.detail(courseId.value)" in course_detail
+    assert "treeApi.list(courseId.value)" in course_detail
+    assert "课程详情页开发中" not in course_list
+
+
+def test_h5_app_role_menu_navigation_returns_to_layout_and_preserves_mp_routes():
+    navigation = read("utils/role-navigation.ts")
+    app = read("App.vue")
+    teacher_layout = read("pages/teacher/layout.vue")
+    student_layout = read("pages/student/layout.vue")
+    parent_layout = read("pages/parent/layout.vue")
+    parent_shell = read("components/ParentShell.vue")
+    course_practice = read("pages/teacher/course-practice.vue")
+
+    assert "uni.reLaunch({ url: roleSectionPath(role, section) })" in navigation
+    assert "onLoad((options: any)" in teacher_layout
+    assert "onLoad((options: any)" in student_layout
+    assert "onLoad((options: any)" in parent_layout
+    assert "navigateRoleSection('parent', key)" in parent_shell
+    assert "// #ifdef MP-WEIXIN" in parent_shell
+    assert "navigateRoleSection('teacher', page)" in course_practice
+    assert "// #ifndef MP-WEIXIN" in course_practice
+    assert "const isLoginEntry" in app
+    assert "不覆盖用户直接打开的业务详情页" in app
+
+
+def test_teacher_practice_course_info_api_is_explicitly_imported():
+    source = read("pages/teacher/course-practice.vue")
+
+    assert "courseApi" in source.split("\n", 30)[-1] or "import { courseApi" in source
+    assert "courseApi.detail(courseId.value)" in source

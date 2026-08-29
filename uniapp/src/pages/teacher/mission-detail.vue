@@ -3,6 +3,12 @@
 
     <!-- 右侧内容区 -->
     <view class="main">
+      <!-- #ifndef MP-WEIXIN -->
+      <view class="detail-toolbar">
+        <button class="back-btn" @click="goBack">返回作业列表</button>
+        <text class="toolbar-title">作业详情</text>
+      </view>
+      <!-- #endif -->
       <!-- 作业信息卡片 -->
       <view v-if="mission" class="mission-card">
         <text class="page-title">{{ isGrading ? '批改作业' : '作业详情' }}</text>
@@ -193,6 +199,12 @@ function modeText(mode: string): string {
   return map[mode] || mode
 }
 
+function goBack() {
+  const pages = getCurrentPages()
+  if (pages.length > 1) uni.navigateBack()
+  else uni.redirectTo({ url: '/pages/teacher/layout?section=assignment-list' })
+}
+
 async function publishMission() {
   try {
     await missionApi.publish(missionId.value)
@@ -299,6 +311,10 @@ function saveQrcodeImage() {
   flex: 1;
   padding: 30rpx 40rpx;
 }
+.detail-toolbar { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
+.back-btn { margin: 0; padding: 8px 16px; color: #606266; background: #fff; border: 1px solid #dcdfe6; border-radius: 6px; font-size: 13px; }
+.back-btn::after { border: none; }
+.toolbar-title { color: #303133; font-size: 18px; font-weight: 600; }
 .mission-card {
   background: #fff;
   border-radius: 12rpx;

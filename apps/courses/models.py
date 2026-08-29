@@ -19,6 +19,14 @@ class Course(models.Model):
         db_column='teacher_id',
         verbose_name='教师',
     )
+    institution = models.ForeignKey(
+        'institutions.Institution',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='courses',
+        verbose_name='所属机构',
+    )
     is_deleted = models.BooleanField(default=False, verbose_name='软删除标记')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -30,6 +38,65 @@ class Course(models.Model):
 
     def __str__(self):
         return f'{self.name} ({self.subject})'
+
+    def save(self, *args, **kwargs):
+        # Keep direct ORM writes consistent with the API during the subject
+        # code migration.  The API also validates this field explicitly.
+        from apps.common.subject_codes import normalize_subject_code
+
+        normalized = normalize_subject_code(self.subject)
+        if normalized:
+            self.subject = normalized
+        return super().save(*args, **kwargs)
+
+
+class CourseCollaborator(models.Model):
+    """Explicit course access for teachers outside the implicit course scope."""
+
+    ROLE_CHOICES = [('viewer', 'viewer'), ('editor', 'editor')]
+
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='collaborators')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='course_collaborations')
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='viewer')
+    status = models.CharField(max_length=20, default='active')
+    granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='granted_course_collaborations',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'course_collaborator'
+        constraints = [
+            models.UniqueConstraint(fields=['course', 'user'], name='uq_course_collaborator_course_user'),
+        ]
+
+
+class CourseAuditLog(models.Model):
+    """Immutable record of course access/control changes."""
+
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    course = models.ForeignKey(Course, on_delete=models.SET_NULL, null=True, related_name='audit_logs')
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='course_audit_actions')
+    action = models.CharField(max_length=50)
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='course_audit_targets',
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'course_audit_log'
+        ordering = ['-created_at']
 
 
 class CourseMaterial(models.Model):

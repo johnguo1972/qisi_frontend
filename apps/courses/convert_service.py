@@ -1,6 +1,7 @@
 """Word document to PDF conversion service using LibreOffice."""
 import os
 import logging
+import shutil
 import subprocess
 from pathlib import Path
 from django.conf import settings
@@ -20,6 +21,13 @@ LIBREOFFICE_PATHS = [
 
 def _find_libreoffice() -> str | None:
     """Find LibreOffice executable path."""
+    custom_path = getattr(settings, 'LIBREOFFICE_PATH', None)
+    if custom_path and os.path.exists(custom_path):
+        return custom_path
+    for command in ('libreoffice', 'soffice'):
+        path = shutil.which(command)
+        if path:
+            return path
     for path in LIBREOFFICE_PATHS:
         if os.path.exists(path):
             return path
@@ -63,7 +71,7 @@ def convert_word_to_pdf(word_path: str) -> str | None:
             ],
             capture_output=True,
             text=True,
-            timeout=60,  # 60 seconds max
+            timeout=120,
         )
         if result.returncode != 0:
             logger.error(f'LibreOffice conversion failed: {result.stderr}')

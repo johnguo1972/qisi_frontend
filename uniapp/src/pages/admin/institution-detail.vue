@@ -1,5 +1,11 @@
 <template>
   <view class="detail-page">
+    <!-- #ifndef MP-WEIXIN -->
+    <view class="page-header">
+      <button class="back-btn" @click="goBack">返回机构管理</button>
+      <text class="page-title">机构详情</text>
+    </view>
+    <!-- #endif -->
     <!-- 机构信息卡片 -->
     <view class="info-card">
       <view class="card-header">
@@ -334,6 +340,12 @@ function statusText(status: string): string {
   return map[status] || status
 }
 
+function goBack() {
+  const pages = getCurrentPages()
+  if (pages.length > 1) uni.navigateBack()
+  else uni.redirectTo({ url: '/pages/admin/home' })
+}
+
 function statusClass(status: string): string {
   const map: Record<string, string> = { active: 'tag-active', suspended: 'tag-suspended', closed: 'tag-closed' }
   return map[status] || ''
@@ -483,6 +495,10 @@ function handleRemoveMember(member: any) {
 
 <style scoped>
 .detail-page { min-height: 100vh; background: #f0f2f5; padding: 30rpx 40rpx; }
+.page-header { display: flex; align-items: center; gap: 24rpx; margin-bottom: 24rpx; }
+.back-btn { margin: 0; padding: 10rpx 20rpx; color: #606266; background: #fff; border: 1rpx solid #dcdfe6; border-radius: 8rpx; font-size: 24rpx; }
+.back-btn::after { border: none; }
+.page-title { color: #303133; font-size: 34rpx; font-weight: 600; }
 .info-card { background: #fff; border-radius: 12rpx; padding: 32rpx; margin-bottom: 30rpx; }
 .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24rpx; padding-bottom: 20rpx; border-bottom: 1rpx solid #f0f0f0; }
 .card-title { font-size: 32rpx; font-weight: bold; color: #333; }
@@ -537,7 +553,7 @@ input { display: block; width: 100%; height: 48px; line-height: 24px; border: 1r
 .remove-text { font-size: 22rpx; color: #e74c3c; }
 
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 999; display: flex; align-items: center; justify-content: center; }
-.modal-content { background: #fff; border-radius: 16rpx; width: 85%; max-width: 600rpx; overflow: hidden; }
+.modal-content { background: #fff; border-radius: 16rpx; width: 85%; max-width: 1000rpx; overflow: hidden; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 24rpx 32rpx; border-bottom: 1rpx solid #f0f0f0; }
 .modal-title { font-size: 32rpx; font-weight: bold; color: #333; }
 .modal-close { font-size: 48rpx; color: #999; line-height: 1; }

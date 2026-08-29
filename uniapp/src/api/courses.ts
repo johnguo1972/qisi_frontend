@@ -34,12 +34,17 @@ function courseFetch<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const courseApi = {
-  list: () => courseFetch<any[]>('/courses/'),
-  create: (data: { name: string; subject: string; grade_level: string; description?: string }) =>
+  list: (institutionId?: UUID) => courseFetch<any[]>(`/courses/${institutionId ? `?institution_id=${institutionId}` : ''}`),
+  create: (data: { name: string; subject: string; grade_level: string; description?: string; institution_id?: UUID }) =>
     courseFetch<any>('/courses/', { method: 'POST', body: JSON.stringify(data) }),
   detail: (id: UUID) => courseFetch<any>(`/courses/${id}/`),
   update: (id: UUID, data: any) => courseFetch<any>(`/courses/${id}/`, { method: 'PUT', body: JSON.stringify(data) }),
   remove: (id: UUID) => courseFetch<any>(`/courses/${id}/`, { method: 'DELETE' }),
+  collaborators: (id: UUID) => courseFetch<any>(`/courses/${id}/collaborators/`),
+  grantCollaborator: (id: UUID, data: { user_id: UUID; role: 'viewer' | 'editor' }) =>
+    courseFetch<any>(`/courses/${id}/collaborators/`, { method: 'POST', body: JSON.stringify(data) }),
+  revokeCollaborator: (id: UUID, userId: UUID) =>
+    courseFetch<any>(`/courses/${id}/collaborators/${userId}/`, { method: 'DELETE' }),
 }
 
 // ============================================================

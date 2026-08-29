@@ -3,6 +3,9 @@
     <!-- 左侧任务信息 -->
     <view class="info-panel">
       <view class="page-header">
+        <!-- #ifndef MP-WEIXIN -->
+        <button class="back-btn" @click="goBack">返回首页</button>
+        <!-- #endif -->
         <text class="page-title">{{ assignmentMode === 'flat' ? '作业' : '关卡' }}</text>
         <button class="export-btn" @click="goExport">导出习题</button>
       </view>
@@ -141,6 +144,12 @@ function goLevel(id: number) {
 function goExport() {
   uni.navigateTo({ url: `/pages/student/export?type=mission&ids=${missionId.value}` })
 }
+
+function goBack() {
+  const pages = getCurrentPages()
+  if (pages.length > 1) uni.navigateBack()
+  else uni.reLaunch({ url: '/pages/student/layout?section=home' })
+}
 </script>
 
 <style scoped>
@@ -161,6 +170,8 @@ function goExport() {
   align-items: center;
   margin-bottom: 20rpx;
 }
+.back-btn { margin: 0; padding: 8rpx 16rpx; color: #606266; background: #fff; border: 1rpx solid #dcdfe6; border-radius: 6rpx; font-size: 22rpx; }
+.back-btn::after { border: none; }
 .page-title {
   font-size: 32rpx;
   font-weight: bold;

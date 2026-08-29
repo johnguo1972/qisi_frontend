@@ -1,8 +1,15 @@
 <template>
   <view class="course-practice">
-    <TeacherSidebar activeItem="course-practice" />
+    <TeacherSidebar activeItem="course-list" @navigate="handleSidebarNavigate" />
 
     <view class="main">
+      <!-- #ifndef MP-WEIXIN -->
+      <view class="page-topbar">
+        <button class="back-btn" @click="goCourseList">返回课程管理</button>
+        <text class="page-topbar-title">课程练习</text>
+      </view>
+      <!-- #endif -->
+      <view class="practice-body">
       <!-- Left: Directory tree -->
       <view class="sidebar-tree">
         <view class="tree-header">
@@ -100,6 +107,7 @@
             </view>
           </view>
         </view>
+      </view>
       </view>
     </view>
 
@@ -261,8 +269,42 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import DirTree from '@/components/DirTree.vue'
-import { treeApi, courseQuestionApi, variantApi, materialApi } from '@/api/courses'
+import { courseApi, treeApi, courseQuestionApi, variantApi, materialApi } from '@/api/courses'
 import { questionApi, importJsonPackage as importJsonPackageApi } from '@/api/questions'
+import { navigateRoleSection } from '@/utils/role-navigation'
+
+const TEACHER_ROUTES: Record<string, string> = {
+  workbench: '/pages/teacher/layout',
+  'question-bank': '/pages/teacher/question-bank',
+  favorites: '/pages/teacher/favorites',
+  'student-management': '/pages/teacher/my-classes',
+  'assignment-list': '/pages/teacher/mission-list',
+  'learning-stats': '/pages/teacher/learning-stats',
+  'course-list': '/pages/teacher/course-list',
+}
+
+function handleSidebarNavigate(page: string) {
+  // #ifndef MP-WEIXIN
+  navigateRoleSection('teacher', page)
+  // #endif
+  // #ifdef MP-WEIXIN
+  const url = TEACHER_ROUTES[page]
+  if (url) uni.redirectTo({ url })
+  // #endif
+}
+
+function goCourseList() {
+  const pages = getCurrentPages()
+  if (pages.length > 1) uni.navigateBack()
+  else {
+    // #ifndef MP-WEIXIN
+    navigateRoleSection('teacher', 'course-list')
+    // #endif
+    // #ifdef MP-WEIXIN
+    uni.redirectTo({ url: '/pages/teacher/course-list' })
+    // #endif
+  }
+}
 
 // ============================================================
 // Course info
@@ -1233,11 +1275,31 @@ onUnmounted(() => {
   margin-left: 240px;
   flex: 1;
   display: flex;
+  flex-direction: column;
   gap: 16px;
   padding: 16px;
   overflow: hidden;
   height: 100vh;
 }
+
+.page-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 0 0 auto;
+}
+.back-btn {
+  margin: 0;
+  padding: 8px 16px;
+  color: #606266;
+  background: #fff;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.back-btn::after { border: none; }
+.page-topbar-title { color: #303133; font-size: 16px; font-weight: 600; }
+.practice-body { flex: 1; min-height: 0; display: flex; gap: 16px; overflow: hidden; }
 
 /* Left sidebar tree */
 .sidebar-tree {

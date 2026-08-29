@@ -42,6 +42,7 @@ class OptionalJWTAuthentication(JWTAuthentication):
             raise AuthenticationFailed('Role is no longer granted', code='ROLE_NOT_GRANTED')
 
         request.active_role = active_role
+        user._active_role = active_role
         # Compatibility for existing permission code. This is the request-loaded
         # instance only and must never be persisted by authentication.
         user.role_type = active_role

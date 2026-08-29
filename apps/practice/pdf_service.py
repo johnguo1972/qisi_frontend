@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+import re
 
 from django.conf import settings
 from apps.common.media import media_url
@@ -23,6 +24,16 @@ def _pdf_question_from_snapshot(snapshot, question=None, *, include_answers=Fals
         for item in (data.get('images') or [])
         if isinstance(item, dict) and (item.get('file_path') or item.get('url'))
     ]
+    data['image_items'] = [
+        {
+            'file_path': item.get('file_path') or item.get('url'),
+            'placement': item.get('placement') or 'stem',
+            'sort_order': item.get('sort_order', 0),
+            'display_width': item.get('display_width'),
+        }
+        for item in (data.get('images') or [])
+        if isinstance(item, dict) and (item.get('file_path') or item.get('url'))
+    ]
     if include_answers and question is not None:
         data['answer'] = question.answer or ''
         data['analysis'] = question.analysis or ''
@@ -40,7 +51,7 @@ def practice_pdf_questions(practice_set, *, include_answers=False):
         str(question.id): question
         for question in ExamQuestion.objects.filter(id__in=question_ids)
     }
-    return [
+    questions = [
         _pdf_question_from_snapshot(
             item.display_snapshot,
             question_map.get(str(item.question_id)),
@@ -48,11 +59,16 @@ def practice_pdf_questions(practice_set, *, include_answers=False):
         )
         for item in items
     ]
+    if questions:
+        questions[0]['_pdf_title'] = practice_set.title
+    return questions
 
 
 def practice_pdf_relative_path(practice_set, *, include_answers=False):
     suffix = '_answers' if include_answers else ''
-    return f'exports/practice_{practice_set.id}_v{practice_set.pdf_version}{suffix}.pdf'
+    title = re.sub(r'[\\/:*?"<>|]+', '_', str(practice_set.title or '')).strip(' ._')[:60]
+    title = title or 'practice'
+    return f'exports/{title}_practice_{practice_set.id}_v{practice_set.pdf_version}{suffix}.pdf'
 
 
 def practice_pdf_download_url(relative_path):

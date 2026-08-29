@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.db import transaction
 
 from apps.accounts.models import UserAccount
+from apps.common.subject_codes import normalize_subject_codes
 from apps.accounts.roles import grant_user_role
 from apps.institutions.models import (
     Institution,
@@ -11,25 +12,6 @@ from apps.institutions.models import (
     ClassStudent,
     ClassJoinRequest,
 )
-
-
-SUBJECT_CODE_ALIASES = {
-    'math': 'math', 'physics': 'physics', 'chinese': 'chinese',
-    'english': 'english', 'chemistry': 'chemistry', 'biology': 'biology',
-    'geography': 'geography', 'history': 'history',
-    '数学': 'math', '物理': 'physics', '语文': 'chinese', '英语': 'english',
-    '化学': 'chemistry', '生物': 'biology', '地理': 'geography', '历史': 'history',
-}
-
-
-def normalize_subject_codes(value):
-    raw_values = value if isinstance(value, list) else [value]
-    normalized = []
-    for raw in raw_values:
-        subject = SUBJECT_CODE_ALIASES.get(str(raw or '').strip(), '')
-        if subject and subject not in normalized:
-            normalized.append(subject)
-    return normalized
 
 
 # ──────────────────────────────────────────────

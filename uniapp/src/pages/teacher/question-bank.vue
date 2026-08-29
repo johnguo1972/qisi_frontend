@@ -405,7 +405,10 @@ async function loadQuestions() {
     if (activeDifficulty.value) params.difficulty = activeDifficulty.value
     if (activeKnowledgePoint.value) params.knowledge_point_id = activeKnowledgePoint.value
     if (tagSearch.value.trim()) params.tag = tagSearch.value.trim()
-    if (uuidSearch.value.trim()) params.uuid = uuidSearch.value.trim()
+    if (uuidSearch.value.trim()) {
+      params.uuid = uuidSearch.value.trim()
+      params.keyword = uuidSearch.value.trim()
+    }
     if (selectedSubject.value) params.subject = selectedSubject.value
 
     const res: any = await questionApi.list(params)

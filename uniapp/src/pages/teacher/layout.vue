@@ -16,6 +16,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import WorkbenchPage from './workbench.vue'
 import QuestionBankPage from './question-bank.vue'
@@ -40,6 +41,10 @@ const components: Record<string, any> = {
 function switchPage(page: string) {
   if (components[page]) currentPage.value = page
 }
+
+onLoad((options: any) => {
+  switchPage(String(options?.section || 'workbench'))
+})
 </script>
 
 <style>

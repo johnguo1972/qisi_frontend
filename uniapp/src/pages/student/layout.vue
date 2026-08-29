@@ -8,30 +8,42 @@
       <PracticePage v-else-if="currentPage === 'practice'" />
       <GrowthPage v-else-if="currentPage === 'growth'" />
       <JoinClassPage v-else-if="currentPage === 'join-class'" />
+      <KnowledgeGraphPage v-else-if="currentPage === 'knowledge'" />
+      <ParentBindPage v-else-if="currentPage === 'parent-bind'" />
+      <ScanEntryPage v-else-if="currentPage === 'scan-entry'" />
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
+import { onLoad, onShow } from '@dcloudio/uni-app'
 import StudentSidebar from '@/components/StudentSidebar.vue'
 import HomePage from './home.vue'
 import WrongbookPage from './wrongbook.vue'
 import PracticePage from '@/components/PracticeContent.vue'
 import GrowthPage from './growth.vue'
 import JoinClassPage from './join-class.vue'
+import KnowledgeGraphPage from './knowledge-graph.vue'
+import ParentBindPage from './parent-bind-requests.vue'
+import ScanEntryPage from './scan-entry.vue'
 
 const currentPage = ref('home')
+const validPages = new Set(['home', 'wrongbook', 'practice', 'growth', 'join-class', 'knowledge', 'parent-bind', 'scan-entry'])
+
+function switchPage(page: string) {
+  if (validPages.has(page)) currentPage.value = page
+}
+
+onLoad((options: any) => {
+  switchPage(String(options?.section || 'home'))
+})
 
 // layout 页面从答题/关卡页面返回时，通知首页重新拉取任务进度
 onShow(() => {
   uni.$emit('student-layout-show')
 })
 
-function switchPage(page: string) {
-  currentPage.value = page
-}
 </script>
 
 <style>

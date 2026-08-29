@@ -16,6 +16,15 @@ def _sync_question_tag_names(question_id):
     )
     ExamQuestion.objects.filter(id=question_id).update(tags=names)
 from apps.parser.models import ExamQuestion
+from apps.study.question_views import _teacher_question_scope_error
+
+
+def _question_scope_response(request, question_id):
+    try:
+        question = ExamQuestion.objects.get(pk=question_id)
+    except ExamQuestion.DoesNotExist:
+        return Response({'code': 404, 'message': '题目不存在', 'data': None, 'trace_id': make_trace_id()}, status=404)
+    return _teacher_question_scope_error(request, question)
 
 
 def make_trace_id() -> str:
@@ -105,6 +114,9 @@ def tag_delete(request, tag_id):
 @permission_classes([IsAuthenticated])
 def question_tags(request, question_id):
     """获取题目的标签列表。"""
+    scope_error = _question_scope_response(request, question_id)
+    if scope_error:
+        return scope_error
     relations = QuestionTagRelation.objects.filter(question_id=question_id).select_related('tag')
     items = [{
         'id': str(r.tag.id),
@@ -118,6 +130,9 @@ def question_tags(request, question_id):
 @permission_classes([IsAuthenticated])
 def question_add_tag(request, question_id):
     """给题目添加标签。"""
+    scope_error = _question_scope_response(request, question_id)
+    if scope_error:
+        return scope_error
     tag_id = request.data.get('tag_id')
     tag_name = request.data.get('tag_name', '').strip()
 
@@ -156,6 +171,9 @@ def question_add_tag(request, question_id):
 @permission_classes([IsAuthenticated])
 def question_remove_tag(request, question_id, tag_id):
     """移除题目的标签。"""
+    scope_error = _question_scope_response(request, question_id)
+    if scope_error:
+        return scope_error
     QuestionTagRelation.objects.filter(question_id=question_id, tag_id=tag_id).delete()
     QuestionTag.objects.filter(pk=tag_id).update(
         question_count=QuestionTagRelation.objects.filter(tag_id=tag_id).count()

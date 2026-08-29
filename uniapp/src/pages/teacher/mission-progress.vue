@@ -4,6 +4,9 @@
     <view v-else-if="errorMessage" class="state error">{{ errorMessage }}</view>
     <template v-else>
       <view class="page-header">
+        <!-- #ifndef MP-WEIXIN -->
+        <button class="back-btn" @click="goBack">返回作业列表</button>
+        <!-- #endif -->
         <text class="page-title">学生完成进度</text>
         <text class="mission-name">{{ missionName || '作业' }}</text>
       </view>
@@ -137,6 +140,12 @@ function statusClass(status: string): string {
 function formatLastAction(value?: string | null): string {
   return value ? formatDateOnly(value, '-') : '未开始'
 }
+
+function goBack() {
+  const pages = getCurrentPages()
+  if (pages.length > 1) uni.navigateBack()
+  else uni.redirectTo({ url: '/pages/teacher/layout?section=assignment-list' })
+}
 </script>
 
 <style scoped>
@@ -148,10 +157,12 @@ function formatLastAction(value?: string | null): string {
 }
 .page-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 24rpx;
   margin-bottom: 24rpx;
 }
+.back-btn { margin: 0; padding: 8px 16px; color: #606266; background: #fff; border: 1px solid #dcdfe6; border-radius: 6px; font-size: 13px; }
+.back-btn::after { border: none; }
 .page-title {
   font-size: 36rpx;
   font-weight: bold;
