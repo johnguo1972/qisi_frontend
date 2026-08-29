@@ -52,3 +52,90 @@ class KnowledgePoint(models.Model):
         grade = self.GRADE_LABELS.get(self.grade_index, self.grade_name)
         term = self.TERM_LABELS.get(self.term, self.term)
         return f'{self.get_subject_display()}-{stage}-{grade}{term}'
+
+
+class KnowledgeTopic(models.Model):
+    """A controlled, versioned topic node used by the AI probe workflow.
+
+    ``KnowledgePoint`` is managed outside Django and deliberately remains
+    untouched. This table only supplies a maintained hierarchy of selectable
+    themes and subthemes. The final module choice is stored by
+    :class:`KnowledgeTopicModule`; persistence resolves it to an existing
+    tree node only after the model has selected the module.
+    """
+
+    id = models.CharField(max_length=120, primary_key=True)
+    subject = models.CharField(max_length=50, choices=KnowledgePoint.SUBJECT_CHOICES)
+    stage = models.CharField(max_length=20, choices=KnowledgePoint.STAGE_CHOICES)
+    parent = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name='children',
+    )
+    name = models.CharField(max_length=120)
+    sort_order = models.PositiveIntegerField(default=0)
+    is_enabled = models.BooleanField(default=True)
+    catalog_version = models.CharField(max_length=64, default='v1')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'knowledge_controlled_topic'
+        ordering = ('sort_order', 'id')
+        indexes = [
+            models.Index(
+                fields=('subject', 'stage', 'parent', 'is_enabled'),
+                name='knowledge_topic_scope_idx',
+            ),
+        ]
+
+    @property
+    def path_ids(self) -> list[str]:
+        """Return the stable root-to-self identifier path without recursion."""
+        path: list[str] = []
+        node = self
+        seen: set[str] = set()
+        while node is not None:
+            if node.id in seen:
+                raise ValueError('knowledge topic hierarchy contains a cycle')
+            seen.add(node.id)
+            path.append(str(node.id))
+            node = node.parent
+        return list(reversed(path))
+
+
+class KnowledgeTopicModule(models.Model):
+    """A controlled topic to a standard knowledge-point module link.
+
+    The source table stores several fine-grained rows below one ``module``.
+    Probe selection intentionally stops at this module level; persistence then
+    resolves the matching local row to retain the existing tree-filter format.
+    """
+
+    topic = models.ForeignKey(
+        KnowledgeTopic,
+        on_delete=models.CASCADE,
+        related_name='module_links',
+    )
+    module = models.CharField(max_length=255)
+    sort_order = models.PositiveIntegerField(default=0)
+    is_enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'knowledge_controlled_topic_module'
+        ordering = ('sort_order', 'id')
+        constraints = [
+            models.UniqueConstraint(
+                fields=('topic', 'module'),
+                name='knowledge_topic_module_unique',
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=('module', 'is_enabled'),
+                name='kn_topic_module_lookup_idx',
+            ),
+        ]

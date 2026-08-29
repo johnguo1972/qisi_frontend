@@ -75,9 +75,6 @@ class _StrictResponseModel(BaseModel):
 class QuestionProbeResponse(_StrictResponseModel):
     subject: Literal["math", "physics"]
     question_type: NonBlankStr
-    grade: str
-    semester: str
-    chapter: str
     difficulty: Literal["L1", "L2", "L3", "L4", "L5"]
     knowledge_points: list[NonBlankStr] = Field(min_length=1, max_length=5)
     multi_part: bool
@@ -87,6 +84,34 @@ class QuestionProbeResponse(_StrictResponseModel):
     recommended_route: Literal["VISION_LIGHT", "STANDARD", "DEEP"]
     brief_reason: str
     normalized_text: NonBlankStr
+
+
+class TaxonomyScopeResponse(_StrictResponseModel):
+    """First controlled probe stage: choose a supplied first-level topic."""
+
+    subject: Literal["math", "physics"]
+    stage: Literal["primary", "junior", "senior"]
+    topic_id: NonBlankStr
+    question_type: NonBlankStr
+    difficulty_level: Literal["L1", "L2", "L3", "L4", "L5"]
+    normalized_text: NonBlankStr
+    confidence: float = Field(ge=0, le=1)
+
+
+class TaxonomySubtopicResponse(_StrictResponseModel):
+    """Second controlled probe stage: optionally choose a child topic."""
+
+    subtopic_id: NonBlankStr | None = None
+    confidence: float = Field(ge=0, le=1)
+
+
+class TaxonomyKnowledgeResponse(_StrictResponseModel):
+    """Third controlled probe stage: choose standard local modules."""
+
+    knowledge_modules: list[NonBlankStr] = Field(min_length=1, max_length=5)
+    difficulty_score: float = Field(ge=1.0, le=5.9)
+    difficulty_reason: NonBlankStr
+    confidence: float = Field(ge=0, le=1)
 
 
 class KnowledgePointResponse(_StrictResponseModel):

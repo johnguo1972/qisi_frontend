@@ -1,0 +1,28 @@
+{
+  "catalog_version": "2026-08-29-v1",
+  "topics": [
+    {"id": "junior-physics-mechanics", "subject": "physics", "stage": "junior", "name": "力学", "sort_order": 10, "chapter_keywords": ["机械", "运动", "力", "压强", "浮力", "功", "能"], "catch_all": false},
+    {"id": "junior-physics-thermal", "subject": "physics", "stage": "junior", "name": "热学", "sort_order": 20, "chapter_keywords": ["热", "温度", "内能", "比热容"], "catch_all": false},
+    {"id": "junior-physics-acoustics", "subject": "physics", "stage": "junior", "name": "声学", "sort_order": 30, "chapter_keywords": ["声"], "catch_all": false},
+    {"id": "junior-physics-optics", "subject": "physics", "stage": "junior", "name": "光学", "sort_order": 40, "chapter_keywords": ["光"], "catch_all": false},
+    {"id": "junior-physics-electricity", "subject": "physics", "stage": "junior", "name": "电学与磁学", "sort_order": 50, "chapter_keywords": ["电", "磁"], "catch_all": false},
+    {"id": "junior-physics-other", "subject": "physics", "stage": "junior", "name": "其他与综合", "sort_order": 99, "catch_all": true},
+    {"id": "senior-physics-mechanics", "subject": "physics", "stage": "senior", "name": "力学", "sort_order": 10, "chapter_keywords": ["运动", "力", "牛顿", "曲线", "万有引力", "功", "能", "动量", "机械"], "catch_all": false},
+    {"id": "senior-physics-thermal", "subject": "physics", "stage": "senior", "name": "热学", "sort_order": 20, "chapter_keywords": ["热", "气体", "内能", "热力学"], "catch_all": false},
+    {"id": "senior-physics-electromagnetism", "subject": "physics", "stage": "senior", "name": "电磁学", "sort_order": 30, "chapter_keywords": ["电", "磁", "交流", "电磁"], "catch_all": false},
+    {"id": "senior-physics-optics-waves", "subject": "physics", "stage": "senior", "name": "光学与波动", "sort_order": 40, "chapter_keywords": ["光", "波", "振动"], "catch_all": false},
+    {"id": "senior-physics-modern", "subject": "physics", "stage": "senior", "name": "近代物理与综合", "sort_order": 99, "catch_all": true},
+    {"id": "junior-math-algebra", "subject": "math", "stage": "junior", "name": "数与代数", "sort_order": 10, "chapter_keywords": ["数", "式", "方程", "不等式", "函数", "根", "因式"], "catch_all": false},
+    {"id": "junior-math-geometry", "subject": "math", "stage": "junior", "name": "图形与几何", "sort_order": 20, "chapter_keywords": ["几何", "三角", "四边形", "圆", "相似", "旋转", "投影", "图"], "catch_all": false},
+    {"id": "junior-math-statistics", "subject": "math", "stage": "junior", "name": "统计与概率", "sort_order": 30, "chapter_keywords": ["数据", "统计", "概率"], "catch_all": false},
+    {"id": "junior-math-other", "subject": "math", "stage": "junior", "name": "其他与综合", "sort_order": 99, "catch_all": true},
+    {"id": "senior-math-algebra", "subject": "math", "stage": "senior", "name": "代数与函数", "sort_order": 10, "chapter_keywords": ["函数", "数列", "不等式", "向量", "复数", "导数"], "catch_all": false},
+    {"id": "senior-math-geometry", "subject": "math", "stage": "senior", "name": "几何与解析几何", "sort_order": 20, "chapter_keywords": ["几何", "圆锥", "直线", "平面", "空间"], "catch_all": false},
+    {"id": "senior-math-statistics", "subject": "math", "stage": "senior", "name": "概率统计", "sort_order": 30, "chapter_keywords": ["概率", "统计", "计数"], "catch_all": false},
+    {"id": "senior-math-other", "subject": "math", "stage": "senior", "name": "其他与综合", "sort_order": 99, "catch_all": true},
+    {"id": "primary-math-number", "subject": "math", "stage": "primary", "name": "数与运算", "sort_order": 10, "chapter_keywords": ["数", "加", "减", "乘", "除", "分数", "小数"], "catch_all": false},
+    {"id": "primary-math-geometry", "subject": "math", "stage": "primary", "name": "图形与测量", "sort_order": 20, "chapter_keywords": ["图形", "长度", "面积", "体积", "角", "位置"], "catch_all": false},
+    {"id": "primary-math-statistics", "subject": "math", "stage": "primary", "name": "统计与概率", "sort_order": 30, "chapter_keywords": ["统计", "可能性", "数据"], "catch_all": false},
+    {"id": "primary-math-other", "subject": "math", "stage": "primary", "name": "其他与综合", "sort_order": 99, "catch_all": true}
+  ]
+}

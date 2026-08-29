@@ -17,6 +17,9 @@ from apps.common.ai.exceptions import AIConfigError
 
 REQUIRED_TASKS = {
     "question_probe",
+    "controlled_taxonomy_scope",
+    "controlled_taxonomy_subtopic",
+    "controlled_taxonomy_knowledge",
     "knowledge_analysis",
     "mode_a_answer",
     "mode_b_answer",
@@ -41,6 +44,9 @@ REQUIRED_TASKS = {
 
 EXPECTED_ROUTE_MATRIX = {
     "question_probe": ("qwen", "qwen3.7-flash", 300.0),
+    "controlled_taxonomy_scope": ("qwen", "qwen3.7-flash", 300.0),
+    "controlled_taxonomy_subtopic": ("qwen", "qwen3.7-flash", 300.0),
+    "controlled_taxonomy_knowledge": ("qwen", "qwen3.7-flash", 300.0),
     "knowledge_analysis": ("qwen", "qwen3.7-flash", 300.0),
     "mode_a_answer": ("qwen", "qwen3.7-plus", 300.0),
     "mode_b_answer": ("qwen", "qwen3.7-plus", 300.0),

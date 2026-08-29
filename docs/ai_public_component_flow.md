@@ -24,7 +24,7 @@ flowchart LR
 |---|---:|---|
 | 排队容量 | 10,000 个 Item | 达到上限时拒绝新任务，避免 Redis/Celery 无限制堆积 |
 | 同时活跃 Job | 3 | 让不同批次公平轮转，避免一个大批次长期独占 |
-| 全局 AI Item 并发 | 16 | 同时执行的“题目全流程”上限 |
+| 全局 AI Item 并发 | 6 | 同时执行的“题目全流程”上限 |
 | 提供商限流 | 按 Qwen / DeepSeek 分别配置 | 防止超过模型侧并发或速率配额 |
 | 单模式软/硬超时 | 3,800 / 3,900 秒 | 保障超长模型调用可被 Celery 回收 |
 | Redis 任务锁 TTL | 4,200 秒 | 防重复执行；任务结束、入队失败均主动按 owner 原子释放 |
@@ -44,14 +44,15 @@ flowchart TD
     LOCK -- 是 --> DUP[返回既有任务状态]
     LOCK -- 否 --> ENQUEUE[创建 Job / Item\n进入 ai.batch]
     ENQUEUE --> RUN[Item Worker 获取 Redis lease]
-    RUN --> PROBE[题目 AI 探查\nquestion_probe]
-    PROBE --> KP[知识点分析\nknowledge_analysis]
-    KP --> VISION[视觉事实提取\nvision_fact_extract]
+    RUN --> SCOPE[受控探查阶段 1\n主题范围、题型、粗难度]
+    SCOPE --> SUBTOPIC[受控探查阶段 2\n按需选择子主题]
+    SUBTOPIC --> MODULE[受控探查阶段 3\n选择知识点模块、细化难度]
+    MODULE --> VISION[视觉事实提取\nvision_fact_extract]
     VISION --> A[A 模式仲裁]
     A --> B[B 模式仲裁]
     B --> C[C 模式仲裁]
     C --> VALIDATE[输出校验、脱敏投影、上下文哈希校验]
-    VALIDATE --> WRITE[原子写入题目探查与 A/B/C 答案]
+    VALIDATE --> WRITE[每阶段即时写入\n题目探查与 A/B/C 答案]
     WRITE --> RELEASE[释放 lease，更新 Item / Job 状态]
     RUN -. 异常或超时 .-> FAIL[记录可读错误\n标记失败/可重试]
     FAIL --> RELEASE
@@ -59,27 +60,43 @@ flowchart TD
 
 > A、B、C 共享已完成的探查、知识点与视觉事实，避免对同一道题重复执行探查；每个模式自身仍进行独立的候选生成与验证。
 
-## 3. 题目探查组件
+## 3. 三阶段受控题目探查组件
 
-| 项目 | 说明 |
-|---|---|
-| 配置任务 | `[task:question_probe]` / `[prompt:question_probe]` |
-| 默认模型路由 | `qwen3.7-plus`（由 cfg 路由决定） |
-| 调用前提 | 题目需要属性探查，且由用户发起的全流程或“AI探查”操作进入 |
-| 输入 | 题干 OCR/规范化文本、完整选项、题图/图表、OCR 置信度、已有题目属性（如有） |
-| 提示词目的 | 识别学科、学段/年级/学期、章节、题型、难度、知识点/主题标签；要求结构化返回而不直接写库 |
-| 输出 | 规范化后的 `subject`、`grade`、`semester`、`chapter`、`question_type`、`difficulty`、`knowledge_points`、`topic_tags_top3` 及置信/依据字段 |
-| 写入规则 | 组件先校验枚举、别名和字段类型，之后由编排服务统一保存；失败不会把非结构化模型原文写入业务字段 |
+探查由用户手工触发的全流程或“AI 探查”触发。目录已导入后，三次调用均使用 `qwen3.7-flash`，模型、路由、超时与提示词分别从 `.env` 和 `config/ai_config.cfg` 读取。模型只能从当前阶段提供的候选中选择，不能自由创造主题或知识点名称。
+
+| 阶段 | 配置任务 | 模型输入 | 严格输出 | 即时写入 |
+|---|---|---|---|---|
+| 1：范围定位 | `controlled_taxonomy_scope` | 题干、选项、表格、可用图片、OCR/视觉事实，以及四个学科-学段范围内的一级主题候选 | `subject`、`stage`、`topic_id`、`question_type`、`difficulty_level`（L1-L5）、`normalized_text`、`confidence` | `ai_probe_result.taxonomy.scope`；更新题型、学科、粗难度 |
+| 2：子主题定位 | `controlled_taxonomy_subtopic` | 规范题面、第一阶段结果、所选一级主题的子主题候选 | `subtopic_id`、`confidence`；没有子主题时本阶段跳过 | `ai_probe_result.taxonomy.subtopic` |
+| 3：模块与细难度 | `controlled_taxonomy_knowledge` | 规范题面、已选主题路径、**叶子主题下的 `knowledge_points.module` 候选**、第一阶段难度等级 | `knowledge_modules`（1-5 个模块）、`difficulty_score`、`difficulty_reason`、`confidence` | `ai_probe_result.taxonomy.knowledge`、`ai_knowledge_enrichment`、题目知识点、`difficulty_level` 与 `difficulty` |
+
+> 第三阶段候选粒度固定为 `knowledge_points.module`，本地约 470 个去重模块，而不是 2,000 多条细粒度记录。选中模块后，服务端再按“科目 + 学段 + 叶子章节 + module”解析实际 `KnowledgePoint` 节点 ID，继续使用既有 `ExamQuestion.knowledge_points = [{"id", "module"}]` 格式。因此题库知识树筛选、统计和历史接口均保持兼容。
+
+第一阶段不会只取非空的父题干。对于“总题干 + 多个子题”、材料题和表格题，会把父题干、材料、完整选项、表格、全部子题、原学科和原题型组合为结构化题面后再交给模型，避免“请判断下列说法”这类通用父题干掩盖真实学科内容。第二阶段只在存在子主题候选时调用，此时模型必须从候选中选择一个有效 ID，不允许返回 `null`；候选为空则由后端直接记录跳过，不消耗模型调用。
+
+受控目录导入时，章节与一级主题的匹配采用“更长关键词优先、同长度时章节中出现位置更靠前者优先、最后按配置顺序兜底”，不再使用第一个命中即停止。例如“第十三章 内能”的“内能”优先于力学中的宽泛关键词“能”，“第十八章 电功率”中的“电”优先于后出现的“力”。重复导入会删除受控主题下已经失效的动态章节叶子，防止同一章节同时残留在多个主题下。
 
 ```mermaid
-flowchart LR
-    Q[题干、选项、图片、OCR] --> N[QuestionInput 规范化]
-    N --> P[question_probe 提示词]
-    P --> M[Qwen 模型]
-    M --> S[JSON 解析与 Schema 校验]
-    S --> R[学科 / 年级 / 章节 / 题型 / 难度 / 知识点]
-    R --> K[knowledge_analysis 补充本地知识点匹配]
+flowchart TD
+    Q[题干、选项、表格、图片、OCR] --> S1[阶段 1：选择学科/学段/一级主题\n题型/粗难度/规范题面]
+    S1 --> SAVE1[立即保存范围结果]
+    SAVE1 --> HAS_CHILD{所选主题有子主题？}
+    HAS_CHILD -->|是| S2[阶段 2：选择子主题]
+    S2 --> SAVE2[立即保存子主题]
+    HAS_CHILD -->|否| S3
+    SAVE2 --> S3[阶段 3：从 module 候选选择 1-5 项\n并给出 Lx 范围内具体难度]
+    S3 --> VALIDATE[校验候选边界、模块去重、难度区间]
+    VALIDATE --> SAVE3[立即保存模块、题型、L 等级和小数难度]
+    SAVE3 --> MAP[本地树解析实际节点 ID]
+    MAP --> DERIVE[最后一个模块反推\n年级、学期、章节]
 ```
+
+### 3.1 难度与失败规则
+
+- `difficulty_level` 与 `difficulty` 分开保存：例如 L3 对应 `difficulty_level="L3"`，具体数值只能是 3.00-3.90，如 3.20。
+- 每阶段 JSON、候选边界或难度校验失败时，仅重试当前阶段一次；仍失败则保留前面已保存的阶段结果和失败原因，不清空任何成功数据。
+- 一个题有多个模块时，按模型返回顺序保存；最后一个可解析模块所对应的本地节点反推年级、学期和章节。
+- 历史数据或目录尚未导入的环境继续使用兼容探查路径；导入受控目录后，新的手工探查和补齐任务走三阶段流程。
 
 ## 4. A / B / C 模式答案：候选与仲裁
 

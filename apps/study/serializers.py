@@ -38,7 +38,7 @@ class QuestionListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ExamQuestion
-        fields = ['id', 'question_no', 'system_id', 'question_type', 'difficulty',
+        fields = ['id', 'question_no', 'system_id', 'question_type', 'difficulty', 'difficulty_level',
                   'subject', 'review_status', 'stem', 'stem_preview', 'answer', 'analysis', 'solution',
                   'knowledge_points_count', 'knowledge_points_display',
                   'ai_answer_a', 'ai_answer_b', 'ai_answer_c',
@@ -192,7 +192,7 @@ class QuestionDetailSerializer(serializers.ModelSerializer):
                   'source_external_id', 'source_question_type', 'material',
                   'subquestions', 'tables', 'difficulty_label',
                   'options', 'images',
-                  'knowledge_points', 'difficulty', 'original_question',
+                  'knowledge_points', 'difficulty', 'difficulty_level', 'original_question',
                   'page_start', 'page_end', 'bbox', 'region_json',
                   'sort_order', 'confidence', 'formula_need_review',
                   'need_review', 'review_status', 'parse_status',

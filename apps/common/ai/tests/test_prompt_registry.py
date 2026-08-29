@@ -189,6 +189,10 @@ def test_default_registry_renders_every_declared_task(provider_env):
         "ocr_text": "题目",
         "has_figure": True,
         "ocr_confidence": "high",
+        "topic_candidates_json": "[]",
+        "scope_json": "{}",
+        "subtopic_candidates_json": "[]",
+        "knowledge_candidates_json": "[]",
         "question_context_json": '{"stem":"题目"}',
         "target_mode": "A",
         "mode_schema_json": '{}',
@@ -437,7 +441,7 @@ def test_deepseek_verification_prompts_require_numeric_confidence(
     assert "confidence 必须为 number，不得为字符串" in system
 
 
-def test_question_probe_prompt_requests_complete_canonical_taxonomy(provider_env):
+def test_question_probe_prompt_leaves_local_tree_taxonomy_to_the_server(provider_env):
     system, _ = PromptRegistry(AIConfig.load()).render(
         "question_probe",
         ocr_text="题目",
@@ -448,13 +452,12 @@ def test_question_probe_prompt_requests_complete_canonical_taxonomy(provider_env
     for field_name in (
         "subject",
         "question_type",
-        "grade",
-        "semester",
-        "chapter",
         "difficulty",
         "knowledge_points",
     ):
         assert f"{field_name} (" in system
+    for field_name in ("grade", "semester", "chapter"):
+        assert f"{field_name} (" not in system
 
 
 _LEGACY_GUIDANCE_GENERATE_SYSTEM = """你是一位擅长苏格拉底式教学的中学教师。

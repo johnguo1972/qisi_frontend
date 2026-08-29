@@ -24,6 +24,9 @@ QWEN_MODELS = frozenset({"qwen3.7-flash", "qwen3.7-plus", "qwen3-vl-plus"})
 DEEPSEEK_MODELS = frozenset({"deepseek-v4-pro"})
 TASK_PROVIDER_SCHEMA = {
     "question_probe": "qwen",
+    "controlled_taxonomy_scope": "qwen",
+    "controlled_taxonomy_subtopic": "qwen",
+    "controlled_taxonomy_knowledge": "qwen",
     "knowledge_analysis": "qwen",
     "mode_a_answer": "qwen",
     "mode_b_answer": "qwen",

@@ -55,6 +55,64 @@ class RecordingAIClient:
         )
 
 
+def test_knowledge_selection_rejects_score_outside_selected_level_range():
+    components = _components()
+    component = components.TaxonomyKnowledgeComponent(
+        RecordingAIClient(
+            {
+                "controlled_taxonomy_knowledge": json.dumps(
+                    {
+                        "knowledge_modules": ["模块一"],
+                        "difficulty_score": 4.1,
+                        "difficulty_reason": "综合应用",
+                        "confidence": 0.9,
+                    },
+                    ensure_ascii=False,
+                )
+            }
+        ),
+        prompt_registry=StaticPromptRegistry(),
+    )
+
+    with pytest.raises(AIResponseError, match="difficulty level"):
+        component.run(
+            components.QuestionInput(
+                stem="题目",
+                metadata={
+                    "difficulty_level": "L3",
+                    "candidates": [{"id": "模块一"}],
+                },
+            )
+        )
+
+
+def test_subtopic_selection_rejects_null_when_candidates_are_available():
+    """Catch a nullable model response stopping a non-empty catalog branch."""
+    components = _components()
+    component = components.TaxonomySubtopicComponent(
+        RecordingAIClient(
+            {
+                "controlled_taxonomy_subtopic": json.dumps(
+                    {"subtopic_id": None, "confidence": 0.2}
+                )
+            }
+        ),
+        prompt_registry=StaticPromptRegistry(),
+    )
+
+    with pytest.raises(AIResponseError, match="subtopic"):
+        component.run(
+            components.QuestionInput(
+                stem="判断扩散现象的说法是否正确",
+                metadata={
+                    "subtopic_candidates": [
+                        {"id": "junior-physics-molecular-motion"}
+                    ]
+                },
+            )
+        )
+
+
 class StaticPromptRegistry:
     """Prompt boundary substitute for component-only response tests."""
 
@@ -659,9 +717,6 @@ def test_probe_routes_fixed_task_and_normalizes_taxonomy_with_multiple_images():
     assert set(result) >= {
         "subject",
         "question_type",
-        "grade",
-        "semester",
-        "chapter",
         "difficulty",
         "knowledge_points",
     }
@@ -698,6 +753,20 @@ def test_probe_normalizes_common_provider_scalar_and_collection_variants():
     assert result["visual_risk_score"] == 45
     assert result["reasoning_risk_score"] == 70
     assert result["recommended_route"] == "DEEP"
+
+
+def test_probe_response_omits_taxonomy_owned_by_local_knowledge_tree():
+    """Catch model-owned grade, term, and chapter leaking from the probe contract."""
+    components = _components()
+    client = RecordingAIClient(
+        {"question_probe": json.dumps(_valid_probe_payload(), ensure_ascii=False)}
+    )
+
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="解方程 x+1=2")
+    )
+
+    assert {"grade", "semester", "chapter"}.isdisjoint(result)
 
 
 def test_probe_preserves_legacy_aliases_when_provider_returns_canonical_fields():

@@ -37,16 +37,14 @@ class CourseAIReconcileCompletenessTests(SimpleTestCase):
         self.assertFalse(tasks.is_ai_probe_complete(question))
         self.assertTrue(tasks.is_ai_knowledge_complete(question))
 
-    def test_probe_requires_grade_semester_subject_type_and_normalized_text(self):
+    def test_probe_requires_subject_type_and_normalized_text_but_not_taxonomy(self):
         question = _question(ai_probe_result={
-            'grade': '九年级',
-            'semester': '',
             'subject': 'physics',
             'question_type': 'single_choice',
             'normalized_text': '题干',
         })
 
-        self.assertFalse(tasks.is_ai_probe_complete(question))
+        self.assertTrue(tasks.is_ai_probe_complete(question))
 
     def test_mode_payload_with_error_is_missing(self):
         question = _question(ai_answer_b={'error': 'read_timeout'})

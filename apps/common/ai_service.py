@@ -6,6 +6,7 @@ import time
 import os
 import threading
 import re
+from decimal import Decimal
 from django.conf import settings
 from pydantic import BaseModel, ValidationError
 from apps.common.exceptions import AIRequestError
@@ -26,6 +27,9 @@ from apps.common.ai.components import (
     QuestionComponentFactory,
     QuestionInput,
     QuestionProbeComponent,
+    TaxonomyKnowledgeComponent,
+    TaxonomyScopeComponent,
+    TaxonomySubtopicComponent,
     ResultVerifierComponent,
     VisionExtractionComponent,
 )
@@ -47,6 +51,13 @@ from apps.common.ai.schemas import (
     ModeCResponse,
     mode_response_schema,
     multipart_true_false_labels,
+)
+from apps.knowledge.controlled_catalog import (
+    ControlledCatalogSelectionError,
+    child_topic_candidates,
+    leaf_knowledge_candidates,
+    root_topic_candidates,
+    validate_selected_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,8 +90,6 @@ _TRUE_FALSE_CANONICAL_TOKENS = (
     ("FALSE", re.compile(r"\bfalse\b|错误|\bwrong\b|[×✗]", re.IGNORECASE)),
     ("TRUE", re.compile(r"\btrue\b|正确|\bcorrect\b|[√✓]", re.IGNORECASE)),
 )
-
-
 def _is_response_contract_failure(error: BaseException) -> bool:
     """Return whether a failed component result is eligible for B JSON repair.
 
@@ -439,15 +448,21 @@ class AIReviewService:
 
     @staticmethod
     def _probe_source_text(question) -> str:
-        """Use structured source fields when an imported question has no stem."""
+        """Keep multipart/table context instead of reducing a question to its stem."""
         stem = str(getattr(question, "stem", "") or "")
-        if stem.strip():
+        context = QuestionContextBuilder.build(question)
+        material = str(getattr(question, "material", "") or "")
+        tables = context.metadata.get("tables", ())
+        subquestions = context.metadata.get("subquestions", ())
+        has_structured_context = bool(
+            material or context.options or tables or subquestions
+        )
+        if stem.strip() and not has_structured_context:
             return stem
 
-        context = QuestionContextBuilder.build(question)
         payload = {
-            "raw_text": str(getattr(question, "raw_text", "") or ""),
-            "material": str(getattr(question, "material", "") or ""),
+            "stem": stem,
+            "material": material,
             "subject": str(getattr(question, "subject", "") or ""),
             "question_type": str(
                 getattr(question, "question_type", "")
@@ -455,9 +470,11 @@ class AIReviewService:
                 or ""
             ),
             "options": context.options,
-            "tables": context.metadata.get("tables", ()),
-            "subquestions": context.metadata.get("subquestions", ()),
+            "tables": tables,
+            "subquestions": subquestions,
         }
+        if not stem.strip():
+            payload["raw_text"] = str(getattr(question, "raw_text", "") or "")
         rendered = json.dumps(
             payload,
             ensure_ascii=False,
@@ -1139,15 +1156,144 @@ class AIReviewService:
             self._component(KnowledgeAnalysisComponent), question_input
         )
 
-    def process_question_probe(self, question_id: int, model: str = None) -> dict:
-        """Run only probe/normalization and knowledge analysis for one question."""
-        from apps.parser.models import ExamQuestion
+    @staticmethod
+    def _controlled_scope_candidate(scope_result: dict, candidates: list[dict]) -> dict:
+        candidate_by_id = {
+            str(candidate.get('id')): candidate for candidate in candidates
+        }
+        topic_id = str(scope_result.get('topic_id') or '')
+        candidate = candidate_by_id.get(topic_id)
+        if candidate is None:
+            raise AIRequestError('controlled taxonomy scope selected an unknown topic')
+        if (
+            scope_result.get('subject') != candidate.get('subject')
+            or scope_result.get('stage') != candidate.get('stage')
+        ):
+            raise AIRequestError('controlled taxonomy scope does not match selected topic')
+        return candidate
 
-        question = ExamQuestion.objects.get(id=question_id)
+    @staticmethod
+    def _controlled_subtopic_candidate(
+        subtopic_result: dict,
+        candidates: list[dict],
+    ) -> dict:
+        candidate_by_id = {
+            str(candidate.get('id')): candidate for candidate in candidates
+        }
+        subtopic_id = str(subtopic_result.get('subtopic_id') or '')
+        candidate = candidate_by_id.get(subtopic_id)
+        if candidate is None:
+            raise AIRequestError('controlled taxonomy subtopic selected an unknown topic')
+        return candidate
+
+    def _run_controlled_taxonomy_scope(self, question, image_urls: list) -> tuple[dict, dict]:
+        candidates = root_topic_candidates()
+        if not candidates:
+            raise AIRequestError('controlled taxonomy catalog has no root topics')
+        result = self._run_component(
+            self._component(TaxonomyScopeComponent),
+            QuestionInput(
+                stem=self._probe_source_text(question),
+                options=self._question_input(question, image_urls).options,
+                answer=getattr(question, 'answer', '') or '',
+                solution=getattr(question, 'solution', '') or '',
+                image_urls=tuple(image_urls),
+                metadata={'topic_candidates': candidates},
+            ),
+        )
+        candidate = self._controlled_scope_candidate(result, candidates)
+        result['topic_path_ids'] = candidate['path_ids']
+        result['catalog_version'] = self._catalog_version(candidate)
+        return result, candidate
+
+    @staticmethod
+    def _catalog_version(candidate: dict) -> str:
+        """Read the version persisted on the selected controlled topic."""
+        from apps.knowledge.models import KnowledgeTopic
+
+        return str(
+            KnowledgeTopic.objects.filter(id=str(candidate['id'])).values_list(
+                'catalog_version', flat=True
+            ).first() or ''
+        )
+
+    def _run_controlled_taxonomy_subtopic(
+        self,
+        question,
+        scope: dict,
+        selected_scope: dict,
+    ) -> tuple[dict, dict]:
+        candidates = child_topic_candidates(str(selected_scope['id']))
+        if not candidates:
+            return {
+                'subtopic_id': None,
+                'confidence': 1.0,
+                'skipped': True,
+            }, selected_scope
+        result = self._run_component(
+            self._component(TaxonomySubtopicComponent),
+            QuestionInput(
+                stem=str(scope['normalized_text']),
+                metadata={
+                    'normalized_text': scope['normalized_text'],
+                    'scope': scope,
+                    'subtopic_candidates': candidates,
+                },
+            ),
+        )
+        candidate = self._controlled_subtopic_candidate(result, candidates)
+        result['topic_path_ids'] = candidate['path_ids']
+        return result, candidate
+
+    def _run_controlled_taxonomy_knowledge(
+        self,
+        question,
+        scope: dict,
+        selected_topic: dict,
+        image_urls: list,
+    ) -> dict:
+        candidates = leaf_knowledge_candidates(str(selected_topic['id']))
+        if not candidates:
+            raise AIRequestError('controlled taxonomy topic has no knowledge modules')
+        result = self._run_component(
+            self._component(TaxonomyKnowledgeComponent),
+            QuestionInput(
+                stem=str(scope['normalized_text']),
+                options=self._question_input(question, image_urls).options,
+                image_urls=tuple(image_urls),
+                metadata={
+                    'normalized_text': scope['normalized_text'],
+                    'scope': {
+                        **scope,
+                        'selected_topic_id': selected_topic['id'],
+                        'selected_topic_name': selected_topic['name'],
+                    },
+                    'candidates': candidates,
+                    'difficulty_level': scope['difficulty_level'],
+                },
+            ),
+        )
+        try:
+            result['knowledge_modules'] = validate_selected_ids(
+                [candidate['id'] for candidate in candidates],
+                result['knowledge_modules'],
+            )
+        except ControlledCatalogSelectionError as error:
+            raise AIRequestError(str(error)) from error
+        result['selected_topic_id'] = str(selected_topic['id'])
+        result['catalog_version'] = self._catalog_version(selected_topic)
+        return result
+
+    def _persist_controlled_probe_stage(self, question_id, taxonomy: dict) -> None:
+        self.save_results_to_question(
+            question_id,
+            {'controlled_taxonomy': taxonomy, 'errors': {}},
+        )
+
+    def _process_legacy_question_probe(self, question, image_urls, model=None) -> dict:
+        """Keep historic rows processable until the controlled catalog is imported."""
         results = {}
         errors = {}
-        image_urls = self._get_question_image_urls(question)
-
         try:
             probe_result = self.probe_and_norm(question, image_urls, model=model)
             results['probe'] = probe_result
@@ -1156,7 +1302,6 @@ class AIReviewService:
             errors['probe'] = str(error)
             results['probe'] = {'error': str(error)}
             normalized_text = question.stem or ''
-
         try:
             results['knowledge'] = self.analyze_knowledge_points(
                 question,
@@ -1167,6 +1312,78 @@ class AIReviewService:
         except AIRequestError as error:
             errors['knowledge'] = str(error)
             results['knowledge'] = {'error': str(error)}
+        results['errors'] = errors
+        return results
+
+    def process_question_probe(
+        self,
+        question_id: int,
+        model: str = None,
+        on_step_complete=None,
+    ) -> dict:
+        """Run the controlled three-stage probe and save each stage immediately."""
+        from apps.parser.models import ExamQuestion
+
+        question = ExamQuestion.objects.get(id=question_id)
+        if not root_topic_candidates():
+            return self._process_legacy_question_probe(
+                question,
+                self._get_question_image_urls(question),
+                model=model,
+            )
+        results: dict = {'controlled_taxonomy': {}}
+        errors: dict = {}
+        image_urls = self._get_question_image_urls(question)
+
+        try:
+            scope, selected_scope = self._run_controlled_taxonomy_scope(
+                question, image_urls
+            )
+            results['controlled_taxonomy']['scope'] = scope
+            self._persist_controlled_probe_stage(
+                question_id, {'scope': scope}
+            )
+            if on_step_complete is not None:
+                on_step_complete('taxonomy_scope', deepcopy(scope))
+        except AIRequestError as error:
+            errors['taxonomy_scope'] = str(error)
+            results['controlled_taxonomy']['scope'] = {'error': str(error)}
+            results['errors'] = errors
+            return results
+
+        try:
+            subtopic, selected_topic = self._run_controlled_taxonomy_subtopic(
+                question, scope, selected_scope
+            )
+            results['controlled_taxonomy']['subtopic'] = subtopic
+            self._persist_controlled_probe_stage(
+                question_id, {'subtopic': subtopic}
+            )
+            if on_step_complete is not None:
+                on_step_complete('taxonomy_subtopic', deepcopy(subtopic))
+        except AIRequestError as error:
+            errors['taxonomy_subtopic'] = str(error)
+            results['controlled_taxonomy']['subtopic'] = {'error': str(error)}
+            results['errors'] = errors
+            return results
+
+        try:
+            knowledge = self._run_controlled_taxonomy_knowledge(
+                question, scope, selected_topic, image_urls
+            )
+            results['controlled_taxonomy']['knowledge'] = knowledge
+            self._persist_controlled_probe_stage(
+                question_id, {'knowledge': knowledge}
+            )
+            if on_step_complete is not None:
+                on_step_complete('taxonomy_knowledge', deepcopy(knowledge))
+        except AIRequestError as error:
+            errors['taxonomy_knowledge'] = str(error)
+            results['controlled_taxonomy']['knowledge'] = {'error': str(error)}
+
+        question.refresh_from_db()
+        results['probe'] = deepcopy(question.ai_probe_result or {})
+        results['knowledge'] = deepcopy(question.ai_knowledge_enrichment or {})
 
         results['errors'] = errors
         return results
@@ -1200,45 +1417,61 @@ class AIReviewService:
         logger.info(f'[AI] Got {len(image_urls)} image URLs for question {question_id}')
         input_hash = self._processing_input_hash(question, image_urls, model)
 
-        # Step 1: Probe & Norm
-        probe_result = self._cached_pipeline_result(
-            getattr(question, "ai_probe_result", None), input_hash
-        )
-        if probe_result is not None:
-            results['probe'] = probe_result
-            normalized_text = probe_result.get('normalized_text', question.stem or '')
+        controlled_catalog_ready = bool(root_topic_candidates())
+        if controlled_catalog_ready:
+            # The controlled stages save scope, subtopic, and selected modules
+            # independently before the answer pipeline continues.
+            controlled_probe = self.process_question_probe(question_id, model=model)
+            if 'controlled_taxonomy' in controlled_probe:
+                results['controlled_taxonomy'] = controlled_probe['controlled_taxonomy']
+            results['probe'] = controlled_probe.get('probe', {})
+            results['knowledge'] = controlled_probe.get('knowledge', {})
+            errors.update(controlled_probe.get('errors', {}))
+            normalized_text = results['probe'].get(
+                'normalized_text', question.stem or ''
+            )
         else:
-            try:
-                probe_result = self.probe_and_norm(question, image_urls, model=model)
-                probe_result = self._with_pipeline_cache(probe_result, input_hash)
-                normalized_text = probe_result.get('normalized_text', question.stem or '')
+            # Until the catalog exists, retain the established cached legacy
+            # path.  This prevents historic AI results from causing another
+            # model call merely because the new feature was deployed.
+            probe_result = self._cached_pipeline_result(
+                getattr(question, 'ai_probe_result', None), input_hash
+            )
+            if probe_result is not None:
                 results['probe'] = probe_result
-            except AIRequestError as e:
-                errors['probe'] = str(e)
-                results['probe'] = {'error': str(e)}
-                normalized_text = question.stem or ''
-        if not results['probe'].get('error'):
-            notify_step_complete('probe')
+                normalized_text = probe_result.get('normalized_text', question.stem or '')
+            else:
+                try:
+                    probe_result = self.probe_and_norm(question, image_urls, model=model)
+                    probe_result = self._with_pipeline_cache(probe_result, input_hash)
+                    normalized_text = probe_result.get('normalized_text', question.stem or '')
+                    results['probe'] = probe_result
+                except AIRequestError as error:
+                    errors['probe'] = str(error)
+                    results['probe'] = {'error': str(error)}
+                    normalized_text = question.stem or ''
+            if not results['probe'].get('error'):
+                notify_step_complete('probe')
 
-        # Step 1.5: Knowledge analysis（识别 1-5 个知识点 + 难度，供 save 匹配并更新）
-        knowledge = self._cached_pipeline_result(
-            getattr(question, "ai_knowledge_enrichment", None), input_hash
-        )
-        if knowledge is not None:
-            results['knowledge'] = knowledge
-        else:
-            try:
-                knowledge = self.analyze_knowledge_points(
-                    question, normalized_text,
-                    subject_hint=results.get('probe', {}).get('subject', ''),
-                    model=model,
-                )
-                results['knowledge'] = self._with_pipeline_cache(knowledge, input_hash)
-            except AIRequestError as e:
-                errors['knowledge'] = str(e)
-                results['knowledge'] = {'error': str(e)}
-        if not results['knowledge'].get('error'):
-            notify_step_complete('knowledge')
+            knowledge = self._cached_pipeline_result(
+                getattr(question, 'ai_knowledge_enrichment', None), input_hash
+            )
+            if knowledge is not None:
+                results['knowledge'] = knowledge
+            else:
+                try:
+                    knowledge = self.analyze_knowledge_points(
+                        question,
+                        normalized_text,
+                        subject_hint=results.get('probe', {}).get('subject', ''),
+                        model=model,
+                    )
+                    results['knowledge'] = self._with_pipeline_cache(knowledge, input_hash)
+                except AIRequestError as error:
+                    errors['knowledge'] = str(error)
+                    results['knowledge'] = {'error': str(error)}
+            if not results['knowledge'].get('error'):
+                notify_step_complete('knowledge')
 
         # Step 2: Vision Extraction
         vision_result = self._cached_pipeline_result(
@@ -1264,7 +1497,13 @@ class AIReviewService:
 
         # Build knowledge refs
         knowledge_refs = ""
-        if results.get('probe', {}).get('topic_tags_top3'):
+        if results.get('knowledge', {}).get('knowledge_modules'):
+            knowledge_refs = ", ".join(
+                results['knowledge']['knowledge_modules']
+            )
+        elif results.get('probe', {}).get('topic_tags_top3'):
+            # Historic cached probe envelopes store free-text tags rather
+            # than the new controlled module list.
             knowledge_refs = ", ".join(results['probe']['topic_tags_top3'])
 
         # A blank source answer must first become a durable DeepSeek canonical
@@ -1376,6 +1615,119 @@ class AIReviewService:
 
         return results
 
+    def _save_controlled_taxonomy(self, question, taxonomy_update: dict) -> None:
+        """Persist one controlled probe stage without discarding earlier stages."""
+        from apps.knowledge.models import KnowledgePoint, KnowledgeTopic
+
+        probe = deepcopy(question.ai_probe_result) if isinstance(
+            question.ai_probe_result, dict
+        ) else {}
+        taxonomy = deepcopy(probe.get('taxonomy')) if isinstance(
+            probe.get('taxonomy'), dict
+        ) else {}
+        for stage_name, value in taxonomy_update.items():
+            if isinstance(value, dict) and not value.get('error'):
+                taxonomy[stage_name] = deepcopy(value)
+        probe['taxonomy'] = taxonomy
+
+        scope = taxonomy.get('scope')
+        if isinstance(scope, dict):
+            for key in ('subject', 'stage', 'question_type', 'difficulty_level', 'normalized_text'):
+                value = scope.get(key)
+                if isinstance(value, str) and value.strip():
+                    probe[key] = value
+            question_type = probe.get('question_type')
+            if isinstance(question_type, str) and question_type.strip():
+                question.question_type = question_type
+            subject = probe.get('subject')
+            if subject in {'math', 'physics'}:
+                question.subject = subject
+            level = probe.get('difficulty_level')
+            if level in {'L1', 'L2', 'L3', 'L4', 'L5'}:
+                question.difficulty_level = level
+
+        knowledge = taxonomy.get('knowledge')
+        if isinstance(knowledge, dict):
+            selected_topic_id = knowledge.get('selected_topic_id')
+            selected_modules = knowledge.get('knowledge_modules')
+            if (
+                isinstance(selected_topic_id, str)
+                and isinstance(selected_modules, list)
+                and selected_modules
+            ):
+                topic = KnowledgeTopic.objects.filter(
+                    id=selected_topic_id,
+                    is_enabled=True,
+                ).first()
+                if topic is None:
+                    raise AIRequestError('controlled taxonomy selected topic no longer exists')
+                modules = [str(module).strip() for module in selected_modules]
+                points_by_module = {}
+                for point in KnowledgePoint.objects.filter(
+                    subject=topic.subject,
+                    stage=topic.stage,
+                    chapter=topic.name,
+                    module__in=modules,
+                ).order_by('id'):
+                    points_by_module.setdefault(point.module, point)
+                missing = [module for module in modules if module not in points_by_module]
+                if missing:
+                    raise AIRequestError(
+                        'controlled taxonomy selected module is no longer in local tree'
+                    )
+                matched_points = [points_by_module[module] for module in modules]
+                final_point = matched_points[-1]
+                derived_taxonomy = {
+                    'subject': final_point.subject,
+                    'stage': final_point.stage,
+                    'grade_index': final_point.grade_index,
+                    'grade': final_point.grade_name,
+                    'semester': KnowledgePoint.TERM_LABELS.get(
+                        final_point.term, final_point.term
+                    ),
+                    'term': final_point.term,
+                    'chapter': final_point.chapter,
+                    'knowledge_point_id': str(final_point.id),
+                    'knowledge_point_module': final_point.module,
+                }
+                probe['derived_taxonomy'] = derived_taxonomy
+                probe.update({
+                    'subject': derived_taxonomy['subject'],
+                    'stage': derived_taxonomy['stage'],
+                    'grade': derived_taxonomy['grade'],
+                    'semester': derived_taxonomy['semester'],
+                    'chapter': derived_taxonomy['chapter'],
+                })
+                question.subject = derived_taxonomy['subject']
+                question.knowledge_points = [
+                    {'id': str(point.id), 'module': point.module}
+                    for point in matched_points
+                ]
+                level = probe.get('difficulty_level')
+                score = knowledge.get('difficulty_score')
+                if level in {'L1', 'L2', 'L3', 'L4', 'L5'} and score is not None:
+                    score_decimal = Decimal(str(score)).quantize(Decimal('0.01'))
+                    lower = Decimal(level[1])
+                    if not lower <= score_decimal <= lower + Decimal('0.9'):
+                        raise AIRequestError(
+                            'controlled taxonomy difficulty score is outside the selected difficulty level'
+                        )
+                    question.difficulty_level = level
+                    question.difficulty = score_decimal
+                question.ai_knowledge_enrichment = {
+                    'knowledge_modules': modules,
+                    'difficulty_level': question.difficulty_level,
+                    'difficulty_score': float(question.difficulty)
+                    if question.difficulty is not None else None,
+                    'difficulty_reason': knowledge.get('difficulty_reason', ''),
+                    'confidence': knowledge.get('confidence'),
+                    'selected_topic_id': selected_topic_id,
+                    'derived_taxonomy': derived_taxonomy,
+                }
+
+        question.ai_probe_result = probe
+        question.save()
+
     def save_results_to_question(self, question_id: int, results: dict):
         """Save AI processing results to ExamQuestion record.
 
@@ -1386,24 +1738,62 @@ class AIReviewService:
 
         question = ExamQuestion.objects.get(id=question_id)
 
-        # Determine subject from the question record
+        controlled_taxonomy = results.get('controlled_taxonomy')
+        if isinstance(controlled_taxonomy, dict):
+            self._save_controlled_taxonomy(question, controlled_taxonomy)
+            remaining_keys = {
+                key for key in results
+                if key not in {'controlled_taxonomy', 'probe', 'knowledge', 'errors'}
+            }
+            if not remaining_keys:
+                return
+            results = {
+                key: value
+                for key, value in results.items()
+                if key not in {'controlled_taxonomy', 'probe', 'knowledge'}
+            }
+            question.refresh_from_db()
+
+        # The local knowledge tree, rather than the probe model, owns grade,
+        # term, and chapter.  A probe may already have been saved by an
+        # earlier per-step write, so enrich that persisted value when the
+        # knowledge step arrives on its own.
+        probe_data = results.get('probe')
+        if not isinstance(probe_data, dict):
+            probe_data = getattr(question, 'ai_probe_result', None)
+        if not isinstance(probe_data, dict):
+            probe_data = None
+
+        # Determine matching subject from the current knowledge result first,
+        # then the probe, and only finally the pre-existing question record.
         subject_map = {'math': 'math', 'physics': 'physics', '数学': 'math', '物理': 'physics'}
-        question_subject = subject_map.get(question.subject, 'math')
+        probe_subject = subject_map.get(
+            (probe_data or {}).get('subject', ''),
+            '',
+        )
+        question_subject = probe_subject or subject_map.get(question.subject, '')
+        derived_taxonomy = None
 
         # Enrich knowledge points with actual DB records
         # Validate and correct: AI may return a wrong id that doesn't match the module name
         if 'knowledge' in results and results['knowledge'].get('error') is None:
             kp_data = results['knowledge']
             matched_kps = []
+            matched_points = []
             if kp_data.get('knowledge_points'):
                 for kp in kp_data['knowledge_points']:
                     ai_module = (kp.get('module') or '').strip()
-                    kp_subject = (kp.get('subject') or question_subject).strip()
+                    kp_subject = subject_map.get(
+                        (kp.get('subject') or kp_data.get('subject') or question_subject).strip(),
+                        question_subject,
+                    )
                     if not ai_module:
                         continue
                     # 匹配 knowledge_points 表的 module 字段：精确 -> 模糊 contains（同 subject 优先，再跨 subject）
-                    db_kp = KnowledgePoint.objects.filter(subject=kp_subject, module=ai_module).first()
-                    if not db_kp:
+                    db_kp = None
+                    if kp_subject:
+                        db_kp = KnowledgePoint.objects.filter(subject=kp_subject, module=ai_module).first()
+                    if not db_kp and kp_subject:
                         db_kp = KnowledgePoint.objects.filter(subject=kp_subject, module__icontains=ai_module).first()
                     if not db_kp:
                         db_kp = KnowledgePoint.objects.filter(module__icontains=ai_module).first()
@@ -1411,7 +1801,17 @@ class AIReviewService:
                         kp['id'] = str(db_kp.id)
                         kp['module'] = db_kp.module
                         kp['full_label'] = db_kp.full_label
+                        kp['local_taxonomy'] = {
+                            'subject': db_kp.subject,
+                            'stage': db_kp.stage,
+                            'grade_index': db_kp.grade_index,
+                            'grade': db_kp.grade_name,
+                            'semester': KnowledgePoint.TERM_LABELS.get(db_kp.term, db_kp.term),
+                            'term': db_kp.term,
+                            'chapter': db_kp.chapter,
+                        }
                         matched_kps.append({'id': str(db_kp.id), 'module': db_kp.module})
+                        matched_points.append(db_kp)
                         logger.info(
                             '[AI] knowledge point matched',
                             extra={'status': 'matched'},
@@ -1423,6 +1823,22 @@ class AIReviewService:
                             '[AI] knowledge point unmatched',
                             extra={'status': 'unmatched'},
                         )
+            if matched_points:
+                final_point = matched_points[-1]
+                derived_taxonomy = {
+                    'subject': final_point.subject,
+                    'stage': final_point.stage,
+                    'grade_index': final_point.grade_index,
+                    'grade': final_point.grade_name,
+                    'semester': KnowledgePoint.TERM_LABELS.get(final_point.term, final_point.term),
+                    'term': final_point.term,
+                    'chapter': final_point.chapter,
+                    'knowledge_point_id': str(final_point.id),
+                    'knowledge_point_module': final_point.module,
+                }
+            else:
+                derived_taxonomy = {}
+            kp_data['derived_taxonomy'] = derived_taxonomy
             question.ai_knowledge_enrichment = kp_data
             # 用匹配到 DB 的知识点更新题目的 knowledge_points 关联
             # No match means the question belongs to the virtual root/未分类 node.
@@ -1436,9 +1852,30 @@ class AIReviewService:
                 if 1 <= level <= 5:
                     question.difficulty = level
 
-        # Save probe result
-        if 'probe' in results:
-            question.ai_probe_result = results['probe']
+        # Keep the probe's core classification, but make all taxonomy values
+        # authoritative only after the local knowledge point match is known.
+        if isinstance(results.get('probe'), dict) and not results['probe'].get('error'):
+            question_type = str(results['probe'].get('question_type') or '').strip()
+            if question_type:
+                question.question_type = question_type
+        if probe_data is not None:
+            probe_data.pop('stage', None)
+            probe_data.pop('grade', None)
+            probe_data.pop('semester', None)
+            probe_data.pop('chapter', None)
+            if derived_taxonomy:
+                probe_data['derived_taxonomy'] = derived_taxonomy
+                probe_data.update({
+                    'subject': derived_taxonomy['subject'],
+                    'stage': derived_taxonomy['stage'],
+                    'grade': derived_taxonomy['grade'],
+                    'semester': derived_taxonomy['semester'],
+                    'chapter': derived_taxonomy['chapter'],
+                })
+                question.subject = derived_taxonomy['subject']
+            elif derived_taxonomy == {}:
+                probe_data['derived_taxonomy'] = {}
+            question.ai_probe_result = probe_data
 
         # Save vision extract
         if 'vision' in results:

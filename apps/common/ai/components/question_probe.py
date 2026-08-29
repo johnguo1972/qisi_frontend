@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Mapping
 
+from apps.common.ai.exceptions import AIResponseError
 from apps.common.ai.schemas import (
     KnowledgeAnalysisResponse,
     QuestionProbeResponse,
+    TaxonomyKnowledgeResponse,
+    TaxonomyScopeResponse,
+    TaxonomySubtopicResponse,
     VisionFactResponse,
 )
 
-from .base import QuestionAIComponent, QuestionInput
+from .base import QuestionAIComponent, QuestionInput, to_plain_data
 
 
 _BOUNDARY_FORMAT_CHARACTERS = frozenset(
@@ -167,9 +173,12 @@ class QuestionProbeComponent(QuestionAIComponent):
             "物理": "physics",
         }.get(subject, subject)
         normalized.setdefault("subject", "")
-        normalized.setdefault("grade", "")
-        normalized.setdefault("semester", "")
-        normalized.setdefault("chapter", "")
+        # Grade, term, and chapter are owned by the local knowledge tree.
+        # Drop provider-supplied values so only a matched local point can
+        # populate them during persistence.
+        normalized.pop("grade", None)
+        normalized.pop("semester", None)
+        normalized.pop("chapter", None)
         _normalize_scalar_alias_pair(
             normalized, "question_type", "question_style", ""
         )
@@ -249,6 +258,88 @@ class KnowledgeAnalysisComponent(QuestionAIComponent):
             ),
             "subject_hint": question.metadata.get("subject_hint", ""),
         }
+
+
+class TaxonomyScopeComponent(QuestionAIComponent):
+    """Select an enabled first-level topic from the supplied catalog only."""
+
+    task_key = "controlled_taxonomy_scope"
+    response_schema = TaxonomyScopeResponse
+
+    def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
+        return {
+            "ocr_text": question.stem,
+            "has_figure": bool(question.image_urls),
+            "topic_candidates_json": json.dumps(
+                to_plain_data(question.metadata.get("topic_candidates", [])),
+                ensure_ascii=False,
+            ),
+        }
+
+
+class TaxonomySubtopicComponent(QuestionAIComponent):
+    """Select an enabled child topic when the selected root has children."""
+
+    task_key = "controlled_taxonomy_subtopic"
+    response_schema = TaxonomySubtopicResponse
+
+    def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
+        return {
+            "normalized_text": question.metadata.get("normalized_text", question.stem),
+            "scope_json": json.dumps(
+                to_plain_data(question.metadata.get("scope", {})), ensure_ascii=False
+            ),
+            "subtopic_candidates_json": json.dumps(
+                to_plain_data(question.metadata.get("subtopic_candidates", [])),
+                ensure_ascii=False,
+            ),
+        }
+
+    def validate_result(self, result: dict, question: QuestionInput) -> dict:
+        candidates = question.metadata.get("subtopic_candidates", []) or []
+        candidate_ids = {
+            str(candidate.get("id"))
+            for candidate in candidates
+            if isinstance(candidate, Mapping) and candidate.get("id")
+        }
+        selected_id = result.get("subtopic_id")
+        if candidate_ids and str(selected_id or "") not in candidate_ids:
+            raise AIResponseError(
+                "controlled taxonomy subtopic must select an available subtopic"
+            )
+        return result
+
+
+class TaxonomyKnowledgeComponent(QuestionAIComponent):
+    """Select controlled standard point IDs and refine the coarse difficulty."""
+
+    task_key = "controlled_taxonomy_knowledge"
+    response_schema = TaxonomyKnowledgeResponse
+
+    def prompt_variables(self, question: QuestionInput) -> dict[str, object]:
+        return {
+            "normalized_text": question.metadata.get("normalized_text", question.stem),
+            "scope_json": json.dumps(
+                to_plain_data(question.metadata.get("scope", {})), ensure_ascii=False
+            ),
+            "knowledge_candidates_json": json.dumps(
+                to_plain_data(question.metadata.get("candidates", [])),
+                ensure_ascii=False,
+            ),
+        }
+
+    def validate_result(self, result: dict, question: QuestionInput) -> dict:
+        level = str(question.metadata.get("difficulty_level", "")).upper()
+        if level not in {"L1", "L2", "L3", "L4", "L5"}:
+            raise AIResponseError("controlled taxonomy difficulty level is missing")
+        lower = float(level[1])
+        upper = lower + 0.9
+        score = float(result["difficulty_score"])
+        if not lower <= score <= upper:
+            raise AIResponseError(
+                "controlled taxonomy difficulty score is outside the selected difficulty level"
+            )
+        return result
 
 
 class VisionExtractionComponent(QuestionAIComponent):

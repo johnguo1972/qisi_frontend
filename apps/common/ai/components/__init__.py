@@ -16,6 +16,9 @@ from .mode_answers import (
 from .question_probe import (
     KnowledgeAnalysisComponent,
     QuestionProbeComponent,
+    TaxonomyKnowledgeComponent,
+    TaxonomyScopeComponent,
+    TaxonomySubtopicComponent,
     VisionExtractionComponent,
 )
 from .result_verifier import ResultVerifierComponent
@@ -36,6 +39,9 @@ __all__ = [
     "QuestionComponentFactory",
     "QuestionInput",
     "QuestionProbeComponent",
+    "TaxonomyKnowledgeComponent",
+    "TaxonomyScopeComponent",
+    "TaxonomySubtopicComponent",
     "ResultVerifierComponent",
     "VisionExtractionComponent",
     "VisionParserComponent",

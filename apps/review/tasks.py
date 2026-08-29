@@ -95,32 +95,60 @@ def _valid_ai_payload(value) -> bool:
 
 
 def is_ai_probe_complete(question) -> bool:
-    """The probe is complete only when routing-critical attributes exist."""
+    """Accept controlled probes while keeping historic persisted probes usable."""
     probe = getattr(question, 'ai_probe_result', None)
     if not _valid_ai_payload(probe):
         return False
+    taxonomy = probe.get('taxonomy')
+    scope = taxonomy.get('scope') if isinstance(taxonomy, dict) else None
+    if _valid_ai_payload(scope):
+        required_fields = (
+            'subject', 'question_type', 'normalized_text', 'difficulty_level',
+        )
+    elif isinstance(taxonomy, dict):
+        # A controlled taxonomy was started but has not completed its scope.
+        return False
+    else:
+        # Existing production rows predate the controlled catalog.  They must
+        # remain visible to the reconcile workflow until they are reprobed.
+        required_fields = ('subject', 'question_type', 'normalized_text')
     return all(
         isinstance(probe.get(key), str) and probe[key].strip()
-        for key in (
-            'grade', 'semester', 'subject', 'question_type', 'normalized_text',
-        )
+        for key in required_fields
     )
 
 
 def is_ai_knowledge_complete(question) -> bool:
-    """Knowledge analysis needs at least one point and a usable difficulty."""
+    """Accept controlled module results and historic knowledge results."""
     knowledge = getattr(question, 'ai_knowledge_enrichment', None)
     if not _valid_ai_payload(knowledge):
         return False
+    modules = knowledge.get('knowledge_modules')
+    if isinstance(modules, list):
+        if not modules:
+            return False
+        level = knowledge.get('difficulty_level')
+        if level not in {'L1', 'L2', 'L3', 'L4', 'L5'}:
+            return False
+        stored = getattr(question, 'difficulty', None)
+        try:
+            score = Decimal(str(stored))
+            return Decimal(level[1]) <= score <= Decimal(level[1]) + Decimal('0.9')
+        except (TypeError, ValueError, ArithmeticError):
+            return False
+
+    # Compatibility for rows generated before module-level constrained
+    # selection was introduced.
     points = knowledge.get('knowledge_points')
     if not isinstance(points, list) or not points:
         return False
     difficulty = knowledge.get('difficulty')
     if isinstance(difficulty, str) and difficulty in {'L1', 'L2', 'L3', 'L4', 'L5'}:
         return True
-    stored = getattr(question, 'difficulty', None)
     try:
-        return Decimal(str(stored)) in {Decimal(i) for i in range(1, 6)}
+        return Decimal(str(getattr(question, 'difficulty', None))) in {
+            Decimal(i) for i in range(1, 6)
+        }
     except (TypeError, ValueError, ArithmeticError):
         return False
 
@@ -141,14 +169,18 @@ def _load_reconcile_question(question_id):
 def _run_reconcile_probe(question_id):
     service = create_ai_review_service()
     try:
-        question = _load_reconcile_question(question_id)
-        result = service.probe_and_norm(
-            question,
-            service._get_question_image_urls(question),
-        )
-        service.save_results_to_question(
-            question_id, {'probe': result, 'errors': {}}
-        )
+        result = service.process_question_probe(question_id)
+        if 'controlled_taxonomy' not in result:
+            # The catalog is not imported yet, so retain the legacy probe
+            # persistence contract for existing deployments.
+            service.save_results_to_question(
+                question_id,
+                {
+                    'probe': result.get('probe', {}),
+                    'knowledge': result.get('knowledge', {}),
+                    'errors': result.get('errors', {}),
+                },
+            )
         return {'status': 'complete'}
     except Exception as error:
         return {'status': 'failed', 'error': classify_ai_failure(error)}
@@ -157,23 +189,9 @@ def _run_reconcile_probe(question_id):
 
 
 def _run_reconcile_knowledge(question_id):
-    service = create_ai_review_service()
-    try:
-        question = _load_reconcile_question(question_id)
-        probe = question.ai_probe_result or {}
-        result = service.analyze_knowledge_points(
-            question,
-            probe.get('normalized_text', question.stem or ''),
-            subject_hint=probe.get('subject', ''),
-        )
-        service.save_results_to_question(
-            question_id, {'knowledge': result, 'errors': {}}
-        )
-        return {'status': 'complete'}
-    except Exception as error:
-        return {'status': 'failed', 'error': classify_ai_failure(error)}
-    finally:
-        service.close()
+    # The third controlled probe stage owns module selection and is invoked
+    # together with scope/subtopic so its candidates cannot drift.
+    return _run_reconcile_probe(question_id)
 
 
 def _run_reconcile_mode(question_id, mode):
@@ -738,6 +756,12 @@ def single_mode_ai_process_question(self, question_id, mode, model=None):
         knowledge_refs = ""
         if probe_result.get('topic_tags_top3'):
             knowledge_refs = ", ".join(probe_result['topic_tags_top3'])
+        elif isinstance(getattr(question, 'ai_knowledge_enrichment', None), dict):
+            modules = question.ai_knowledge_enrichment.get('knowledge_modules')
+            if isinstance(modules, list):
+                knowledge_refs = ", ".join(
+                    str(module) for module in modules if str(module).strip()
+                )
 
         # Get image URLs
         image_urls = service._get_question_image_urls(question)

@@ -3,6 +3,7 @@
 from io import StringIO
 from contextlib import nullcontext
 from copy import deepcopy
+from decimal import Decimal
 import json
 import logging
 import uuid
@@ -30,6 +31,9 @@ from apps.common.ai.components import (
     ModeCAnswerComponent,
     QuestionProbeComponent,
     ResultVerifierComponent,
+    TaxonomyKnowledgeComponent,
+    TaxonomyScopeComponent,
+    TaxonomySubtopicComponent,
     VisionExtractionComponent,
 )
 from apps.common.ai.answer_arbitration import (
@@ -41,7 +45,7 @@ from apps.common.ai.exceptions import AIResponseError
 from apps.common.exceptions import AIRequestError
 from apps.common.ai.question_context import QuestionContextBuilder, question_context_hash
 from apps.parser.models import ExamPaper, ExamQuestion, QuestionOption
-from apps.knowledge.models import KnowledgePoint
+from apps.knowledge.models import KnowledgePoint, KnowledgeTopic, KnowledgeTopicModule
 
 
 @pytest.fixture
@@ -63,6 +67,171 @@ def _make_question(*, stem="1 + 1 = ?"):
         answer="2",
         question_type="calculation",
     )
+
+
+@pytest.mark.django_db
+def test_probe_source_text_keeps_child_statements_when_parent_stem_is_present():
+    """Catch multipart content being discarded by the generic parent stem."""
+    paper = ExamPaper.objects.create(title="Multipart probe paper", subject="physics")
+    question = ExamQuestion.objects.create(
+        paper=paper,
+        subject="physics",
+        stem="请判断下列说法是否正确。",
+        question_type="判断题",
+        subquestions=[
+            {"label": "（1）", "stem": "扩散现象说明分子不停做无规则运动。"},
+            {"label": "（2）", "stem": "温度越高，扩散越剧烈。"},
+        ],
+    )
+
+    source = common_ai_service.AIReviewService._probe_source_text(question)
+
+    assert "请判断下列说法是否正确" in source
+    assert "扩散现象说明分子不停做无规则运动" in source
+    assert "温度越高，扩散越剧烈" in source
+    assert '"subject":"physics"' in source
+
+
+@pytest.fixture
+def controlled_module_topic(db):
+    """A controlled leaf exposes a module, then resolves it to one DB node."""
+    from django.db import connection
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS knowledge_points (
+                id BIGINT PRIMARY KEY,
+                subject VARCHAR(50), stage VARCHAR(20), grade_index SMALLINT,
+                grade_name VARCHAR(20), term VARCHAR(10), chapter VARCHAR(255),
+                module VARCHAR(255), node_type VARCHAR(20), content TEXT,
+                created_at TIMESTAMP
+            )
+            """
+        )
+        cursor.execute("DELETE FROM knowledge_points WHERE id = 991001")
+        cursor.execute(
+            """
+            INSERT INTO knowledge_points
+            (id, subject, stage, grade_index, grade_name, term, chapter, module, node_type, content, created_at)
+            VALUES (991001, 'physics', 'junior', 8, 'Grade 8', 'up',
+                    'Chapter 1 Motion', 'Speed and motion', 'general', 'fixture', CURRENT_TIMESTAMP)
+            """
+        )
+
+    root = KnowledgeTopic.objects.create(
+        id='controlled-junior-physics-mechanics',
+        subject='physics',
+        stage='junior',
+        name='Mechanics',
+    )
+    leaf = KnowledgeTopic.objects.create(
+        id='controlled-junior-physics-motion',
+        subject='physics',
+        stage='junior',
+        parent=root,
+        name='Chapter 1 Motion',
+    )
+    KnowledgeTopicModule.objects.create(topic=leaf, module='Speed and motion')
+    return {'root': root, 'leaf': leaf, 'point_id': 991001}
+
+
+def _controlled_probe_factory(*, knowledge_result):
+    responses = {
+        TaxonomyScopeComponent: {
+            'subject': 'physics',
+            'stage': 'junior',
+            'topic_id': 'controlled-junior-physics-mechanics',
+            'question_type': 'single_choice',
+            'difficulty_level': 'L3',
+            'normalized_text': 'A controlled motion question.',
+            'confidence': 0.91,
+        },
+        TaxonomySubtopicComponent: {
+            'subtopic_id': 'controlled-junior-physics-motion',
+            'confidence': 0.93,
+        },
+        TaxonomyKnowledgeComponent: knowledge_result,
+    }
+
+    def factory(component_type):
+        component = MagicMock()
+        payload = responses[component_type]
+        if isinstance(payload, Exception):
+            component.run.side_effect = payload
+        else:
+            component.run.return_value = deepcopy(payload)
+        return component
+
+    return factory
+
+
+@pytest.mark.django_db
+def test_controlled_probe_persists_scope_when_module_selection_fails(
+    controlled_module_topic,
+):
+    question = _make_question(stem='A controlled motion question.')
+    service = common_ai_service.AIReviewService(
+        component_factory=_controlled_probe_factory(
+            knowledge_result=AIRequestError('module selection unavailable'),
+        )
+    )
+    service._get_question_image_urls = MagicMock(return_value=[])
+
+    result = service.process_question_probe(str(question.id))
+
+    question.refresh_from_db()
+    assert result['errors']['taxonomy_knowledge'] == 'module selection unavailable'
+    assert question.subject == 'physics'
+    assert question.question_type == 'single_choice'
+    assert question.difficulty_level == 'L3'
+    assert question.knowledge_points in (None, [])
+    assert question.ai_probe_result['taxonomy']['scope']['topic_id'] == (
+        controlled_module_topic['root'].id
+    )
+
+
+@pytest.mark.django_db
+def test_controlled_probe_selects_module_and_persists_resolved_tree_node(
+    controlled_module_topic,
+):
+    question = _make_question(stem='A controlled motion question.')
+    service = common_ai_service.AIReviewService(
+        component_factory=_controlled_probe_factory(
+            knowledge_result={
+                'knowledge_modules': ['Speed and motion'],
+                'difficulty_score': 3.2,
+                'difficulty_reason': 'one-step application',
+                'confidence': 0.94,
+            },
+        )
+    )
+    service._get_question_image_urls = MagicMock(return_value=[])
+
+    result = service.process_question_probe(str(question.id))
+
+    question.refresh_from_db()
+    assert result['errors'] == {}
+    assert question.difficulty_level == 'L3'
+    assert question.difficulty == Decimal('3.20')
+    assert question.knowledge_points == [{
+        'id': str(controlled_module_topic['point_id']),
+        'module': 'Speed and motion',
+    }]
+    assert question.ai_knowledge_enrichment['knowledge_modules'] == [
+        'Speed and motion'
+    ]
+    assert question.ai_probe_result['derived_taxonomy'] == {
+        'subject': 'physics',
+        'stage': 'junior',
+        'grade_index': 8,
+        'grade': 'Grade 8',
+        'semester': KnowledgePoint.TERM_LABELS['up'],
+        'term': 'up',
+        'chapter': 'Chapter 1 Motion',
+        'knowledge_point_id': str(controlled_module_topic['point_id']),
+        'knowledge_point_module': 'Speed and motion',
+    }
 
 
 def _teacher_api_client() -> APIClient:
@@ -432,6 +601,81 @@ def test_probe_pipeline_runs_only_probe_and_knowledge_then_persists_attributes()
     assert question.ai_answer_a is None
     assert question.ai_answer_b is None
     assert question.ai_answer_c is None
+
+
+@pytest.mark.django_db
+def test_save_probe_results_derives_taxonomy_from_last_matched_knowledge_point():
+    """Catch taxonomy or question type no longer being updated from matched points."""
+    question = _make_question()
+    question.subject = "math"
+    question.question_type = "calculation"
+    question.save(update_fields=["subject", "question_type"])
+    KnowledgePoint.objects.create(
+        subject="physics",
+        stage="junior",
+        grade_index=8,
+        grade_name="八年级",
+        term="up",
+        chapter="第一章",
+        module="运动",
+        node_type="method",
+        content="运动",
+    )
+    final_point = KnowledgePoint.objects.create(
+        subject="physics",
+        stage="senior",
+        grade_index=10,
+        grade_name="高一",
+        term="down",
+        chapter="第三章 牛顿运动定律",
+        module="牛顿第二定律",
+        node_type="formula",
+        content="F=ma",
+    )
+    results = {
+        "probe": {
+            "subject": "physics",
+            "question_type": "multiple_choice",
+            "difficulty": "L3",
+            "knowledge_points": ["运动", "牛顿第二定律"],
+            "normalized_text": "根据受力求加速度",
+        },
+        "knowledge": {
+            "subject": "physics",
+            "difficulty": "L3",
+            "knowledge_points": [
+                {"subject": "physics", "module": "运动", "reason": "基础概念"},
+                {"subject": "physics", "module": "牛顿第二定律", "reason": "直接求解依据"},
+            ],
+        },
+        "errors": {},
+    }
+
+    service = common_ai_service.AIReviewService(
+        component_factory=lambda component_type: MagicMock()
+    )
+    service.save_results_to_question(str(question.id), results)
+
+    question.refresh_from_db()
+    expected_taxonomy = {
+        "subject": "physics",
+        "stage": "senior",
+        "grade_index": 10,
+        "grade": "高一",
+        "semester": "下学期",
+        "term": "down",
+        "chapter": "第三章 牛顿运动定律",
+        "knowledge_point_id": str(final_point.id),
+        "knowledge_point_module": "牛顿第二定律",
+    }
+    assert question.question_type == "multiple_choice"
+    assert question.subject == "physics"
+    assert question.ai_probe_result["derived_taxonomy"] == expected_taxonomy
+    assert question.ai_knowledge_enrichment["derived_taxonomy"] == expected_taxonomy
+    assert question.knowledge_points[-1] == {
+        "id": str(final_point.id),
+        "module": "牛顿第二定律",
+    }
 
 
 @pytest.mark.parametrize(

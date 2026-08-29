@@ -126,6 +126,14 @@ class ExamQuestion(models.Model):
 
     knowledge_points = models.JSONField(null=True, blank=True, verbose_name='知识点')
     difficulty = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True, verbose_name='难度')
+    difficulty_level = models.CharField(
+        max_length=2,
+        choices=[(f'L{level}', f'L{level}') for level in range(1, 6)],
+        null=True,
+        blank=True,
+        verbose_name='难度等级',
+        help_text='AI 探查的粗粒度难度等级，和具体难度数值 difficulty 分开保存。',
+    )
     original_question = models.ForeignKey(
         'self', on_delete=models.SET_NULL, null=True, blank=True,
         related_name='modified_versions', db_column='original_question_id',
