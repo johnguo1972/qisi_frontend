@@ -6,7 +6,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("courses", "0005_courseclass_coursehandout"),
+        ("courses", "0004_courseclass_coursehandout"),
         ("handouts", "0001_initial"),
     ]
 

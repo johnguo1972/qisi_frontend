@@ -2,7 +2,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    dependencies = [('study', '0005_questionrelation')]
+    dependencies = [('study', '0004_answerattempt_image_count')]
 
     operations = [migrations.AddField(
         model_name='answerattempt', name='idempotency_key',

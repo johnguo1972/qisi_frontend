@@ -6,7 +6,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("courses", "0004_coursematerial_conversion_status"),
+        ("courses", "0003_course_scope_collaboration"),
         ("institutions", "0004_class_grade_level"),
     ]
 

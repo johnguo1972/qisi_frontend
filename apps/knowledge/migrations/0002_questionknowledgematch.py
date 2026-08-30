@@ -8,7 +8,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("knowledge", "0002_controlled_probe_taxonomy"),
+        ("knowledge", "0001_initial"),
         ("parser", "0007_examquestion_json_source_fields"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]

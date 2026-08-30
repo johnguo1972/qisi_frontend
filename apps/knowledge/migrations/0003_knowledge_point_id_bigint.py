@@ -27,5 +27,5 @@ def restore_uuid_column(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    dependencies = [('knowledge', '0003_questionknowledgematch')]
+    dependencies = [('knowledge', '0002_questionknowledgematch')]
     operations = [migrations.RunPython(use_bigint_for_external_knowledge_table, restore_uuid_column)]
