@@ -188,6 +188,11 @@
                 </view>
               </view>
             </view>
+            <view v-if="relationState.candidateTotal > relationState.candidatePageSize" class="relation-pagination">
+              <button size="mini" :disabled="relationState.candidatePage <= 1" @click="relationController.previousCandidatePage">上一页</button>
+              <text>{{ relationState.candidatePage }} / {{ relationCandidatePages }} 页（{{ relationState.candidateTotal }}题）</text>
+              <button size="mini" :disabled="relationState.candidatePage >= relationCandidatePages" @click="relationController.nextCandidatePage">下一页</button>
+            </view>
             <view class="modal-actions"><button size="mini" type="primary" :disabled="!relationState.selectedIds.length" @click="createRelations">关联</button></view>
           </template>
           <template v-else>
@@ -197,6 +202,11 @@
                 <view class="relation-item-main"><text>{{ item.question_no }}：{{ item.stem_preview }}</text></view>
                 <button size="mini" class="relation-remove" @click.stop="confirmRemoveRelation(item.id)">解除关联</button>
               </view>
+            </view>
+            <view v-if="relationState.linkedTotal > relationState.linkedPageSize" class="relation-pagination">
+              <button size="mini" :disabled="relationState.linkedPage <= 1" @click="relationController.previousLinkedPage">上一页</button>
+              <text>{{ relationState.linkedPage }} / {{ relationLinkedPages }} 页（{{ relationState.linkedTotal }}题）</text>
+              <button size="mini" :disabled="relationState.linkedPage >= relationLinkedPages" @click="relationController.nextLinkedPage">下一页</button>
             </view>
           </template>
         </view>
@@ -292,6 +302,8 @@ function isCurrentAiModeGeneration(generation: number) {
 const addMenuVisible = ref(false)
 const relationController = createQuestionRelationsController(questionApi)
 const relationState = relationController.state
+const relationCandidatePages = computed(() => Math.max(1, Math.ceil(relationState.candidateTotal / relationState.candidatePageSize)))
+const relationLinkedPages = computed(() => Math.max(1, Math.ceil(relationState.linkedTotal / relationState.linkedPageSize)))
 const tagVisible = ref(false)
 const editingQuestion = ref<any>(null)
 const questionTags = ref<any[]>([])
@@ -901,6 +913,7 @@ async function removeQuestionTagFromCurrent(tagId: string) {
 .relation-tabs button { flex: 1; }
 .relation-tab-active { color: #fff; background: #409eff; border-color: #409eff; }
 .relation-list { max-height: 46vh; overflow-y: auto; }
+.relation-pagination { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; color: #606266; font-size: 13px; }
 .relation-candidate-item, .relation-linked-item { display: flex; align-items: center; gap: 10px; }
 .relation-item-main { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
 .relation-item-meta { color: #909399; font-size: 12px; }

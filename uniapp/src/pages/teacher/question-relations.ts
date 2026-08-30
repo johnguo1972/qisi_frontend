@@ -5,6 +5,8 @@ import { reactive } from 'vue'
 export type RelationPage = {
   items: QuestionRelationItem[]
   total: number
+  pageNo: number
+  pageSize: number
   reason?: string
 }
 
@@ -21,6 +23,12 @@ export type RelationState = {
   tab: 'candidates' | 'linked'
   candidates: QuestionRelationItem[]
   linked: QuestionRelationItem[]
+  candidatePage: number
+  candidateTotal: number
+  candidatePageSize: number
+  linkedPage: number
+  linkedTotal: number
+  linkedPageSize: number
   selectedIds: UUID[]
   loading: boolean
   reason: string
@@ -32,11 +40,13 @@ function responseData(response: any): any {
   return data?.data ?? data ?? {}
 }
 
-function pageFromResponse(response: unknown): RelationPage {
+function pageFromResponse(response: unknown, requestedPage: number, requestedPageSize: number): RelationPage {
   const data = responseData(response)
   return {
     items: Array.isArray(data?.items) ? data.items : [],
     total: Number(data?.total) || 0,
+    pageNo: Math.max(1, Number(data?.page_no) || requestedPage),
+    pageSize: Math.max(1, Number(data?.page_size) || requestedPageSize),
     reason: typeof data?.reason === 'string' ? data.reason : '',
   }
 }
@@ -65,21 +75,36 @@ export function createQuestionRelationsController(api: RelationApi) {
     tab: 'candidates',
     candidates: [],
     linked: [],
+    candidatePage: 1,
+    candidateTotal: 0,
+    candidatePageSize: 50,
+    linkedPage: 1,
+    linkedTotal: 0,
+    linkedPageSize: 50,
     selectedIds: [],
     loading: false,
     reason: '',
     error: '',
   })
-  let pendingRequests = 0
+  let generation = 0
+  let activeRequestCount = 0
 
-  async function withLoading<T>(operation: () => Promise<T>): Promise<T> {
-    pendingRequests += 1
-    state.loading = true
+  function isCurrent(requestGeneration: number, questionId: UUID): boolean {
+    return state.visible && generation === requestGeneration && state.questionId === questionId
+  }
+
+  async function withLoading<T>(requestGeneration: number, questionId: UUID, operation: () => Promise<T>): Promise<T> {
+    if (isCurrent(requestGeneration, questionId)) {
+      activeRequestCount += 1
+      state.loading = true
+    }
     try {
       return await operation()
     } finally {
-      pendingRequests -= 1
-      state.loading = pendingRequests > 0
+      if (isCurrent(requestGeneration, questionId)) {
+        activeRequestCount = Math.max(0, activeRequestCount - 1)
+        state.loading = activeRequestCount > 0
+      }
     }
   }
 
@@ -87,48 +112,108 @@ export function createQuestionRelationsController(api: RelationApi) {
     return state.questionId
   }
 
-  async function loadCandidates(): Promise<void> {
+  async function loadCandidates(page = state.candidatePage, requestGeneration = generation): Promise<void> {
     const questionId = currentQuestionId()
     if (!questionId) return
-    const page = ensureRequestSucceeded(await withLoading(() => api.relationCandidates(questionId, { page: 1, page_size: 50 })))
-    const data = pageFromResponse(page)
+    const response = await withLoading(requestGeneration, questionId, () => api.relationCandidates(questionId, { page, page_size: state.candidatePageSize }))
+    if (!isCurrent(requestGeneration, questionId)) return
+    const data = pageFromResponse(ensureRequestSucceeded(response), page, state.candidatePageSize)
     state.candidates = data.items
+    state.candidatePage = data.pageNo
+    state.candidateTotal = data.total
+    state.candidatePageSize = data.pageSize
     state.reason = data.reason || ''
   }
 
-  async function loadLinked(): Promise<void> {
+  async function loadLinked(page = state.linkedPage, requestGeneration = generation): Promise<void> {
     const questionId = currentQuestionId()
     if (!questionId) return
-    const page = ensureRequestSucceeded(await withLoading(() => api.relations(questionId, { page: 1, page_size: 50 })))
-    state.linked = pageFromResponse(page).items
+    const response = await withLoading(requestGeneration, questionId, () => api.relations(questionId, { page, page_size: state.linkedPageSize }))
+    if (!isCurrent(requestGeneration, questionId)) return
+    const data = pageFromResponse(ensureRequestSucceeded(response), page, state.linkedPageSize)
+    state.linked = data.items
+    state.linkedPage = data.pageNo
+    state.linkedTotal = data.total
+    state.linkedPageSize = data.pageSize
   }
 
-  async function refresh(): Promise<void> {
-    await Promise.all([loadCandidates(), loadLinked()])
+  async function refresh(requestGeneration = generation): Promise<void> {
+    await Promise.all([
+      loadCandidates(state.candidatePage, requestGeneration),
+      loadLinked(state.linkedPage, requestGeneration),
+    ])
   }
+
+  function totalPages(total: number, pageSize: number): number {
+    return Math.max(1, Math.ceil(total / pageSize))
+  }
+
+  async function changeCandidatePage(page: number): Promise<void> {
+    const requestGeneration = generation
+    const questionId = currentQuestionId()
+    if (!questionId) return
+    try {
+      await loadCandidates(Math.max(1, Math.min(totalPages(state.candidateTotal, state.candidatePageSize), page)), requestGeneration)
+    } catch (error) {
+      if (isCurrent(requestGeneration, questionId)) state.error = errorMessage(error)
+    }
+  }
+
+  async function changeLinkedPage(page: number): Promise<void> {
+    const requestGeneration = generation
+    const questionId = currentQuestionId()
+    if (!questionId) return
+    try {
+      await loadLinked(Math.max(1, Math.min(totalPages(state.linkedTotal, state.linkedPageSize), page)), requestGeneration)
+    } catch (error) {
+      if (isCurrent(requestGeneration, questionId)) state.error = errorMessage(error)
+    }
+  }
+
+  async function nextCandidatePage(): Promise<void> { await changeCandidatePage(state.candidatePage + 1) }
+  async function previousCandidatePage(): Promise<void> { await changeCandidatePage(state.candidatePage - 1) }
+  async function nextLinkedPage(): Promise<void> { await changeLinkedPage(state.linkedPage + 1) }
+  async function previousLinkedPage(): Promise<void> { await changeLinkedPage(state.linkedPage - 1) }
 
   async function open(questionId: UUID): Promise<void> {
+    generation += 1
+    const requestGeneration = generation
+    activeRequestCount = 0
     state.visible = true
     state.questionId = questionId
     state.tab = 'candidates'
     state.candidates = []
     state.linked = []
+    state.candidatePage = 1
+    state.candidateTotal = 0
+    state.candidatePageSize = 50
+    state.linkedPage = 1
+    state.linkedTotal = 0
+    state.linkedPageSize = 50
     state.selectedIds = []
     state.reason = ''
     state.error = ''
     try {
-      await refresh()
+      await refresh(requestGeneration)
     } catch (error) {
-      state.error = errorMessage(error)
+      if (isCurrent(requestGeneration, questionId)) state.error = errorMessage(error)
     }
   }
 
   function close(): void {
+    generation += 1
+    activeRequestCount = 0
     state.visible = false
     state.questionId = null
     state.tab = 'candidates'
     state.candidates = []
     state.linked = []
+    state.candidatePage = 1
+    state.candidateTotal = 0
+    state.candidatePageSize = 50
+    state.linkedPage = 1
+    state.linkedTotal = 0
+    state.linkedPageSize = 50
     state.selectedIds = []
     state.reason = ''
     state.error = ''
@@ -148,15 +233,21 @@ export function createQuestionRelationsController(api: RelationApi) {
   async function createSelected(): Promise<boolean> {
     const questionId = currentQuestionId()
     if (!questionId || state.selectedIds.length === 0) return false
+    const requestGeneration = generation
     state.error = ''
     try {
-      ensureRequestSucceeded(await withLoading(() => api.createRelations(questionId, [...state.selectedIds])))
+      const response = await withLoading(requestGeneration, questionId, () => api.createRelations(questionId, [...state.selectedIds]))
+      if (!isCurrent(requestGeneration, questionId)) return false
+      ensureRequestSucceeded(response)
       state.selectedIds = []
-      await refresh()
-      state.tab = 'linked'
-      return true
+      await refresh(requestGeneration)
+      if (isCurrent(requestGeneration, questionId)) {
+        state.tab = 'linked'
+        return true
+      }
+      return false
     } catch (error) {
-      state.error = errorMessage(error)
+      if (isCurrent(requestGeneration, questionId)) state.error = errorMessage(error)
       return false
     }
   }
@@ -164,12 +255,15 @@ export function createQuestionRelationsController(api: RelationApi) {
   async function remove(relatedId: UUID): Promise<void> {
     const questionId = currentQuestionId()
     if (!questionId) return
+    const requestGeneration = generation
     state.error = ''
     try {
-      ensureRequestSucceeded(await withLoading(() => api.removeRelation(questionId, relatedId)))
-      await refresh()
+      const response = await withLoading(requestGeneration, questionId, () => api.removeRelation(questionId, relatedId))
+      if (!isCurrent(requestGeneration, questionId)) return
+      ensureRequestSucceeded(response)
+      await refresh(requestGeneration)
     } catch (error) {
-      state.error = errorMessage(error)
+      if (isCurrent(requestGeneration, questionId)) state.error = errorMessage(error)
       throw error
     }
   }
@@ -182,6 +276,12 @@ export function createQuestionRelationsController(api: RelationApi) {
     toggleSelection,
     loadCandidates,
     loadLinked,
+    changeCandidatePage,
+    changeLinkedPage,
+    nextCandidatePage,
+    previousCandidatePage,
+    nextLinkedPage,
+    previousLinkedPage,
     createSelected,
     remove,
   }

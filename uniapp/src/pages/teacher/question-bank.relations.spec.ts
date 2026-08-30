@@ -18,8 +18,14 @@ const linked = {
   knowledge_points_display: [{ id: 'kp-1', name: '分子动理论' }],
 }
 
-function page(items: typeof candidate[]) {
-  return { data: { items, total: items.length, reason: '' } }
+function page(items: typeof candidate[], pageNo = 1, pageSize = 50, total = items.length) {
+  return { data: { items, total, page_no: pageNo, page_size: pageSize, reason: '' } }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((nextResolve) => { resolve = nextResolve })
+  return { promise, resolve }
 }
 
 describe('题库关联题状态', () => {
@@ -94,5 +100,91 @@ describe('题库关联题状态', () => {
     expect(created).toBe(false)
     expect(controller.state.selectedIds).toEqual(['candidate-1'])
     expect(controller.state.error).toBe('没有关联题权限')
+  })
+
+  it('候选和已关联题都支持超过 50 条翻页，且候选勾选可跨页保留', async () => {
+    const candidatePageOne = { ...candidate, id: 'candidate-page-1' }
+    const candidatePageTwo = { ...candidate, id: 'candidate-page-2' }
+    const linkedPageOne = { ...linked, id: 'linked-page-1' }
+    const linkedPageTwo = { ...linked, id: 'linked-page-2' }
+    const api: RelationApi = {
+      relationCandidates: async (_id, params) => params?.page === 2
+        ? page([candidatePageTwo], 2, 50, 51)
+        : page([candidatePageOne], 1, 50, 51),
+      relations: async (_id, params) => params?.page === 2
+        ? page([linkedPageTwo], 2, 50, 51)
+        : page([linkedPageOne], 1, 50, 51),
+      createRelations: async () => ({ data: { created_count: 0, existing_count: 0, invalid_question_ids: [] } }),
+      removeRelation: async () => ({ data: { removed: true } }),
+    }
+    const controller = createQuestionRelationsController(api)
+
+    await controller.open('origin-1')
+    controller.toggleSelection('candidate-page-1')
+    await controller.nextCandidatePage()
+    await controller.nextLinkedPage()
+
+    expect(controller.state.candidatePage).toBe(2)
+    expect(controller.state.candidateTotal).toBe(51)
+    expect(controller.state.candidatePageSize).toBe(50)
+    expect(controller.state.candidates).toEqual([candidatePageTwo])
+    expect(controller.state.selectedIds).toEqual(['candidate-page-1'])
+    expect(controller.state.linkedPage).toBe(2)
+    expect(controller.state.linkedTotal).toBe(51)
+    expect(controller.state.linkedPageSize).toBe(50)
+    expect(controller.state.linked).toEqual([linkedPageTwo])
+  })
+
+  it('关闭弹窗后忽略慢响应，避免重新写回已清空的关联题列表', async () => {
+    const candidateRequest = deferred<ReturnType<typeof page>>()
+    const linkedRequest = deferred<ReturnType<typeof page>>()
+    const api: RelationApi = {
+      relationCandidates: async () => candidateRequest.promise,
+      relations: async () => linkedRequest.promise,
+      createRelations: async () => ({ data: {} }),
+      removeRelation: async () => ({ data: {} }),
+    }
+    const controller = createQuestionRelationsController(api)
+    const opening = controller.open('origin-1')
+
+    controller.close()
+    candidateRequest.resolve(page([candidate]))
+    linkedRequest.resolve(page([linked]))
+    await opening
+
+    expect(controller.state.visible).toBe(false)
+    expect(controller.state.questionId).toBeNull()
+    expect(controller.state.candidates).toEqual([])
+    expect(controller.state.linked).toEqual([])
+  })
+
+  it('从题 A 切换至题 B 时忽略题 A 的迟到响应', async () => {
+    const requests: Record<string, { candidates: ReturnType<typeof deferred<ReturnType<typeof page>>>; linked: ReturnType<typeof deferred<ReturnType<typeof page>>> }> = {}
+    const api: RelationApi = {
+      relationCandidates: async (questionId) => {
+        requests[questionId] ||= { candidates: deferred(), linked: deferred() }
+        return requests[questionId].candidates.promise
+      },
+      relations: async (questionId) => {
+        requests[questionId] ||= { candidates: deferred(), linked: deferred() }
+        return requests[questionId].linked.promise
+      },
+      createRelations: async () => ({ data: {} }),
+      removeRelation: async () => ({ data: {} }),
+    }
+    const controller = createQuestionRelationsController(api)
+    const openingA = controller.open('question-a')
+    const openingB = controller.open('question-b')
+
+    requests['question-b'].candidates.resolve(page([{ ...candidate, id: 'candidate-b' }]))
+    requests['question-b'].linked.resolve(page([{ ...linked, id: 'linked-b' }]))
+    await openingB
+    requests['question-a'].candidates.resolve(page([{ ...candidate, id: 'candidate-a' }]))
+    requests['question-a'].linked.resolve(page([{ ...linked, id: 'linked-a' }]))
+    await openingA
+
+    expect(controller.state.questionId).toBe('question-b')
+    expect(controller.state.candidates.map((item) => item.id)).toEqual(['candidate-b'])
+    expect(controller.state.linked.map((item) => item.id)).toEqual(['linked-b'])
   })
 })
