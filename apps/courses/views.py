@@ -5,6 +5,8 @@ import logging
 import mimetypes
 from django.conf import settings
 from django.db import models as db_models, transaction
+from django.db.models import Q, CharField
+from django.db.models.functions import Cast
 from django.http import FileResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
@@ -15,6 +17,11 @@ from rest_framework.exceptions import PermissionDenied, NotFound, ValidationErro
 from apps.accounts.roles import has_user_role
 from apps.common.subject_codes import normalize_subject_codes
 from apps.institutions.models import Institution, InstitutionMember
+from apps.knowledge.models import KnowledgePoint
+from apps.parser.models import ExamQuestion
+from apps.study.models import QuestionTagRelation
+from apps.study.question_views import _keyword_tokens
+from apps.study.serializers import QuestionListSerializer
 
 from .models import (
     Course,
@@ -31,7 +38,6 @@ from .serializers import (
     CourseTreeSerializer,
     CourseTreeNestedSerializer,
     VariantTaskSerializer,
-    CourseQuestionLinkSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -840,25 +846,130 @@ def variant_task_detail(request, course_id, task_id):
 # 习题管理
 # ============================================================
 
+def apply_course_question_filters(queryset, params):
+    """Apply the question-bank's card filters to a course-node queryset."""
+    difficulty = params.get('difficulty')
+    question_type = params.get('question_type')
+    keyword = (params.get('keyword') or '').strip()
+    tag = (params.get('tag') or '').strip()
+    knowledge_point_id = params.get('knowledge_point_id') or ''
+
+    if difficulty:
+        diff_values = [value.strip() for value in difficulty.split(',') if value.strip()]
+        try:
+            diff_values = [float(value) for value in diff_values]
+            if len(diff_values) == 1:
+                queryset = queryset.filter(difficulty=diff_values[0])
+            elif diff_values:
+                queryset = queryset.filter(difficulty__in=diff_values)
+        except (TypeError, ValueError):
+            pass
+    if question_type:
+        question_types = [value.strip() for value in question_type.split(',') if value.strip()]
+        if len(question_types) == 1:
+            queryset = queryset.filter(question_type=question_types[0])
+        elif question_types:
+            queryset = queryset.filter(question_type__in=question_types)
+    if tag:
+        tag_question_ids = QuestionTagRelation.objects.filter(tag__name=tag).values('question_id')
+        queryset = queryset.filter(Q(tags__contains=[tag]) | Q(id__in=tag_question_ids))
+
+    keyword_tokens = _keyword_tokens(keyword)
+    if keyword_tokens:
+        queryset = queryset.annotate(uuid_text=Cast('id', output_field=CharField()))
+        for token in keyword_tokens:
+            queryset = queryset.filter(
+                Q(stem__icontains=token)
+                | Q(stem_html__icontains=token)
+                | Q(question_no__icontains=token)
+                | Q(paper_question_no__icontains=token)
+                | Q(system_id__icontains=token)
+                | Q(options__content__icontains=token)
+                | Q(uuid_text__icontains=token)
+            )
+        queryset = queryset.distinct()
+
+    if knowledge_point_id:
+        kp_values = [value.strip() for value in knowledge_point_id.split(',') if value.strip()]
+        if '-1' in kp_values:
+            queryset = queryset.filter(Q(knowledge_points__isnull=True) | Q(knowledge_points=[]))
+        else:
+            kp_query = Q()
+            for value in kp_values:
+                kp_query |= (
+                    Q(knowledge_points__contains=[{'id': value}])
+                    | Q(ai_knowledge_enrichment__contains={
+                        'knowledge_points': [{'id': value}]
+                    })
+                )
+                try:
+                    kp_id = int(value)
+                    kp_query |= (
+                        Q(knowledge_points__contains=[{'id': kp_id}])
+                        | Q(knowledge_points__contains=[{'id': str(kp_id)}])
+                        | Q(ai_knowledge_enrichment__contains=[{'id': kp_id}])
+                    )
+                    try:
+                        kp = KnowledgePoint.objects.get(pk=kp_id)
+                        kp_query |= Q(knowledge_points__contains=[{'module': kp.module}])
+                    except KnowledgePoint.DoesNotExist:
+                        pass
+                except (TypeError, ValueError):
+                    try:
+                        kp = KnowledgePoint.objects.get(pk=value)
+                        kp_query |= Q(knowledge_points__contains=[{'module': kp.module}])
+                    except (KnowledgePoint.DoesNotExist, TypeError, ValueError):
+                        continue
+            if kp_query:
+                queryset = queryset.filter(kp_query)
+    return queryset
+
+
+def paginate_question_queryset(queryset, request):
+    """Use the question-bank's page validation and response shape."""
+    try:
+        page = max(int(request.query_params.get('page', 1)), 1)
+        page_size = min(max(int(request.query_params.get('page_size', 20)), 1), 100)
+    except (TypeError, ValueError):
+        raise ValidationError('page/page_size 参数无效')
+
+    total = queryset.count()
+    start = (page - 1) * page_size
+    items = queryset.order_by('sort_order', 'id')[start:start + page_size]
+    return {
+        'items': QuestionListSerializer(items, many=True).data,
+        'total': total,
+        'page_no': page,
+        'page_size': page_size,
+    }
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def question_list(request, course_id):
-    """课程习题列表（按 tree_node_id 筛选）"""
+    """List paginated questions linked to one selected course-tree node."""
     course = _get_course_or_404(course_id)
     _check_course_access(course, request.user)
 
+    tree_node_id = request.query_params.get('tree_node_id')
+    if not tree_node_id:
+        raise ValidationError('tree_node_id is required')
+    try:
+        tree_node_uuid = uuid.UUID(str(tree_node_id))
+    except (TypeError, ValueError, AttributeError):
+        raise ValidationError('tree_node_id is invalid')
+    if not CourseTree.objects.filter(id=tree_node_uuid, course=course).exists():
+        raise ValidationError('tree_node_id does not belong to this course')
+
     links = CourseQuestionLink.objects.filter(
         course=course,
+        tree_node_id=tree_node_uuid,
         is_deleted=False,
-    ).select_related('question').order_by('-created_at')
-
-    # 按 tree_node_id 筛选
-    tree_node_id = request.query_params.get('tree_node_id')
-    if tree_node_id:
-        links = links.filter(tree_node_id=tree_node_id)
-
-    serializer = CourseQuestionLinkSerializer(links, many=True, context={'request': request})
-    return Response({'success': True, 'data': serializer.data})
+    )
+    queryset = ExamQuestion.objects.select_related('paper').filter(
+        id__in=links.values('question_id'),
+    )
+    queryset = apply_course_question_filters(queryset, request.query_params)
+    return Response({'success': True, 'data': paginate_question_queryset(queryset, request)})
 
 
 @api_view(['POST'])
