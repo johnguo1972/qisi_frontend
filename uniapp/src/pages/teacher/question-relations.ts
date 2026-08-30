@@ -134,7 +134,9 @@ export function createQuestionRelationsController(api: RelationApi) {
   let generation = 0
   let candidateRequestSequence = 0
   let linkedRequestSequence = 0
-  let activeRequestCount = 0
+  let candidateLoadingSequence: number | null = null
+  let linkedLoadingSequence: number | null = null
+  let mutationRequestCount = 0
 
   function isCurrent(requestGeneration: number, questionId: UUID): boolean {
     return state.visible && generation === requestGeneration && state.questionId === questionId
@@ -148,17 +150,55 @@ export function createQuestionRelationsController(api: RelationApi) {
     return isCurrent(requestGeneration, questionId) && linkedRequestSequence === sequence
   }
 
-  async function withLoading<T>(requestGeneration: number, questionId: UUID, operation: () => Promise<T>): Promise<T> {
+  function syncLoading(): void {
+    state.loading = state.visible && (
+      candidateLoadingSequence === candidateRequestSequence
+      || linkedLoadingSequence === linkedRequestSequence
+      || mutationRequestCount > 0
+    )
+  }
+
+  async function withCandidateLoading<T>(requestGeneration: number, questionId: UUID, sequence: number, operation: () => Promise<T>): Promise<T> {
     if (isCurrent(requestGeneration, questionId)) {
-      activeRequestCount += 1
-      state.loading = true
+      candidateLoadingSequence = sequence
+      syncLoading()
+    }
+    try {
+      return await operation()
+    } finally {
+      if (isCurrent(requestGeneration, questionId) && candidateLoadingSequence === sequence) {
+        candidateLoadingSequence = null
+        syncLoading()
+      }
+    }
+  }
+
+  async function withLinkedLoading<T>(requestGeneration: number, questionId: UUID, sequence: number, operation: () => Promise<T>): Promise<T> {
+    if (isCurrent(requestGeneration, questionId)) {
+      linkedLoadingSequence = sequence
+      syncLoading()
+    }
+    try {
+      return await operation()
+    } finally {
+      if (isCurrent(requestGeneration, questionId) && linkedLoadingSequence === sequence) {
+        linkedLoadingSequence = null
+        syncLoading()
+      }
+    }
+  }
+
+  async function withMutationLoading<T>(requestGeneration: number, questionId: UUID, operation: () => Promise<T>): Promise<T> {
+    if (isCurrent(requestGeneration, questionId)) {
+      mutationRequestCount += 1
+      syncLoading()
     }
     try {
       return await operation()
     } finally {
       if (isCurrent(requestGeneration, questionId)) {
-        activeRequestCount = Math.max(0, activeRequestCount - 1)
-        state.loading = activeRequestCount > 0
+        mutationRequestCount = Math.max(0, mutationRequestCount - 1)
+        syncLoading()
       }
     }
   }
@@ -173,7 +213,7 @@ export function createQuestionRelationsController(api: RelationApi) {
     const requestSequence = ++candidateRequestSequence
     let response: QuestionRelationApiEnvelope<QuestionRelationPageData>
     try {
-      response = await withLoading(requestGeneration, questionId, () => api.relationCandidates(questionId, { page, page_size: state.candidatePageSize }))
+      response = await withCandidateLoading(requestGeneration, questionId, requestSequence, () => api.relationCandidates(questionId, { page, page_size: state.candidatePageSize }))
     } catch (error) {
       if (isCandidateRequestCurrent(requestGeneration, questionId, requestSequence)) throw error
       return
@@ -201,7 +241,7 @@ export function createQuestionRelationsController(api: RelationApi) {
     const requestSequence = ++linkedRequestSequence
     let response: QuestionRelationApiEnvelope<QuestionRelationPageData>
     try {
-      response = await withLoading(requestGeneration, questionId, () => api.relations(questionId, { page, page_size: state.linkedPageSize }))
+      response = await withLinkedLoading(requestGeneration, questionId, requestSequence, () => api.relations(questionId, { page, page_size: state.linkedPageSize }))
     } catch (error) {
       if (isLinkedRequestCurrent(requestGeneration, questionId, requestSequence)) throw error
       return
@@ -261,7 +301,10 @@ export function createQuestionRelationsController(api: RelationApi) {
     candidateRequestSequence += 1
     linkedRequestSequence += 1
     const requestGeneration = generation
-    activeRequestCount = 0
+    candidateLoadingSequence = null
+    linkedLoadingSequence = null
+    mutationRequestCount = 0
+    state.loading = false
     state.visible = true
     state.questionId = questionId
     state.tab = 'candidates'
@@ -288,8 +331,11 @@ export function createQuestionRelationsController(api: RelationApi) {
     generation += 1
     candidateRequestSequence += 1
     linkedRequestSequence += 1
-    activeRequestCount = 0
+    candidateLoadingSequence = null
+    linkedLoadingSequence = null
+    mutationRequestCount = 0
     state.visible = false
+    state.loading = false
     state.questionId = null
     state.tab = 'candidates'
     state.candidates = []
@@ -327,7 +373,7 @@ export function createQuestionRelationsController(api: RelationApi) {
 
     let data: QuestionRelationCreateData
     try {
-      const response = await withLoading(requestGeneration, questionId, () => api.createRelations(questionId, submittedIds))
+      const response = await withMutationLoading(requestGeneration, questionId, () => api.createRelations(questionId, submittedIds))
       if (!isCurrent(requestGeneration, questionId)) return emptyCreateResult('cancelled', '')
       data = responsePayload(response)
     } catch (error) {
@@ -381,7 +427,7 @@ export function createQuestionRelationsController(api: RelationApi) {
 
     let data: QuestionRelationRemoveData
     try {
-      const response = await withLoading(requestGeneration, questionId, () => api.removeRelation(questionId, relatedId))
+      const response = await withMutationLoading(requestGeneration, questionId, () => api.removeRelation(questionId, relatedId))
       if (!isCurrent(requestGeneration, questionId)) return { success: false, removed: false, message: '', warning: '' }
       data = responsePayload(response)
     } catch (error) {

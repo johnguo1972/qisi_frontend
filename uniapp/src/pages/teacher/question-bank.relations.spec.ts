@@ -284,6 +284,77 @@ describe('题库关联题状态', () => {
     expect(controller.state.linked.map((item) => item.id)).toEqual(['linked-page-3'])
   })
 
+  it.each(['candidates', 'linked'] as const)('%s 的旧页仍悬挂时，最新页成功后立即结束加载且旧页结束不再改变状态', async (listKind) => {
+    const candidateRequests: Record<number, ReturnType<typeof deferred<ReturnType<typeof page>>>> = {}
+    const linkedRequests: Record<number, ReturnType<typeof deferred<ReturnType<typeof page>>>> = {}
+    const api: RelationApi = {
+      relationCandidates: async (_id, params) => {
+        const requestedPage = params?.page || 1
+        if (requestedPage === 1) return page([candidate], 1, 50, 150)
+        candidateRequests[requestedPage] ||= deferred()
+        return candidateRequests[requestedPage].promise
+      },
+      relations: async (_id, params) => {
+        const requestedPage = params?.page || 1
+        if (requestedPage === 1) return page([linked], 1, 50, 150)
+        linkedRequests[requestedPage] ||= deferred()
+        return linkedRequests[requestedPage].promise
+      },
+      createRelations: async () => ({ data: { created_count: 0, existing_count: 0, invalid_question_ids: [] } }),
+      removeRelation: async () => ({ data: { removed: true } }),
+    }
+    const controller = createQuestionRelationsController(api)
+    await controller.open('origin-1')
+
+    const oldPage = listKind === 'candidates'
+      ? controller.changeCandidatePage(2)
+      : controller.changeLinkedPage(2)
+    const latestPage = listKind === 'candidates'
+      ? controller.changeCandidatePage(3)
+      : controller.changeLinkedPage(3)
+    const requests = listKind === 'candidates' ? candidateRequests : linkedRequests
+    const baseItem = listKind === 'candidates' ? candidate : linked
+    requests[3].resolve(page([{ ...baseItem, id: `${listKind}-page-3` }], 3, 50, 150))
+
+    await latestPage
+
+    const visibleItems = listKind === 'candidates' ? controller.state.candidates : controller.state.linked
+    expect(visibleItems.map(item => item.id)).toEqual([`${listKind}-page-3`])
+    expect(controller.state.loading).toBe(false)
+
+    requests[2].resolve(page([{ ...baseItem, id: `${listKind}-page-2` }], 2, 50, 150))
+    await oldPage
+    expect(controller.state.loading).toBe(false)
+  })
+
+  it.each(['create', 'remove'] as const)('%s 关联变更执行期间仍保持加载状态', async (mutationKind) => {
+    const createRequest = deferred<{ data: { created_count: number; existing_count: number; invalid_question_ids: string[] } }>()
+    const removeRequest = deferred<{ data: { removed: boolean } }>()
+    const api: RelationApi = {
+      relationCandidates: async () => page([candidate]),
+      relations: async () => page([linked]),
+      createRelations: async () => createRequest.promise,
+      removeRelation: async () => removeRequest.promise,
+    }
+    const controller = createQuestionRelationsController(api)
+    await controller.open('origin-1')
+
+    if (mutationKind === 'create') controller.toggleSelection(candidate.id)
+    const operation = mutationKind === 'create'
+      ? controller.createSelected()
+      : controller.remove(linked.id)
+
+    expect(controller.state.loading).toBe(true)
+
+    if (mutationKind === 'create') {
+      createRequest.resolve({ data: { created_count: 1, existing_count: 0, invalid_question_ids: [] } })
+    } else {
+      removeRequest.resolve({ data: { removed: true } })
+    }
+    await operation
+    expect(controller.state.loading).toBe(false)
+  })
+
   it('最新页成功后，候选和已关联题的旧页迟到失败都不能覆盖当前错误状态', async () => {
     const candidateRequests: Record<number, ReturnType<typeof deferred<ReturnType<typeof page>>>> = {}
     const linkedRequests: Record<number, ReturnType<typeof deferred<ReturnType<typeof page>>>> = {}
