@@ -1,4 +1,10 @@
-import type { QuestionRelationItem } from '@/api/questions'
+import type {
+  QuestionRelationCreateData,
+  QuestionRelationApiEnvelope,
+  QuestionRelationItem,
+  QuestionRelationPageData,
+  QuestionRelationRemoveData,
+} from '@/api/questions'
 import type { UUID } from '@/types/uuid'
 import { reactive } from 'vue'
 
@@ -11,10 +17,26 @@ export type RelationPage = {
 }
 
 export type RelationApi = {
-  relations: (questionId: UUID, params?: { page?: number; page_size?: number }) => Promise<unknown>
-  relationCandidates: (questionId: UUID, params?: { page?: number; page_size?: number }) => Promise<unknown>
-  createRelations: (questionId: UUID, questionIds: UUID[]) => Promise<unknown>
-  removeRelation: (questionId: UUID, relatedId: UUID) => Promise<unknown>
+  relations: (questionId: UUID, params?: { page?: number; page_size?: number }) => Promise<QuestionRelationApiEnvelope<QuestionRelationPageData>>
+  relationCandidates: (questionId: UUID, params?: { page?: number; page_size?: number }) => Promise<QuestionRelationApiEnvelope<QuestionRelationPageData>>
+  createRelations: (questionId: UUID, questionIds: UUID[]) => Promise<QuestionRelationApiEnvelope<QuestionRelationCreateData>>
+  removeRelation: (questionId: UUID, relatedId: UUID) => Promise<QuestionRelationApiEnvelope<QuestionRelationRemoveData>>
+}
+
+export type CreateRelationsResult = {
+  status: 'success' | 'partial' | 'invalid' | 'failed' | 'cancelled'
+  createdCount: number
+  existingCount: number
+  invalidQuestionIds: UUID[]
+  message: string
+  warning: string
+}
+
+export type RemoveRelationResult = {
+  success: boolean
+  removed: boolean
+  message: string
+  warning: string
 }
 
 export type RelationState = {
@@ -33,15 +55,31 @@ export type RelationState = {
   loading: boolean
   reason: string
   error: string
+  warning: string
 }
 
-function responseData(response: any): any {
-  const data = response?.data
-  return data?.data ?? data ?? {}
+function isApiResponse(value: unknown): value is QuestionRelationApiEnvelope<unknown> {
+  return typeof value === 'object' && value !== null && 'data' in value
 }
 
-function pageFromResponse(response: unknown, requestedPage: number, requestedPageSize: number): RelationPage {
-  const data = responseData(response)
+function responsePayload<T>(response: QuestionRelationApiEnvelope<T>): T {
+  let current: unknown = response
+  while (isApiResponse(current)) {
+    const code = current.code
+    if (code !== undefined && code !== 0 && code !== '0') {
+      throw new Error(current.message || '关联题操作失败，请稍后重试')
+    }
+    current = current.data
+  }
+  return current as T
+}
+
+function pageFromResponse(
+  response: QuestionRelationApiEnvelope<QuestionRelationPageData>,
+  requestedPage: number,
+  requestedPageSize: number,
+): RelationPage {
+  const data = responsePayload(response)
   return {
     items: Array.isArray(data?.items) ? data.items : [],
     total: Number(data?.total) || 0,
@@ -53,19 +91,25 @@ function pageFromResponse(response: unknown, requestedPage: number, requestedPag
 
 function errorMessage(error: unknown): string {
   if (typeof error === 'object' && error) {
-    const data = (error as any).data
-    if (typeof data?.message === 'string' && data.message) return data.message
-    if (typeof (error as any).message === 'string' && (error as any).message) return (error as any).message
+    const data = 'data' in error ? (error as { data?: unknown }).data : undefined
+    if (typeof data === 'object' && data && 'message' in data) {
+      const message = (data as { message?: unknown }).message
+      if (typeof message === 'string' && message) return message
+    }
+    if ('message' in error) {
+      const message = (error as { message?: unknown }).message
+      if (typeof message === 'string' && message) return message
+    }
   }
   return '关联题操作失败，请稍后重试'
 }
 
-function ensureRequestSucceeded(response: unknown): unknown {
-  const code = (response as any)?.code
-  if (code !== undefined && code !== 0 && code !== '0') {
-    throw new Error((response as any)?.message || '关联题操作失败，请稍后重试')
-  }
-  return response
+function totalPages(total: number, pageSize: number): number {
+  return Math.max(1, Math.ceil(total / pageSize))
+}
+
+function emptyCreateResult(status: CreateRelationsResult['status'], message: string): CreateRelationsResult {
+  return { status, createdCount: 0, existingCount: 0, invalidQuestionIds: [], message, warning: '' }
 }
 
 export function createQuestionRelationsController(api: RelationApi) {
@@ -85,12 +129,23 @@ export function createQuestionRelationsController(api: RelationApi) {
     loading: false,
     reason: '',
     error: '',
+    warning: '',
   })
   let generation = 0
+  let candidateRequestSequence = 0
+  let linkedRequestSequence = 0
   let activeRequestCount = 0
 
   function isCurrent(requestGeneration: number, questionId: UUID): boolean {
     return state.visible && generation === requestGeneration && state.questionId === questionId
+  }
+
+  function isCandidateRequestCurrent(requestGeneration: number, questionId: UUID, sequence: number): boolean {
+    return isCurrent(requestGeneration, questionId) && candidateRequestSequence === sequence
+  }
+
+  function isLinkedRequestCurrent(requestGeneration: number, questionId: UUID, sequence: number): boolean {
+    return isCurrent(requestGeneration, questionId) && linkedRequestSequence === sequence
   }
 
   async function withLoading<T>(requestGeneration: number, questionId: UUID, operation: () => Promise<T>): Promise<T> {
@@ -115,9 +170,10 @@ export function createQuestionRelationsController(api: RelationApi) {
   async function loadCandidates(page = state.candidatePage, requestGeneration = generation, allowPageFallback = true): Promise<void> {
     const questionId = currentQuestionId()
     if (!questionId) return
+    const requestSequence = ++candidateRequestSequence
     const response = await withLoading(requestGeneration, questionId, () => api.relationCandidates(questionId, { page, page_size: state.candidatePageSize }))
-    if (!isCurrent(requestGeneration, questionId)) return
-    const data = pageFromResponse(ensureRequestSucceeded(response), page, state.candidatePageSize)
+    if (!isCandidateRequestCurrent(requestGeneration, questionId, requestSequence)) return
+    const data = pageFromResponse(response, page, state.candidatePageSize)
     const lastPage = totalPages(data.total, data.pageSize)
     const normalizedPage = Math.min(data.pageNo, lastPage)
     if (allowPageFallback && data.pageNo !== normalizedPage) {
@@ -125,6 +181,7 @@ export function createQuestionRelationsController(api: RelationApi) {
       await loadCandidates(normalizedPage, requestGeneration, false)
       return
     }
+    if (!isCandidateRequestCurrent(requestGeneration, questionId, requestSequence)) return
     state.candidates = data.items
     state.candidatePage = normalizedPage
     state.candidateTotal = data.total
@@ -135,9 +192,10 @@ export function createQuestionRelationsController(api: RelationApi) {
   async function loadLinked(page = state.linkedPage, requestGeneration = generation, allowPageFallback = true): Promise<void> {
     const questionId = currentQuestionId()
     if (!questionId) return
+    const requestSequence = ++linkedRequestSequence
     const response = await withLoading(requestGeneration, questionId, () => api.relations(questionId, { page, page_size: state.linkedPageSize }))
-    if (!isCurrent(requestGeneration, questionId)) return
-    const data = pageFromResponse(ensureRequestSucceeded(response), page, state.linkedPageSize)
+    if (!isLinkedRequestCurrent(requestGeneration, questionId, requestSequence)) return
+    const data = pageFromResponse(response, page, state.linkedPageSize)
     const lastPage = totalPages(data.total, data.pageSize)
     const normalizedPage = Math.min(data.pageNo, lastPage)
     if (allowPageFallback && data.pageNo !== normalizedPage) {
@@ -145,6 +203,7 @@ export function createQuestionRelationsController(api: RelationApi) {
       await loadLinked(normalizedPage, requestGeneration, false)
       return
     }
+    if (!isLinkedRequestCurrent(requestGeneration, questionId, requestSequence)) return
     state.linked = data.items
     state.linkedPage = normalizedPage
     state.linkedTotal = data.total
@@ -156,10 +215,6 @@ export function createQuestionRelationsController(api: RelationApi) {
       loadCandidates(state.candidatePage, requestGeneration),
       loadLinked(state.linkedPage, requestGeneration),
     ])
-  }
-
-  function totalPages(total: number, pageSize: number): number {
-    return Math.max(1, Math.ceil(total / pageSize))
   }
 
   async function changeCandidatePage(page: number): Promise<void> {
@@ -191,6 +246,8 @@ export function createQuestionRelationsController(api: RelationApi) {
 
   async function open(questionId: UUID): Promise<void> {
     generation += 1
+    candidateRequestSequence += 1
+    linkedRequestSequence += 1
     const requestGeneration = generation
     activeRequestCount = 0
     state.visible = true
@@ -207,6 +264,7 @@ export function createQuestionRelationsController(api: RelationApi) {
     state.selectedIds = []
     state.reason = ''
     state.error = ''
+    state.warning = ''
     try {
       await refresh(requestGeneration)
     } catch (error) {
@@ -216,6 +274,8 @@ export function createQuestionRelationsController(api: RelationApi) {
 
   function close(): void {
     generation += 1
+    candidateRequestSequence += 1
+    linkedRequestSequence += 1
     activeRequestCount = 0
     state.visible = false
     state.questionId = null
@@ -231,6 +291,7 @@ export function createQuestionRelationsController(api: RelationApi) {
     state.selectedIds = []
     state.reason = ''
     state.error = ''
+    state.warning = ''
   }
 
   function selectTab(tab: RelationState['tab']): void {
@@ -244,42 +305,99 @@ export function createQuestionRelationsController(api: RelationApi) {
     else state.selectedIds.push(questionId)
   }
 
-  async function createSelected(): Promise<boolean> {
+  async function createSelected(): Promise<CreateRelationsResult> {
     const questionId = currentQuestionId()
-    if (!questionId || state.selectedIds.length === 0) return false
+    if (!questionId || state.selectedIds.length === 0) return emptyCreateResult('invalid', '请先选择要关联的题目')
     const requestGeneration = generation
+    const submittedIds = [...state.selectedIds]
     state.error = ''
+    state.warning = ''
+
+    let data: QuestionRelationCreateData
     try {
-      const response = await withLoading(requestGeneration, questionId, () => api.createRelations(questionId, [...state.selectedIds]))
-      if (!isCurrent(requestGeneration, questionId)) return false
-      ensureRequestSucceeded(response)
-      state.selectedIds = []
-      await refresh(requestGeneration)
-      if (isCurrent(requestGeneration, questionId)) {
-        state.tab = 'linked'
-        return true
-      }
-      return false
+      const response = await withLoading(requestGeneration, questionId, () => api.createRelations(questionId, submittedIds))
+      if (!isCurrent(requestGeneration, questionId)) return emptyCreateResult('cancelled', '')
+      data = responsePayload(response)
     } catch (error) {
-      if (isCurrent(requestGeneration, questionId)) state.error = errorMessage(error)
-      return false
+      const message = errorMessage(error)
+      if (isCurrent(requestGeneration, questionId)) state.error = message
+      return emptyCreateResult('failed', message)
     }
+
+    const createdCount = Math.max(0, Number(data.created_count) || 0)
+    const existingCount = Math.max(0, Number(data.existing_count) || 0)
+    const invalidQuestionIds = Array.isArray(data.invalid_question_ids) ? data.invalid_question_ids.map(String) : []
+    const invalidSet = new Set(invalidQuestionIds)
+    const successfulIds = submittedIds.filter(id => !invalidSet.has(id))
+    const successfulCount = createdCount + existingCount
+
+    if (successfulCount === 0) {
+      const message = `未建立关联：${invalidQuestionIds.length || submittedIds.length} 题无效`
+      return { status: 'invalid', createdCount, existingCount, invalidQuestionIds, message, warning: '' }
+    }
+
+    state.selectedIds = state.selectedIds.filter(id => !successfulIds.includes(id))
+    const successfulSet = new Set(successfulIds)
+    const removedFromCurrentPage = state.candidates.filter(item => successfulSet.has(item.id)).length
+    state.candidates = state.candidates.filter(item => !successfulSet.has(item.id))
+    state.candidateTotal = Math.max(0, state.candidateTotal - removedFromCurrentPage)
+    state.tab = 'linked'
+
+    const status: CreateRelationsResult['status'] = invalidQuestionIds.length ? 'partial' : 'success'
+    const message = status === 'partial'
+      ? `部分关联完成：成功或已存在 ${successfulCount} 题，${invalidQuestionIds.length} 题无效`
+      : `关联完成：新建 ${createdCount} 题，已有关联 ${existingCount} 题`
+    const result: CreateRelationsResult = { status, createdCount, existingCount, invalidQuestionIds, message, warning: '' }
+
+    try {
+      await refresh(requestGeneration)
+    } catch {
+      if (isCurrent(requestGeneration, questionId)) {
+        result.warning = '操作已成功，列表刷新失败，请重试'
+        state.warning = result.warning
+      }
+    }
+    return result
   }
 
-  async function remove(relatedId: UUID): Promise<void> {
+  async function remove(relatedId: UUID): Promise<RemoveRelationResult> {
     const questionId = currentQuestionId()
-    if (!questionId) return
+    if (!questionId) return { success: false, removed: false, message: '', warning: '' }
     const requestGeneration = generation
     state.error = ''
+    state.warning = ''
+
+    let data: QuestionRelationRemoveData
     try {
       const response = await withLoading(requestGeneration, questionId, () => api.removeRelation(questionId, relatedId))
-      if (!isCurrent(requestGeneration, questionId)) return
-      ensureRequestSucceeded(response)
-      await refresh(requestGeneration)
+      if (!isCurrent(requestGeneration, questionId)) return { success: false, removed: false, message: '', warning: '' }
+      data = responsePayload(response)
     } catch (error) {
       if (isCurrent(requestGeneration, questionId)) state.error = errorMessage(error)
       throw error
     }
+
+    const existedLocally = state.linked.some(item => item.id === relatedId)
+    state.linked = state.linked.filter(item => item.id !== relatedId)
+    state.selectedIds = state.selectedIds.filter(id => id !== relatedId)
+    if (existedLocally) state.linkedTotal = Math.max(0, state.linkedTotal - 1)
+    state.linkedPage = Math.min(state.linkedPage, totalPages(state.linkedTotal, state.linkedPageSize))
+
+    const result: RemoveRelationResult = {
+      success: true,
+      removed: data.removed !== false,
+      message: '已解除关联',
+      warning: '',
+    }
+    try {
+      await refresh(requestGeneration)
+    } catch {
+      if (isCurrent(requestGeneration, questionId)) {
+        result.warning = '操作已成功，列表刷新失败，请重试'
+        state.warning = result.warning
+      }
+    }
+    return result
   }
 
   return {

@@ -10,6 +10,31 @@ export type QuestionRelationItem = {
   common_knowledge_point_names?: string[]
 }
 
+export type QuestionRelationPageData = {
+  items: QuestionRelationItem[]
+  total: number
+  page_no: number
+  page_size: number
+  reason?: string
+}
+
+export type QuestionRelationCreateData = {
+  created_count: number
+  existing_count: number
+  invalid_question_ids: UUID[]
+}
+
+export type QuestionRelationRemoveData = {
+  removed: boolean
+}
+
+export type QuestionRelationApiEnvelope<T> = {
+  code?: number | string
+  message?: string
+  data: T | QuestionRelationApiEnvelope<T>
+  trace_id?: string
+}
+
 // #ifdef APP-PLUS
 const UPLOAD_BASE = 'https://qisi.chengxuelu.com/api/v1'
 // #endif
@@ -102,14 +127,14 @@ export const questionApi = {
   getAiJobStatus: (jobId: string) =>
     get<any>(`/review/ai-jobs/${jobId}/`),
   similar: (questionId: UUID) => get<any>(`/questions/${questionId}/similar/`),
-  relations: (questionId: UUID, params?: { page?: number; page_size?: number }) =>
-    get<any>(`/questions/${questionId}/relations/`, params),
-  relationCandidates: (questionId: UUID, params?: { page?: number; page_size?: number }) =>
-    get<any>(`/questions/${questionId}/relation-candidates/`, params),
-  createRelations: (questionId: UUID, questionIds: UUID[]) =>
-    post<any>(`/questions/${questionId}/relations/`, { question_ids: questionIds }),
-  removeRelation: (questionId: UUID, relatedId: UUID) =>
-    del<any>(`/questions/${questionId}/relations/${relatedId}/`),
+  relations: (questionId: UUID, params?: { page?: number; page_size?: number }): Promise<QuestionRelationApiEnvelope<QuestionRelationPageData>> =>
+    get<QuestionRelationPageData>(`/questions/${questionId}/relations/`, params),
+  relationCandidates: (questionId: UUID, params?: { page?: number; page_size?: number }): Promise<QuestionRelationApiEnvelope<QuestionRelationPageData>> =>
+    get<QuestionRelationPageData>(`/questions/${questionId}/relation-candidates/`, params),
+  createRelations: (questionId: UUID, questionIds: UUID[]): Promise<QuestionRelationApiEnvelope<QuestionRelationCreateData>> =>
+    post<QuestionRelationCreateData>(`/questions/${questionId}/relations/`, { question_ids: questionIds }),
+  removeRelation: (questionId: UUID, relatedId: UUID): Promise<QuestionRelationApiEnvelope<QuestionRelationRemoveData>> =>
+    del<QuestionRelationRemoveData>(`/questions/${questionId}/relations/${relatedId}/`),
 
   // AI task status polling
   getTaskStatus: (taskId: string) =>

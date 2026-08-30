@@ -97,7 +97,7 @@ describe('题库关联题状态', () => {
     controller.toggleSelection('candidate-1')
     const created = await controller.createSelected()
 
-    expect(created).toBe(false)
+    expect(created).toMatchObject({ status: 'failed', message: '没有关联题权限' })
     expect(controller.state.selectedIds).toEqual(['candidate-1'])
     expect(controller.state.error).toBe('没有关联题权限')
   })
@@ -236,5 +236,142 @@ describe('题库关联题状态', () => {
     expect(controller.state.linkedPage).toBe(1)
     expect(controller.state.linked).toEqual([linkedPageOne])
     expect(linkedCalls.slice(-2)).toEqual([2, 1])
+  })
+
+  it('同一题快速翻页时，候选和已关联题都只接受最新页响应', async () => {
+    const candidateRequests: Record<number, ReturnType<typeof deferred<ReturnType<typeof page>>>> = {}
+    const linkedRequests: Record<number, ReturnType<typeof deferred<ReturnType<typeof page>>>> = {}
+    const api: RelationApi = {
+      relationCandidates: async (_id, params) => {
+        const requestedPage = params?.page || 1
+        if (requestedPage === 1) return page([candidate], 1, 50, 150)
+        candidateRequests[requestedPage] ||= deferred()
+        return candidateRequests[requestedPage].promise
+      },
+      relations: async (_id, params) => {
+        const requestedPage = params?.page || 1
+        if (requestedPage === 1) return page([linked], 1, 50, 150)
+        linkedRequests[requestedPage] ||= deferred()
+        return linkedRequests[requestedPage].promise
+      },
+      createRelations: async () => ({ data: { created_count: 0, existing_count: 0, invalid_question_ids: [] } }),
+      removeRelation: async () => ({ data: { removed: true } }),
+    }
+    const controller = createQuestionRelationsController(api)
+    await controller.open('origin-1')
+
+    const candidatePageTwo = controller.changeCandidatePage(2)
+    const candidatePageThree = controller.changeCandidatePage(3)
+    candidateRequests[3].resolve(page([{ ...candidate, id: 'candidate-page-3' }], 3, 50, 150))
+    await candidatePageThree
+    candidateRequests[2].resolve(page([{ ...candidate, id: 'candidate-page-2' }], 2, 50, 150))
+    await candidatePageTwo
+
+    const linkedPageTwo = controller.changeLinkedPage(2)
+    const linkedPageThree = controller.changeLinkedPage(3)
+    linkedRequests[3].resolve(page([{ ...linked, id: 'linked-page-3' }], 3, 50, 150))
+    await linkedPageThree
+    linkedRequests[2].resolve(page([{ ...linked, id: 'linked-page-2' }], 2, 50, 150))
+    await linkedPageTwo
+
+    expect(controller.state.candidatePage).toBe(3)
+    expect(controller.state.candidates.map((item) => item.id)).toEqual(['candidate-page-3'])
+    expect(controller.state.linkedPage).toBe(3)
+    expect(controller.state.linked.map((item) => item.id)).toEqual(['linked-page-3'])
+  })
+
+  it('部分成功只移除有效选择，全部无效则保留全部选择并返回明确统计', async () => {
+    const selectedCandidates = [
+      { ...candidate, id: 'candidate-created' },
+      { ...candidate, id: 'candidate-existing' },
+      { ...candidate, id: 'candidate-invalid' },
+    ]
+    let responseData = { created_count: 1, existing_count: 1, invalid_question_ids: ['candidate-invalid'] }
+    const api: RelationApi = {
+      relationCandidates: async () => page(selectedCandidates),
+      relations: async () => page([]),
+      createRelations: async () => ({ data: responseData }),
+      removeRelation: async () => ({ data: { removed: true } }),
+    }
+    const controller = createQuestionRelationsController(api)
+    await controller.open('origin-1')
+    selectedCandidates.forEach((item) => controller.toggleSelection(item.id))
+
+    const partial = await controller.createSelected()
+
+    expect(partial).toMatchObject({
+      status: 'partial',
+      createdCount: 1,
+      existingCount: 1,
+      invalidQuestionIds: ['candidate-invalid'],
+    })
+    expect(controller.state.selectedIds).toEqual(['candidate-invalid'])
+    expect(partial.message).toContain('2')
+    expect(partial.message).toContain('1')
+
+    responseData = { created_count: 0, existing_count: 0, invalid_question_ids: ['candidate-invalid'] }
+    const invalid = await controller.createSelected()
+    expect(invalid).toMatchObject({ status: 'invalid', createdCount: 0, existingCount: 0 })
+    expect(controller.state.selectedIds).toEqual(['candidate-invalid'])
+  })
+
+  it('建立关联已成功但刷新失败时保留成功结果，并将刷新问题标记为警告', async () => {
+    let refreshFails = false
+    const api: RelationApi = {
+      relationCandidates: async () => {
+        if (refreshFails) throw new Error('刷新超时')
+        return page([candidate])
+      },
+      relations: async () => {
+        if (refreshFails) throw new Error('刷新超时')
+        return page([])
+      },
+      createRelations: async () => {
+        refreshFails = true
+        return { data: { created_count: 1, existing_count: 0, invalid_question_ids: [] } }
+      },
+      removeRelation: async () => ({ data: { removed: true } }),
+    }
+    const controller = createQuestionRelationsController(api)
+    await controller.open('origin-1')
+    controller.toggleSelection('candidate-1')
+
+    const result = await controller.createSelected()
+
+    expect(result).toMatchObject({ status: 'success', createdCount: 1 })
+    expect(controller.state.selectedIds).toEqual([])
+    expect(controller.state.error).toBe('')
+    expect(controller.state.warning).toContain('操作已成功')
+  })
+
+  it('解除关联已成功但刷新失败时立即本地移除，并返回成功与刷新警告', async () => {
+    let refreshFails = false
+    const api: RelationApi = {
+      relationCandidates: async () => {
+        if (refreshFails) throw new Error('刷新超时')
+        return page([])
+      },
+      relations: async () => {
+        if (refreshFails) throw new Error('刷新超时')
+        return page([linked])
+      },
+      createRelations: async () => ({ data: { created_count: 0, existing_count: 0, invalid_question_ids: [] } }),
+      removeRelation: async () => {
+        refreshFails = true
+        return { data: { removed: true } }
+      },
+    }
+    const controller = createQuestionRelationsController(api)
+    await controller.open('origin-1')
+    controller.toggleSelection('linked-1')
+
+    const result = await controller.remove('linked-1')
+
+    expect(result).toMatchObject({ success: true, removed: true })
+    expect(controller.state.linked).toEqual([])
+    expect(controller.state.linkedTotal).toBe(0)
+    expect(controller.state.selectedIds).toEqual([])
+    expect(controller.state.error).toBe('')
+    expect(controller.state.warning).toContain('操作已成功')
   })
 })

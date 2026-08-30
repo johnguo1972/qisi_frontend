@@ -176,6 +176,7 @@
         <view v-if="relationState.loading" class="relation-empty">加载中...</view>
         <view v-else>
           <view v-if="relationState.error" class="relation-error">{{ relationState.error }}</view>
+          <view v-if="relationState.warning" class="relation-warning">{{ relationState.warning }}</view>
           <template v-if="relationState.tab === 'candidates'">
             <view v-if="relationState.reason" class="relation-empty">{{ relationState.reason }}</view>
             <view v-else-if="!relationState.candidates.length" class="relation-empty">暂无可关联题</view>
@@ -539,9 +540,14 @@ async function createRelations() {
     uni.showToast({ title: '请先选择要关联的题目', icon: 'none' })
     return
   }
-  const created = await relationController.createSelected()
-  if (created) uni.showToast({ title: '关联成功', icon: 'success' })
-  else if (relationState.error) uni.showToast({ title: relationState.error, icon: 'none' })
+  const result = await relationController.createSelected()
+  if (result.status === 'success') {
+    uni.showToast({ title: result.message, icon: 'success' })
+  } else if (result.status === 'partial' || result.status === 'invalid') {
+    uni.showToast({ title: result.message, icon: 'none', duration: 3000 })
+  } else if (result.status === 'failed') {
+    uni.showToast({ title: result.message || relationState.error, icon: 'none' })
+  }
 }
 function confirmRemoveRelation(relatedId: string) {
   uni.showModal({
@@ -550,8 +556,13 @@ function confirmRemoveRelation(relatedId: string) {
     success: async (result) => {
       if (!result.confirm) return
       try {
-        await relationController.remove(relatedId)
-        uni.showToast({ title: '已解除关联', icon: 'success' })
+        const removeResult = await relationController.remove(relatedId)
+        if (removeResult.success) {
+          uni.showToast({
+            title: removeResult.warning ? '已解除关联，列表刷新失败' : removeResult.message,
+            icon: removeResult.warning ? 'none' : 'success',
+          })
+        }
       } catch {
         uni.showToast({ title: relationState.error || '解除关联失败，请稍后重试', icon: 'none' })
       }
@@ -919,6 +930,7 @@ async function removeQuestionTagFromCurrent(tagId: string) {
 .relation-item-meta { color: #909399; font-size: 12px; }
 .relation-empty { padding: 24px 0; text-align: center; color: #909399; }
 .relation-error { margin-bottom: 10px; padding: 8px 10px; border-radius: 4px; color: #f56c6c; background: #fef0f0; }
+.relation-warning { margin-bottom: 10px; padding: 8px 10px; border-radius: 4px; color: #e6a23c; background: #fdf6ec; }
 .relation-remove { flex: 0 0 auto; color: #f56c6c; }
 .tag-editor { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .tag-chip { padding: 4px 8px; border-radius: 12px; background: #ecf5ff; color: #409eff; }
