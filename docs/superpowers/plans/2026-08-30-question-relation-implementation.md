@@ -288,7 +288,7 @@ git commit -m "feat: manage question relations from question bank"
 - Consumes: Tasks 1–3 的模型、API 和前端页面。
 - Produces: 已应用迁移、可重复运行的测试证据和面向用户的完成说明。
 
-- [ ] **Step 1: 检查迁移没有遗漏**
+- [x] **Step 1: 检查迁移没有遗漏**
 
 Run: `python manage.py makemigrations --check --dry-run`
 
@@ -298,7 +298,7 @@ Run: `python manage.py migrate --plan`
 
 Expected: 本地数据库仅显示尚未执行的既有迁移；若 `study.0005_questionrelation` 未应用，先执行 `python manage.py migrate study` 后重新检查。
 
-- [ ] **Step 2: 运行后端回归测试**
+- [x] **Step 2: 运行后端回归测试**
 
 Run: `python -m pytest apps/study/tests/test_question_relations.py apps/study/tests/test_question_scope.py -q --reuse-db`
 
@@ -308,7 +308,7 @@ Run: `python manage.py check`
 
 Expected: `System check identified no issues`。
 
-- [ ] **Step 3: 执行本地人工验收**
+- [ ] **Step 3: 执行本地人工验收**（未具备教师登录态的浏览器会话，尚未执行）
 
 启动后端与 H5 后，以具备教师题库权限的账号验证：
 
@@ -318,10 +318,9 @@ Expected: `System check identified no issues`。
 4. 点击“解除关联”并确认后，题目从“已关联题”消失、重新出现在“可关联题”；原题和被关联题仍可打开，答案和知识点不变。
 5. 重复解除同一题不产生前端错误。
 
-- [ ] **Step 4: 提交验收文档与计划状态**
+- [x] **Step 4: 提交验收文档与计划状态**
 
 ```bash
 git add docs/superpowers/specs/2026-08-30-question-relation-design.md docs/superpowers/plans/2026-08-30-question-relation-implementation.md
 git commit -m "docs: record question relation verification"
 ```
-
