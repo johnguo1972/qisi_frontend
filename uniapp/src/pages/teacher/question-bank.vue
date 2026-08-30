@@ -163,8 +163,44 @@
       @json="handleJsonImport"
     />
 
-    <view v-if="relatedVisible" class="modal-overlay" @click.self="relatedVisible = false">
-      <view class="data-modal"><view class="modal-title">类似题</view><view v-if="relatedLoading">加载中...</view><view v-else-if="!relatedQuestions.length">暂无符合条件的类似题</view><view v-for="item in relatedQuestions" :key="item.id" class="related-item" @click="goEdit(item.id)">{{ item.question_no }}：{{ item.stem_preview || item.stem }}</view><button size="mini" @click="relatedVisible = false">关闭</button></view>
+    <view v-if="relationState.visible" class="modal-overlay" @click.self="closeRelations">
+      <view class="data-modal relation-modal" @click.stop>
+        <view class="relation-modal-header">
+          <view class="modal-title">关联题</view>
+          <button size="mini" class="relation-close" @click="closeRelations">关闭</button>
+        </view>
+        <view class="relation-tabs">
+          <button size="mini" :class="{ 'relation-tab-active': relationState.tab === 'candidates' }" @click="relationController.selectTab('candidates')">可关联题</button>
+          <button size="mini" :class="{ 'relation-tab-active': relationState.tab === 'linked' }" @click="relationController.selectTab('linked')">已关联题</button>
+        </view>
+        <view v-if="relationState.loading" class="relation-empty">加载中...</view>
+        <view v-else>
+          <view v-if="relationState.error" class="relation-error">{{ relationState.error }}</view>
+          <template v-if="relationState.tab === 'candidates'">
+            <view v-if="relationState.reason" class="relation-empty">{{ relationState.reason }}</view>
+            <view v-else-if="!relationState.candidates.length" class="relation-empty">暂无可关联题</view>
+            <view v-else class="relation-list">
+              <view v-for="item in relationState.candidates" :key="item.id" class="related-item relation-candidate-item">
+                <checkbox :checked="relationState.selectedIds.includes(item.id)" @click.stop="relationController.toggleSelection(item.id)" />
+                <view class="relation-item-main">
+                  <text>{{ item.question_no }}：{{ item.stem_preview }}</text>
+                  <text v-if="item.common_knowledge_point_names?.length" class="relation-item-meta">共同知识点：{{ item.common_knowledge_point_names.join('、') }}</text>
+                </view>
+              </view>
+            </view>
+            <view class="modal-actions"><button size="mini" type="primary" :disabled="!relationState.selectedIds.length" @click="createRelations">关联</button></view>
+          </template>
+          <template v-else>
+            <view v-if="!relationState.linked.length" class="relation-empty">暂无已关联题</view>
+            <view v-else class="relation-list">
+              <view v-for="item in relationState.linked" :key="item.id" class="related-item relation-linked-item">
+                <view class="relation-item-main"><text>{{ item.question_no }}：{{ item.stem_preview }}</text></view>
+                <button size="mini" class="relation-remove" @click.stop="confirmRemoveRelation(item.id)">解除关联</button>
+              </view>
+            </view>
+          </template>
+        </view>
+      </view>
     </view>
 
     <view v-if="tagVisible" class="modal-overlay" @click.self="tagVisible = false">
@@ -186,6 +222,7 @@
 import { ref, computed, onUnmounted } from 'vue'
 import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
 import { questionApi, aiProcessProbe, importJsonPackage, getQuestionTags, addQuestionTag, removeQuestionTag, getTagList } from '@/api/questions'
+import { createQuestionRelationsController } from './question-relations'
 import { knowledgeApi } from '@/api/knowledge'
 import { favoriteApi } from '@/api/favorites'
 
@@ -253,9 +290,8 @@ function isCurrentAiModeGeneration(generation: number) {
 }
 
 const addMenuVisible = ref(false)
-const relatedVisible = ref(false)
-const relatedLoading = ref(false)
-const relatedQuestions = ref<any[]>([])
+const relationController = createQuestionRelationsController(questionApi)
+const relationState = relationController.state
 const tagVisible = ref(false)
 const editingQuestion = ref<any>(null)
 const questionTags = ref<any[]>([])
@@ -482,11 +518,33 @@ function toggleAllAnswers() { const allShown = allAnswersShown.value; questions.
 // === 操作 ===
 function goEdit(id: string) { uni.navigateTo({ url: `/pages/teacher/question-edit?id=${id}` }) }
 async function handleRelated(id: string) {
-  relatedVisible.value = true
-  relatedLoading.value = true
-  try { const res: any = await questionApi.similar(id); relatedQuestions.value = res.data || [] }
-  catch { relatedQuestions.value = [] }
-  finally { relatedLoading.value = false }
+  await relationController.open(String(id))
+  if (relationState.error) uni.showToast({ title: relationState.error, icon: 'none' })
+}
+function closeRelations() { relationController.close() }
+async function createRelations() {
+  if (!relationState.selectedIds.length) {
+    uni.showToast({ title: '请先选择要关联的题目', icon: 'none' })
+    return
+  }
+  const created = await relationController.createSelected()
+  if (created) uni.showToast({ title: '关联成功', icon: 'success' })
+  else if (relationState.error) uni.showToast({ title: relationState.error, icon: 'none' })
+}
+function confirmRemoveRelation(relatedId: string) {
+  uni.showModal({
+    title: '解除关联',
+    content: '解除后仅取消两题的关联，不会删除题目或答案。是否继续？',
+    success: async (result) => {
+      if (!result.confirm) return
+      try {
+        await relationController.remove(relatedId)
+        uni.showToast({ title: '已解除关联', icon: 'success' })
+      } catch {
+        uni.showToast({ title: relationState.error || '解除关联失败，请稍后重试', icon: 'none' })
+      }
+    },
+  })
 }
 function goPhotoUpload() { uni.navigateTo({ url: '/pages/teacher/photo-upload' }); addMenuVisible.value = false }
 
@@ -835,6 +893,20 @@ async function removeQuestionTagFromCurrent(tagId: string) {
 .data-modal { width: 520px; max-width: 90vw; max-height: 80vh; overflow-y: auto; padding: 20px; background: #fff; border-radius: 8px; }
 .modal-title { margin-bottom: 16px; font-size: 18px; font-weight: 600; color: #303133; }
 .related-item { padding: 10px 0; border-bottom: 1px solid #f0f0f0; color: #606266; cursor: pointer; }
+.relation-modal { min-height: 280px; }
+.relation-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.relation-modal-header .modal-title { margin-bottom: 0; }
+.relation-close { flex: 0 0 auto; }
+.relation-tabs { display: flex; gap: 8px; margin: 16px 0; }
+.relation-tabs button { flex: 1; }
+.relation-tab-active { color: #fff; background: #409eff; border-color: #409eff; }
+.relation-list { max-height: 46vh; overflow-y: auto; }
+.relation-candidate-item, .relation-linked-item { display: flex; align-items: center; gap: 10px; }
+.relation-item-main { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
+.relation-item-meta { color: #909399; font-size: 12px; }
+.relation-empty { padding: 24px 0; text-align: center; color: #909399; }
+.relation-error { margin-bottom: 10px; padding: 8px 10px; border-radius: 4px; color: #f56c6c; background: #fef0f0; }
+.relation-remove { flex: 0 0 auto; color: #f56c6c; }
 .tag-editor { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .tag-chip { padding: 4px 8px; border-radius: 12px; background: #ecf5ff; color: #409eff; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }

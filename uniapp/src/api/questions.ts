@@ -1,6 +1,15 @@
 import { post, get, put, patch, del } from '@/utils/request'
 import type { UUID } from '@/types/uuid'
 
+export type QuestionRelationItem = {
+  id: UUID
+  question_no: string
+  stem_preview: string
+  difficulty: string | number | null
+  knowledge_points_display: Array<{ id?: string; name: string }>
+  common_knowledge_point_names?: string[]
+}
+
 // #ifdef APP-PLUS
 const UPLOAD_BASE = 'https://qisi.chengxuelu.com/api/v1'
 // #endif
@@ -93,6 +102,14 @@ export const questionApi = {
   getAiJobStatus: (jobId: string) =>
     get<any>(`/review/ai-jobs/${jobId}/`),
   similar: (questionId: UUID) => get<any>(`/questions/${questionId}/similar/`),
+  relations: (questionId: UUID, params?: { page?: number; page_size?: number }) =>
+    get<any>(`/questions/${questionId}/relations/`, params),
+  relationCandidates: (questionId: UUID, params?: { page?: number; page_size?: number }) =>
+    get<any>(`/questions/${questionId}/relation-candidates/`, params),
+  createRelations: (questionId: UUID, questionIds: UUID[]) =>
+    post<any>(`/questions/${questionId}/relations/`, { question_ids: questionIds }),
+  removeRelation: (questionId: UUID, relatedId: UUID) =>
+    del<any>(`/questions/${questionId}/relations/${relatedId}/`),
 
   // AI task status polling
   getTaskStatus: (taskId: string) =>

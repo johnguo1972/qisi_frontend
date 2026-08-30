@@ -21,7 +21,7 @@
         <text v-if="selected" class="check-mark">&#10003;</text>
       </view>
       <button size="mini" @click="$emit('edit', question.id)">编辑</button>
-      <button size="mini" @click="$emit('related', question.id)">类似题</button>
+      <button size="mini" @click="$emit('related', question.id)">关联题</button>
       <button size="mini" @click="$emit('edit-tags', question)">标签编辑</button>
       <button size="mini" @click="$emit('add-favorite', question.id)">加入精选</button>
     </view>
@@ -84,7 +84,7 @@
         <button size="mini" class="btn-ai-answer mode-b" @click="$emit('ai-answer', 'B')">B模式答案</button>
         <button size="mini" class="btn-ai-answer mode-c" @click="$emit('ai-answer', 'C')">C模式答案</button>
         <button size="mini" @click="$emit('edit', question.id)">编辑</button>
-        <button size="mini" @click="$emit('related', question.id)">类似题</button>
+        <button size="mini" @click="$emit('related', question.id)">关联题</button>
         <button size="mini" @click="$emit('edit-tags', question)">标签编辑</button>
         <button size="mini" @click="$emit('add-favorite', question.id)">加入精选</button>
       </view>
