@@ -1,4 +1,5 @@
 """Question search/detail/update/publish views."""
+import re
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -31,6 +32,19 @@ SUBJECT_LABELS = {
     'english': '英语',
     'chemistry': '化学',
 }
+
+
+def _keyword_tokens(raw_value):
+    """Split a user keyword query while preserving the first spelling of each term."""
+    tokens = []
+    seen = set()
+    for token in re.split(r'[\s,，;；]+', raw_value or ''):
+        token = token.strip()
+        normalized = token.casefold()
+        if token and normalized not in seen:
+            seen.add(normalized)
+            tokens.append(token)
+    return tokens
 
 
 @api_view(['GET'])
@@ -109,21 +123,25 @@ def question_list(request):
     if tag:
         tag_question_ids = QuestionTagRelation.objects.filter(tag__name=tag).values('question_id')
         qs = qs.filter(Q(tags__contains=[tag]) | Q(id__in=tag_question_ids))
-    if keyword:
-        qs = qs.filter(
-            Q(stem__icontains=keyword)
-            | Q(stem_html__icontains=keyword)
-            | Q(question_no__icontains=keyword)
-            | Q(paper_question_no__icontains=keyword)
-            | Q(system_id__icontains=keyword)
-            | Q(options__content__icontains=keyword)
-        ).distinct()
-    if question_uuid:
+    keyword_tokens = _keyword_tokens(keyword)
+    if keyword_tokens or question_uuid:
         # UUID 字段不能直接使用字符串 icontains；转换为文本后支持输入完整 UUID
         # 或任意片段的模糊查询，例如前 8 位、后 6 位等。
-        qs = qs.annotate(uuid_text=Cast('id', output_field=CharField())).filter(
-            uuid_text__icontains=question_uuid
+        qs = qs.annotate(uuid_text=Cast('id', output_field=CharField()))
+    for token in keyword_tokens:
+        qs = qs.filter(
+            Q(stem__icontains=token)
+            | Q(stem_html__icontains=token)
+            | Q(question_no__icontains=token)
+            | Q(paper_question_no__icontains=token)
+            | Q(system_id__icontains=token)
+            | Q(options__content__icontains=token)
+            | Q(uuid_text__icontains=token)
         )
+    if keyword_tokens:
+        qs = qs.distinct()
+    if question_uuid:
+        qs = qs.filter(uuid_text__icontains=question_uuid)
     if question_no:
         qs = qs.filter(
             Q(question_no__icontains=question_no) |

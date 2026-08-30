@@ -106,7 +106,7 @@
               <view class="filter-select tag-filter-select">{{ tagFilterLabel }}</view>
             </picker>
             <button size="mini" class="tag-refresh-btn" :loading="tagLoading" @click="loadTags">刷新标签</button>
-            <input v-model="uuidSearch" class="uuid-search" placeholder="按UUID模糊查询" />
+            <input v-model="uuidSearch" class="uuid-search" placeholder="输入关键字（可多个）进行查询" />
             <button size="mini" type="primary" @click="applyFilters">查询</button>
             <button size="mini" class="reset-filter-btn" @click="resetFilters">重置</button>
           </view>
@@ -455,7 +455,6 @@ async function loadQuestions() {
     if (activeKnowledgePoint.value) params.knowledge_point_id = activeKnowledgePoint.value
     if (tagSearch.value.trim()) params.tag = tagSearch.value.trim()
     if (uuidSearch.value.trim()) {
-      params.uuid = uuidSearch.value.trim()
       params.keyword = uuidSearch.value.trim()
     }
     if (selectedSubject.value) params.subject = selectedSubject.value

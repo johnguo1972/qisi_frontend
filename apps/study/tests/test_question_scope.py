@@ -4,7 +4,8 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import UserAccount
 from apps.papers.models import ExamPaper
-from apps.parser.models import ExamQuestion
+from apps.parser.models import ExamQuestion, QuestionOption
+from apps.study.models import QuestionTag, QuestionTagRelation
 
 
 @pytest.fixture
@@ -137,3 +138,57 @@ def test_knowledge_point_filter_matches_uuid_id_inside_multi_point_array(
     question_ids = {item['id'] for item in response.data['data']['items']}
     assert str(matching_question.id) in question_ids
     assert str(unrelated_question.id) not in question_ids
+
+
+@pytest.mark.django_db
+def test_question_list_requires_every_keyword_and_keeps_tag_and_knowledge_filters(
+    teacher_client, junior_physics_paper, knowledge_point_table, physics_teacher
+):
+    """A multi-keyword search must intersect every token with existing filters."""
+    tag = QuestionTag.objects.create(name='autumn-practice', created_by=physics_teacher)
+    matching_question = ExamQuestion.objects.create(
+        paper=junior_physics_paper,
+        question_no='keyword-match',
+        question_type='single_choice',
+        subject='physics',
+        stem='Speed analysis question',
+        knowledge_points=[{'id': '9001'}],
+    )
+    QuestionOption.objects.create(
+        question=matching_question,
+        option_label='A',
+        content='Velocity changes over time',
+    )
+    QuestionTagRelation.objects.create(question=matching_question, tag=tag)
+
+    missing_keyword_question = ExamQuestion.objects.create(
+        paper=junior_physics_paper,
+        question_no='keyword-missing',
+        question_type='single_choice',
+        subject='physics',
+        stem='Speed stays constant',
+        knowledge_points=[{'id': '9001'}],
+    )
+    QuestionTagRelation.objects.create(question=missing_keyword_question, tag=tag)
+
+    wrong_tag_question = ExamQuestion.objects.create(
+        paper=junior_physics_paper,
+        question_no='wrong-tag',
+        question_type='single_choice',
+        subject='physics',
+        stem='Speed changes quickly',
+        knowledge_points=[{'id': '9001'}],
+    )
+
+    response = teacher_client.get(
+        '/api/v1/questions/',
+        {
+            'keyword': 'Speed, changes Speed',
+            'knowledge_point_id': '9001',
+            'tag': tag.name,
+        },
+    )
+
+    assert response.status_code == 200
+    question_ids = {item['id'] for item in response.data['data']['items']}
+    assert question_ids == {str(matching_question.id)}
