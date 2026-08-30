@@ -129,6 +129,15 @@ def test_course_question_list_rejects_foreign_course_node(api_client, course, te
 
 
 @pytest.mark.django_db
+def test_course_question_list_rejects_malformed_tree_node_id(api_client, course):
+    response = api_client.get(
+        f'/api/v1/courses/{course.id}/questions/', {'tree_node_id': 'not-a-uuid'}
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
 def test_course_question_list_filters_only_current_node(api_client, course, node, questions):
     response = api_client.get(
         f'/api/v1/courses/{course.id}/questions/',
