@@ -1,6 +1,6 @@
 from datetime import timedelta
-
 from django.utils import timezone
+from django.db.models import Q
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -32,8 +32,10 @@ def _mission_queryset(student, scope=None):
     close_stale_missions()
     class_ids = _active_class_ids(student)
     queryset = LearningMission.objects.filter(
-        status='published', class_obj_id__in=class_ids,
-    ).select_related('class_obj').prefetch_related('levels').order_by('-created_at')
+        status='published',
+    ).filter(
+        Q(class_obj_id__in=class_ids) | Q(class_assignments__class_obj_id__in=class_ids)
+    ).select_related('class_obj').prefetch_related('levels', 'class_assignments__class_obj').distinct().order_by('-created_at')
     now = timezone.now()
     if scope == 'today':
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -90,7 +92,7 @@ def _mission_payload(mission, student, include_levels=False):
         'mission_no': mission.mission_no,
         'mission_name': mission.mission_name,
         'goal_text': mission.goal_text,
-        'class_name': mission.class_obj.class_name if mission.class_obj else None,
+        'class_name': '、'.join(item.class_obj.class_name for item in mission.class_assignments.filter(status='active') if item.class_obj) or (mission.class_obj.class_name if mission.class_obj else None),
         'deadline': mission.end_at,
         'assignment_mode': mission.assignment_mode,
         'pdf_download_url': mission_pdf_download_url(mission),

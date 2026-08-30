@@ -5,6 +5,7 @@ from datetime import timedelta
 from xml.sax.saxutils import escape
 from django.conf import settings
 from django.core.cache import cache
+from django.db.models import Q
 from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
@@ -18,7 +19,11 @@ from apps.parser.models import ExamQuestion
 from apps.parser.models import QuestionImage, QuestionOption
 from apps.common.batch_tasks import PROGRESS_KEY_PREFIX
 from apps.common.media import media_url
-from apps.missions.services import assignment_levels, close_stale_missions
+from apps.missions.services import (
+    assignment_levels, close_stale_missions, mission_visible_to_student,
+    ordered_mission_question_rels,
+)
+from apps.missions.snapshots import snapshot_payload
 from apps.missions.pdf_service import _mission_questions, mission_pdf_download_url
 
 
@@ -29,10 +34,17 @@ def make_trace_id():
 def _visible_mission_rels(level_or_mission, student_id):
     """Return relations visible to a student, including class-wide questions."""
     if isinstance(level_or_mission, MissionLevel):
-        manager = MissionQuestionRel.objects.filter(level=level_or_mission)
+        relations = [
+            relation for relation in ordered_mission_question_rels(level_or_mission.mission)
+            if relation.level_id == level_or_mission.id
+        ]
     else:
-        manager = MissionQuestionRel.objects.filter(mission=level_or_mission)
-    return [rel for rel in manager if not rel.target_student_ids or str(student_id) in {str(value) for value in rel.target_student_ids}]
+        relations = ordered_mission_question_rels(level_or_mission)
+    return [
+        relation for relation in relations
+        if not relation.target_student_ids
+        or str(student_id) in {str(value) for value in relation.target_student_ids}
+    ]
 
 
 @api_view(['GET'])
@@ -67,10 +79,17 @@ def student_home(request):
         })
 
     # 获取已发布的任务（属于学生所在班级的）
-    published_missions = LearningMission.objects.filter(
+    published_missions = list(LearningMission.objects.filter(
         status='published',
-        class_obj_id__in=student_class_ids,
-    ).select_related('class_obj').order_by('-created_at')
+    ).filter(
+        Q(class_obj_id__in=student_class_ids) |
+        Q(class_assignments__class_obj_id__in=student_class_ids)
+    ).select_related('class_obj').prefetch_related('class_assignments__class_obj').distinct().order_by('-created_at'))
+    published_missions = [
+        mission for mission in published_missions
+        if mission_visible_to_student(mission, student.id, student_class_ids)
+    ]
+    published_mission_ids = [mission.id for mission in published_missions]
 
     # 自动为缺失的任务创建进度记录
     existing_progress_ids = set(
@@ -92,8 +111,9 @@ def student_home(request):
 
     # 查询进度记录（现在一定包含了所有已发布的任务）
     progresses = StudentMissionProgress.objects.filter(
-        student_user_id=student
-    ).select_related('mission', 'mission__class_obj')
+        student_user_id=student, mission__status='published',
+        mission_id__in=published_mission_ids,
+    ).select_related('mission', 'mission__class_obj').prefetch_related('mission__class_assignments__class_obj')
 
     class_id = request.query_params.get('class_id')
     # 前端“全部班级”使用 0 作为占位值，将其视为不筛选班级；真实班级 ID 仍必须是 UUID。
@@ -105,7 +125,7 @@ def student_home(request):
                 'code': 400, 'message': 'class_id must be a valid UUID',
                 'data': None, 'trace_id': make_trace_id(),
             }, status=400)
-        progresses = progresses.filter(mission__class_obj_id=class_uuid)
+        progresses = progresses.filter(Q(mission__class_obj_id=class_uuid) | Q(mission__class_assignments__class_obj_id=class_uuid)).distinct()
 
     # Filter by scope (date range on end_at)
     scope = request.query_params.get('scope')
@@ -121,7 +141,9 @@ def student_home(request):
     missions = []
     for p in progresses:
         mission = p.mission
-        class_obj = mission.class_obj
+        assignment_classes = [item.class_obj for item in mission.class_assignments.all()
+                              if item.status == 'active' and item.class_obj_id in student_class_ids]
+        class_obj = assignment_classes[0] if assignment_classes else mission.class_obj
         visible_levels = assignment_levels(mission)
         level_count = len(visible_levels)
         question_count = len(_visible_mission_rels(mission, student.id))
@@ -155,7 +177,8 @@ def student_home(request):
                 'mission_no': mission.mission_no,
                 'mission_name': mission.mission_name,
             },
-            'class_label': class_obj.class_name if class_obj else None,
+            'class_label': '、'.join(cls.class_name for cls in assignment_classes) if assignment_classes else (class_obj.class_name if class_obj else None),
+            'class_ids': [str(cls.id) for cls in assignment_classes],
             'deadline': mission.end_at.isoformat() if mission.end_at else None,
             'assignment_mode': mission.assignment_mode,
             'level_count': level_count,
@@ -176,6 +199,8 @@ def student_home(request):
 def student_mission_detail(request, mission_id):
     """S-02: Student mission detail."""
     close_stale_missions()
+    from apps.institutions.models import ClassStudent
+    student = getattr(request, '_effective_student', request.user)
     try:
         mission = LearningMission.objects.get(pk=mission_id)
     except LearningMission.DoesNotExist:
@@ -184,22 +209,29 @@ def student_mission_detail(request, mission_id):
     if mission.status != 'published':
         return Response({'code': 403, 'message': '任务未发布', 'data': None, 'trace_id': make_trace_id()}, status=403)
 
+    student_class_ids = set(
+        ClassStudent.objects.filter(student=student, status='active')
+        .values_list('class_obj_id', flat=True)
+    )
+    if not mission_visible_to_student(mission, student.id, student_class_ids):
+        return Response({'code': 403, 'message': '无权访问该任务', 'data': None, 'trace_id': make_trace_id()}, status=403)
+
     # 校验学生有权访问（存在任务进度记录）
     if not StudentMissionProgress.objects.filter(
-            mission=mission, student_user_id=request.user).exists():
+            mission=mission, student_user_id=student).exists():
         return Response({'code': 403, 'message': '无权访问该任务', 'data': None, 'trace_id': make_trace_id()}, status=403)
 
     levels = []
     total_progress = 0
     for lv in assignment_levels(mission):
         lp = StudentLevelProgress.objects.filter(
-            level=lv, student_user_id=request.user
+            level=lv, student_user_id=student
         ).first()
-        level_q_count = len(_visible_mission_rels(lv, request.user.id))
+        level_q_count = len(_visible_mission_rels(lv, student.id))
 
         # 计算关卡进度：已答对的题目数 / 总题目数
         correct_count = AnswerAttempt.objects.filter(
-            student_user_id=request.user,
+            student_user_id=student,
             level=lv,
             is_correct=True,
         ).values('question_id').distinct().count()
@@ -219,7 +251,7 @@ def student_mission_detail(request, mission_id):
     overall_progress = round(total_progress / level_count, 2)
     try:
         sp = StudentMissionProgress.objects.get(
-            mission=mission, student_user_id=request.user
+            mission=mission, student_user_id=student
         )
         if get_request_role(request) == 'student':
             sp.progress_percent = overall_progress
@@ -231,13 +263,18 @@ def student_mission_detail(request, mission_id):
     except StudentMissionProgress.DoesNotExist:
         pass
 
-    class_obj = mission.class_obj
+    assignment_classes = [item.class_obj for item in mission.class_assignments.all()
+                          if item.status == 'active' and ClassStudent.objects.filter(
+                              class_obj_id=item.class_obj_id, student=student, status='active'
+                          ).exists()]
+    class_obj = assignment_classes[0] if assignment_classes else mission.class_obj
     return Response({
         'code': 0, 'message': 'success',
         'data': {
             'mission_name': mission.mission_name,
             'goal_text': mission.goal_text,
-            'class_name': class_obj.class_name if class_obj else None,
+            'class_name': '、'.join(cls.class_name for cls in assignment_classes) if assignment_classes else (class_obj.class_name if class_obj else None),
+            'class_ids': [str(cls.id) for cls in assignment_classes],
             'deadline': mission.end_at.isoformat() if mission.end_at else None,
             'assignment_mode': mission.assignment_mode,
             'pdf_download_url': mission_pdf_download_url(mission),
@@ -255,54 +292,42 @@ def student_level_detail(request, level_id):
     except MissionLevel.DoesNotExist:
         return Response({'code': 404, 'message': '关卡不存在', 'data': None, 'trace_id': make_trace_id()}, status=404)
 
-    # 校验该关卡所属任务学生有权访问
-    if level.mission_id and not StudentMissionProgress.objects.filter(
-            mission_id=level.mission_id, student_user_id=request.user).exists():
+    student = getattr(request, '_effective_student', request.user)
+    from apps.institutions.models import ClassStudent
+    mission = level.mission
+    student_class_ids = set(
+        ClassStudent.objects.filter(student=student, status='active')
+        .values_list('class_obj_id', flat=True)
+    )
+    if mission.status != 'published' or not mission_visible_to_student(
+        mission, student.id, student_class_ids,
+    ):
         return Response({'code': 403, 'message': '无权访问该关卡', 'data': None, 'trace_id': make_trace_id()}, status=403)
 
-    rels = _visible_mission_rels(level, request.user.id)
+    # 校验该关卡所属任务学生有权访问
+    if level.mission_id and not StudentMissionProgress.objects.filter(
+            mission_id=level.mission_id, student_user_id=student).exists():
+        return Response({'code': 403, 'message': '无权访问该关卡', 'data': None, 'trace_id': make_trace_id()}, status=403)
+
+    rels = _visible_mission_rels(level, student.id)
     questions = []
     for rel in rels:
         try:
             q = ExamQuestion.objects.get(pk=rel.question_id)
-            questions.append({
-                'id': q.id,
-                'question_no': q.question_no,
-                'question_type': q.question_type,
-                'difficulty': float(q.difficulty) if q.difficulty else None,
-                'stem': q.stem or '',
-                'stem_html': q.stem_html or '',
-                'answer': q.answer or '',
-                'analysis': q.analysis or '',
-                'solution': q.solution or '',
-                'images': [
-                    {
-                        'id': img.id,
-                        'file_path': img.file_path,
-                        'url': media_url(img.file_path),
-                        'image_type': img.image_type,
-                        'display_width': img.display_width,
-                        'description': img.description or '',
-                    }
-                    for img in q.images.all().order_by('sort_order')
-                    if img.file_path and img.image_type != 'formula'
-                ],
-                'options': [{'label': o.option_label, 'content': o.content}
-                           for o in q.options.all()],
-            })
+            questions.append(snapshot_payload(q, rel))
         except ExamQuestion.DoesNotExist:
             continue
 
     # Create progress if not exists
     lp, _ = StudentLevelProgress.objects.get_or_create(
-        level=level, student_user_id=request.user,
+        level=level, student_user_id=student,
         defaults={'status': 'running'}
     )
 
     # 更新任务进度状态为进行中
     if level.mission_id:
         StudentMissionProgress.objects.filter(
-            mission_id=level.mission_id, student_user_id=request.user
+            mission_id=level.mission_id, student_user_id=student
         ).exclude(progress_status='in_progress').exclude(progress_status='completed').update(
             progress_status='in_progress',
             current_level_id=level.id,
@@ -312,6 +337,7 @@ def student_level_detail(request, level_id):
         'code': 0, 'message': 'success',
         'data': {
             'level_id': level.id,
+            'mission_id': str(level.mission_id) if level.mission_id else None,
             'level_name': level.level_name,
             'mode_policy': level.mode_policy,
             'questions': questions,

@@ -6,6 +6,7 @@ import mimetypes
 from django.conf import settings
 from django.db import models as db_models
 from django.http import FileResponse
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -14,6 +15,7 @@ from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
 from apps.accounts.roles import has_user_role
 from apps.common.subject_codes import normalize_subject_codes
+from apps.common.p2_api import success as p2_success
 from apps.institutions.models import Institution, InstitutionMember
 
 from .models import (
@@ -23,6 +25,8 @@ from .models import (
     CourseMaterial,
     CourseTree,
     CourseQuestionLink,
+    CourseClass,
+    CourseHandout,
     VariantTask,
 )
 from .serializers import (
@@ -330,6 +334,110 @@ def _get_course_or_404(course_id):
 # ============================================================
 # 课程 CRUD
 # ============================================================
+
+def _class_can_be_assigned(class_obj, user):
+    if _is_admin(user):
+        return True
+    return class_obj.creator_teacher_id == user.id or class_obj.class_teachers.filter(
+        teacher=user, role__in=['owner', 'co_teacher'],
+    ).exists()
+
+
+def _course_class_data(relation):
+    class_obj = relation.class_obj
+    return {
+        'id': str(relation.id), 'class_id': str(class_obj.id),
+        'class_name': class_obj.class_name, 'grade_level': class_obj.grade_level or '',
+        'status': relation.status, 'created_at': relation.created_at,
+    }
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def course_classes(request, course_id):
+    course = _get_course_or_404(course_id)
+    if request.method == 'GET':
+        _check_course_access(course, request.user)
+        rows = CourseClass.objects.filter(course=course, status='active').select_related('class_obj')
+        return p2_success([_course_class_data(row) for row in rows])
+    _check_course_owner(course, request.user)
+    from apps.institutions.models import Class
+    try:
+        class_obj = Class.objects.get(id=request.data.get('class_id'), status='active')
+    except (Class.DoesNotExist, DjangoValidationError, ValueError, TypeError):
+        raise NotFound('班级不存在或已停用')
+    if course.institution_id and class_obj.institution_id != course.institution_id:
+        raise PermissionDenied('只能关联同一机构的班级')
+    if not _class_can_be_assigned(class_obj, request.user):
+        raise PermissionDenied('没有权限管理该班级')
+    relation, _ = CourseClass.objects.update_or_create(
+        course=course, class_obj=class_obj, defaults={'status': 'active'},
+    )
+    return p2_success(_course_class_data(relation), status=201)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def course_class_remove(request, course_id, class_id):
+    course = _get_course_or_404(course_id)
+    _check_course_owner(course, request.user)
+    relation = CourseClass.objects.filter(course=course, class_obj_id=class_id).first()
+    if not relation:
+        raise NotFound('课程班级关联不存在')
+    relation.status = 'removed'
+    relation.save(update_fields=['status'])
+    return p2_success(None)
+
+
+def _course_handout_data(relation):
+    handout = relation.handout
+    return {
+        'id': str(relation.id), 'handout_id': str(handout.id), 'name': handout.name,
+        'status': relation.status, 'handout_status': handout.status,
+        'sort_no': relation.sort_no, 'question_count': handout.questions.count(),
+    }
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def course_handouts(request, course_id):
+    course = _get_course_or_404(course_id)
+    if request.method == 'GET':
+        _check_course_access(course, request.user)
+        rows = CourseHandout.objects.filter(course=course, status='active').select_related('handout')
+        return p2_success([_course_handout_data(row) for row in rows])
+    _check_course_owner(course, request.user)
+    from apps.handouts.models import Handout
+    try:
+        handout = Handout.objects.get(id=request.data.get('handout_id'))
+    except (Handout.DoesNotExist, DjangoValidationError, ValueError, TypeError):
+        raise NotFound('讲义不存在')
+    if handout.creator_teacher_id != request.user.id:
+        raise PermissionDenied('没有权限关联该讲义')
+    if handout.course_id not in (None, course.id):
+        raise ValidationError('讲义已经关联其他课程')
+    if handout.course_id is None:
+        handout.course = course
+        handout.save(update_fields=['course', 'updated_at'])
+    relation, _ = CourseHandout.objects.update_or_create(
+        course=course, handout=handout,
+        defaults={'sort_no': request.data.get('sort_no', 1), 'status': 'active'},
+    )
+    return p2_success(_course_handout_data(relation), status=201)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def course_handout_remove(request, course_id, handout_id):
+    course = _get_course_or_404(course_id)
+    _check_course_owner(course, request.user)
+    relation = CourseHandout.objects.filter(course=course, handout_id=handout_id).first()
+    if not relation:
+        raise NotFound('课程讲义关联不存在')
+    relation.status = 'removed'
+    relation.save(update_fields=['status'])
+    return p2_success(None)
+
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
@@ -1225,8 +1333,24 @@ def generate_mission(request, course_id):
     pass_rule = request.data.get('pass_rule', {'correct_rate': 0.6})
     class_id = request.data.get('class_id')
     deadline = request.data.get('deadline')
+    handout_id = request.data.get('handout_id')
 
-    if not node_ids:
+    if class_id and not CourseClass.objects.filter(
+        course=course, class_obj_id=class_id, status='active',
+    ).exists():
+        raise PermissionDenied('只能向已关联到课程的班级发布任务')
+
+    handout = None
+    if handout_id:
+        from apps.handouts.models import Handout
+        try:
+            handout = Handout.objects.get(id=handout_id, course=course, status='published')
+        except (Handout.DoesNotExist, ValueError, TypeError):
+            raise ValidationError('讲义不存在、未发布或不属于当前课程')
+        if not handout.questions.exists():
+            raise ValidationError('讲义至少需要一道题目')
+
+    if not node_ids and handout is None:
         # 如果未选择节点，使用课程下所有根节点
         node_ids = list(CourseTree.objects.filter(
             course=course, parent=None
@@ -1241,7 +1365,25 @@ def generate_mission(request, course_id):
         status='draft',
         class_obj_id=class_id if class_id else None,
         end_at=deadline if deadline else None,
+        course=course,
     )
+
+    if handout is not None:
+        level = MissionLevel.objects.create(
+            mission=mission, level_no=1, level_name=handout.name,
+            level_type=level_type, pass_rule_json=pass_rule,
+        )
+        for sort_no, handout_question in enumerate(handout.questions.all(), 1):
+            MissionQuestionRel.objects.create(
+                mission=mission, level=level, question_id=handout_question.question_id,
+                sort_no=sort_no, source_type='handout_snapshot',
+                question_snapshot=handout_question.display_snapshot,
+            )
+        return Response({
+            'success': True,
+            'data': {'mission_id': mission.id, 'mission_no': mission.mission_no, 'level_ids': [level.id], 'level_count': 1},
+            'message': '讲义任务创建成功，共 1 个关卡',
+        }, status=status.HTTP_201_CREATED)
 
     created_levels = []
     for idx, node_id in enumerate(node_ids, 1):

@@ -70,6 +70,8 @@
             <text class="total-count">({{ totalCount }}题)</text>
           </view>
           <view class="header-right">
+            <button size="mini" class="btn-add" @click="goKnowledgeMatches">知识点待确认</button>
+            <button size="mini" class="btn-add" @click="goHandoutList">讲义管理</button>
             <view class="pagination-new">
               <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
               <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
@@ -86,6 +88,7 @@
               <text class="page-info">{{ currentPage }}/{{ totalPages }}页</text>
               <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
             </view>
+            <button v-if="selectedQuestionIds.length" class="btn-add" @click="goCreateHandout">生成讲义 ({{ selectedQuestionIds.length }})</button>
             <button class="btn-add" @click="showAddMenu">+ 新增</button>
           </view>
         </view>
@@ -541,6 +544,19 @@ async function handleJsonImport(file: any) {
 
 // === 其他 ===
 function showAddMenu() { addMenuVisible.value = true }
+
+function goCreateHandout() {
+  if (!selectedQuestionIds.value.length) {
+    uni.showToast({ title: '请先选择题目', icon: 'none' })
+    return
+  }
+  uni.navigateTo({
+    url: `/pages/teacher/handout-create?questionIds=${encodeURIComponent(selectedQuestionIds.value.join(','))}&subject=${encodeURIComponent(selectedSubject.value)}`,
+  })
+}
+
+function goKnowledgeMatches() { uni.navigateTo({ url: '/pages/teacher/knowledge-matches' }) }
+function goHandoutList() { uni.navigateTo({ url: '/pages/teacher/handout-list' }) }
 function toggleViewMode() { viewMode.value = viewMode.value === 'compact' ? 'detail' : 'compact' }
 async function handleRefresh() {
   currentPage.value = 1

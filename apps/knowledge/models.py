@@ -1,4 +1,5 @@
 """KnowledgePoint model mapping to existing knowledge_points table."""
+import uuid_utils.compat as uuid_compat
 from django.db import models
 
 
@@ -52,3 +53,48 @@ class KnowledgePoint(models.Model):
         grade = self.GRADE_LABELS.get(self.grade_index, self.grade_name)
         term = self.TERM_LABELS.get(self.term, self.term)
         return f'{self.get_subject_display()}-{stage}-{grade}{term}'
+
+
+class QuestionKnowledgeMatch(models.Model):
+    """Auditable relation between a question and a knowledge point.
+
+    ``ExamQuestion.knowledge_points`` is intentionally kept as the legacy
+    JSON field.  This table is the P2 source of truth for suggestions and
+    manual confirmation, without silently rewriting old questions.
+    """
+
+    SOURCE_CHOICES = [('manual', 'manual'), ('import', 'import'), ('rule', 'rule'), ('ai', 'ai')]
+    STATUS_CHOICES = [('suggested', 'suggested'), ('confirmed', 'confirmed'), ('rejected', 'rejected')]
+
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    question = models.ForeignKey(
+        'parser.ExamQuestion', on_delete=models.CASCADE,
+        related_name='knowledge_matches', db_column='question_id',
+    )
+    knowledge_point = models.ForeignKey(
+        KnowledgePoint, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='question_matches', db_column='knowledge_point_id',
+        db_constraint=False,
+    )
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='rule')
+    source_version = models.CharField(max_length=30, default='rule-v1')
+    confidence = models.DecimalField(max_digits=5, decimal_places=4, null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='suggested')
+    evidence = models.JSONField(null=True, blank=True)
+    confirmed_by = models.ForeignKey(
+        'accounts.UserAccount', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='confirmed_question_knowledge_matches',
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'question_knowledge_match'
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['question', 'knowledge_point', 'source_version'],
+                name='uq_question_kp_match_version',
+            ),
+        ]

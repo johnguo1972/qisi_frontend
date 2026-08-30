@@ -273,13 +273,15 @@ class TestMissions:
 
         sample_mission.refresh_from_db()
         assert sample_mission.assignment_mode == 'flat'
+        # The assignment is persisted in the same natural question-number
+        # order used by the teacher matrix and exports.
         assert list(sample_mission.missionquestionrel_set.order_by('sort_no').values_list('question_id', flat=True)) == [
-            second.id,
             sample_question.id,
+            second.id,
         ]
         detail = teacher_client.get(f'/api/v1/missions/{sample_mission.id}/').json()
         assert detail['data']['assignment_mode'] == 'flat'
-        assert detail['data']['question_ids'] == [str(second.id), str(sample_question.id)]
+        assert detail['data']['question_ids'] == [str(sample_question.id), str(second.id)]
 
     def test_flat_assignment_publish_requires_questions_and_deadline(self, teacher_client, sample_mission):
         """A saved draft cannot be published until the required fields are complete."""

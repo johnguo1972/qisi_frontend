@@ -162,7 +162,7 @@ def class_simple_list(request):
     qs = Class.objects.filter(
         class_teachers__teacher=request.user,
         status='active',
-    ).order_by('-created_at').values('id', 'class_name', 'class_no')
+    ).order_by('-created_at').values('id', 'class_name', 'class_no', 'grade_level')
 
     return Response({
         'code': 0,
@@ -365,7 +365,10 @@ def class_learning_stats(request, class_id):
     from apps.missions.models import LearningMission
     from apps.study.models import StudentMissionProgress, AnswerAttempt
 
-    missions = LearningMission.objects.filter(class_obj_id=class_id)
+    from django.db.models import Q
+    missions = LearningMission.objects.filter(
+        Q(class_obj_id=class_id) | Q(class_assignments__class_obj_id=class_id, class_assignments__status='active')
+    ).distinct()
     rows = []
     for relation in cls.class_students.filter(status='active').select_related('student'):
         student_id = relation.student_id

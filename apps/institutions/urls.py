@@ -8,6 +8,7 @@ from . import (
     class_views,
     request_views,
     student_views,
+    import_views,
 )
 
 app_name = 'institutions'
@@ -31,6 +32,10 @@ urlpatterns = [
     path('classes/<uuid:class_id>', class_views.class_detail, name='class-detail'),
     path('classes/<uuid:class_id>/regenerate-code', class_views.regenerate_invite_code, name='class-regenerate-code'),
     path('classes/<uuid:class_id>/students', class_views.class_students, name='class-students'),
+    path('classes/<uuid:class_id>/students/import-template', import_views.import_template, name='student-import-template'),
+    path('classes/<uuid:class_id>/students/import', import_views.import_students, name='student-import'),
+    path('student-imports/<uuid:task_id>', import_views.import_status, name='student-import-status'),
+    path('student-imports/<uuid:task_id>/errors', import_views.import_errors, name='student-import-errors'),
     path('classes/<uuid:class_id>/learning-stats', class_views.class_learning_stats, name='class-learning-stats'),
     path('classes/<uuid:class_id>/students/<uuid:student_id>', class_views.remove_student, name='class-remove-student'),
 

@@ -215,6 +215,42 @@ class CourseQuestionLink(models.Model):
         return f'{self.course} -> {self.question}'
 
 
+class CourseClass(models.Model):
+    """Active class scope for a course (one course can serve many classes)."""
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='class_relations')
+    class_obj = models.ForeignKey(
+        'institutions.Class', on_delete=models.CASCADE, related_name='course_relations',
+        db_column='class_id',
+    )
+    status = models.CharField(max_length=20, default='active')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'course_class'
+        constraints = [
+            models.UniqueConstraint(fields=['course', 'class_obj'], name='uq_course_class'),
+        ]
+
+
+class CourseHandout(models.Model):
+    """Handouts published through a course."""
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='handout_relations')
+    handout = models.ForeignKey(
+        'handouts.Handout', on_delete=models.CASCADE, related_name='course_relations',
+    )
+    sort_no = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=20, default='active')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'course_handout'
+        constraints = [
+            models.UniqueConstraint(fields=['course', 'handout'], name='uq_course_handout'),
+        ]
+
+
 class VariantTask(models.Model):
     """变式题生成任务"""
     STATUS_CHOICES = [

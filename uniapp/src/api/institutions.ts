@@ -96,7 +96,7 @@ export const teacherApi = {
 
 // === Class (Teacher) ===
 export const classApi = {
-  create: (data: { institution_id: UUID; class_name: string; description?: string; max_students?: number; allow_invite_join?: boolean }) =>
+  create: (data: { institution_id: UUID; class_name: string; grade_level?: string; description?: string; max_students?: number; allow_invite_join?: boolean }) =>
     post('/classes', data),
   list: (institutionId?: UUID) =>
     get(`/classes${institutionId ? `?institution_id=${institutionId}` : ''}`),
@@ -106,6 +106,18 @@ export const classApi = {
   remove: (id: UUID) => del(`/classes/${id}`),
   regenerateCode: (id: UUID) => post(`/classes/${id}/regenerate-code`),
   students: (id: UUID) => get(`/classes/${id}/students`),
+  importStudents: (id: UUID, file: File) => {
+    const token = uni.getStorageSync('accessToken')
+    const form = new FormData()
+    form.append('file', file)
+    return fetch(`/api/v1/classes/${id}/students/import`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form,
+    }).then(async response => {
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.message || '导入失败')
+      return data
+    })
+  },
   learningStats: (id: UUID) => get(`/classes/${id}/learning-stats`),
   removeStudent: (classId: UUID, studentId: UUID) =>
     put(`/classes/${classId}/students/${studentId}`),

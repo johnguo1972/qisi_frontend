@@ -184,7 +184,7 @@ def test_0003_runpython_cleanup_deletes_only_migration_sourced_grants():
 
     # The current UserAccount model includes fields added after 0003. Bring
     # the database back to the current accounts schema before using it below.
-    MigrationExecutor(connection).migrate([("accounts", "0005_useraccount_subjects")])
+    MigrationExecutor(connection).migrate([("accounts", "0006_student_identifier")])
     current_teacher = UserAccount.objects.get(pk=legacy_teacher.pk)
     revoke_user_role(current_teacher, "teacher")
     business_regrant = grant_user_role(current_teacher, "teacher")
@@ -215,7 +215,7 @@ def test_0003_full_schema_downgrade_removes_user_role_table():
 
     executor = MigrationExecutor(connection)
     executor.migrate([("accounts", "0003_userrole")])
-    MigrationExecutor(connection).migrate([("accounts", "0005_useraccount_subjects")])
+    MigrationExecutor(connection).migrate([("accounts", "0006_student_identifier")])
     current_user = UserAccount.objects.get(pk=legacy_user.pk)
     business_regrant = grant_user_role(current_user, "teacher")
     assert business_regrant.grant_source == "business"
@@ -225,7 +225,7 @@ def test_0003_full_schema_downgrade_removes_user_role_table():
     assert "user_role" not in connection.introspection.table_names()
 
     # Restore the test database's normal schema after proving the downgrade.
-    MigrationExecutor(connection).migrate([("accounts", "0005_useraccount_subjects")])
+    MigrationExecutor(connection).migrate([("accounts", "0006_student_identifier")])
     assert "wechat_web_identity" in connection.introspection.table_names()
 
 

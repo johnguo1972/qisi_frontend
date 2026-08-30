@@ -8,12 +8,13 @@ from django.conf import settings
 
 from apps.missions.models import MissionQuestionRel
 from apps.parser.models import ExamQuestion, QuestionImage, QuestionOption
+from .services import ordered_mission_question_rels
 
 
 def _mission_questions(mission):
     """Build PDF input in the exact MissionQuestionRel sort order."""
     relations = list(
-        MissionQuestionRel.objects.filter(mission=mission).order_by('sort_no', 'id')
+        ordered_mission_question_rels(mission)
     )
     question_ids = [relation.question_id for relation in relations]
     question_map = {
@@ -37,15 +38,23 @@ def _mission_questions(mission):
         ).exclude(image_type='formula').values(
             'file_path', 'placement', 'sort_order', 'display_width'
         ).order_by('sort_order')
+        snapshot = relation.question_snapshot or {}
+        snapshot_options = snapshot.get('options_html') if snapshot else None
+        snapshot_images = snapshot.get('image_items') if snapshot else None
         questions.append({
             **question,
+            **snapshot,
+            'id': question['id'],
             '_pdf_title': mission.mission_name,
-            'options_html': [
+            'options_html': snapshot_options if snapshot_options is not None else [
                 {'label': option['option_label'], 'content': option['content']}
                 for option in options
             ],
-            'image_urls': [item['file_path'] for item in images],
-            'image_items': list(images),
+            'image_urls': [
+                item.get('file_path', '') if isinstance(item, dict) else item['file_path']
+                for item in (snapshot_images if snapshot_images is not None else images)
+            ],
+            'image_items': snapshot_images if snapshot_images is not None else list(images),
         })
     return questions
 

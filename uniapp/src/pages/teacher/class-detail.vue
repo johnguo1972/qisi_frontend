@@ -44,6 +44,7 @@
         </view>
         <!-- 操作按钮 -->
         <view class="action-bar">
+          <button class="btn-import" @click="goImport">批量导入学生</button>
           <button class="btn-requests" @click="goRequests">
             申请审批
             <text v-if="pendingCount > 0" class="badge">{{ pendingCount }}</text>
@@ -199,6 +200,7 @@ async function handleRefreshCode() {
 function goBack() { uni.navigateBack() }
 function goEdit() { uni.navigateTo({ url: `/pages/teacher/class-edit?id=${classId}` }) }
 function goRequests() { uni.navigateTo({ url: `/pages/teacher/class-requests?classId=${classId}` }) }
+function goImport() { uni.navigateTo({ url: `/pages/teacher/student-import?classId=${classId}` }) }
 
 async function removeStudent(student: Student) {
   const studentId = String(student.student || student.id)

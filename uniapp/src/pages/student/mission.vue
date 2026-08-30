@@ -12,6 +12,7 @@
       <view class="mission-card">
         <text class="title">{{ missionName }}</text>
         <text class="goal">{{ goalText || '暂无描述' }}</text>
+        <button v-if="assignmentMode === 'flat'" class="submit-all-btn" :disabled="submitting" @click="submitMission">{{ submitting ? '提交中...' : '提交整份作业' }}</button>
         <!-- 班级和截止日期 -->
         <view class="mission-meta">
           <view class="meta-item" v-if="className">
@@ -79,6 +80,7 @@ const className = ref('')
 const deadline = ref('')
 const assignmentMode = ref<'flat' | 'levels'>('levels')
 const levels = ref<any[]>([])
+const submitting = ref(false)
 
 const deadlineText = computed(() => {
   return formatDateOnly(deadline.value, '')
@@ -141,6 +143,23 @@ function goLevel(id: number) {
   uni.navigateTo({ url: `/pages/student/answer?levelId=${id}` })
 }
 
+async function submitMission() {
+  if (submitting.value) return
+  submitting.value = true
+  try {
+    const response: any = await studentApi.submitMission(missionId.value)
+    if (response.code === 0) {
+      uni.showToast({ title: '作业已提交', icon: 'success' })
+      await loadMission()
+    } else {
+      const missing = response.data?.missing_question_ids?.length || 0
+      uni.showToast({ title: missing ? `还有 ${missing} 题未提交` : (response.message || '提交失败'), icon: 'none' })
+    }
+  } finally {
+    submitting.value = false
+  }
+}
+
 function goExport() {
   uni.navigateTo({ url: `/pages/student/export?type=mission&ids=${missionId.value}` })
 }
@@ -188,6 +207,8 @@ function goBack() {
   padding: 8rpx 20rpx;
   line-height: 1.4;
 }
+.submit-all-btn { margin: 18rpx 0 0; background: #67c23a; color: #fff; font-size: 24rpx; }
+.submit-all-btn::after { border: none; }
 .export-btn::after {
   border: none;
 }

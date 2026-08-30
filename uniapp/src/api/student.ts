@@ -7,8 +7,10 @@ export const studentApi = {
   missionDetail: (id: UUID, refreshKey?: number) =>
     get(`/student/missions/${id}`, refreshKey ? { _t: refreshKey } : undefined),
   levelDetail: (id: UUID) => get(`/student/levels/${id}`),
-  submitAnswer: (data: { question_id: UUID; answer_content: object; mission_id?: UUID; level_id?: UUID }) =>
+  submitAnswer: (data: { question_id: UUID; answer_content: object; mission_id?: UUID; level_id?: UUID; idempotency_key?: string }) =>
     post('/student/attempts', data),
+  submitMission: (id: UUID) => post<any>(`/student/missions/${id}/submit`),
+  relatedQuestions: (questionId: UUID) => get<any[]>(`/student/questions/${questionId}/related`),
   startAttempt: (data: { question_id: UUID; mission_id?: UUID; level_id?: UUID }) =>
     post<{ attempt_id: UUID }>('/student/attempts/start', data),
   submitDraftAttempt: (attemptId: UUID, answer_content: object) =>
