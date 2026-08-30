@@ -13,11 +13,11 @@ export interface CourseQuestionListQuery {
   tree_node_id: string
   page: number
   page_size: number
-  question_type?: string
-  difficulty?: string
-  knowledge_point_id?: string
-  tag?: string
-  keyword?: string
+  question_type?: string | null
+  difficulty?: string | null
+  knowledge_point_id?: string | null
+  tag?: string | null
+  keyword?: string | null
 }
 
 export interface CourseQuestionListResult<T = unknown> {
@@ -25,6 +25,15 @@ export interface CourseQuestionListResult<T = unknown> {
   total: number
   pageNo: number
   pageSize: number
+}
+
+export function serializeCourseQuestionQuery(query: CourseQuestionListQuery): URLSearchParams {
+  const params = new URLSearchParams()
+  Object.entries(query).forEach(([key, value]) => {
+    if (value == null || (typeof value === 'string' && !value.trim())) return
+    params.set(key, String(value))
+  })
+  return params
 }
 
 export function buildCourseQuestionQuery(input: CourseQuestionListInput): CourseQuestionListQuery | null {
@@ -51,4 +60,13 @@ export function normalizeCourseQuestionList<T = unknown>(response: unknown): Cou
     pageNo: Number(data?.page_no || 1),
     pageSize: Number(data?.page_size || 20),
   }
+}
+
+export async function loadCourseQuestionList<T = unknown>(
+  input: CourseQuestionListInput,
+  fetchList: (query: CourseQuestionListQuery) => Promise<unknown>,
+): Promise<CourseQuestionListResult<T>> {
+  const query = buildCourseQuestionQuery(input)
+  if (!query) return normalizeCourseQuestionList<T>(null)
+  return normalizeCourseQuestionList<T>(await fetchList(query))
 }

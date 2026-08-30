@@ -1,6 +1,6 @@
 // Course API - 后端 courses API 路径是 /api/v1/courses/
 import type { UUID } from '@/types/uuid'
-import type { CourseQuestionListQuery } from '@/pages/teacher/course-practice-list'
+import { serializeCourseQuestionQuery, type CourseQuestionListQuery } from '@/pages/teacher/course-practice-list'
 
 const COURSE_BASE = '/api/v1'
 
@@ -128,8 +128,7 @@ export const treeApi = {
 // ============================================================
 export const courseQuestionApi = {
   list: (courseId: UUID, params: CourseQuestionListQuery) => {
-    const query = new URLSearchParams()
-    Object.entries(params).forEach(([key, value]) => query.set(key, String(value)))
+    const query = serializeCourseQuestionQuery(params)
     return courseFetch<any>(`/courses/${courseId}/questions/?${query.toString()}`)
   },
   import: (courseId: UUID, data: { question_ids: UUID[]; tree_node_id?: UUID }) =>

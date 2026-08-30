@@ -270,6 +270,7 @@ import { onShow } from '@dcloudio/uni-app'
 import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import DirTree from '@/components/DirTree.vue'
 import { courseApi, treeApi, courseQuestionApi, variantApi, materialApi } from '@/api/courses'
+import { loadCourseQuestionList } from './course-practice-list'
 import { questionApi, importJsonPackage as importJsonPackageApi } from '@/api/questions'
 import { navigateRoleSection } from '@/utils/role-navigation'
 
@@ -598,6 +599,9 @@ interface Question {
 const questions = ref<Question[]>([])
 const loading = ref(false)
 const selectedIds = ref<string[]>([])
+const total = ref(0)
+const pageNo = ref(1)
+const pageSize = ref(20)
 
 function questionTables(q: Question): Array<{ table_id?: string; rows?: string[][] }> {
   return Array.isArray(q.tables) ? q.tables : []
@@ -626,12 +630,18 @@ function flattenedTableCells(table: { rows?: string[][] }): string[] {
 async function loadQuestions() {
   loading.value = true
   try {
-    const params: any = {}
-    if (selectedNode.value) {
-      params.tree_node_id = selectedNode.value.id
-    }
-    const res: any = await courseQuestionApi.list(courseId.value, params)
-    questions.value = res.data || res || []
+    const result = await loadCourseQuestionList(
+      {
+        treeNodeId: selectedNode.value ? String(selectedNode.value.id) : '',
+        page: pageNo.value,
+        pageSize: pageSize.value,
+      },
+      (query) => courseQuestionApi.list(courseId.value, query),
+    )
+    questions.value = result.items as Question[]
+    total.value = result.total
+    pageNo.value = result.pageNo
+    pageSize.value = result.pageSize
     selectedIds.value = []
   } catch (e) {
     console.error('加载习题列表失败:', e)
