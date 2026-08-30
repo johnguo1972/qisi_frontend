@@ -5,6 +5,7 @@ from . import json_import_views, basket_views, batch_views
 # 新增导入（barcode_views 依赖 python-barcode，设为可选）
 from . import tag_views
 from . import qr_views
+from apps.knowledge import match_views
 try:
     from . import barcode_views
     HAS_BARCODE = True
@@ -30,6 +31,13 @@ urlpatterns = [
     path('tags/create/', tag_views.tag_create, name='tag-create'),
     path('tags/<str:tag_id>/update/', tag_views.tag_update, name='tag-update'),
     path('tags/<str:tag_id>/delete/', tag_views.tag_delete, name='tag-delete'),
+
+    # P2 question/knowledge-point matching
+    path('knowledge-matches/preview', match_views.knowledge_match_preview, name='knowledge-match-preview'),
+    path('knowledge-matches/batch-confirm', match_views.knowledge_match_batch_confirm, name='knowledge-match-batch-confirm'),
+    path('knowledge-matches/pending', match_views.knowledge_match_pending, name='knowledge-match-pending'),
+    path('knowledge-matches/rebuild', match_views.knowledge_match_rebuild_batch, name='knowledge-match-rebuild-batch'),
+    path('<uuid:question_id>/knowledge-matches/rebuild', match_views.knowledge_match_rebuild, name='knowledge-match-rebuild'),
 
     # JSON数据包导入
     path('import-json-package', json_import_views.import_json_package, name='import-json-package'),

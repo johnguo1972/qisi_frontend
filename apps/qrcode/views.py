@@ -9,6 +9,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
+from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status
@@ -38,7 +39,7 @@ from apps.study.permissions import IsNotParentSession
 from .models import AttemptImage, MissionShortCode, PaperScanBatch, PaperScanPage, StudentClassShortCode, WrongbookPracticeSheet
 from .services import (
     analyze_image_blur, cache_wechat_pending, ensure_mission_short_code,
-    ensure_student_short_code, mission_qr_url, paper_qr_url, qr_png, wxacode_png, wechat_url_link,
+    ensure_student_short_code, ensure_mission_short_codes, mission_qr_url, paper_qr_url, qr_png, wxacode_png, wechat_url_link,
 )
 
 
@@ -119,7 +120,17 @@ def mission_qrcode(request, mission_id):
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
     except LearningMission.DoesNotExist:
         return Response({'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': trace_id()}, status=404)
-    code = ensure_mission_short_code(mission)
+    class_id = request.query_params.get('class_id')
+    class_obj = None
+    if class_id:
+        assignment = mission.class_assignments.filter(
+            class_obj_id=class_id, status='active',
+        ).select_related('class_obj').first()
+        if assignment:
+            class_obj = assignment.class_obj
+        elif str(mission.class_obj_id or '') != str(class_id):
+            return Response({'code': 404, 'message': '班级任务不存在', 'data': None, 'trace_id': trace_id()}, status=404)
+    code = ensure_mission_short_code(mission, class_obj=class_obj)
     try:
         size = max(180, min(800, int(request.query_params.get('size', 300))))
     except (TypeError, ValueError):
@@ -134,10 +145,12 @@ def mission_qrcode_info(request, mission_id):
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
     except LearningMission.DoesNotExist:
         return Response({'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': trace_id()}, status=404)
-    code = ensure_mission_short_code(mission)
+    codes = ensure_mission_short_codes(mission)
+    code = codes[0]
     image_data = base64.b64encode(qr_png(mission_qr_url(code.short_code), 300)).decode('ascii')
     return Response({'code': 0, 'message': 'success', 'data': {
         'short_code': code.short_code, 'url': mission_qr_url(code.short_code),
+        'class_codes': [{'class_id': str(item.class_obj_id) if item.class_obj_id else None, 'short_code': item.short_code, 'url': mission_qr_url(item.short_code)} for item in codes],
         'status': code.status, 'expires_at': code.expires_at,
         'image_data': f'data:image/png;base64,{image_data}',
     }, 'trace_id': trace_id()})
@@ -711,11 +724,17 @@ def complete_scan_batch(request, batch_id):
 def _mission_students(mission, requested_id=None):
     from apps.institutions.models import ClassStudent
     if requested_id:
-        link = ClassStudent.objects.filter(class_obj=mission.class_obj, student_id=requested_id, status='active').select_related('student').first()
+        link = ClassStudent.objects.filter(
+            Q(class_obj=mission.class_obj) | Q(class_obj__mission_assignments__mission=mission, class_obj__mission_assignments__status='active'),
+            student_id=requested_id, status='active',
+        ).select_related('student').first()
         return [link.student] if link else []
+    assignment_class_ids = list(mission.class_assignments.filter(status='active').values_list('class_obj_id', flat=True))
     if mission.class_obj_id:
+        assignment_class_ids.append(mission.class_obj_id)
+    if assignment_class_ids:
         return list(UserAccount.objects.filter(
-            student_classes__class_obj=mission.class_obj,
+            student_classes__class_obj_id__in=assignment_class_ids,
             student_classes__status='active',
         ).distinct())
     ids = [str(value) for value in (mission.target_student_ids or [])]
@@ -724,6 +743,18 @@ def _mission_students(mission, requested_id=None):
         role_grants__role='student',
         role_grants__status='active',
     ).distinct())
+
+
+def _mission_student_class(mission, student):
+    """Pick the student's active class for a multi-class paper."""
+    class_ids = list(mission.class_assignments.filter(status='active').values_list('class_obj_id', flat=True))
+    if mission.class_obj_id:
+        class_ids.append(mission.class_obj_id)
+    return ClassStudent.objects.filter(
+        class_obj_id__in=class_ids, student=student, status='active',
+    ).select_related('class_obj').first().class_obj if ClassStudent.objects.filter(
+        class_obj_id__in=class_ids, student=student, status='active',
+    ).exists() else mission.class_obj
 
 
 def _paper_pdf(mission, students, mission_code):
@@ -739,13 +770,15 @@ def _paper_pdf(mission, students, mission_code):
     width, height = A4
     count = MissionQuestionRel.objects.filter(mission=mission).count()
     for student in students:
-        student_code = ensure_student_short_code(student, mission.class_obj).short_code
-        qr = ImageReader(io.BytesIO(qr_png(paper_qr_url(student_code, mission_code, 1), 240)))
+        student_class = _mission_student_class(mission, student)
+        student_code = ensure_student_short_code(student, student_class).short_code
+        student_mission_code = ensure_mission_short_code(mission, student_class).short_code
+        qr = ImageReader(io.BytesIO(qr_png(paper_qr_url(student_code, student_mission_code, 1), 240)))
         pdf.setFont('Helvetica-Bold', 18)
         pdf.drawCentredString(width / 2, height - 45, str(mission.mission_name))
         pdf.setFont('Helvetica', 11)
         pdf.drawString(45, height - 75, f'Student: {student.display_name or student.login_name}')
-        pdf.drawString(45, height - 95, f'Paper code: {student_code}-{mission_code}')
+        pdf.drawString(45, height - 95, f'Paper code: {student_code}-{student_mission_code}')
         pdf.drawImage(qr, width - 160, height - 170, width=110, height=110, preserveAspectRatio=True, mask='auto')
         pdf.drawString(45, height - 140, f'Questions: {count}')
         pdf.line(45, height - 180, width - 45, height - 180)
@@ -800,7 +833,7 @@ def mission_paper_pdf(request, mission_id):
     except LearningMission.DoesNotExist:
         return Response({'code': 404, 'message': 'mission not found', 'data': None, 'trace_id': trace_id()}, status=404)
     students = _mission_students(mission, request.query_params.get('student_id'))
-    if not students or not mission.class_obj_id:
+    if not students or not (mission.class_obj_id or mission.class_assignments.filter(status='active').exists()):
         return Response({'code': 400, 'message': 'mission has no printable class students', 'data': None, 'trace_id': trace_id()}, status=400)
     code = ensure_mission_short_code(mission)
     response = HttpResponse(_paper_pdf(mission, students, code.short_code), content_type='application/pdf')

@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'apps.wrongbook',
     'apps.institutions',
     'apps.courses',
+    'apps.handouts',
     'apps.qrcode',
     'apps.practice',
 ]

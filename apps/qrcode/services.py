@@ -24,21 +24,32 @@ def _unique_code(length, alphabet):
     raise RuntimeError('短码生成失败，请稍后重试')
 
 
-def ensure_mission_short_code(mission):
+def ensure_mission_short_code(mission, class_obj=None):
+    """Return an idempotent code for one mission/class publication."""
+    if class_obj is None:
+        class_obj = mission.class_obj
     expires_at = mission.end_at
     code, created = MissionShortCode.objects.get_or_create(
         mission=mission,
-        class_obj=mission.class_obj,
+        class_obj=class_obj,
         defaults={
             'short_code': _unique_code(6, SHORT_ALPHABET),
             'expires_at': expires_at,
-            'payload_json': {'type': 'mission', 'mission_id': str(mission.id), 'class_id': str(mission.class_obj_id or '')},
+            'payload_json': {'type': 'mission', 'mission_id': str(mission.id), 'class_id': str(getattr(class_obj, 'id', class_obj or ''))},
         },
     )
     if not created and expires_at != code.expires_at:
         code.expires_at = expires_at
         code.save(update_fields=['expires_at', 'updated_at'])
     return code
+
+
+def ensure_mission_short_codes(mission):
+    """Create codes for every active class, with legacy fallback."""
+    assignments = list(mission.class_assignments.filter(status='active').select_related('class_obj'))
+    if not assignments:
+        return [ensure_mission_short_code(mission)]
+    return [ensure_mission_short_code(mission, item.class_obj) for item in assignments]
 
 
 def ensure_student_short_code(student, class_obj):

@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.db import models
-from .models import LearningMission, MissionLevel, MissionQuestionRel
-from .services import FLAT_ASSIGNMENT_MODE
+from .models import LearningMission, MissionLevel, MissionQuestionRel, MissionClassAssignment
+from .services import FLAT_ASSIGNMENT_MODE, ordered_mission_question_rels
 
 
 # 课程和历史题目数据中同时存在中文名称、英文编码和单字母编码。
@@ -44,13 +44,16 @@ class MissionListSerializer(serializers.ModelSerializer):
     unfinished_count = serializers.SerializerMethodField()
     completion_progress = serializers.SerializerMethodField()
     subject = serializers.SerializerMethodField()
+    class_names = serializers.SerializerMethodField()
+    class_ids = serializers.SerializerMethodField()
 
     class Meta:
         model = LearningMission
         fields = ['id', 'mission_no', 'mission_name', 'goal_text',
                   'status', 'start_at', 'end_at', 'creator_name',
-                  'assignment_mode', 'level_count', 'class_name', 'question_count', 'unfinished_count', 'completion_progress', 'subject',
-                  'default_mode_policy', 'class_obj', 'target_student_ids', 'course']
+                  'assignment_mode', 'mission_kind', 'source_type', 'level_count', 'class_name', 'class_names', 'class_ids', 'question_count', 'unfinished_count', 'completion_progress', 'subject',
+                  'default_mode_policy', 'class_obj', 'target_student_ids', 'course',
+                  'source_matrix_id', 'source_generation_batch_id', 'parent_mission_id']
 
     def get_level_count(self, obj):
         return 0 if obj.assignment_mode == FLAT_ASSIGNMENT_MODE else obj.levels.count()
@@ -59,6 +62,16 @@ class MissionListSerializer(serializers.ModelSerializer):
         if obj.class_obj:
             return obj.class_obj.class_name
         return None
+
+    def _assignments(self, obj):
+        items = list(obj.class_assignments.filter(status='active').select_related('class_obj'))
+        return items or ([obj] if obj.class_obj_id else [])
+
+    def get_class_names(self, obj):
+        return [item.class_obj.class_name for item in self._assignments(obj) if getattr(item, 'class_obj', None)]
+
+    def get_class_ids(self, obj):
+        return [str(item.class_obj_id) for item in self._assignments(obj) if getattr(item, 'class_obj_id', None)]
 
     def get_question_count(self, obj):
         return MissionQuestionRel.objects.filter(mission=obj).count()
@@ -77,20 +90,17 @@ class MissionListSerializer(serializers.ModelSerializer):
         from apps.study.models import StudentMissionProgress
 
         targets = {str(student_id) for student_id in (obj.target_student_ids or [])}
-        if obj.class_obj_id:
-            assigned_students = ClassStudent.objects.filter(
-                class_obj_id=obj.class_obj_id, status='active',
-            )
-            if targets:
-                assigned_students = assigned_students.filter(student_id__in=targets)
-            student_ids = assigned_students.values_list('student_id', flat=True)
-        else:
-            student_ids = UserAccount.objects.filter(
-                id__in=targets, status='active',
-            ).filter(
-                Q(role_type='student') |
-                Q(role_grants__role='student', role_grants__status='active'),
-            ).distinct().values_list('id', flat=True)
+        assignments = list(obj.class_assignments.filter(status='active').values_list('class_obj_id', 'target_student_ids'))
+        if not assignments and obj.class_obj_id:
+            assignments = [(obj.class_obj_id, list(targets))]
+        student_id_set = set()
+        for class_id, class_targets in assignments:
+            assigned_students = ClassStudent.objects.filter(class_obj_id=class_id, status='active')
+            effective_targets = {str(value) for value in (class_targets or [])} or targets
+            if effective_targets:
+                assigned_students = assigned_students.filter(student_id__in=effective_targets)
+            student_id_set.update(str(value) for value in assigned_students.values_list('student_id', flat=True))
+        student_ids = UserAccount.objects.filter(id__in=student_id_set, status='active').values_list('id', flat=True)
 
         total = student_ids.count()
         completed = StudentMissionProgress.objects.filter(
@@ -127,13 +137,16 @@ class MissionDetailSerializer(serializers.ModelSerializer):
     creator_teacher = serializers.UUIDField(source='creator_teacher_id.id', read_only=True)
     class_obj = serializers.UUIDField(source='class_obj_id', read_only=True, allow_null=True)
     question_ids = serializers.SerializerMethodField()
+    class_ids = serializers.SerializerMethodField()
+    class_names = serializers.SerializerMethodField()
 
     class Meta:
         model = LearningMission
         fields = ['id', 'mission_no', 'mission_name', 'goal_text',
                   'creator_teacher', 'creator_name', 'start_at', 'end_at',
                   'status', 'assignment_mode', 'default_mode_policy', 'levels',
-                  'question_ids', 'class_obj', 'target_student_ids', 'course']
+                  'question_ids', 'class_obj', 'class_ids', 'class_names', 'target_student_ids', 'course', 'mission_kind', 'source_type',
+                  'source_matrix_id', 'source_generation_batch_id', 'parent_mission_id']
 
     def get_levels(self, obj):
         levels = obj.levels.all()
@@ -147,39 +160,82 @@ class MissionDetailSerializer(serializers.ModelSerializer):
         } for lv in levels]
 
     def get_question_ids(self, obj):
-        return list(MissionQuestionRel.objects.filter(mission=obj).order_by('sort_no', 'id').values_list('question_id', flat=True))
+        return [rel.question_id for rel in ordered_mission_question_rels(obj)]
+
+    def get_class_ids(self, obj):
+        assignments = list(obj.class_assignments.filter(status='active').values_list('class_obj_id', flat=True))
+        return [str(value) for value in assignments] or ([str(obj.class_obj_id)] if obj.class_obj_id else [])
+
+    def get_class_names(self, obj):
+        return list(obj.class_assignments.filter(status='active').values_list('class_obj__class_name', flat=True)) or ([obj.class_obj.class_name] if obj.class_obj else [])
 
 
 class CreateMissionSerializer(serializers.ModelSerializer):
     class_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    class_ids = serializers.ListField(child=serializers.UUIDField(), write_only=True, required=False, allow_empty=True)
     target_student_ids = serializers.ListField(child=serializers.UUIDField(), required=False, default=list)
     course_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    mission_kind = serializers.ChoiceField(choices=['regular', 'drill', 'wrongbook_personal'], required=False, default='regular')
+    source_type = serializers.ChoiceField(choices=['question_bank', 'handout', 'wrongbook', 'ai_recommendation', 'teacher_matrix'], required=False, default='question_bank')
 
     class Meta:
         model = LearningMission
-        fields = ['mission_name', 'goal_text', 'start_at', 'end_at', 'default_mode_policy', 'class_id', 'course_id', 'target_student_ids']
+        fields = ['mission_name', 'goal_text', 'start_at', 'end_at', 'default_mode_policy', 'class_id', 'class_ids', 'course_id', 'target_student_ids', 'mission_kind', 'source_type']
 
     def create(self, validated_data):
         class_id = validated_data.pop('class_id', None)
+        class_ids = validated_data.pop('class_ids', None)
         course_id = validated_data.pop('course_id', None)
         # JSONField stores target IDs as strings; DRF's UUIDField returns UUID
         # objects, which PostgreSQL's JSON adapter cannot serialize directly.
         validated_data['target_student_ids'] = [
             str(student_id) for student_id in validated_data.get('target_student_ids', [])
         ]
+        if not validated_data.get('start_at'):
+            from django.utils import timezone
+            validated_data['start_at'] = timezone.now()
+        validated_data['assignment_mode'] = FLAT_ASSIGNMENT_MODE
         if class_id:
             from apps.institutions.models import Class
             try:
                 validated_data['class_obj'] = Class.objects.get(pk=class_id)
             except Class.DoesNotExist:
                 pass
+        if class_ids is not None:
+            # The view performs the same validation for update requests. Keep
+            # creation atomic here so no mission can be left half-assigned.
+            from django.db import transaction
+            from apps.institutions.models import Class, ClassTeacher
+            from apps.courses.models import Course
+            request = self.context.get('request')
+            ids = list(dict.fromkeys(str(value) for value in class_ids if value))
+            classes = list(Class.objects.filter(pk__in=ids, status='active'))
+            if len(classes) != len(ids):
+                raise serializers.ValidationError({'class_ids': '存在无效或已停用的班级'})
+            if request and not all(
+                ClassTeacher.objects.filter(class_obj=cls, teacher=request.user).exists()
+                or cls.creator_teacher_id == request.user.id
+                for cls in classes
+            ):
+                raise serializers.ValidationError({'class_ids': '只能选择自己管理的班级'})
+            from .services import class_grade_in_teacher_scope
+            if request and any(not class_grade_in_teacher_scope(cls, request.user) for cls in classes):
+                raise serializers.ValidationError({'class_ids': '所选班级年级超出教师任教范围'})
+            validated_data['class_obj'] = classes[0] if classes else None
+            if course_id:
+                validated_data['course_id'] = course_id if Course.objects.filter(pk=course_id).exists() else None
+            with transaction.atomic():
+                mission = super().create(validated_data)
+                for cls in classes:
+                    MissionClassAssignment.objects.create(
+                        mission=mission, class_obj=cls,
+                        start_at=mission.start_at, end_at=mission.end_at,
+                        target_student_ids=list(mission.target_student_ids or []),
+                    )
+            return mission
         if course_id:
             from apps.courses.models import Course
             validated_data['course_id'] = course_id if Course.objects.filter(pk=course_id).exists() else None
-        if not validated_data.get('start_at'):
-            from django.utils import timezone
-            validated_data['start_at'] = timezone.now()
-        validated_data['assignment_mode'] = FLAT_ASSIGNMENT_MODE
         return super().create(validated_data)
 
 

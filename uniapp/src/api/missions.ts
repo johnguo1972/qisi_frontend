@@ -10,6 +10,10 @@ export interface Mission {
   end_at?: string
   status: string
   assignment_mode?: 'flat' | 'levels'
+  mission_kind?: 'regular' | 'drill' | 'wrongbook_personal'
+  source_type?: string
+  class_ids?: UUID[]
+  class_names?: string[]
   level_count?: number
   class_name?: string
   question_count?: number
@@ -29,7 +33,7 @@ export const missionApi = {
   list: (params?: { class_id?: UUID; subject?: string; unfinished?: boolean }) => get<Mission[]>('/missions/', params),
 
   // POST /api/v1/missions/
-  create: (data: { mission_name: string; goal_text?: string; start_at?: string; end_at?: string; class_id?: UUID | null; course_id?: UUID | null; target_student_ids?: UUID[] }) =>
+  create: (data: { mission_name: string; goal_text?: string; start_at?: string; end_at?: string; class_id?: UUID | null; class_ids?: UUID[]; course_id?: UUID | null; target_student_ids?: UUID[]; mission_kind?: string; source_type?: string }) =>
     post<{ id: UUID }>('/missions/', data),
 
   // GET /api/v1/missions/{id}/
@@ -50,6 +54,10 @@ export const missionApi = {
   // POST /api/v1/missions/{id}/questions/ - replace the flat question order
   saveQuestions: (id: UUID, question_ids: UUID[]) =>
     post<{ question_count: number }>(`/missions/${id}/questions/`, { question_ids }),
+  replaceQuestions: (id: UUID, question_ids: UUID[], source_type = 'manual_select') =>
+    post<{ question_count: number }>(`/missions/${id}/questions/replace/`, { question_ids, source_type }),
+  setKind: (id: UUID, kind: 'regular' | 'drill' | 'wrongbook_personal') =>
+    post<any>(`/missions/${id}/kind/${kind}/`),
 
   // GET /api/v1/missions/{id}/levels/<level_id>/
   levelDetail: (id: UUID, levelId: UUID) => get<any>(`/missions/${id}/levels/${levelId}/`),
@@ -74,7 +82,8 @@ export const missionApi = {
   exportPdf: (id: UUID) => get<any>(`/missions/${id}/export-pdf/`),
 
   grading: (id: UUID) => get<any>(`/missions/${id}/grading/`),
-  progress: (id: UUID) => get<any>(`/missions/${id}/progress/`),
+  progress: (id: UUID, params?: { class_id?: UUID }) => get<any>(`/missions/${id}/progress/`, params),
+  statistics: (id: UUID, params?: { class_id?: UUID }) => get<any>(`/missions/${id}/statistics/`, params),
   gradeAttempt: (id: UUID, attemptId: UUID, data: { score: number; feedback?: string }) =>
     patch<any>(`/missions/${id}/grading/attempts/${attemptId}/`, data),
   generateVariant: (id: UUID, data: { question_id: UUID; level_id: UUID; student_id: UUID; variant_mode?: string }) =>
@@ -98,4 +107,18 @@ export const missionApi = {
     post<any>('/missions/guidance/start/', data),
   guidanceReply: (sessionId: UUID, data: { user_answer: string }) =>
     post<any>(`/missions/guidance/reply/${sessionId}/`, data),
+
+  // Phase 4 teacher wrong-book matrix. New writes intentionally omit a slash.
+  wrongbookMatrix: (id: UUID, params?: { class_id?: UUID }) => get<any>(`/missions/${id}/wrongbook-matrix`, params),
+  saveWrongbookMatrix: (id: UUID, data: { version: number; cells: Array<{ student_id: UUID; source_question_id: UUID; wrong: boolean }> }) => patch<any>(`/missions/${id}/wrongbook-matrix`, data),
+  generateWrongbook: (id: UUID, data: { version: number; idempotency_key: string; cell_ids?: UUID[]; related_limit?: number }) => post<any>(`/missions/${id}/wrongbook-matrix/generate`, data),
+  wrongbookGeneration: (id: UUID, batchId: UUID) => get<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}`),
+  wrongbookHistory: (id: UUID) => get<any>(`/missions/${id}/wrongbook-matrix/history`),
+  wrongbookStudentHistory: (id: UUID, studentId: UUID) => get<any>(`/missions/${id}/wrongbook-matrix/students/${studentId}`),
+  wrongbookSummary: (id: UUID, params?: { class_id?: UUID }) => get<any>(`/missions/${id}/wrongbook-matrix/summary`, params),
+  refreshWrongbookScope: (id: UUID, data?: { class_id?: UUID }) => post<any>(`/missions/${id}/wrongbook-matrix/refresh-scope`, data || {}),
+  closeWrongbookMatrix: (id: UUID) => post<any>(`/missions/${id}/wrongbook-matrix/close`),
+  retryWrongbookGeneration: (id: UUID, batchId: UUID) => post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/retry`),
+  wrongbookRecommendations: (id: UUID, batchId: UUID, data?: { limit?: number }) => data ? post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/recommendations`, data) : get<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/recommendations`),
+  confirmWrongbookRecommendations: (id: UUID, batchId: UUID, data: { recommendation_ids: UUID[]; idempotency_key: string }) => post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/recommendations/confirm`, data),
 }

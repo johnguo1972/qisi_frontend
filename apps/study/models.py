@@ -56,6 +56,7 @@ class AnswerAttempt(models.Model):
     submit_source = models.CharField(max_length=20, default='manual')
     submitted_at = models.DateTimeField(auto_now_add=True)
     image_count = models.PositiveIntegerField(default=0)
+    idempotency_key = models.CharField(max_length=100, blank=True, default='', db_index=True)
 
     class Meta:
         db_table = 'answer_attempt'

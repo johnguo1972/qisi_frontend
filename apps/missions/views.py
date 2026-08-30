@@ -1,12 +1,14 @@
 import uuid
 import json
+from django.db import transaction
 from django.db.models import Exists, OuterRef, Q
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from apps.accounts.permissions import IsTeacherSession
-from .models import LearningMission, MissionLevel, MissionQuestionRel
+from .models import LearningMission, MissionLevel, MissionQuestionRel, MissionClassAssignment
 from apps.study.models import AnswerAttempt
 from apps.institutions.models import ClassStudent
 from apps.parser.models import ExamQuestion, QuestionImage, QuestionOption
@@ -22,8 +24,11 @@ from .serializers import (
 from .services import (
     FLAT_ASSIGNMENT_MODE,
     assignment_levels,
+    class_grade_in_teacher_scope,
     close_stale_missions,
     ensure_flat_assignment_level,
+    ordered_mission_question_rels,
+    question_no_sort_key,
 )
 from .pdf_service import ensure_mission_pdf, mission_pdf_download_url
 
@@ -32,13 +37,50 @@ def make_trace_id():
     return uuid.uuid4().hex[:16]
 
 
-def _mission_student_ids(mission):
-    """Return active students assigned to the mission, honoring targeted students."""
+def _mission_assignments(mission, active_only=True):
+    """Return new class assignments, falling back to the legacy class field."""
+    query = mission.class_assignments.filter(status='active') if active_only else mission.class_assignments.all()
+    assignments = list(query.select_related('class_obj'))
+    if assignments:
+        return assignments
+    return [mission] if mission.class_obj_id else []
+
+
+def _managed_class_ids(user):
+    from apps.institutions.models import ClassTeacher, Class
+    return set(ClassTeacher.objects.filter(teacher=user).values_list('class_obj_id', flat=True)) | set(
+        Class.objects.filter(creator_teacher=user).values_list('id', flat=True)
+    )
+
+
+def _validate_mission_classes(user, class_ids, course=None):
+    from apps.institutions.models import Class
+    ids = list(dict.fromkeys(str(value) for value in (class_ids or []) if value))
+    classes = list(Class.objects.filter(pk__in=ids, status='active'))
+    if len(classes) != len(ids):
+        return None, '存在无效或已停用的班级'
+    managed = {str(value) for value in _managed_class_ids(user)}
+    if any(str(cls.id) not in managed for cls in classes):
+        return None, '只能选择自己管理的班级'
+    if course and course.institution_id and any(cls.institution_id != course.institution_id for cls in classes):
+        return None, '班级与课程所属机构不一致'
+    if any(not class_grade_in_teacher_scope(cls, user) for cls in classes):
+        return None, '所选班级年级超出教师任教范围'
+    return classes, None
+
+
+def _mission_student_ids(mission, class_id=None):
+    """Return active students assigned to the mission, honoring per-class targets."""
     from apps.institutions.models import ClassStudent
     from apps.accounts.models import UserAccount
 
     targets = {str(student_id) for student_id in (mission.target_student_ids or [])}
-    if not mission.class_obj_id:
+    assignments = _mission_assignments(mission)
+    if class_id:
+        assignments = [item for item in assignments if str(getattr(item, 'class_obj_id', '')) == str(class_id)]
+        if not assignments:
+            return UserAccount.objects.none().values_list('id', flat=True)
+    if not assignments:
         if not targets:
             return UserAccount.objects.none().values_list('id', flat=True)
         return UserAccount.objects.filter(
@@ -49,12 +91,16 @@ def _mission_student_ids(mission):
             Q(role_grants__role='student', role_grants__status='active'),
         ).distinct().values_list('id', flat=True)
 
-    students = ClassStudent.objects.filter(
-        class_obj_id=mission.class_obj_id, status='active',
-    ).values_list('student_id', flat=True)
-    if targets:
-        students = students.filter(student_id__in=targets)
-    return students
+    student_ids = set()
+    for assignment in assignments:
+        class_id = getattr(assignment, 'class_obj_id', None)
+        class_targets = {str(value) for value in (getattr(assignment, 'target_student_ids', None) or [])}
+        query = ClassStudent.objects.filter(class_obj_id=class_id, status='active')
+        effective_targets = class_targets or targets
+        if effective_targets:
+            query = query.filter(student_id__in=effective_targets)
+        student_ids.update(str(value) for value in query.values_list('student_id', flat=True))
+    return UserAccount.objects.filter(id__in=student_ids, status='active').values_list('id', flat=True)
 
 
 @api_view(['POST'])
@@ -114,13 +160,9 @@ def mission_grading(request, mission_id):
         mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
     except LearningMission.DoesNotExist:
         return Response({'code': 404, 'message': 'mission not found'}, status=404)
-    students = ClassStudent.objects.filter(
-        class_obj_id=mission.class_obj_id, status='active',
-    ).select_related('student') if mission.class_obj_id else ClassStudent.objects.none()
-    target_ids = {str(value) for value in (mission.target_student_ids or [])}
-    if target_ids:
-        students = students.filter(student_id__in=target_ids)
-    student_ids = list(students.values_list('student_id', flat=True))
+    student_ids = list(_mission_student_ids(mission))
+    from apps.accounts.models import UserAccount
+    students = UserAccount.objects.filter(id__in=student_ids, status='active').order_by('display_name', 'mobile')
     attempts = AnswerAttempt.objects.filter(mission=mission, student_user_id__in=student_ids).order_by('student_user_id', '-submitted_at')
     question_ids = {str(attempt.question_id) for attempt in attempts}
     question_map = {
@@ -144,8 +186,8 @@ def mission_grading(request, mission_id):
         })
     return Response({'code': 0, 'data': {
         'students': [{
-            'id': str(row.student_id), 'name': row.student.display_name, 'mobile': row.student.mobile,
-        } for row in students],
+            'id': str(student.id), 'name': student.display_name, 'mobile': student.mobile,
+        } for student in students],
         'attempts': attempt_rows,
     }})
 
@@ -153,7 +195,7 @@ def mission_grading(request, mission_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def mission_progress(request, mission_id):
-    """Return overall completion progress for every student assigned to a mission."""
+    """Return progress using the latest valid attempt for each required question."""
     from apps.accounts.models import UserAccount
     from apps.study.models import StudentMissionProgress
 
@@ -164,60 +206,126 @@ def mission_progress(request, mission_id):
     except LearningMission.DoesNotExist:
         return Response({'code': 404, 'message': 'mission not found'}, status=404)
 
-    target_ids = {str(value) for value in (mission.target_student_ids or [])}
-    if mission.class_obj_id:
-        assigned = ClassStudent.objects.filter(
-            class_obj_id=mission.class_obj_id, status='active',
-        )
-        if target_ids:
-            assigned = assigned.filter(student_id__in=target_ids)
-        student_ids = list(assigned.values_list('student_id', flat=True))
-    else:
-        student_ids = list(UserAccount.objects.filter(
-            id__in=target_ids, status='active',
-        ).filter(
-            Q(role_type='student') |
-            Q(role_grants__role='student', role_grants__status='active'),
-        ).distinct().values_list('id', flat=True))
-
-    students = UserAccount.objects.filter(id__in=student_ids).order_by('display_name', 'mobile')
+    class_id = request.GET.get('class_id', '').strip()
+    all_assignments = _mission_assignments(mission)
+    if class_id and not any(str(item.class_obj_id) == class_id for item in all_assignments):
+        return Response({'code': 404, 'message': '班级任务不存在', 'data': None}, status=404)
+    assignments = [item for item in all_assignments if not class_id or str(item.class_obj_id) == class_id]
+    student_ids = list(_mission_student_ids(mission, class_id=class_id or None))
+    students = UserAccount.objects.filter(id__in=student_ids, status='active').order_by('display_name', 'mobile')
+    rels = [rel for rel in ordered_mission_question_rels(mission) if rel.is_required]
+    # Legacy level-only records may not have flat relations. Preserve their
+    # established progress contract while still returning every student.
+    if not rels:
+        progress_by_student = {
+            str(progress.student_user_id_id): progress
+            for progress in StudentMissionProgress.objects.filter(mission=mission, student_user_id__in=student_ids)
+        }
+        rows = []
+        completed = 0
+        for student in students:
+            progress = progress_by_student.get(str(student.id))
+            progress_status = progress.progress_status if progress else 'not_started'
+            progress_percent = float(progress.progress_percent) if progress else 0.0
+            if progress_status in ('completed', 'passed'):
+                completed += 1
+            rows.append({
+                'student_id': str(student.id), 'student_name': student.display_name or student.mobile,
+                'mobile': student.mobile, 'progress_status': progress_status,
+                'progress_percent': progress_percent, 'last_action_at': progress.last_action_at if progress else None,
+            })
+        total = len(rows)
+        return Response({'code': 0, 'data': {
+            'mission_id': str(mission.id), 'mission_name': mission.mission_name,
+            'mission_status': mission.status,
+            'class_id': class_id or None,
+            'class_name': '、'.join(item.class_obj.class_name for item in assignments if getattr(item, 'class_obj', None)) or None,
+            'summary': {'completed': completed, 'total': total, 'unfinished': max(total - completed, 0), 'percent': round(completed / total * 100, 2) if total else 0},
+            'students': rows,
+        }})
+    question_ids = {str(rel.question_id) for rel in rels}
+    attempts = AnswerAttempt.objects.filter(
+        mission=mission, student_user_id__in=student_ids, question_id__in=question_ids,
+    ).exclude(submit_source='draft').order_by('student_user_id', 'question_id', '-submitted_at', '-attempt_no')
+    latest = {}
+    for attempt in attempts:
+        key = (str(attempt.student_user_id_id), str(attempt.question_id))
+        latest.setdefault(key, attempt)
     progress_by_student = {
         str(progress.student_user_id_id): progress
-        for progress in StudentMissionProgress.objects.filter(
-            mission=mission, student_user_id__in=student_ids,
-        )
+        for progress in StudentMissionProgress.objects.filter(mission=mission, student_user_id__in=student_ids)
     }
-    completed_statuses = {'completed', 'passed'}
+    now = timezone.now()
+    end_at = mission.end_at
     rows = []
-    completed = 0
+    counts = {'not_started': 0, 'in_progress': 0, 'submitted': 0, 'graded': 0}
     for student in students:
-        progress = progress_by_student.get(str(student.id))
-        progress_status = progress.progress_status if progress else 'not_started'
-        progress_percent = float(progress.progress_percent) if progress else 0.0
-        if progress_status in completed_statuses:
-            completed += 1
+        sid = str(student.id)
+        student_attempts = [attempt for (student_key, _), attempt in latest.items() if student_key == sid]
+        answered_count = len(student_attempts)
+        submitted_count = sum(1 for attempt in student_attempts if attempt.submit_source != 'draft')
+        subjective_pending = sum(1 for attempt in student_attempts if attempt.is_subjective_pending)
+        correct_count = sum(1 for attempt in student_attempts if attempt.is_correct and not attempt.is_subjective_pending)
+        objective_count = submitted_count - subjective_pending
+        question_count = len(rels)
+        percent = round(submitted_count / question_count * 100, 2) if question_count else 0
+        if submitted_count == 0:
+            base_status = 'not_started'
+        elif submitted_count >= question_count:
+            base_status = 'submitted' if subjective_pending else 'graded'
+        else:
+            base_status = 'in_progress'
+        overdue = bool(end_at and now > end_at and base_status not in ('graded', 'submitted'))
+        progress = progress_by_student.get(sid)
+        last_action = max((attempt.submitted_at for attempt in student_attempts), default=(progress.last_action_at if progress else None))
+        counts[base_status] += 1
         rows.append({
-            'student_id': str(student.id),
+            'student_id': sid,
             'student_name': student.display_name or student.mobile,
             'mobile': student.mobile,
-            'progress_status': progress_status,
-            'progress_percent': progress_percent,
-            'last_action_at': progress.last_action_at if progress else None,
+            'status': base_status,
+            'progress_status': base_status,
+            'progress_percent': percent,
+            'answered_count': answered_count,
+            'question_count': question_count,
+            'correct_count': correct_count,
+            'accuracy': round(correct_count / objective_count * 100, 2) if objective_count else 0,
+            'submitted_at': max((attempt.submitted_at for attempt in student_attempts), default=None),
+            'graded_at': max((attempt.submitted_at for attempt in student_attempts if not attempt.is_subjective_pending), default=None) if subjective_pending == 0 and submitted_count else None,
+            'last_action_at': last_action,
+            'overdue': overdue,
         })
-
-    total = len(rows)
+    status_filter = request.GET.get('status', '').strip()
+    keyword = request.GET.get('keyword', '').strip().lower()
+    if status_filter:
+        rows = [row for row in rows if row['status'] == status_filter or (status_filter == 'overdue' and row['overdue'])]
+    if keyword:
+        rows = [row for row in rows if keyword in (row['student_name'] or '').lower() or keyword in (row['mobile'] or '')]
+    total = len(students)
+    visible_total = len(rows)
+    graded = counts['graded']
+    submitted = counts['submitted']
     return Response({'code': 0, 'data': {
         'mission_id': str(mission.id),
         'mission_name': mission.mission_name,
         'mission_status': mission.status,
-        'class_name': mission.class_obj.class_name if mission.class_obj else None,
+        'class_id': class_id or None,
+        'class_name': '、'.join(cls.class_name for item in assignments for cls in [item.class_obj] if cls) or None,
+        'class_names': [item.class_obj.class_name for item in assignments if getattr(item, 'class_obj', None)],
         'summary': {
-            'completed': completed,
+            'not_started': counts['not_started'],
+            'in_progress': counts['in_progress'],
+            'submitted': submitted,
+            'graded': graded,
+            'completed': graded,
             'total': total,
-            'unfinished': max(total - completed, 0),
-            'percent': round(completed / total * 100, 2) if total else 0,
+            'unfinished': max(total - graded - submitted, 0),
+            'completion_rate': round((graded + submitted) / total * 100, 2) if total else 0,
+            'percent': round((graded + submitted) / total * 100, 2) if total else 0,
         },
         'students': rows,
+        'filters': {'status': status_filter or None, 'keyword': keyword or None},
+        'total': visible_total,
     }})
 
 
@@ -246,6 +354,11 @@ def mission_grade_attempt(request, mission_id, attempt_id):
     attempt.is_correct = score >= 60
     attempt.is_subjective_pending = False
     attempt.save(update_fields=['answer_content', 'score', 'is_correct', 'is_subjective_pending'])
+    # Keep the grading endpoint decoupled from study imports at module load
+    # time; the local import also avoids a missions/study circular import.
+    from apps.study.answer_views import _update_mission_progress
+
+    _update_mission_progress(attempt.mission, attempt.student_user_id, final=True)
     return Response({'code': 0, 'data': {'id': str(attempt.id), 'score': score, 'is_correct': attempt.is_correct}})
 
 
@@ -289,10 +402,10 @@ def mission_list(request):
         close_stale_missions()
         missions = LearningMission.objects.filter(
             creator_teacher_id=user
-        ).select_related('course', 'class_obj').order_by('-created_at')
+        ).select_related('course', 'class_obj').prefetch_related('class_assignments__class_obj').order_by('-created_at')
         class_id = request.GET.get('class_id')
         if class_id:
-            missions = missions.filter(class_obj_id=class_id)
+            missions = missions.filter(Q(class_obj_id=class_id) | Q(class_assignments__class_obj_id=class_id)).distinct()
         subject = request.GET.get('subject', '').strip()
         if subject:
             subject_values = subject_filter_values(subject)
@@ -317,12 +430,36 @@ def mission_list(request):
         })
 
     # POST: create
-    serializer = CreateMissionSerializer(data=request.data)
+    serializer = CreateMissionSerializer(data=request.data, context={'request': request})
     serializer.is_valid(raise_exception=True)
-    mission = serializer.save(creator_teacher_id=user)
+    class_ids = request.data.get('class_ids')
+    if class_ids is None and request.data.get('class_id'):
+        class_ids = [request.data.get('class_id')]
+    course = serializer.validated_data.get('course_id')
+    if course:
+        from apps.courses.models import Course
+        course = Course.objects.filter(pk=course).first()
+    classes, error = _validate_mission_classes(user, class_ids, course)
+    if error:
+        return Response({'code': 403, 'message': error, 'data': None, 'trace_id': make_trace_id()}, status=403)
+    try:
+        with transaction.atomic():
+            mission = serializer.save(creator_teacher_id=user)
+            # The serializer creates relations for the new class_ids contract.
+            # Legacy class_id requests need the same relation for consistent reads.
+            if classes and not mission.class_assignments.filter(status='active').exists():
+                for cls in classes:
+                    MissionClassAssignment.objects.create(
+                        mission=mission, class_obj=cls,
+                        start_at=mission.start_at, end_at=mission.end_at,
+                        target_student_ids=list(mission.target_student_ids or []),
+                    )
+    except Exception:
+        raise
     return Response({
         'code': 0, 'message': '创建成功',
-        'data': {'id': mission.id, 'mission_no': mission.mission_no},
+        'data': {'id': mission.id, 'mission_no': mission.mission_no,
+                 'class_ids': [str(cls.id) for cls in classes or []]},
         'trace_id': make_trace_id(),
     }, status=status.HTTP_201_CREATED)
 
@@ -346,7 +483,18 @@ def mission_detail(request, mission_id):
         })
 
     # PUT: update
-    for field in ['mission_name', 'goal_text', 'start_at', 'end_at', 'default_mode_policy', 'assignment_mode']:
+    requested_class_ids = request.data.get('class_ids')
+    if requested_class_ids is None and 'class_id' in request.data:
+        requested_class_ids = [request.data.get('class_id')] if request.data.get('class_id') else []
+    if requested_class_ids is not None:
+        from apps.courses.models import Course
+        course = Course.objects.filter(pk=request.data.get('course_id') or mission.course_id).first()
+        classes, error = _validate_mission_classes(request.user, requested_class_ids, course)
+        if error:
+            return Response({'code': 403, 'message': error, 'data': None, 'trace_id': make_trace_id()}, status=403)
+    else:
+        classes = None
+    for field in ['mission_name', 'goal_text', 'start_at', 'end_at', 'default_mode_policy', 'assignment_mode', 'mission_kind', 'source_type']:
         if field in request.data:
             val = request.data[field]
             # 空字符串转 None（Django DateTimeField 不接受空字符串）
@@ -354,6 +502,10 @@ def mission_detail(request, mission_id):
                 val = None
             if field == 'assignment_mode' and val not in ('flat', 'levels'):
                 return Response({'code': 400, 'message': 'assignment_mode 无效', 'data': None, 'trace_id': make_trace_id()}, status=400)
+            if field == 'mission_kind' and val not in ('regular', 'drill', 'wrongbook_personal'):
+                return Response({'code': 400, 'message': 'mission_kind 无效', 'data': None, 'trace_id': make_trace_id()}, status=400)
+            if field == 'source_type' and val not in ('question_bank', 'handout', 'wrongbook', 'ai_recommendation', 'teacher_matrix'):
+                return Response({'code': 400, 'message': 'source_type 无效', 'data': None, 'trace_id': make_trace_id()}, status=400)
             setattr(mission, field, val)
     if 'target_student_ids' in request.data:
         mission.target_student_ids = request.data.get('target_student_ids') or []
@@ -373,40 +525,36 @@ def mission_detail(request, mission_id):
 
     mission.save()
 
-    # Sync StudentMissionProgress if class changed
-    new_class_id = mission.class_obj_id
-    if old_class_id != new_class_id:
-        from apps.institutions.models import ClassStudent
-        from apps.study.models import StudentMissionProgress
-
-        if old_class_id:
-            # Remove progress records for students no longer in this class
-            old_student_ids = set(ClassStudent.objects.filter(
-                class_obj_id=old_class_id, status='active',
-            ).values_list('student_id', flat=True))
-            if new_class_id:
-                new_student_ids = set(ClassStudent.objects.filter(
-                    class_obj_id=new_class_id, status='active',
-                ).values_list('student_id', flat=True))
-                removed_ids = old_student_ids - new_student_ids
+    if classes is not None:
+        current = {str(item.class_obj_id): item for item in mission.class_assignments.all()}
+        desired = {str(cls.id): cls for cls in classes}
+        for class_id, assignment in current.items():
+            if class_id not in desired and assignment.status != 'removed':
+                assignment.status = 'removed'
+                assignment.save(update_fields=['status', 'updated_at'])
+        for class_id, cls in desired.items():
+            assignment = current.get(class_id)
+            if assignment:
+                assignment.status = 'active'
+                assignment.start_at = mission.start_at
+                assignment.end_at = mission.end_at
+                assignment.target_student_ids = list(mission.target_student_ids or [])
+                assignment.save(update_fields=['status', 'start_at', 'end_at', 'target_student_ids', 'updated_at'])
             else:
-                removed_ids = old_student_ids
-            StudentMissionProgress.objects.filter(
-                mission=mission, student_user_id__in=removed_ids,
-            ).delete()
-
-        if new_class_id:
-            # Create progress records for new students in the class
-            new_student_ids = _mission_student_ids(mission)
-            for student_id in new_student_ids:
-                StudentMissionProgress.objects.get_or_create(
-                    mission=mission,
-                    student_user_id_id=student_id,
-                    defaults={
-                        'progress_status': 'not_started',
-                        'progress_percent': 0,
-                    },
+                MissionClassAssignment.objects.create(
+                    mission=mission, class_obj=cls, start_at=mission.start_at,
+                    end_at=mission.end_at, target_student_ids=list(mission.target_student_ids or []),
                 )
+
+    # Keep progress rows for history, and add rows for newly assigned students.
+    # This works for both a legacy class change and a multi-class update.
+    if classes is not None or old_class_id != mission.class_obj_id:
+        from apps.study.models import StudentMissionProgress
+        for student_id in _mission_student_ids(mission):
+            StudentMissionProgress.objects.get_or_create(
+                mission=mission, student_user_id_id=student_id,
+                defaults={'progress_status': 'not_started', 'progress_percent': 0},
+            )
     return Response({'code': 0, 'message': '更新成功', 'data': None, 'trace_id': make_trace_id()})
 
 
@@ -527,7 +675,7 @@ def mission_questions(request, mission_id):
 
     if request.method == 'GET':
         from apps.study.serializers import QuestionListSerializer
-        rels = list(MissionQuestionRel.objects.filter(mission=mission).order_by('sort_no', 'id'))
+        rels = ordered_mission_question_rels(mission)
         question_map = {
             str(question.id): question
             for question in ExamQuestion.objects.filter(id__in=[rel.question_id for rel in rels])
@@ -542,7 +690,17 @@ def mission_questions(request, mission_id):
     if 'question_ids' in request.data and 'level_id' not in request.data:
         serializer = FlatQuestionsSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        question_ids = serializer.validated_data['question_ids']
+        question_ids = list(dict.fromkeys(serializer.validated_data['question_ids']))
+        questions = list(ExamQuestion.objects.filter(pk__in=question_ids))
+        if len(questions) != len(question_ids):
+            return Response({'code': 400, 'message': '存在不存在的题目', 'data': None, 'trace_id': make_trace_id()}, status=400)
+        from apps.study.question_views import _teacher_question_scope_error
+        for question in questions:
+            scope_error = _teacher_question_scope_error(request, question)
+            if scope_error:
+                return scope_error
+        question_map = {str(question.id): question for question in questions}
+        question_ids.sort(key=lambda question_id: question_no_sort_key(question_map[str(question_id)].question_no))
         level = ensure_flat_assignment_level(mission)
         MissionQuestionRel.objects.filter(mission=mission).delete()
         for sort_no, question_id in enumerate(question_ids, start=1):
@@ -552,6 +710,7 @@ def mission_questions(request, mission_id):
                 question_id=question_id,
                 sort_no=sort_no,
                 is_required=True,
+                source_type=request.data.get('source_type', 'manual_select'),
             )
 
         mission.assignment_mode = FLAT_ASSIGNMENT_MODE
@@ -570,15 +729,50 @@ def mission_questions(request, mission_id):
             'code': 400, 'message': '关卡不属于当前任务', 'data': None, 'trace_id': make_trace_id(),
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    for i, qid in enumerate(data['question_ids']):
+    question_rows = []
+    for qid in data['question_ids']:
+        try:
+            question = ExamQuestion.objects.get(pk=qid)
+        except ExamQuestion.DoesNotExist:
+            return Response({'code': 400, 'message': f'题目不存在: {qid}', 'data': None, 'trace_id': make_trace_id()}, status=400)
+        from apps.study.question_views import _teacher_question_scope_error
+        scope_error = _teacher_question_scope_error(request, question)
+        if scope_error:
+            return scope_error
+        question_rows.append((qid, question))
+    question_rows.sort(key=lambda row: question_no_sort_key(row[1].question_no))
+    for i, (qid, question) in enumerate(question_rows):
         MissionQuestionRel.objects.create(
             mission=mission,
             level=level,
             question_id=qid,
             sort_no=i,
             is_required=data['is_required'],
+            source_type=request.data.get('source_type', 'manual_select'),
         )
     return Response({'code': 0, 'message': '题目添加成功', 'data': None, 'trace_id': make_trace_id()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
+def mission_set_kind(request, mission_id, kind):
+    """Set the teacher assignment kind; drill remains in the mission domain."""
+    if kind not in ('regular', 'drill', 'wrongbook_personal'):
+        return Response({'code': 400, 'message': '作业类型无效', 'data': None, 'trace_id': make_trace_id()}, status=400)
+    try:
+        mission = LearningMission.objects.get(pk=mission_id, creator_teacher_id=request.user)
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': '任务不存在', 'data': None, 'trace_id': make_trace_id()}, status=404)
+    mission.mission_kind = kind
+    source_type = request.data.get('source_type') or 'question_bank'
+    if source_type not in ('question_bank', 'handout', 'wrongbook', 'ai_recommendation', 'teacher_matrix'):
+        return Response({'code': 400, 'message': 'source_type 无效', 'data': None, 'trace_id': make_trace_id()}, status=400)
+    mission.source_type = source_type
+    mission.save(update_fields=['mission_kind', 'source_type', 'updated_at'])
+    return Response({'code': 0, 'message': '作业类型已设置', 'data': {
+        'mission_id': str(mission.id), 'mission_kind': mission.mission_kind,
+        'source_type': mission.source_type,
+    }, 'trace_id': make_trace_id()})
 
 
 @api_view(['GET'])
@@ -599,7 +793,7 @@ def mission_level_detail(request, mission_id, level_id):
             'code': 404, 'message': '关卡不存在', 'data': None, 'trace_id': make_trace_id(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    rels = MissionQuestionRel.objects.filter(level=level).order_by('sort_no')
+    rels = [rel for rel in ordered_mission_question_rels(mission) if rel.level_id == level.id]
     questions = []
     for rel in rels:
         try:
@@ -662,6 +856,20 @@ def mission_publish(request, mission_id):
 
     if mission.status == 'closed':
         return Response({'code': 400, 'message': '作业已自动关闭，不能发布', 'data': None, 'trace_id': make_trace_id()}, status=400)
+    # Materialize the legacy class field into the relation before validating
+    # publication. This is also safe for old missions created before P1.
+    if mission.class_obj_id and not mission.class_assignments.filter(status='active').exists():
+        MissionClassAssignment.objects.create(
+            mission=mission, class_obj=mission.class_obj,
+            start_at=mission.start_at, end_at=mission.end_at,
+            target_student_ids=list(mission.target_student_ids or []),
+        )
+    assignments = _mission_assignments(mission)
+    from apps.courses.models import Course
+    course = Course.objects.filter(pk=mission.course_id).first() if mission.course_id else None
+    classes, error = _validate_mission_classes(request.user, [a.class_obj_id for a in assignments], course)
+    if error:
+        return Response({'code': 403, 'message': error, 'data': None, 'trace_id': make_trace_id()}, status=403)
     # The simplified flow must have a completion date and at least one
     # question. Legacy level assignments keep the old publish contract.
     if mission.assignment_mode == FLAT_ASSIGNMENT_MODE:
@@ -669,7 +877,7 @@ def mission_publish(request, mission_id):
             return Response({'code': 400, 'message': '请设置完成日期', 'data': None, 'trace_id': make_trace_id()}, status=400)
         if not MissionQuestionRel.objects.filter(mission=mission).exists():
             return Response({'code': 400, 'message': '请至少选择一道题目', 'data': None, 'trace_id': make_trace_id()}, status=400)
-        if not mission.class_obj_id and not (mission.target_student_ids or []):
+        if not assignments and not (mission.target_student_ids or []):
             return Response({'code': 400, 'message': '请先选择班级或指定学生', 'data': None, 'trace_id': make_trace_id()}, status=400)
 
     # Generate before changing the status so a missing PDF dependency or an
@@ -681,30 +889,38 @@ def mission_publish(request, mission_id):
     except ValueError as exc:
         return Response({'code': 400, 'message': str(exc), 'data': None, 'trace_id': make_trace_id()}, status=400)
 
-    mission.status = 'published'
-    mission.save(update_fields=['status', 'updated_at'])
-    # 作业发布后立即建立幂等的作业短码，二维码端只读取该唯一来源。
-    from apps.qrcode.services import ensure_mission_short_code
-    short_code = ensure_mission_short_code(mission)
-
-    # Create progress records for class members or explicitly targeted students.
-    created_count = 0
+    # Publication and progress creation must be all-or-nothing. PDF generation
+    # intentionally happens before this transaction because it is external I/O.
     from apps.study.models import StudentMissionProgress
-    student_ids = _mission_student_ids(mission)
-    for student_id in student_ids:
-        _, created = StudentMissionProgress.objects.get_or_create(
-            mission=mission,
-            student_user_id_id=student_id,
-            defaults={
-                'progress_status': 'not_started',
-                'progress_percent': 0,
-            },
-        )
-        created_count += int(created)
+    from apps.qrcode.services import ensure_mission_short_code, ensure_mission_short_codes
+    with transaction.atomic():
+        mission.status = 'published'
+        mission.save(update_fields=['status', 'updated_at'])
+        short_codes = ensure_mission_short_codes(mission)
+        short_code = short_codes[0]
+        created_count = 0
+        for student_id in _mission_student_ids(mission):
+            _, created = StudentMissionProgress.objects.get_or_create(
+                mission=mission, student_user_id_id=student_id,
+                defaults={'progress_status': 'not_started', 'progress_percent': 0},
+            )
+            created_count += int(created)
+        assignment_result = [{
+            'class_id': str(item.class_obj_id),
+            'class_name': item.class_obj.class_name,
+            'student_count': ClassStudent.objects.filter(
+                class_obj_id=item.class_obj_id, status='active',
+            ).count(),
+            'status': item.status,
+            'error': None,
+        } for item in assignments]
+        for row, code in zip(assignment_result, short_codes):
+            row['short_code'] = code.short_code
 
     return Response({
         'code': 0, 'message': '发布成功',
-        'data': {'students_notified': created_count, 'short_code': short_code.short_code},
+        'data': {'students_notified': created_count, 'short_code': short_code.short_code,
+                 'classes': assignment_result},
         'trace_id': make_trace_id(),
     })
 
@@ -728,6 +944,8 @@ def mission_clone(request, mission_id):
         end_at=original.end_at,
         default_mode_policy=original.default_mode_policy,
         assignment_mode=original.assignment_mode,
+        mission_kind=original.mission_kind,
+        source_type=original.source_type,
         class_obj=original.class_obj,
         target_student_ids=list(original.target_student_ids or []),
         course=original.course,
@@ -743,7 +961,14 @@ def mission_clone(request, mission_id):
             MissionQuestionRel.objects.create(
                 mission=clone, level=new_level, question_id=rel.question_id,
                 sort_no=rel.sort_no, is_required=rel.is_required,
+                source_type=rel.source_type, target_student_ids=list(rel.target_student_ids or []),
             )
+    for assignment in original.class_assignments.filter(status='active'):
+        MissionClassAssignment.objects.create(
+            mission=clone, class_obj=assignment.class_obj,
+            start_at=assignment.start_at, end_at=assignment.end_at,
+            target_student_ids=list(assignment.target_student_ids or []),
+        )
     return Response({
         'code': 0, 'message': '复制成功',
         'data': {'id': clone.id}, 'trace_id': make_trace_id(),
@@ -792,6 +1017,14 @@ def mission_clone_with_class(request, mission_id):
         end_at=request.data.get('end_at'),  # Required for homework
         default_mode_policy=original.default_mode_policy,
         assignment_mode=original.assignment_mode,
+        mission_kind=original.mission_kind,
+        source_type=original.source_type,
+        target_student_ids=list(original.target_student_ids or []),
+    )
+    MissionClassAssignment.objects.create(
+        mission=clone, class_obj=target_class,
+        start_at=clone.start_at, end_at=clone.end_at,
+        target_student_ids=list(clone.target_student_ids or []),
     )
 
     # Clone levels and questions
@@ -805,6 +1038,7 @@ def mission_clone_with_class(request, mission_id):
             MissionQuestionRel.objects.create(
                 mission=clone, level=new_level, question_id=rel.question_id,
                 sort_no=rel.sort_no, is_required=rel.is_required,
+                source_type=rel.source_type, target_student_ids=list(rel.target_student_ids or []),
             )
 
     return Response({

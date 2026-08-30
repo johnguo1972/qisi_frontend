@@ -23,6 +23,12 @@
           />
         </view>
         <view class="form-item">
+          <text class="form-label">班级年级</text>
+          <picker :range="gradeOptions" :value="gradeIndex" @change="gradeIndex = Number($event.detail.value); form.grade_level = gradeOptions[gradeIndex] || ''">
+            <view class="picker-display">{{ form.grade_level || '请选择年级（可选）' }}</view>
+          </picker>
+        </view>
+        <view class="form-item">
           <text class="form-label">班级描述</text>
           <textarea
             class="form-textarea"
@@ -65,6 +71,7 @@ import { classApi, teacherApi } from '@/api/index.ts'
 interface CreateForm {
   institution_id: number
   class_name: string
+  grade_level: string
   description: string
   max_students: number
   allow_invite_join: boolean
@@ -84,10 +91,17 @@ const institutionLabels = computed(() => institutions.value.map(i => i.instituti
 const form = reactive<CreateForm>({
   institution_id: 0,
   class_name: '',
+  grade_level: '',
   description: '',
   max_students: 0,
   allow_invite_join: true,
 })
+
+const gradeOptions = [
+  '一年级', '二年级', '三年级', '四年级', '五年级', '六年级',
+  '七年级', '八年级', '九年级', '高一', '高二', '高三',
+]
+const gradeIndex = ref(-1)
 
 onLoad(async () => {
   try {
@@ -122,6 +136,7 @@ async function handleSubmit() {
     const res: any = await classApi.create({
       institution_id: form.institution_id,
       class_name: form.class_name.trim(),
+      grade_level: form.grade_level || undefined,
       description: form.description.trim() || undefined,
       max_students: form.max_students || 0,
       allow_invite_join: form.allow_invite_join,

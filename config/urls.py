@@ -17,6 +17,7 @@ urlpatterns = [
     path('api/v1/', include('apps.institutions.urls')),
     path('api/v1/', include('apps.review.urls')),  # Review API (before questions)
     path('api/v1/', include('apps.courses.urls')),  # Courses API
+    path('api/v1/', include('apps.handouts.urls')),  # P2 handout API
     path('api/v1/papers/', include('apps.papers.urls')),  # Papers API
     path('api/papers/', include('apps.papers.urls')),  # Legacy papers API compatibility
     path('api/v1/questions/', include('apps.study.urls')),
