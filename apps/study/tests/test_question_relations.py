@@ -2,13 +2,14 @@ from decimal import Decimal
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 
 from apps.accounts.models import UserAccount
 from apps.papers.models import ExamPaper
 from apps.parser.models import ExamQuestion
 from apps.study.models import QuestionRelation
 from apps.study.question_relation_service import (
+    canonical_question_pair,
     find_relation_candidates,
     knowledge_point_keys,
 )
@@ -152,3 +153,24 @@ def test_relation_cannot_point_to_itself_or_duplicate_pair(teacher, questions):
 
     with pytest.raises(IntegrityError):
         QuestionRelation.create_for_questions(questions['id_match'], questions['origin'], teacher)
+
+
+@pytest.mark.django_db
+def test_relation_database_rejects_self_and_reverse_pairs_bypassing_the_factory(teacher, questions):
+    left, right = canonical_question_pair(questions['origin'], questions['id_match'])
+
+    with transaction.atomic():
+        with pytest.raises(IntegrityError):
+            QuestionRelation.objects.create(
+                question_left=right,
+                question_right=left,
+                created_by=teacher,
+            )
+
+    with transaction.atomic():
+        with pytest.raises(IntegrityError):
+            QuestionRelation.objects.create(
+                question_left=left,
+                question_right=left,
+                created_by=teacher,
+            )

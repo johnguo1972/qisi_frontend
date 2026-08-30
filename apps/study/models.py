@@ -1,6 +1,6 @@
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import Q
+from django.db.models import F, Q
 import uuid_utils.compat as uuid_compat
 from apps.accounts.models import UserAccount
 from apps.missions.models import LearningMission, MissionLevel
@@ -188,6 +188,10 @@ class QuestionRelation(models.Model):
             models.UniqueConstraint(
                 fields=['question_left', 'question_right'],
                 name='uq_question_relation_pair',
+            ),
+            models.CheckConstraint(
+                condition=Q(question_left__lt=F('question_right')),
+                name='ck_question_relation_canonical_pair',
             ),
         ]
 

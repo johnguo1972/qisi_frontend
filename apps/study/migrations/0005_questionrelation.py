@@ -26,7 +26,10 @@ class Migration(migrations.Migration):
             ],
             options={
                 'db_table': 'tiku_question_relation',
-                'constraints': [models.UniqueConstraint(fields=('question_left', 'question_right'), name='uq_question_relation_pair')],
+                'constraints': [
+                    models.UniqueConstraint(fields=('question_left', 'question_right'), name='uq_question_relation_pair'),
+                    models.CheckConstraint(condition=models.Q(('question_left__lt', models.F('question_right'))), name='ck_question_relation_canonical_pair'),
+                ],
             },
         ),
     ]
