@@ -32,82 +32,93 @@
       <!-- Center: Question list -->
       <view class="question-panel">
         <view class="panel-header">
-          <text class="panel-title">习题列表</text>
+          <view>
+            <text class="panel-title">习题列表</text>
+            <text class="total-count">（{{ total }} 题）</text>
+          </view>
           <view class="header-actions">
             <button class="btn-action" size="mini" @click="showAddPanel">+ 新增习题</button>
-            <button class="btn-action" size="mini" type="warning" @click="goAssignMission">布置作业</button>
-            <button class="btn-action" size="mini" type="primary" @click="batchAiProcess" :disabled="selectedIds.length === 0 || batchAiProcessing" :loading="batchAiProcessing">{{ batchAiProcessing ? `AI ${batchAiProgress.completed}/${batchAiProgress.total}` : '批量AI处理' }}</button>
-            <button class="btn-action" size="mini" type="success" @click="batchGenerateVariant" :disabled="!canBatchGenerateVariant">批量生成变式题</button>
-            <button class="btn-action refresh-action" size="mini" @click="refreshQuestions" :loading="loading">刷新</button>
-            <button class="btn-action" size="mini" type="warning" @click="showGenerateMission">生成作业</button>
+            <view class="pagination-new">
+              <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
+              <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
+              <picker mode="selector" :range="pageRangeLabels" :value="currentPage - 1" @change="selectPage"><view class="page-picker">{{ pageOptionLabel(currentPage) }}</view></picker>
+              <picker mode="selector" :range="pageSizeRange" :value="pageSizeOptions.indexOf(pageSize)" @change="changePageSize"><view class="page-size-picker">{{ pageSizeOptionLabel(pageSize) }}</view></picker>
+            </view>
+          </view>
+        </view>
+
+        <view class="quick-filters">
+          <view class="filter-group">
+            <text class="filter-label">题型</text>
+            <picker mode="selector" :range="questionTypeRange" :value="questionTypeIndex" @change="onQuestionTypeChange"><view class="filter-select">{{ questionTypeLabel }}</view></picker>
+            <text class="filter-label">难度</text>
+            <picker mode="selector" :range="difficultyRange" :value="difficultyIndex" @change="onDifficultyChange"><view class="filter-select">{{ difficultyLabel }}</view></picker>
+            <text class="filter-label">知识点</text>
+            <picker mode="selector" :range="knowledgeRange" :value="knowledgeIndex" @change="onKnowledgePointChange"><view class="filter-select">{{ knowledgeLabel }}</view></picker>
+            <text class="filter-label">标签</text>
+            <picker mode="selector" :range="tagPickerRange" :value="tagPickerIndex" @change="onTagChange"><view class="filter-select tag-filter-select">{{ tagFilterLabel }}</view></picker>
+            <button size="mini" class="tag-refresh-btn" :loading="tagLoading" @click="loadTags">刷新标签</button>
+            <input v-model="keyword" class="keyword-search" placeholder="输入关键词进行查询" @confirm="applyFilters" />
+            <button size="mini" type="primary" @click="applyFilters">查询</button>
+            <button size="mini" class="reset-filter-btn" @click="resetFilters">重置</button>
           </view>
         </view>
 
         <!-- Batch action bar -->
-        <view v-if="selectedIds.length > 0" class="batch-bar">
+        <view v-if="selectedIds.length > 0 && !loading" class="batch-bar">
           <text class="batch-text">已选 {{ selectedIds.length }} 题</text>
           <button size="mini" @click="showMoveDialog">移动节点</button>
           <button size="mini" type="warn" @click="batchRemove">从课程移除</button>
           <button size="mini" @click="selectedIds = []">取消选择</button>
         </view>
 
-        <!-- Question table -->
-        <view v-if="loading" class="loading">加载中...</view>
-        <view v-else-if="questions.length === 0" class="empty">暂无题目{{ !selectedNode ? '，请选择目录节点' : '' }}</view>
-        <view v-else class="question-table">
-          <view class="table-header">
-            <view class="col col-check">
-              <view class="check-all" @click="toggleSelectAll"><text>{{ isAllSelected ? '☑' : '☐' }}</text></view>
-            </view>
-            <text class="col-index">序号</text>
-            <text class="col-stem">题干</text>
-            <text class="col-diff">难度</text>
-            <text class="col-kp">知识点</text>
-            <text class="col-confirm">内容确认</text>
-            <text class="col-ai">AI答案</text>
-            <text class="col-actions">操作</text>
-          </view>
-          <view v-for="(q, index) in questions" :key="q.question_id"
-                :class="['table-row', { 'row-selected': selectedIds.includes(q.question_id) }]"
-                @click="toggleSelect(q.question_id)">
-            <view class="col col-check" @click.stop="toggleSelect(q.question_id)">
-              <text>{{ selectedIds.includes(q.question_id) ? '☑' : '☐' }}</text>
-            </view>
-            <text class="col-index">{{ index + 1 }}</text>
-            <view class="col-stem" @click.stop="goEdit(q.question_id)">
-              <view class="stem-text">{{ q.stem_preview || '暂无题干' }}</view>
-              <view v-for="(table, tableIndex) in questionTables(q)" :key="table.table_id || tableIndex" class="question-table-preview">
-                <view class="table-caption">表格{{ questionTables(q).length > 1 ? ` ${tableIndex + 1}` : '' }}</view>
-                <view class="data-grid" :style="{ gridTemplateColumns: tableGridColumns(table) }">
-                  <view v-for="(cell, cellIndex) in flattenedTableCells(table)" :key="cellIndex" class="data-cell">
-                    {{ cell || ' ' }}
-                  </view>
-                </view>
-              </view>
-            </view>
-            <text :class="['col-diff', 'diff-' + q.difficulty]">{{ q.difficulty_label || '未评定' }}</text>
-            <text class="col-kp">{{ q.knowledge_points_count || '-' }}</text>
-            <text :class="['col-confirm', q.review_status === 'confirmed' ? 'confirmed' : 'pending']">
-              {{ q.review_status === 'confirmed' ? '✓' : '待审核' }}
-            </text>
-            <view class="col-ai" @click.stop>
-              <text :class="['badge', q.ai_answer_a_confirmed ? 'done' : q.ai_answer_a ? 'blank' : '']">A</text>
-              <text :class="['badge', q.ai_answer_b_confirmed ? 'done' : q.ai_answer_b ? 'blank' : '']">B</text>
-              <text :class="['badge', q.ai_answer_c_confirmed ? 'done' : q.ai_answer_c ? 'blank' : '']">C</text>
-            </view>
-            <view class="col-actions" @click.stop>
-              <button size="mini" @click="goEdit(q.question_id)">编辑</button>
-              <button size="mini" type="primary" @click="handleAiProcess(q.question_id)">AI处理</button>
-              <button size="mini" type="success" :disabled="q.review_status !== 'confirmed'"
-                      :title="q.review_status === 'confirmed' ? '生成变式题' : '请先编辑并确认题目后生成变式题'"
-                      @click="handleGenerateVariant(q)">
-                生成变式
-              </button>
-              <button size="mini" type="warn" @click="handleRemove(q.question_id)">移除</button>
-            </view>
-          </view>
-        </view>
+        <scroll-view scroll-y class="question-scroll">
+          <view v-if="loading" class="loading">加载中...</view>
+          <view v-else-if="questions.length === 0" class="empty">暂无题目{{ !selectedNode ? '，请选择目录节点' : '' }}</view>
+          <QuestionDetailCard
+            v-for="(question, index) in questions"
+            :key="question.id"
+            :question="question"
+            :index="pageOffset + index + 1"
+            :show-answer="Boolean(showAnswerMap[question.id])"
+            :selected="selectedIds.includes(question.id)"
+            :compact="viewMode === 'compact'"
+            @check="toggleSelect"
+            @toggle-answer="toggleAnswer(question.id)"
+            @ai-answer="mode => openAiAnswer(question, mode)"
+            @edit="goEdit"
+            @related="handleRelated"
+            @edit-tags="openTagEditor"
+            @add-favorite="addFavorite"
+          >
+            <template #course-footer-actions>
+              <button data-test="remove-course" size="mini" type="warn" :disabled="loading" @click.stop="handleRemove(question.id)">从课程移除</button>
+              <button data-test="disabled-variant" size="mini" disabled @click.stop="handleDisabledVariantAction">生成变式题</button>
+            </template>
+          </QuestionDetailCard>
+        </scroll-view>
       </view>
+      <RightActionPanel
+        :all-shown="allAnswersShown"
+        :compact-mode="viewMode === 'compact'"
+        :ai-mode-running="aiModeRunning"
+        :ai-action-running="aiActionRunning"
+        @refresh="refreshQuestions"
+        @toggle-answer="toggleAllAnswers"
+        @toggle-mode="toggleViewMode"
+        @basket="addSelectedToFavorites"
+        @batch-ai="submitBatchAi"
+        @ai-explore="submitAiExplore"
+        @ai-mode-a="submitAiMode('A')"
+        @ai-mode-b="submitAiMode('B')"
+        @ai-mode-c="submitAiMode('C')"
+      >
+        <template #course-actions>
+          <button class="course-action-btn" @click="goAssignMission">布置作业</button>
+          <button class="course-action-btn" @click="showGenerateMission">生成作业</button>
+          <button class="course-action-btn" disabled @click="handleDisabledVariantAction">批量生成变式题</button>
+        </template>
+      </RightActionPanel>
       </view>
     </view>
 
@@ -210,7 +221,7 @@
         </view>
         <view class="modal-footer">
           <button size="default" @click="moveDialogVisible = false">取消</button>
-          <button size="default" type="primary" @click="confirmMove" :disabled="!moveTarget">确定移动</button>
+          <button size="default" type="primary" @click="confirmMove" :disabled="!moveTarget || loading">确定移动</button>
         </view>
       </view>
     </view>
@@ -261,16 +272,59 @@
         </view>
       </view>
     </view>
+
+    <view v-if="relationState.visible" class="modal-overlay" @click.self="closeRelations">
+      <view class="modal relation-modal" @click.stop>
+        <view class="relation-modal-header"><text class="modal-title">关联题</text><button size="mini" @click="closeRelations">关闭</button></view>
+        <view class="relation-tabs">
+          <button size="mini" :class="{ 'relation-tab-active': relationState.tab === 'candidates' }" @click="relationController.selectTab('candidates')">可关联题</button>
+          <button size="mini" :class="{ 'relation-tab-active': relationState.tab === 'linked' }" @click="relationController.selectTab('linked')">已关联题</button>
+        </view>
+        <view v-if="relationState.loading" class="relation-empty">加载中...</view>
+        <view v-else-if="relationState.error" class="relation-error">{{ relationState.error }}</view>
+        <template v-else-if="relationState.tab === 'candidates'">
+          <view v-if="relationState.reason" class="relation-empty">{{ relationState.reason }}</view>
+          <view v-else-if="!relationState.candidates.length" class="relation-empty">暂无可关联题</view>
+          <view v-else class="relation-list"><view v-for="item in relationState.candidates" :key="item.id" class="relation-item"><checkbox :checked="relationState.selectedIds.includes(item.id)" @click.stop="relationController.toggleSelection(item.id)" /><text>{{ item.question_no }}：{{ item.stem_preview }}</text></view></view>
+          <view v-if="relationState.candidateTotal > relationState.candidatePageSize" class="relation-pagination"><button size="mini" :disabled="relationState.candidatePage <= 1" @click="relationController.previousCandidatePage">上一页</button><text>{{ relationState.candidatePage }} / {{ relationCandidatePages }} 页</text><button size="mini" :disabled="relationState.candidatePage >= relationCandidatePages" @click="relationController.nextCandidatePage">下一页</button></view>
+          <view class="modal-footer"><button size="mini" type="primary" :disabled="!relationState.selectedIds.length" @click="createRelations">关联</button></view>
+        </template>
+        <template v-else>
+          <view v-if="!relationState.linked.length" class="relation-empty">暂无已关联题</view>
+          <view v-else class="relation-list"><view v-for="item in relationState.linked" :key="item.id" class="relation-item"><text>{{ item.question_no }}：{{ item.stem_preview }}</text><button size="mini" @click="confirmRemoveRelation(item.id)">解除关联</button></view></view>
+          <view v-if="relationState.linkedTotal > relationState.linkedPageSize" class="relation-pagination"><button size="mini" :disabled="relationState.linkedPage <= 1" @click="relationController.previousLinkedPage">上一页</button><text>{{ relationState.linkedPage }} / {{ relationLinkedPages }} 页</text><button size="mini" :disabled="relationState.linkedPage >= relationLinkedPages" @click="relationController.nextLinkedPage">下一页</button></view>
+        </template>
+      </view>
+    </view>
+
+    <view v-if="tagVisible" class="modal-overlay" @click.self="tagVisible = false">
+      <view class="modal"><text class="modal-title">标签编辑</text><view class="tag-editor"><text v-for="tag in questionTags" :key="tag.id" class="tag-chip">{{ tag.name }} <text @click="removeQuestionTagFromCurrent(tag.id)">×</text></text></view><input v-model="newTag" class="form-input" placeholder="输入标签后添加" @confirm="addQuestionTagToCurrent" /><view class="modal-footer"><button size="mini" @click="addQuestionTagToCurrent">添加</button><button size="mini" type="primary" @click="tagVisible = false">完成</button></view></view>
+    </view>
+
+    <AiAnswerModal :visible="answerVisible" :question="answerQuestion" :mode="answerMode" @close="answerVisible = false" @saved="refreshAnswerQuestion" @reprocessed="refreshAnswerQuestion" />
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
+import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
 import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import DirTree from '@/components/DirTree.vue'
-import { courseApi, treeApi, courseQuestionApi, variantApi, materialApi } from '@/api/courses'
-import { questionApi, importJsonPackage as importJsonPackageApi } from '@/api/questions'
+import { courseApi, treeApi, courseQuestionApi, materialApi, variantApi } from '@/api/courses'
+import {
+  createCourseQuestionListController,
+  loadCourseKnowledgePointOptions,
+  handleDisabledVariantAction as ignoreDisabledVariantAction,
+  normalizeBackgroundAiStatus,
+  submitCourseAiTasks,
+  submitCourseBatchAi,
+} from './course-practice-list'
+import { questionApi, aiProcessProbe, getQuestionTags, addQuestionTag, getTagList, removeQuestionTag, importJsonPackage as importJsonPackageApi } from '@/api/questions'
+import { favoriteApi } from '@/api/favorites'
+import { createQuestionRelationsController } from './question-relations'
+import QuestionDetailCard from '@/components/QuestionDetailCard.vue'
+import RightActionPanel from '@/components/RightActionPanel.vue'
+import AiAnswerModal from '@/components/AiAnswerModal.vue'
 import { navigateRoleSection } from '@/utils/role-navigation'
 
 const TEACHER_ROUTES: Record<string, string> = {
@@ -311,14 +365,17 @@ function goCourseList() {
 // ============================================================
 const courseId = ref<string>('')
 const courseName = ref('课程加载中...')
+const courseSubject = ref('')
 
 async function loadCourseInfo() {
   try {
     const res: any = await courseApi.detail(courseId.value)
     if (res?.data?.name) {
       courseName.value = res.data.name
+      courseSubject.value = String(res.data.subject || '')
     } else if (res?.name) {
       courseName.value = res.name
+      courseSubject.value = String(res.subject || '')
     }
   } catch (e) {
     console.error('加载课程信息失败:', e)
@@ -326,15 +383,17 @@ async function loadCourseInfo() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   const pages = getCurrentPages()
   const currentPage = pages[pages.length - 1] as any
   const id = currentPage.options?.id
   if (id) {
     courseId.value = String(id)
-    loadCourseInfo()
+    await loadCourseInfo()
   }
   loadTree()
+  void loadKnowledgeOptions()
+  void loadTags()
   loadQuestions()
 })
 
@@ -394,9 +453,15 @@ function flattenTree(node: any): TreeNodeData {
   }
 }
 
-function onSelectNode(node: TreeNodeData) {
+async function onSelectNode(node: TreeNodeData) {
   selectedNode.value = node
-  loadQuestions()
+  selectedIds.value = []
+  questions.value = []
+  total.value = 0
+  pageNo.value = 1
+  questionListController.resetForNode(String(node.id), pageSize.value)
+  loading.value = true
+  await loadQuestions()
 }
 
 // Node actions
@@ -581,62 +646,103 @@ async function confirmNodeAction() {
 interface Question {
   id: string
   question_id: string
-  stem_preview: string
+  question_no?: string
+  stem?: string
+  stem_preview?: string
+  question_type?: string
   difficulty: number | null
-  difficulty_label?: string
-  tables?: Array<{ table_id?: string; rows?: string[][] }>
-  knowledge_points_count?: number
-  review_status: string
-  ai_answer_a: boolean
-  ai_answer_b: boolean
-  ai_answer_c: boolean
-  ai_answer_a_confirmed: boolean
-  ai_answer_b_confirmed: boolean
-  ai_answer_c_confirmed: boolean
+  knowledge_points_display?: Array<{ id?: string; name: string }>
+  tags?: string[]
+  [key: string]: unknown
 }
 
 const questions = ref<Question[]>([])
 const loading = ref(false)
 const selectedIds = ref<string[]>([])
+const total = ref(0)
+const pageNo = ref(1)
+const pageSize = ref(20)
+const questionListController = createCourseQuestionListController<any>((query) => courseQuestionApi.list(courseId.value, query))
+const currentPage = computed({ get: () => pageNo.value, set: (value: number) => { pageNo.value = value } })
+const pageSizeOptions = [10, 20, 30, 50]
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
+const pageNumbers = computed(() => Array.from({ length: totalPages.value }, (_, index) => index + 1))
+const pageRangeLabels = computed(() => pageNumbers.value.map(pageOptionLabel))
+const pageSizeRange = pageSizeOptions.map((size) => `${size} 题 / 页`)
+const pageOffset = computed(() => (currentPage.value - 1) * pageSize.value)
 
-function questionTables(q: Question): Array<{ table_id?: string; rows?: string[][] }> {
-  return Array.isArray(q.tables) ? q.tables : []
-}
+const activeType = ref('')
+const activeDifficulty = ref('')
+const activeKnowledgePoint = ref('')
+const activeTag = ref('')
+const keyword = ref('')
+const knowledgeOptions = ref<Array<{ id: string; name: string }>>([])
+const allTags = ref<Array<{ id: string; name: string }>>([])
+const tagLoading = ref(false)
+const showAnswerMap = ref<Record<string, boolean>>({})
+const viewMode = ref<'compact' | 'detail'>('detail')
 
-function tableRows(table: { rows?: string[][] }): string[][] {
-  return Array.isArray(table.rows) ? table.rows : []
-}
+const questionTypes = [
+  { label: '选择题', value: 'single_choice' },
+  { label: '填空题', value: 'fill_blank' },
+  { label: '解答题', value: 'solution' },
+]
+const difficultyLevels = [
+  { label: '简单', value: '1' }, { label: '较易', value: '2' }, { label: '中等', value: '3' }, { label: '较难', value: '4' }, { label: '困难', value: '5' },
+]
+const questionTypeRange = ['全部题型', ...questionTypes.map(item => item.label)]
+const difficultyRange = ['全部难度', ...difficultyLevels.map(item => item.label)]
+const knowledgeRange = computed(() => ['全部知识点', ...knowledgeOptions.value.map(item => item.name)])
+const tagPickerRange = computed(() => ['全部标签', ...allTags.value.map(item => item.name)])
+const questionTypeIndex = computed(() => Math.max(0, questionTypes.findIndex(item => item.value === activeType.value) + 1))
+const difficultyIndex = computed(() => Math.max(0, difficultyLevels.findIndex(item => item.value === activeDifficulty.value) + 1))
+const knowledgeIndex = computed(() => Math.max(0, knowledgeOptions.value.findIndex(item => item.id === activeKnowledgePoint.value) + 1))
+const tagPickerIndex = computed(() => Math.max(0, allTags.value.findIndex(item => item.name === activeTag.value) + 1))
+const questionTypeLabel = computed(() => questionTypeRange[questionTypeIndex.value])
+const difficultyLabel = computed(() => difficultyRange[difficultyIndex.value])
+const knowledgeLabel = computed(() => knowledgeRange.value[knowledgeIndex.value])
+const tagFilterLabel = computed(() => tagPickerRange.value[tagPickerIndex.value])
+const allAnswersShown = computed(() => questions.value.length > 0 && questions.value.every(question => showAnswerMap.value[question.id]))
 
-function tableColumnCount(table: { rows?: string[][] }): number {
-  return Math.max(1, ...tableRows(table).map((row) => Array.isArray(row) ? row.length : 0))
-}
-
-function tableGridColumns(table: { rows?: string[][] }): string {
-  return `repeat(${tableColumnCount(table)}, minmax(72px, 1fr))`
-}
-
-function flattenedTableCells(table: { rows?: string[][] }): string[] {
-  const count = tableColumnCount(table)
-  return tableRows(table).flatMap((row) => {
-    const cells = Array.isArray(row) ? row.map((cell) => String(cell ?? '')) : []
-    return cells.concat(Array(Math.max(0, count - cells.length)).fill(''))
-  })
+function normalizeQuestion(item: any): Question {
+  const id = String(item?.id || item?.question_id || '')
+  return {
+    ...item,
+    id,
+    question_id: String(item?.question_id || id),
+    stem: item?.stem || item?.stem_preview || '',
+    tags: Array.isArray(item?.tags) ? item.tags : [],
+    knowledge_points_display: Array.isArray(item?.knowledge_points_display) ? item.knowledge_points_display : [],
+  }
 }
 
 async function loadQuestions() {
-  loading.value = true
+  const treeNodeId = selectedNode.value ? String(selectedNode.value.id) : ''
+  if (questionListController.state.treeNodeId !== treeNodeId) {
+    questionListController.resetForNode(treeNodeId, pageSize.value)
+  }
+  questionListController.state.page = pageNo.value
+  questionListController.state.pageSize = pageSize.value
+  questionListController.state.selectedIds = [...selectedIds.value]
+  loading.value = questionListController.state.loading || Boolean(treeNodeId)
   try {
-    const params: any = {}
-    if (selectedNode.value) {
-      params.tree_node_id = selectedNode.value.id
-    }
-    const res: any = await courseQuestionApi.list(courseId.value, params)
-    questions.value = res.data || res || []
-    selectedIds.value = []
+    const loaded = await questionListController.load({
+      questionType: activeType.value,
+      difficulty: activeDifficulty.value,
+      knowledgePointId: activeKnowledgePoint.value,
+      tag: activeTag.value,
+      keyword: keyword.value,
+    })
+    if (!loaded.applied) return
+    questions.value = questionListController.state.items.map(normalizeQuestion)
+    total.value = questionListController.state.total
+    pageNo.value = questionListController.state.page
+    pageSize.value = questionListController.state.pageSize
+    selectedIds.value = [...questionListController.state.selectedIds]
   } catch (e) {
     console.error('加载习题列表失败:', e)
   } finally {
-    loading.value = false
+    if (!questionListController.state.loading) loading.value = false
   }
 }
 
@@ -646,28 +752,78 @@ async function refreshQuestions() {
   uni.showToast({ title: '题目已刷新', icon: 'success', duration: 1000 })
 }
 
+function pageOptionLabel(page: number) {
+  return page === currentPage.value ? `${page} / ${totalPages.value} 页` : `第 ${page} 页`
+}
+
+function pageSizeOptionLabel(size: number) {
+  return size === pageSize.value ? `${size} / ${total.value}` : `${size} 题 / 页`
+}
+
+function prevPage() { if (currentPage.value > 1) { currentPage.value -= 1; void loadQuestions() } }
+function nextPage() { if (currentPage.value < totalPages.value) { currentPage.value += 1; void loadQuestions() } }
+function selectPage(event: any) {
+  currentPage.value = Math.max(1, Math.min(totalPages.value, Number(event?.detail?.value ?? 0) + 1))
+  void loadQuestions()
+}
+function changePageSize(event: any) {
+  pageSize.value = pageSizeOptions[Number(event?.detail?.value ?? 0)] || pageSizeOptions[0]
+  currentPage.value = 1
+  void loadQuestions()
+}
+
+function onQuestionTypeChange(event: any) { activeType.value = questionTypes[Number(event?.detail?.value ?? 0) - 1]?.value || '' }
+function onDifficultyChange(event: any) { activeDifficulty.value = difficultyLevels[Number(event?.detail?.value ?? 0) - 1]?.value || '' }
+function onKnowledgePointChange(event: any) { activeKnowledgePoint.value = knowledgeOptions.value[Number(event?.detail?.value ?? 0) - 1]?.id || '' }
+function onTagChange(event: any) { activeTag.value = allTags.value[Number(event?.detail?.value ?? 0) - 1]?.name || '' }
+function applyFilters() { currentPage.value = 1; void loadQuestions() }
+function resetFilters() {
+  activeType.value = ''
+  activeDifficulty.value = ''
+  activeKnowledgePoint.value = ''
+  activeTag.value = ''
+  keyword.value = ''
+  currentPage.value = 1
+  void loadQuestions()
+}
+
+async function loadTags() {
+  tagLoading.value = true
+  try {
+    const response: any = await getTagList()
+    allTags.value = Array.isArray(response?.data) ? response.data : []
+  } catch {
+    allTags.value = []
+    uni.showToast({ title: '加载标签失败', icon: 'none' })
+  } finally {
+    tagLoading.value = false
+  }
+}
+
+async function loadKnowledgeOptions() {
+  try {
+    knowledgeOptions.value = await loadCourseKnowledgePointOptions(courseSubject.value, subject => questionApi.dictKnowledgePoints(subject))
+  } catch {
+    knowledgeOptions.value = []
+  }
+}
+
+function toggleAnswer(id: string) { showAnswerMap.value[id] = !showAnswerMap.value[id] }
+function toggleAllAnswers() {
+  const allShown = allAnswersShown.value
+  questions.value.forEach(question => { showAnswerMap.value[question.id] = !allShown })
+}
+function toggleViewMode() { viewMode.value = viewMode.value === 'compact' ? 'detail' : 'compact' }
+function handleDisabledVariantAction() {
+  return ignoreDisabledVariantAction({ generate: () => undefined, batchGenerate: () => undefined })
+}
+
 // Selection
-const isAllSelected = computed(() =>
-  questions.value.length > 0 && selectedIds.value.length === questions.value.length
-)
-
-const selectedQuestions = computed(() =>
-  questions.value.filter((question) => selectedIds.value.includes(question.question_id))
-)
-
-const canBatchGenerateVariant = computed(() =>
-  selectedQuestions.value.length > 0 && selectedQuestions.value.every((question) => question.review_status === 'confirmed')
-)
-
 function toggleSelect(id: string) {
+  if (loading.value) return
   const idx = selectedIds.value.indexOf(id)
   if (idx >= 0) selectedIds.value.splice(idx, 1)
   else selectedIds.value.push(id)
-}
-
-function toggleSelectAll() {
-  if (isAllSelected.value) selectedIds.value = []
-  else selectedIds.value = questions.value.map((q) => q.question_id)
 }
 
 function goEdit(id: string) {
@@ -1050,16 +1206,246 @@ async function batchGenerateVariant() {
 }
 
 // ============================================================
+// Question-bank AI controls: every request is submitted as a background task.
+// ============================================================
+type AiMode = 'A' | 'B' | 'C'
+type AiModeTerminalStatus = 'complete' | 'partial' | 'failed' | 'skipped' | 'cancelled'
+type AiModePoll = { taskId: string; generation: number; timer?: ReturnType<typeof setTimeout>; releaseDelay?: () => void; cancelled: boolean }
+const aiModeRunning = ref<Record<AiMode, boolean>>({ A: false, B: false, C: false })
+const aiActionRunning = ref<Record<'batch' | 'probe', boolean>>({ batch: false, probe: false })
+const aiModePolls = new Map<string, AiModePoll>()
+let aiModeGeneration = 0
+let aiModePageActive = true
+
+function selectionRequired() {
+  uni.showToast({ title: '请先选择题目', icon: 'none' })
+}
+
+async function submitBatchAi() {
+  if (loading.value || aiActionRunning.value.batch) return
+  aiActionRunning.value.batch = true
+  try {
+    const submitted = await submitCourseBatchAi({
+      selectedIds: selectedIds.value,
+      batchAi: (ids) => questionApi.batchAi(ids),
+      poll: taskId => pollAiTaskUntilTerminal(taskId, questionApi.getAiJobStatus),
+      refresh: loadQuestions,
+      onTerminal: () => { aiActionRunning.value.batch = false },
+    })
+    if (!submitted.submitted) {
+      aiActionRunning.value.batch = false
+      if (selectedIds.value.length === 0) selectionRequired()
+      else if (submitted.noNewTask) uni.showToast({ title: '所选题目已有进行中的 AI 任务', icon: 'none' })
+      else uni.showToast({ title: '批量AI任务提交失败', icon: 'none' })
+      return
+    }
+    uni.showToast({ title: '批量AI任务已提交', icon: 'success' })
+  } catch {
+    aiActionRunning.value.batch = false
+    uni.showToast({ title: '批量AI任务提交失败', icon: 'none' })
+  }
+}
+
+async function submitAiExplore() {
+  if (loading.value || aiActionRunning.value.probe) return
+  if (!selectedIds.value.length) return selectionRequired()
+  aiActionRunning.value.probe = true
+  try {
+    const submitted = await submitCourseAiTasks({
+      selectedIds: selectedIds.value,
+      submit: id => aiProcessProbe(id),
+      poll: taskId => pollAiTaskUntilTerminal(taskId, questionApi.getTaskStatus),
+      refresh: loadQuestions,
+      onTerminal: () => { aiActionRunning.value.probe = false },
+    })
+    if (!submitted.submitted) {
+      aiActionRunning.value.probe = false
+      uni.showToast({ title: 'AI探索提交失败', icon: 'none' })
+    }
+    else if (submitted.failed) uni.showToast({ title: `AI探索部分提交（${submitted.submitted}题）`, icon: 'none' })
+    else uni.showToast({ title: 'AI探索任务已提交', icon: 'success' })
+  } catch {
+    aiActionRunning.value.probe = false
+    uni.showToast({ title: 'AI探索提交失败', icon: 'none' })
+  }
+}
+
+function isCurrentAiModeGeneration(generation: number) {
+  return aiModePageActive && generation === aiModeGeneration
+}
+
+function waitForAiModePoll(poll: AiModePoll, milliseconds: number): Promise<boolean> {
+  if (poll.cancelled || !isCurrentAiModeGeneration(poll.generation)) return Promise.resolve(false)
+  return new Promise(resolve => {
+    const release = () => {
+      poll.timer = undefined
+      poll.releaseDelay = undefined
+      resolve(!poll.cancelled && isCurrentAiModeGeneration(poll.generation))
+    }
+    poll.releaseDelay = release
+    poll.timer = setTimeout(release, milliseconds)
+  })
+}
+
+async function pollAiTaskUntilTerminal(
+  taskId: string,
+  getStatus: (taskId: string) => Promise<unknown>,
+  generation = aiModeGeneration,
+): Promise<AiModeTerminalStatus> {
+  const poll: AiModePoll = { taskId, generation, cancelled: false }
+  aiModePolls.set(taskId, poll)
+  try {
+    for (let attempt = 0; attempt < 1050; attempt += 1) {
+      if (!await waitForAiModePoll(poll, attempt === 0 ? 1000 : 2000)) return 'cancelled'
+      try {
+        const response: any = await getStatus(taskId)
+        const status = normalizeBackgroundAiStatus(response?.data?.status)
+        if (status) return status
+      } catch {
+        if (attempt === 1049) return 'failed'
+      }
+    }
+    return 'failed'
+  } finally {
+    if (poll.timer) clearTimeout(poll.timer)
+    if (aiModePolls.get(taskId) === poll) aiModePolls.delete(taskId)
+  }
+}
+
+async function submitAiMode(mode: AiMode) {
+  if (loading.value) return
+  if (!selectedIds.value.length) return selectionRequired()
+  if (aiModeRunning.value[mode]) {
+    uni.showToast({ title: `AI-${mode}模式正在处理中`, icon: 'none' })
+    return
+  }
+  const generation = aiModeGeneration
+  if (!isCurrentAiModeGeneration(generation)) return
+  aiModeRunning.value[mode] = true
+  try {
+    const submissions = await Promise.all(selectedIds.value.map(async (id) => {
+      try {
+        const response: any = await questionApi.aiProcessMode(id, mode)
+        return response?.data?.task_id ? String(response.data.task_id) : null
+      } catch {
+        return null
+      }
+    }))
+    if (!isCurrentAiModeGeneration(generation)) return
+    const taskIds = submissions.filter((id): id is string => Boolean(id))
+    if (!taskIds.length) {
+      uni.showToast({ title: `AI-${mode}模式提交失败`, icon: 'none' })
+      return
+    }
+    uni.showToast({ title: `AI-${mode}模式任务已提交`, icon: 'success' })
+    const statuses = await Promise.all(taskIds.map(taskId => pollAiTaskUntilTerminal(taskId, questionApi.getTaskStatus, generation)))
+    if (!isCurrentAiModeGeneration(generation)) return
+    if (statuses.some(status => status === 'complete' || status === 'partial')) await loadQuestions()
+  } finally {
+    aiModeRunning.value[mode] = false
+  }
+}
+
+function stopAiModePolling() {
+  aiModeGeneration += 1
+  aiModePageActive = false
+  aiModePolls.forEach(poll => {
+    poll.cancelled = true
+    if (poll.timer) clearTimeout(poll.timer)
+    poll.releaseDelay?.()
+  })
+  aiModePolls.clear()
+  ;(['A', 'B', 'C'] as AiMode[]).forEach(mode => { aiModeRunning.value[mode] = false })
+}
+
+onShow(() => { aiModePageActive = true })
+onHide(stopAiModePolling)
+onUnload(stopAiModePolling)
+
+// ============================================================
+// Shared question-bank modals.
+// ============================================================
+const relationController = createQuestionRelationsController(questionApi)
+const relationState = relationController.state
+const relationCandidatePages = computed(() => Math.max(1, Math.ceil(relationState.candidateTotal / relationState.candidatePageSize)))
+const relationLinkedPages = computed(() => Math.max(1, Math.ceil(relationState.linkedTotal / relationState.linkedPageSize)))
+const tagVisible = ref(false)
+const editingQuestion = ref<Question | null>(null)
+const questionTags = ref<Array<{ id: string; name: string }>>([])
+const newTag = ref('')
+const answerVisible = ref(false)
+const answerQuestion = ref<Question | null>(null)
+const answerMode = ref<'ALL' | 'A' | 'B' | 'C'>('ALL')
+
+async function handleRelated(id: string) {
+  await relationController.open(id)
+  if (relationState.error) uni.showToast({ title: relationState.error, icon: 'none' })
+}
+function closeRelations() { relationController.close() }
+async function createRelations() {
+  const result = await relationController.createSelected()
+  if (result.status === 'success') uni.showToast({ title: result.message, icon: 'success' })
+  else if (result.status !== 'cancelled') uni.showToast({ title: result.message || relationState.error, icon: 'none' })
+}
+function confirmRemoveRelation(relatedId: string) {
+  uni.showModal({ title: '解除关联', content: '解除后仅取消题目关联，不会删除题目或答案。是否继续？', success: async result => {
+    if (!result.confirm) return
+    try { await relationController.remove(relatedId); uni.showToast({ title: '已解除关联', icon: 'success' }) }
+    catch { uni.showToast({ title: relationState.error || '解除关联失败', icon: 'none' }) }
+  } })
+}
+function openAiAnswer(question: Question, mode: 'ALL' | 'A' | 'B' | 'C' = 'ALL') { answerQuestion.value = question; answerMode.value = mode; answerVisible.value = true }
+async function refreshAnswerQuestion() {
+  const questionId = answerQuestion.value?.id
+  await loadQuestions()
+  if (questionId) answerQuestion.value = questions.value.find(question => question.id === questionId) || answerQuestion.value
+}
+async function openTagEditor(question: Question) {
+  editingQuestion.value = question
+  tagVisible.value = true
+  newTag.value = ''
+  try { const response: any = await getQuestionTags(question.id); questionTags.value = response?.data || [] }
+  catch { questionTags.value = [] }
+}
+async function addQuestionTagToCurrent() {
+  if (!editingQuestion.value || !newTag.value.trim()) return
+  try { await addQuestionTag(editingQuestion.value.id, { tag_name: newTag.value.trim() }); await openTagEditor(editingQuestion.value); newTag.value = '' }
+  catch { uni.showToast({ title: '标签添加失败', icon: 'none' }) }
+}
+async function removeQuestionTagFromCurrent(tagId: string) {
+  if (!editingQuestion.value) return
+  try { await removeQuestionTag(editingQuestion.value.id, tagId); await openTagEditor(editingQuestion.value) }
+  catch { uni.showToast({ title: '标签移除失败', icon: 'none' }) }
+}
+async function addFavorite(id: string) {
+  if (loading.value) return
+  try { await favoriteApi.add(id); uni.showToast({ title: '已加入精选', icon: 'success' }) }
+  catch (error: any) { if (error?.statusCode === 409) uni.showToast({ title: '已在精选中', icon: 'none' }) }
+}
+async function addSelectedToFavorites() {
+  if (loading.value) return
+  if (!selectedIds.value.length) return selectionRequired()
+  await Promise.all(selectedIds.value.map(addFavorite))
+}
+
+// ============================================================
 // Remove questions
 // ============================================================
 async function handleRemove(questionId: string) {
+  if (loading.value) return
+  const sourceNodeId = String(selectedNode.value?.id || '')
+  if (!sourceNodeId) return
   uni.showModal({
     title: '确认移除',
     content: '确定要从课程中移除此题目吗？',
     success: async (res) => {
       if (res.confirm) {
+        if (loading.value || String(selectedNode.value?.id || '') !== sourceNodeId) {
+          uni.showToast({ title: '当前节点已切换，请刷新后重试', icon: 'none' })
+          return
+        }
         try {
-          await courseQuestionApi.batchDelete(courseId.value, [questionId])
+          await courseQuestionApi.batchDelete(courseId.value, [questionId], sourceNodeId)
           uni.showToast({ title: '已移除', icon: 'success' })
           loadQuestions()
         } catch (e: any) {
@@ -1071,15 +1457,21 @@ async function handleRemove(questionId: string) {
 }
 
 async function batchRemove() {
+  if (loading.value) return
   const ids = [...selectedIds.value]
-  if (ids.length === 0) return
+  const sourceNodeId = String(selectedNode.value?.id || '')
+  if (ids.length === 0 || !sourceNodeId) return
   uni.showModal({
     title: '确认批量移除',
     content: `确定要从课程中移除选中的 ${ids.length} 道题目吗？`,
     success: async (res) => {
       if (res.confirm) {
+        if (loading.value || String(selectedNode.value?.id || '') !== sourceNodeId) {
+          uni.showToast({ title: '当前节点已切换，请刷新后重试', icon: 'none' })
+          return
+        }
         try {
-          await courseQuestionApi.batchDelete(courseId.value, ids)
+          await courseQuestionApi.batchDelete(courseId.value, ids, sourceNodeId)
           uni.showToast({ title: `已移除 ${ids.length} 题`, icon: 'success' })
           selectedIds.value = []
           loadQuestions()
@@ -1096,10 +1488,13 @@ async function batchRemove() {
 // ============================================================
 const moveDialogVisible = ref(false)
 const moveTarget = ref<number | null>(null)
+const moveSourceNodeId = ref('')
 const moveTargetLabel = ref('')
 
 function showMoveDialog() {
+  if (loading.value || !selectedIds.value.length) return
   moveTarget.value = null
+  moveSourceNodeId.value = String(selectedNode.value?.id || '')
   moveTargetLabel.value = ''
   moveDialogVisible.value = true
 }
@@ -1126,11 +1521,17 @@ function onMoveTargetChange(e: any) {
 }
 
 async function confirmMove() {
-  if (!moveTarget.value) return
+  if (loading.value) return
+  if (!moveTarget.value || !moveSourceNodeId.value) return
   const ids = [...selectedIds.value]
   if (ids.length === 0) return
+  if (String(selectedNode.value?.id || '') !== moveSourceNodeId.value) {
+    uni.showToast({ title: '当前节点已切换，请刷新后重试', icon: 'none' })
+    moveDialogVisible.value = false
+    return
+  }
   try {
-    await courseQuestionApi.batchMove(courseId.value, ids, moveTarget.value)
+    await courseQuestionApi.batchMove(courseId.value, ids, moveSourceNodeId.value, moveTarget.value)
     uni.showToast({ title: `已移动 ${ids.length} 题`, icon: 'success' })
     selectedIds.value = []
     moveDialogVisible.value = false
@@ -1358,10 +1759,13 @@ onUnmounted(() => {
   font-weight: 500;
   color: #303133;
 }
+.total-count { margin-left: 8px; color: #909399; font-size: 13px; }
 
 .header-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .btn-action {
@@ -1372,6 +1776,20 @@ onUnmounted(() => {
 .btn-action::after {
   border: none;
 }
+
+.pagination-new { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.page-picker, .page-size-picker { min-width: 78px; height: 28px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; color: #606266; font-size: 12px; line-height: 28px; text-align: center; }
+.page-size-picker { min-width: 92px; }
+.quick-filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
+.filter-group { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.filter-label { color: #909399; font-size: 12px; }
+.filter-select { min-width: 86px; height: 28px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; color: #606266; font-size: 12px; line-height: 28px; text-align: center; }
+.tag-filter-select { min-width: 120px; }
+.tag-refresh-btn, .reset-filter-btn { margin: 0; font-size: 12px; }
+.keyword-search { flex: 1 1 180px; min-width: 160px; height: 28px; padding: 0 8px; border: 1px solid #dcdfe6; border-radius: 4px; box-sizing: border-box; font-size: 12px; }
+.question-scroll { flex: 1; min-height: 0; padding: 12px 4px; box-sizing: border-box; background: #f5f7fa; }
+.course-action-btn { width: 100%; margin: 0; padding: 8px 6px; border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; color: #606266; font-size: 12px; line-height: 1.2; }
+.course-action-btn[disabled] { color: #909399; background: #f4f4f5; border-color: #e9e9eb; }
 
 /* uni-app applies a low-contrast native disabled style to buttons. Keep the
  * disabled action legible while making its unavailable state obvious. */
@@ -1596,6 +2014,20 @@ onUnmounted(() => {
   color: #909399;
   padding: 40px 0;
 }
+
+.relation-modal { width: min(640px, calc(100vw - 32px)); max-height: 80vh; overflow-y: auto; }
+.relation-modal-header, .relation-tabs, .relation-item { display: flex; align-items: center; gap: 8px; }
+.relation-modal-header { justify-content: space-between; }
+.relation-tabs { margin: 12px 0; }
+.relation-tab-active { color: #fff; background: #409eff; border-color: #409eff; }
+.relation-list { display: flex; flex-direction: column; gap: 8px; }
+.relation-item { justify-content: space-between; padding: 8px; border-radius: 4px; background: #f5f7fa; font-size: 13px; }
+.relation-item > text { flex: 1; min-width: 0; }
+.relation-pagination { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; color: #606266; font-size: 13px; }
+.relation-empty { padding: 24px 0; color: #909399; text-align: center; }
+.relation-error { margin: 8px 0; padding: 8px; color: #f56c6c; background: #fef0f0; border-radius: 4px; font-size: 13px; }
+.tag-editor { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.tag-chip { padding: 4px 8px; border-radius: 12px; background: #ecf5ff; color: #409eff; font-size: 12px; }
 
 /* Add question panel overlay */
 .panel-overlay {

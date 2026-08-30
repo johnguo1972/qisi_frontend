@@ -1,5 +1,6 @@
 // Course API - 后端 courses API 路径是 /api/v1/courses/
 import type { UUID } from '@/types/uuid'
+import { serializeCourseQuestionQuery, type CourseQuestionListQuery } from '@/pages/teacher/course-practice-list'
 
 const COURSE_BASE = '/api/v1'
 
@@ -126,18 +127,18 @@ export const treeApi = {
 // 课程习题
 // ============================================================
 export const courseQuestionApi = {
-  list: (courseId: UUID, params?: { tree_node_id?: UUID }) => {
-    const qs = params?.tree_node_id ? `?tree_node_id=${params.tree_node_id}` : ''
-    return courseFetch<any[]>(`/courses/${courseId}/questions/${qs}`)
+  list: (courseId: UUID, params: CourseQuestionListQuery) => {
+    const query = serializeCourseQuestionQuery(params)
+    return courseFetch<any>(`/courses/${courseId}/questions/?${query.toString()}`)
   },
   import: (courseId: UUID, data: { question_ids: UUID[]; tree_node_id?: UUID }) =>
     courseFetch<any>(`/courses/${courseId}/questions/import/`, { method: 'POST', body: JSON.stringify({ question_ids: data.question_ids, tree_node_id: data.tree_node_id }) }),
-  batchDelete: (courseId: UUID, questionIds: UUID[]) =>
-    courseFetch<any>(`/courses/${courseId}/questions/batch-delete/`, { method: 'POST', body: JSON.stringify({ question_ids: questionIds }) }),
-  batchMove: (courseId: UUID, questionIds: UUID[], targetNodeId: UUID) =>
+  batchDelete: (courseId: UUID, questionIds: UUID[], sourceNodeId: UUID) =>
+    courseFetch<any>(`/courses/${courseId}/questions/batch-delete/`, { method: 'POST', body: JSON.stringify({ question_ids: questionIds, tree_node_id: sourceNodeId }) }),
+  batchMove: (courseId: UUID, questionIds: UUID[], sourceNodeId: UUID, targetNodeId: UUID) =>
     courseFetch<any>(`/courses/${courseId}/questions/batch-move/`, {
       method: 'POST',
-      body: JSON.stringify({ question_ids: questionIds, target_node_id: targetNodeId }),
+      body: JSON.stringify({ question_ids: questionIds, tree_node_id: sourceNodeId, target_node_id: targetNodeId }),
     }),
 }
 

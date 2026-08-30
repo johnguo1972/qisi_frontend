@@ -8,8 +8,8 @@
       {{ allShown ? '关闭答案' : '显示答案' }}
     </button>
     <button class="action-btn btn-warning" @click="$emit('basket')">加入精选</button>
-    <button class="action-btn btn-ai" @click="$emit('batch-ai')">批量AI</button>
-    <button class="action-btn btn-ai-sub" @click="$emit('ai-explore')">AI探索</button>
+    <button class="action-btn btn-ai" :disabled="aiActionRunning?.batch" @click="$emit('batch-ai')">{{ aiActionRunning?.batch ? '批量AI处理中...' : '批量AI' }}</button>
+    <button class="action-btn btn-ai-sub" :disabled="aiActionRunning?.probe" @click="$emit('ai-explore')">{{ aiActionRunning?.probe ? 'AI探索处理中...' : 'AI探索' }}</button>
     <button class="action-btn btn-ai-sub" :disabled="aiModeRunning?.A" @click="$emit('ai-mode-a')">
       {{ aiModeRunning?.A ? 'AI-A处理中...' : 'AI-A模式' }}
     </button>
@@ -19,6 +19,7 @@
     <button class="action-btn btn-ai-sub" :disabled="aiModeRunning?.C" @click="$emit('ai-mode-c')">
       {{ aiModeRunning?.C ? 'AI-C处理中...' : 'AI-C模式' }}
     </button>
+    <slot name="course-actions" />
   </view>
 </template>
 
@@ -27,6 +28,7 @@ defineProps<{
   allShown?: boolean
   compactMode?: boolean
   aiModeRunning?: Partial<Record<'A' | 'B' | 'C', boolean>>
+  aiActionRunning?: Partial<Record<'batch' | 'probe', boolean>>
 }>()
 
 defineEmits(['refresh', 'toggle-answer', 'toggle-mode', 'basket', 'batch-ai', 'ai-explore', 'ai-mode-a', 'ai-mode-b', 'ai-mode-c'])

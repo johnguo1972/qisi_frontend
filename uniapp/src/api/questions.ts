@@ -102,7 +102,7 @@ export const questionApi = {
 
   // Dictionaries
   dictSubjects: () => get<any[]>('/dicts/subjects'),
-  dictKnowledgePoints: () => get<any[]>('/dicts/knowledge-points'),
+  dictKnowledgePoints: (subject?: string) => get<any[]>(`/dicts/knowledge-points${subject ? `?subject=${encodeURIComponent(subject)}` : ''}`),
   dictQuestionTypes: () => get<any[]>('/dicts/question-types'),
   dictDifficultyLevels: () => get<any[]>('/dicts/difficulty-levels'),
 
