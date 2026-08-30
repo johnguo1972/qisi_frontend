@@ -171,7 +171,13 @@ export function createQuestionRelationsController(api: RelationApi) {
     const questionId = currentQuestionId()
     if (!questionId) return
     const requestSequence = ++candidateRequestSequence
-    const response = await withLoading(requestGeneration, questionId, () => api.relationCandidates(questionId, { page, page_size: state.candidatePageSize }))
+    let response: QuestionRelationApiEnvelope<QuestionRelationPageData>
+    try {
+      response = await withLoading(requestGeneration, questionId, () => api.relationCandidates(questionId, { page, page_size: state.candidatePageSize }))
+    } catch (error) {
+      if (isCandidateRequestCurrent(requestGeneration, questionId, requestSequence)) throw error
+      return
+    }
     if (!isCandidateRequestCurrent(requestGeneration, questionId, requestSequence)) return
     const data = pageFromResponse(response, page, state.candidatePageSize)
     const lastPage = totalPages(data.total, data.pageSize)
@@ -193,7 +199,13 @@ export function createQuestionRelationsController(api: RelationApi) {
     const questionId = currentQuestionId()
     if (!questionId) return
     const requestSequence = ++linkedRequestSequence
-    const response = await withLoading(requestGeneration, questionId, () => api.relations(questionId, { page, page_size: state.linkedPageSize }))
+    let response: QuestionRelationApiEnvelope<QuestionRelationPageData>
+    try {
+      response = await withLoading(requestGeneration, questionId, () => api.relations(questionId, { page, page_size: state.linkedPageSize }))
+    } catch (error) {
+      if (isLinkedRequestCurrent(requestGeneration, questionId, requestSequence)) throw error
+      return
+    }
     if (!isLinkedRequestCurrent(requestGeneration, questionId, requestSequence)) return
     const data = pageFromResponse(response, page, state.linkedPageSize)
     const lastPage = totalPages(data.total, data.pageSize)
