@@ -187,4 +187,54 @@ describe('题库关联题状态', () => {
     expect(controller.state.candidates.map((item) => item.id)).toEqual(['candidate-b'])
     expect(controller.state.linked.map((item) => item.id)).toEqual(['linked-b'])
   })
+
+  it('建立或解除关联使末页越界时回退到最后有效页，而不是停在空页', async () => {
+    const candidatePageOne = { ...candidate, id: 'candidate-page-1' }
+    const candidatePageTwo = { ...candidate, id: 'candidate-page-2' }
+    const linkedPageOne = { ...linked, id: 'linked-page-1' }
+    const linkedPageTwo = { ...linked, id: 'linked-page-2' }
+    let candidateTotal = 51
+    let linkedTotal = 51
+    const candidateCalls: number[] = []
+    const linkedCalls: number[] = []
+    const api: RelationApi = {
+      relationCandidates: async (_id, params) => {
+        const currentPage = params?.page || 1
+        candidateCalls.push(currentPage)
+        return currentPage === 2
+          ? page(candidateTotal > 50 ? [candidatePageTwo] : [], 2, 50, candidateTotal)
+          : page([candidatePageOne], 1, 50, candidateTotal)
+      },
+      relations: async (_id, params) => {
+        const currentPage = params?.page || 1
+        linkedCalls.push(currentPage)
+        return currentPage === 2
+          ? page(linkedTotal > 50 ? [linkedPageTwo] : [], 2, 50, linkedTotal)
+          : page([linkedPageOne], 1, 50, linkedTotal)
+      },
+      createRelations: async () => {
+        candidateTotal = 50
+        return { data: { created_count: 1, existing_count: 0, invalid_question_ids: [] } }
+      },
+      removeRelation: async () => {
+        linkedTotal = 50
+        return { data: { removed: true } }
+      },
+    }
+    const controller = createQuestionRelationsController(api)
+
+    await controller.open('origin-1')
+    await controller.nextCandidatePage()
+    controller.toggleSelection('candidate-page-2')
+    await controller.createSelected()
+    expect(controller.state.candidatePage).toBe(1)
+    expect(controller.state.candidates).toEqual([candidatePageOne])
+    expect(candidateCalls.slice(-2)).toEqual([2, 1])
+
+    await controller.nextLinkedPage()
+    await controller.remove('linked-page-2')
+    expect(controller.state.linkedPage).toBe(1)
+    expect(controller.state.linked).toEqual([linkedPageOne])
+    expect(linkedCalls.slice(-2)).toEqual([2, 1])
+  })
 })

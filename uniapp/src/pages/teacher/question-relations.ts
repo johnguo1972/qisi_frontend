@@ -112,27 +112,41 @@ export function createQuestionRelationsController(api: RelationApi) {
     return state.questionId
   }
 
-  async function loadCandidates(page = state.candidatePage, requestGeneration = generation): Promise<void> {
+  async function loadCandidates(page = state.candidatePage, requestGeneration = generation, allowPageFallback = true): Promise<void> {
     const questionId = currentQuestionId()
     if (!questionId) return
     const response = await withLoading(requestGeneration, questionId, () => api.relationCandidates(questionId, { page, page_size: state.candidatePageSize }))
     if (!isCurrent(requestGeneration, questionId)) return
     const data = pageFromResponse(ensureRequestSucceeded(response), page, state.candidatePageSize)
+    const lastPage = totalPages(data.total, data.pageSize)
+    const normalizedPage = Math.min(data.pageNo, lastPage)
+    if (allowPageFallback && data.pageNo !== normalizedPage) {
+      state.candidatePage = normalizedPage
+      await loadCandidates(normalizedPage, requestGeneration, false)
+      return
+    }
     state.candidates = data.items
-    state.candidatePage = data.pageNo
+    state.candidatePage = normalizedPage
     state.candidateTotal = data.total
     state.candidatePageSize = data.pageSize
     state.reason = data.reason || ''
   }
 
-  async function loadLinked(page = state.linkedPage, requestGeneration = generation): Promise<void> {
+  async function loadLinked(page = state.linkedPage, requestGeneration = generation, allowPageFallback = true): Promise<void> {
     const questionId = currentQuestionId()
     if (!questionId) return
     const response = await withLoading(requestGeneration, questionId, () => api.relations(questionId, { page, page_size: state.linkedPageSize }))
     if (!isCurrent(requestGeneration, questionId)) return
     const data = pageFromResponse(ensureRequestSucceeded(response), page, state.linkedPageSize)
+    const lastPage = totalPages(data.total, data.pageSize)
+    const normalizedPage = Math.min(data.pageNo, lastPage)
+    if (allowPageFallback && data.pageNo !== normalizedPage) {
+      state.linkedPage = normalizedPage
+      await loadLinked(normalizedPage, requestGeneration, false)
+      return
+    }
     state.linked = data.items
-    state.linkedPage = data.pageNo
+    state.linkedPage = normalizedPage
     state.linkedTotal = data.total
     state.linkedPageSize = data.pageSize
   }
