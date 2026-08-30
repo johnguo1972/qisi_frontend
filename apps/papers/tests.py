@@ -1,5 +1,5 @@
 """Tests for papers app."""
-import pytest
+from unittest import skip
 from django.test import TestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
 from apps.papers.models import ExamPaper, ParseTask
@@ -59,7 +59,7 @@ class ParseTaskModelTest(TestCase):
         self.assertIn('测试试卷', str(task))
 
 
-@pytest.mark.skip(reason="试卷解析功能已下线")
+@skip(reason="试卷解析功能已下线")
 class UploadPaperAPITest(TestCase):
     def test_upload_docx_success(self):
         """Test uploading a valid .docx file."""
@@ -107,7 +107,7 @@ class UploadPaperAPITest(TestCase):
         self.assertEqual(response.status_code, 400)
 
 
-@pytest.mark.skip(reason="试卷解析功能已下线")
+@skip(reason="试卷解析功能已下线")
 class StartParseAPITest(TestCase):
     def test_start_parse_success(self):
         """Test starting a parse task for an existing paper."""
