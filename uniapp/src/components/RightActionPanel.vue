@@ -19,6 +19,7 @@
     <button class="action-btn btn-ai-sub" :disabled="aiModeRunning?.C" @click="$emit('ai-mode-c')">
       {{ aiModeRunning?.C ? 'AI-C处理中...' : 'AI-C模式' }}
     </button>
+    <slot name="course-actions" />
   </view>
 </template>
 

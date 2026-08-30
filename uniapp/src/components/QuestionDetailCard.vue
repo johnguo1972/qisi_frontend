@@ -87,6 +87,7 @@
         <button size="mini" @click="$emit('related', question.id)">关联题</button>
         <button size="mini" @click="$emit('edit-tags', question)">标签编辑</button>
         <button size="mini" @click="$emit('add-favorite', question.id)">加入精选</button>
+        <slot name="course-footer-actions" />
       </view>
     </view>
 

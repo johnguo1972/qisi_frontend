@@ -41,6 +41,8 @@
     "@dcloudio/uni-stacktracey": "3.0.0-alpha-5020120260710001",
     "@dcloudio/vite-plugin-uni": "3.0.0-alpha-5020120260710001",
     "@vue/runtime-core": "3.5.39",
+    "@vue/test-utils": "^2.5.0",
+    "jsdom": "^29.1.1",
     "rollup": "4.14.3",
     "typescript": "5.3.3",
     "vite": "5.2.8",
