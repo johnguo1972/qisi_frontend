@@ -1,5 +1,6 @@
 """学生端信号接收器：学生加入班级后回填任务进度。"""
 from django.db.models.signals import post_save
+from django.db.models import Q
 from django.dispatch import receiver
 from apps.institutions.models import ClassStudent
 from apps.missions.models import LearningMission
@@ -12,7 +13,9 @@ def backfill_mission_progress_on_join(sender, instance, created, **kwargs):
     if not created or instance.status != 'active':
         return
     missions = LearningMission.objects.filter(
-        class_obj_id=instance.class_obj_id, status='published'
+        Q(class_obj_id=instance.class_obj_id) |
+        Q(class_assignments__class_obj_id=instance.class_obj_id, class_assignments__status='active'),
+        status='published',
     )
     for mission in missions:
         StudentMissionProgress.objects.get_or_create(

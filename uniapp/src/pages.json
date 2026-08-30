@@ -21,10 +21,12 @@
     { "path": "pages/teacher/mission-detail", "style": { "navigationBarTitleText": "作业详情" } },
     { "path": "pages/teacher/mission-progress", "style": { "navigationBarTitleText": "学生完成进度" } },
     { "path": "pages/teacher/learning-stats", "style": { "navigationBarTitleText": "学情统计" } },
+    { "path": "pages/teacher/wrongbook-matrix", "style": { "navigationBarTitleText": "学生错题统计" } },
     { "path": "pages/teacher/level-practice", "style": { "navigationBarTitleText": "关卡练习" } },
     { "path": "pages/teacher/class-create", "style": { "navigationBarTitleText": "创建班级" } },
     { "path": "pages/teacher/class-edit", "style": { "navigationBarTitleText": "编辑班级" } },
     { "path": "pages/teacher/class-detail", "style": { "navigationBarTitleText": "班级详情" } },
+    { "path": "pages/teacher/student-import", "style": { "navigationBarTitleText": "批量导入学生" } },
     { "path": "pages/teacher/class-requests", "style": { "navigationBarTitleText": "申请审批" } },
     { "path": "pages/teacher/course-list", "style": { "navigationBarTitleText": "课程列表" } },
     { "path": "pages/teacher/course-detail", "style": { "navigationBarTitleText": "课程详情" } },
@@ -60,6 +62,9 @@
     ,{ "path": "pages/parent/growth", "style": { "navigationBarTitleText": "成长分析" } }
     ,{ "path": "pages/parent/knowledge", "style": { "navigationBarTitleText": "知识掌握" } }
     ,{ "path": "pages/parent/practice", "style": { "navigationBarTitleText": "精练题" } }
+    { "path": "pages/teacher/handout-create", "style": { "navigationBarTitleText": "创建讲义" } }
+    { "path": "pages/teacher/knowledge-matches", "style": { "navigationBarTitleText": "知识点匹配待确认" } },
+    { "path": "pages/teacher/handout-list", "style": { "navigationBarTitleText": "讲义管理" } }
   ],
   "tabBar": {
     "color": "#999999", "selectedColor": "#409eff", "backgroundColor": "#ffffff", "borderStyle": "white",

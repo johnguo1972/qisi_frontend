@@ -110,6 +110,7 @@
         <button class="btn-next" @click="nextQuestion">
           {{ hasNext ? '下一题 ›' : '完成' }}
         </button>
+        <button v-if="hasSubmitted" class="btn-related" @click="loadRelatedQuestions">同类题</button>
       </view>
 
       <!-- 答案解析面板（提交后展开） -->
@@ -170,6 +171,13 @@
       </view>
     </view>
   </view>
+  <view v-if="relatedVisible" class="related-modal" @click="relatedVisible = false">
+    <view class="related-panel" @click.stop>
+      <view class="answer-panel-header"><text class="answer-panel-title">可练习的同类题</text><text class="answer-panel-close" @click="relatedVisible = false">✕</text></view>
+      <view v-for="item in relatedItems" :key="item.id" class="related-item"><text>{{ item.question_no || '题目' }}：{{ item.stem }}</text></view>
+      <text v-if="!relatedItems.length" class="related-empty">暂无可练习的同类题</text>
+    </view>
+  </view>
 </template>
 
 <script setup lang="ts">
@@ -183,6 +191,7 @@ import { getQuestionTypeLabel } from '@/utils/question-type'
 import PhotoUploadEnhanced from '@/components/PhotoUploadEnhanced.vue'
 
 const levelId = ref<string>('')
+const missionId = ref<string>('')
 const questions = ref<any[]>([])
 const currentIndex = ref(0)
 const selectedOptions = ref<string[]>([])
@@ -200,6 +209,9 @@ const renderedOptions = ref<Record<string, string>>({})
 const renderedAnswer = ref('')
 const renderedAnalysis = ref('')
 const renderedSolution = ref('')
+const relatedVisible = ref(false)
+const relatedItems = ref<any[]>([])
+const idempotencyKey = ref('')
 
 // 每题状态缓存（切换题目时保存/恢复）
 const answersMap = ref<Record<number, any>>({})
@@ -309,6 +321,7 @@ onMounted(async () => {
   try {
     const res = await studentApi.levelDetail(levelId.value)
     questions.value = res.data?.questions || []
+    missionId.value = String(res.data?.mission_id || '')
     await renderCurrentQuestion()
   } catch (e) {
     console.error('加载题目失败:', e)
@@ -332,6 +345,7 @@ function saveQuestionState() {
     isCorrect: isCorrect.value,
     modeAData: modeAData.value,
     suggestGuidance: suggestGuidance.value,
+    idempotencyKey: idempotencyKey.value,
   }
 }
 
@@ -350,6 +364,7 @@ function restoreQuestionState(questionId: number) {
     isCorrect.value = saved.isCorrect || false
     modeAData.value = saved.modeAData || null
     suggestGuidance.value = saved.suggestGuidance || false
+    idempotencyKey.value = saved.idempotencyKey || ''
   } else {
     // 没做过：重置
     hasSubmitted.value = false
@@ -362,6 +377,7 @@ function restoreQuestionState(questionId: number) {
     textAnswer.value = ''
     uploadedImages.value = []
     attemptId.value = ''
+    idempotencyKey.value = ''
   }
 }
 
@@ -402,7 +418,7 @@ async function handleTakePhoto() {
   try {
     // #ifdef MP-WEIXIN
     if (!attemptId.value) {
-      const started: any = await studentApi.startAttempt({ question_id: currentQuestion.value.id, level_id: levelId.value })
+      const started: any = await studentApi.startAttempt({ question_id: currentQuestion.value.id, mission_id: missionId.value || undefined, level_id: levelId.value })
       if (started.code !== 0 || !started.data?.attempt_id) throw new Error(started.message || '无法创建作答记录')
       attemptId.value = started.data.attempt_id
     }
@@ -468,6 +484,9 @@ function previewImage(idx: number) {
 
 async function submitAnswer() {
   submitting.value = true
+  if (!idempotencyKey.value) {
+    idempotencyKey.value = `${currentQuestion.value.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  }
   const content = isObjective.value
     ? { selected_options: selectedOptions.value }
     : { text: textAnswer.value, images: uploadedImages.value.map(img => img.serverUrl) }
@@ -476,14 +495,14 @@ async function submitAnswer() {
     let res: any
     // #ifdef MP-WEIXIN
     if (!attemptId.value) {
-      const started: any = await studentApi.startAttempt({ question_id: currentQuestion.value.id, level_id: levelId.value })
+      const started: any = await studentApi.startAttempt({ question_id: currentQuestion.value.id, mission_id: missionId.value || undefined, level_id: levelId.value })
       if (started.code !== 0 || !started.data?.attempt_id) throw new Error(started.message || '无法创建作答记录')
       attemptId.value = started.data.attempt_id
     }
     res = await studentApi.submitDraftAttempt(attemptId.value, content)
     // #endif
     // #ifndef MP-WEIXIN
-    res = await studentApi.submitAnswer({ question_id: currentQuestion.value.id, answer_content: content, level_id: levelId.value })
+    res = await studentApi.submitAnswer({ question_id: currentQuestion.value.id, answer_content: content, mission_id: missionId.value || undefined, level_id: levelId.value, idempotency_key: idempotencyKey.value })
     // #endif
     isCorrect.value = res.data?.is_correct || false
     feedback.value = res.data?.feedback || ''
@@ -516,6 +535,16 @@ async function submitAnswer() {
 
 function showAnswerPanel() {
   showAnswer.value = true
+}
+
+async function loadRelatedQuestions() {
+  try {
+    const response: any = await studentApi.relatedQuestions(currentQuestion.value.id)
+    relatedItems.value = response.data || []
+    relatedVisible.value = true
+  } catch (error) {
+    uni.showToast({ title: '加载同类题失败', icon: 'none' })
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -849,6 +878,12 @@ async function nextQuestion() {
   padding: 20rpx 0;
   border-radius: 8rpx;
 }
+.btn-related { background: #fff; color: #409eff; border: 1rpx solid #409eff; font-size: 22rpx; }
+.btn-related::after { border: none; }
+.related-modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
+.related-panel { width: 80%; max-height: 70vh; overflow-y: auto; padding: 24rpx; border-radius: 12rpx; background: #fff; }
+.related-item { padding: 18rpx 0; border-bottom: 1rpx solid #eee; color: #333; font-size: 24rpx; line-height: 1.5; }
+.related-empty { display: block; padding: 30rpx; color: #999; text-align: center; font-size: 24rpx; }
 
 /* 答案解析面板 */
 .answer-panel {

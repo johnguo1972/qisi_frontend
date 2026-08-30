@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import wrongbook_matrix_views as matrix_views
 
 app_name = 'missions'
 urlpatterns = [
@@ -18,6 +19,10 @@ urlpatterns = [
     path('<uuid:mission_id>/levels/<uuid:level_id>/', views.mission_level_detail, name='mission-level-detail'),
     path('<uuid:mission_id>/questions', views.mission_questions, name='mission-questions-no-slash'),
     path('<uuid:mission_id>/questions/', views.mission_questions, name='mission-questions'),
+    path('<uuid:mission_id>/questions/replace', views.mission_questions, name='mission-questions-replace-no-slash'),
+    path('<uuid:mission_id>/questions/replace/', views.mission_questions, name='mission-questions-replace'),
+    path('<uuid:mission_id>/kind/<str:kind>', views.mission_set_kind, name='mission-set-kind-no-slash'),
+    path('<uuid:mission_id>/kind/<str:kind>/', views.mission_set_kind, name='mission-set-kind'),
     path('<uuid:mission_id>/favorites', views.mission_add_favorites, name='mission-add-favorites-no-slash'),
     path('<uuid:mission_id>/favorites/', views.mission_add_favorites, name='mission-add-favorites'),
     path('<uuid:mission_id>/export-pdf', views.mission_export_pdf, name='mission-export-pdf-no-slash'),
@@ -26,6 +31,8 @@ urlpatterns = [
     path('<uuid:mission_id>/grading/', views.mission_grading, name='mission-grading'),
     path('<uuid:mission_id>/progress', views.mission_progress, name='mission-progress-no-slash'),
     path('<uuid:mission_id>/progress/', views.mission_progress, name='mission-progress'),
+    path('<uuid:mission_id>/statistics', views.mission_progress, name='mission-statistics-no-slash'),
+    path('<uuid:mission_id>/statistics/', views.mission_progress, name='mission-statistics'),
     path('<uuid:mission_id>/grading/attempts/<uuid:attempt_id>', views.mission_grade_attempt, name='mission-grade-attempt-no-slash'),
     path('<uuid:mission_id>/grading/attempts/<uuid:attempt_id>/', views.mission_grade_attempt, name='mission-grade-attempt'),
     path('<uuid:mission_id>/grading/generate-variant', views.mission_generate_variant, name='mission-generate-variant-no-slash'),
@@ -39,4 +46,20 @@ urlpatterns = [
     # Teacher B/C mode guidance
     path('guidance/start/', views.start_teacher_guidance, name='teacher-guidance-start'),
     path('guidance/reply/<str:session_id>/', views.teacher_guidance_reply, name='teacher-guidance-reply'),
+    # Phase 4: teacher wrong-book matrix (canonical no-trailing-slash writes).
+    path('<uuid:mission_id>/wrongbook-matrix', matrix_views.wrongbook_matrix, name='wrongbook-matrix'),
+    path('<uuid:mission_id>/wrongbook-matrix/generate', matrix_views.wrongbook_matrix_generate, name='wrongbook-matrix-generate'),
+    path('<uuid:mission_id>/wrongbook-matrix/history', matrix_views.wrongbook_generation_history, name='wrongbook-matrix-history'),
+    path('<uuid:mission_id>/wrongbook-matrix/summary', matrix_views.wrongbook_matrix_summary, name='wrongbook-matrix-summary'),
+    path('<uuid:mission_id>/wrongbook-matrix/students/<uuid:student_id>', matrix_views.wrongbook_matrix_student, name='wrongbook-matrix-student'),
+    path('<uuid:mission_id>/wrongbook-matrix/refresh-scope', matrix_views.wrongbook_matrix_refresh_scope, name='wrongbook-matrix-refresh-scope'),
+    path('<uuid:mission_id>/wrongbook-matrix/close', matrix_views.wrongbook_matrix_close, name='wrongbook-matrix-close'),
+    path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>', matrix_views.wrongbook_generation_detail_nested, name='wrongbook-generation-detail-nested'),
+    path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/retry', matrix_views.wrongbook_generation_retry_nested, name='wrongbook-generation-retry-nested'),
+    path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/recommendations', matrix_views.wrongbook_recommendations_nested, name='wrongbook-recommendations-nested'),
+    path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/recommendations/confirm', matrix_views.wrongbook_recommendations_confirm_nested, name='wrongbook-recommendations-confirm-nested'),
+    path('wrongbook-generation/<uuid:batch_id>', matrix_views.wrongbook_generation_detail, name='wrongbook-generation-detail'),
+    path('wrongbook-generation/<uuid:batch_id>/retry', matrix_views.wrongbook_generation_retry, name='wrongbook-generation-retry'),
+    path('wrongbook-generation/<uuid:batch_id>/recommendations', matrix_views.wrongbook_recommendations, name='wrongbook-recommendations'),
+    path('wrongbook-generation/<uuid:batch_id>/recommendations/confirm', matrix_views.wrongbook_recommendations_confirm, name='wrongbook-recommendations-confirm'),
 ]

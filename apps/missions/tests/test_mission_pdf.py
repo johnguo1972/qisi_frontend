@@ -62,7 +62,7 @@ def test_publish_generates_ordered_pdf_and_student_parent_lists_expose_it(monkey
         mission=mission, level_no=1, level_name='作业题目', level_type='practice',
     )
     # Deliberately store the choice after the short answer in the relation
-    # table; PDF generation must follow this order, not question primary keys.
+    # table; publication now uses the natural numeric question order.
     MissionQuestionRel.objects.create(
         mission=mission, level=level, question_id=short_answer.id, sort_no=1,
     )
@@ -85,7 +85,7 @@ def test_publish_generates_ordered_pdf_and_student_parent_lists_expose_it(monkey
     mission.refresh_from_db()
     assert mission.status == 'published'
     assert mission.pdf_file_path.endswith(f'mission_{mission.id}.pdf')
-    assert [question['question_no'] for question in captured['questions']] == ['2', '1']
+    assert [question['question_no'] for question in captured['questions']] == ['1', '2']
 
     student_response = _client(student_parent, 'student').get('/api/v1/student/home')
     assert student_response.status_code == 200

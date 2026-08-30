@@ -3,7 +3,7 @@ from .student_views import (
     student_home, student_mission_detail, student_level_detail, growth_summary, export_pdf, upload_attempt_image,
     task_progress_stream
 )
-from .answer_views import submit_answer, retry_answer, get_mode_a, start_attempt, submit_attempt
+from .answer_views import submit_answer, retry_answer, get_mode_a, start_attempt, submit_attempt, submit_mission, related_questions
 from .guidance_views import start_guidance, guidance_reply
 from .knowledge_views import knowledge_mastery
 
@@ -15,12 +15,14 @@ urlpatterns = [
     path('attempts/start', start_attempt, name='start-attempt'),
     path('attempts/<uuid:attempt_id>/submit', submit_attempt, name='submit-attempt'),
     path('attempts', submit_answer, name='submit-answer'),
+    path('missions/<uuid:mission_id>/submit', submit_mission, name='submit-mission'),
     path('attempts/<uuid:attempt_id>/retry', retry_answer, name='retry-answer'),
     path('guidance/sessions', start_guidance, name='start-guidance'),
     # Legacy tests/clients may serialize UUID(int=n) as its compact integer.
     path('guidance/sessions/<int:session_id>/reply', guidance_reply, name='guidance-reply-int'),
     path('guidance/sessions/<uuid:session_id>/reply', guidance_reply, name='guidance-reply'),
     path('questions/<uuid:question_id>/mode-a', get_mode_a, name='mode-a'),
+    path('questions/<uuid:question_id>/related', related_questions, name='related-questions'),
     path('growth', growth_summary, name='growth-summary'),
     path('export/pdf', export_pdf, name='export-pdf'),
     path('attempts/<uuid:attempt_id>/upload-image', upload_attempt_image, name='upload-attempt-image'),

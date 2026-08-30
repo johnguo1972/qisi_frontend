@@ -45,6 +45,7 @@
           <text class="mission-end">截止: {{ formatMissionDate(m.end_at) }}</text>
         </view>
         <view class="card-actions">
+          <button size="mini" @click.stop="goLearningStats(m.id)">学情统计</button>
           <button size="mini" @click.stop="goGradeMission(m.id)">批改作业</button>
         </view>
       </view>
@@ -153,6 +154,10 @@ function goMissionProgress(id: string) {
 
 function goGradeMission(id: string) {
   uni.navigateTo({ url: `/pages/teacher/mission-detail?id=${id}&mode=grading` })
+}
+
+function goLearningStats(id: string) {
+  uni.navigateTo({ url: `/pages/teacher/wrongbook-matrix?missionId=${id}` })
 }
 </script>
 

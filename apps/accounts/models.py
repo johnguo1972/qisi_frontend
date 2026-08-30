@@ -10,7 +10,8 @@ class UserAccount(AbstractBaseUser):
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     role_type = models.CharField(max_length=20)  # teacher/student/parent/admin
     login_name = models.CharField(max_length=64, blank=True, null=True)
-    mobile = models.CharField(max_length=20, unique=True)
+    mobile = models.CharField(max_length=20, unique=True, null=True, blank=True)
+    student_no = models.CharField(max_length=64, blank=True, default='', db_index=True)
     display_name = models.CharField(max_length=64)
     subject = models.CharField(max_length=20, blank=True, null=True)  # teacher subject
     subjects = models.JSONField(blank=True, null=True)  # teacher subjects, e.g. ['physics', 'math']

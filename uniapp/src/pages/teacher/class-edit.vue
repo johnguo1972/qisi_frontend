@@ -29,6 +29,13 @@
         </view>
 
         <view class="form-item">
+          <text class="label">班级年级</text>
+          <picker :range="gradeOptions" :value="gradeIndex" @change="gradeIndex = Number($event.detail.value); form.grade_level = gradeOptions[gradeIndex] || ''">
+            <view class="picker-display">{{ form.grade_level || '请选择年级（可选）' }}</view>
+          </picker>
+        </view>
+
+        <view class="form-item">
           <text class="label">班级描述</text>
           <textarea v-model="form.description" placeholder="可选" class="textarea" />
         </view>
@@ -70,17 +77,23 @@ import { classApi } from '@/api/index.ts'
 
 const statusOptions = ['open', 'closed', 'archived']
 const statusTextMap: Record<string, string> = { open: '开放', closed: '已关闭', archived: '已归档' }
+const gradeOptions = [
+  '一年级', '二年级', '三年级', '四年级', '五年级', '六年级',
+  '七年级', '八年级', '九年级', '高一', '高二', '高三',
+]
 
 const classId = ref<string>('')
 const inviteCode = ref('')
 const regenerating = ref(false)
 const form = ref({
   class_name: '',
+  grade_level: '',
   description: '',
   max_students: 0,
   allow_invite_join: true,
   status: 'open',
 })
+const gradeIndex = ref(-1)
 const submitting = ref(false)
 
 // Use onLoad to get route parameters (works in H5 mode)
@@ -102,11 +115,13 @@ async function loadClass() {
       inviteCode.value = res.data.invite_code || ''
       form.value = {
         class_name: res.data.class_name || '',
+        grade_level: res.data.grade_level || '',
         description: res.data.description || '',
         max_students: res.data.max_students || 0,
         allow_invite_join: res.data.allow_invite_join ?? true,
         status: res.data.status || 'open',
       }
+      gradeIndex.value = Math.max(-1, gradeOptions.indexOf(form.value.grade_level))
     }
   } catch (e) {
     console.error('Failed to load class:', e)
@@ -168,6 +183,7 @@ async function handleSubmit() {
   try {
     const res: any = await classApi.update(classId.value, {
       class_name: form.value.class_name.trim(),
+      grade_level: form.value.grade_level || null,
       description: form.value.description.trim(),
       max_students: form.value.max_students,
       allow_invite_join: form.value.allow_invite_join,

@@ -8,6 +8,10 @@ urlpatterns = [
     path('courses/<uuid:course_id>/', views.course_detail_update_delete, name='course-detail-update-delete'),
     path('courses/<uuid:course_id>/collaborators/', views.course_collaborators, name='course-collaborators'),
     path('courses/<uuid:course_id>/collaborators/<uuid:user_id>/', views.course_collaborator_delete, name='course-collaborator-delete'),
+    path('courses/<uuid:course_id>/classes/', views.course_classes, name='course-classes'),
+    path('courses/<uuid:course_id>/classes/<uuid:class_id>/', views.course_class_remove, name='course-class-remove'),
+    path('courses/<uuid:course_id>/handouts/', views.course_handouts, name='course-handouts'),
+    path('courses/<uuid:course_id>/handouts/<uuid:handout_id>/', views.course_handout_remove, name='course-handout-remove'),
 
     # 课程资料
     path('courses/<uuid:course_id>/materials/', views.material_list, name='material-list'),

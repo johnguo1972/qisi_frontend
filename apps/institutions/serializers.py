@@ -183,7 +183,7 @@ class ClassListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Class
         fields = [
-            'id', 'class_no', 'class_name', 'description', 'max_students',
+            'id', 'class_no', 'class_name', 'grade_level', 'description', 'max_students',
             'invite_code', 'allow_invite_join', 'status', 'student_count',
             'pending_request_count', 'created_at', 'updated_at',
         ]
@@ -204,7 +204,7 @@ class ClassDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Class
         fields = [
-            'id', 'class_no', 'class_name', 'description', 'max_students',
+            'id', 'class_no', 'class_name', 'grade_level', 'description', 'max_students',
             'invite_code', 'allow_invite_join', 'status', 'institution_name',
             'creator_name', 'student_count', 'teachers', 'created_at',
             'updated_at',
@@ -236,7 +236,7 @@ class ClassDetailSerializer(serializers.ModelSerializer):
 class CreateClassSerializer(serializers.ModelSerializer):
     class Meta:
         model = Class
-        fields = ['class_name', 'description', 'max_students',
+        fields = ['class_name', 'grade_level', 'description', 'max_students',
                   'allow_invite_join']
 
     def create(self, validated_data):
@@ -248,7 +248,7 @@ class CreateClassSerializer(serializers.ModelSerializer):
 class UpdateClassSerializer(serializers.ModelSerializer):
     class Meta:
         model = Class
-        fields = ['class_name', 'description', 'max_students',
+        fields = ['class_name', 'grade_level', 'description', 'max_students',
                   'allow_invite_join', 'status']
 
 

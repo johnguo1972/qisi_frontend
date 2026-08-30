@@ -5,6 +5,18 @@
     <view class="main">
       <!-- Step 1: 基本信息 -->
       <view v-if="step === 1" class="form">
+        <view class="form-item">
+          <text class="label">题目来源</text>
+          <view class="target-mode-group">
+            <view
+              v-for="item in sourceTypeOptions"
+              :key="item.value"
+              class="target-mode"
+              :class="{ active: sourceType === item.value }"
+              @click="sourceType = item.value"
+            >{{ item.label }}</view>
+          </view>
+        </view>
         <view class="form-title">作业信息</view>
         <view class="form-item">
           <text class="label">作业名称 *</text>
@@ -14,18 +26,25 @@
           </view>
         </view>
         <view class="form-item">
+          <text class="label">作业类型</text>
+          <view class="target-mode-group">
+            <view class="target-mode" :class="{ active: missionKind === 'regular' }" @click="missionKind = 'regular'">普通作业</view>
+            <view class="target-mode" :class="{ active: missionKind === 'drill' }" @click="missionKind = 'drill'">教师精练</view>
+          </view>
+        </view>
+        <view class="form-item">
           <text class="label">选择班级 *</text>
           <view class="class-picker" @click="showClassDropdown = !showClassDropdown">
-            <text class="class-value">{{ selectedClassName || '请选择班级' }}</text>
+            <text class="class-value">{{ selectedClassName || '请选择班级（可多选）' }}</text>
             <text class="class-arrow">📋</text>
           </view>
           <!-- 班级下拉框 -->
           <view v-if="showClassDropdown" class="class-dropdown">
             <view v-for="cls in classList" :key="cls.id"
-                  :class="['class-option', {active: form.class_id === cls.id}]"
-                  @click="selectClass(cls)">
+                  :class="['class-option', {active: form.class_ids.includes(String(cls.id))}]"
+                  @click="toggleClass(cls)">
               <text class="class-opt-name">{{ cls.class_name }}</text>
-              <text v-if="form.class_id === cls.id" class="class-opt-check">✓</text>
+              <text v-if="form.class_ids.includes(String(cls.id))" class="class-opt-check">✓</text>
             </view>
             <view v-if="classList.length === 0" class="class-empty">
               <text>暂无班级，请先创建班级</text>
@@ -61,11 +80,12 @@
             <view class="target-mode" :class="{ active: targetMode === 'class' }" @click="setTargetMode('class')">全班</view>
             <view
               class="target-mode"
-              :class="{ active: targetMode === 'students', disabled: !form.class_id }"
+              :class="{ active: targetMode === 'students', disabled: !form.class_id || form.class_ids.length !== 1 }"
               @click="setTargetMode('students')"
             >指定学生</view>
           </view>
           <text v-if="!form.class_id" class="target-hint">请先选择班级，才能指定学生</text>
+          <text v-else-if="form.class_ids.length > 1" class="target-hint">多班级作业暂不支持指定学生，请布置给全班</text>
         </view>
         <view v-if="form.class_id && targetMode === 'students'" class="form-item target-students-item">
           <text class="label">选择需要精练的学生</text>
@@ -224,6 +244,10 @@
               <view class="filter-item">
                 <text class="filter-label">题号搜索</text>
                 <input v-model="searchQuery" placeholder="输入题号关键词" class="search-input" />
+              </view>
+              <view class="filter-item">
+                <text class="filter-label">标签</text>
+                <input v-model="filterTag" placeholder="输入标签名称" class="search-input" />
               </view>
               <view class="filter-actions">
                 <button class="filter-btn" @click="applyFilters">🔍 筛选</button>
@@ -529,7 +553,16 @@ const step = ref(1)
 const editMode = ref(false)
 const editMissionId = ref<string>('')
 
-const form = ref({ mission_name: '', goal_text: '', start_at: '', end_at: '', class_id: null as string | null })
+const form = ref({ mission_name: '', goal_text: '', start_at: '', end_at: '', class_id: null as string | null, class_ids: [] as string[] })
+const missionKind = ref<'regular' | 'drill'>('regular')
+type SourceType = 'question_bank' | 'handout' | 'wrongbook' | 'ai_recommendation'
+const sourceType = ref<SourceType>('question_bank')
+const sourceTypeOptions: Array<{ value: SourceType; label: string }> = [
+  { value: 'question_bank', label: '题库' },
+  { value: 'handout', label: '讲义' },
+  { value: 'wrongbook', label: '错题本' },
+  { value: 'ai_recommendation', label: 'AI推荐' },
+]
 const assignmentTitle = ref('作业')
 const targetMode = ref<'class' | 'students'>('class')
 const courseId = ref<number | null>(null)
@@ -558,6 +591,7 @@ const questionTypeLabel = computed(() => questionTypeOptions[questionTypeIndex.v
 const sortNos = ref<Record<string, number>>({})
 const draggingIndex = ref(-1)
 const searchQuery = ref('')
+const filterTag = ref('')
 const showDatePicker = ref(false)
 const tempDate = ref('')
 const showStartDatePicker = ref(false)
@@ -770,7 +804,7 @@ function confirmDate() {
 // Step 导航
 function nextStep() {
   if (step.value === 1) {
-    if (!form.value.class_id) {
+    if (!form.value.class_ids.length) {
       uni.showToast({ title: '请先选择班级', icon: 'none' })
       return
     }
@@ -847,6 +881,7 @@ async function loadQuestions() {
     if (selectedStages.value.length) params.stages = selectedStages.value.join(',')
     if (selectedQuestionType.value) params.question_type = selectedQuestionType.value
     if (searchQuery.value.trim()) params.question_no = searchQuery.value.trim()
+    if (filterTag.value.trim()) params.tag = filterTag.value.trim()
 
     const res: any = await questionApi.list(params)
     const data = res.data || {}
@@ -890,6 +925,7 @@ function resetFilters() {
   filterErrorMin.value = null
   filterErrorMax.value = null
   searchQuery.value = ''
+  filterTag.value = ''
   applyFilters()
 }
 
@@ -1139,7 +1175,7 @@ async function saveMission(
   shouldPublish: boolean,
   createMission: (payload: any) => Promise<any> = (payload) => missionApi.create(payload),
 ) {
-  if (!form.value.class_id && targetStudentIds.value.length === 0) {
+  if (!form.value.class_ids.length && targetStudentIds.value.length === 0) {
     uni.showToast({ title: '请选择班级或指定学生', icon: 'none' })
     step.value = 1
     return
@@ -1176,9 +1212,12 @@ async function saveMission(
       start_at: form.value.start_at || new Date().toISOString(),
       end_at: form.value.end_at,
       class_id: form.value.class_id,
+      class_ids: form.value.class_ids,
       course_id: courseId.value,
       target_student_ids: targetMode.value === 'students' ? targetStudentIds.value : [],
       assignment_mode: 'flat',
+      mission_kind: missionKind.value,
+      source_type: sourceType.value,
     }
 
     if (editMode.value) {
@@ -1243,16 +1282,18 @@ async function loadMissionData(id: string) {
     form.value.start_at = data.start_at || ''
     form.value.end_at = data.end_at || ''
     form.value.class_id = data.class_obj || null
+    form.value.class_ids = (data.class_ids || (data.class_obj ? [data.class_obj] : [])).map((value: any) => String(value))
+    missionKind.value = data.mission_kind === 'drill' ? 'drill' : 'regular'
+    sourceType.value = (data.source_type || 'question_bank') as SourceType
     targetStudentIds.value = (data.target_student_ids || []).map((value: any) => String(value))
     targetMode.value = targetStudentIds.value.length ? 'students' : 'class'
     assignmentTitle.value = data.mission_name || '作业'
-    if (data.class_obj) await loadClassStudents(data.class_obj)
+    if (form.value.class_ids.length === 1) await loadClassStudents(form.value.class_ids[0])
 
     // 加载班级名称（此时 classList 已加载）
-    if (data.class_obj) {
-      const cls = classList.value.find((c: any) => c.id === data.class_obj)
-      if (cls) selectedClassName.value = cls.class_name
-    }
+    selectedClassName.value = classList.value
+      .filter((c: any) => form.value.class_ids.includes(String(c.id)))
+      .map((c: any) => c.class_name).join('、')
 
     // 平铺读取题目，兼容历史作业的关卡关联顺序。
     try {
@@ -1287,8 +1328,26 @@ function selectClass(cls: any) {
   loadClassStudents(cls.id)
 }
 
+function toggleClass(cls: any) {
+  const id = String(cls.id)
+  const index = form.value.class_ids.indexOf(id)
+  if (index >= 0) form.value.class_ids.splice(index, 1)
+  else form.value.class_ids.push(id)
+  form.value.class_id = form.value.class_ids[0] || null
+  selectedClassName.value = classList.value
+    .filter(item => form.value.class_ids.includes(String(item.id)))
+    .map(item => item.class_name).join('、')
+  showClassDropdown.value = false
+  if (form.value.class_ids.length === 1) loadClassStudents(form.value.class_ids[0])
+  else {
+    classStudents.value = []
+    targetMode.value = 'class'
+    targetStudentIds.value = []
+  }
+}
+
 function setTargetMode(mode: 'class' | 'students') {
-  if (mode === 'students' && !form.value.class_id) {
+  if (mode === 'students' && (!form.value.class_id || form.value.class_ids.length !== 1)) {
     uni.showToast({ title: '请先选择班级', icon: 'none' })
     return
   }

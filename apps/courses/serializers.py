@@ -37,7 +37,7 @@ class CourseSerializer(serializers.ModelSerializer):
         return obj.question_links.filter(is_deleted=False).count()
 
     def get_class_count(self, obj):
-        return obj.tree_nodes.count()
+        return obj.class_relations.filter(status='active').count()
 
     def create(self, validated_data):
         validated_data['teacher'] = self.context['request'].user
