@@ -387,23 +387,25 @@ def _relation_item(question, common_names=None):
     }
 
 
-def _relation_page(request, items):
+def _relation_pagination(request):
     try:
         page = max(int(request.GET.get('page', 1)), 1)
-        page_size = min(max(int(request.GET.get('page_size', 20)), 1), 100)
+        page_size = min(max(int(request.GET.get('page_size', 50)), 1), 100)
     except (TypeError, ValueError):
         return None, Response(
             {'code': 400, 'message': 'page/page_size 参数无效', 'data': None, 'trace_id': ''},
             status=400,
         )
-    total = len(items)
-    start = (page - 1) * page_size
+    return (page, page_size), None
+
+
+def _relation_page_data(total, page, page_size, items):
     return {
-        'items': items[start:start + page_size],
+        'items': items,
         'total': total,
         'page_no': page,
         'page_size': page_size,
-    }, None
+    }
 
 
 @api_view(['GET', 'POST'])
@@ -419,15 +421,21 @@ def question_relations(request, question_id):
         return error
 
     if request.method == 'GET':
+        pagination, page_error = _relation_pagination(request)
+        if page_error:
+            return page_error
+        page, page_size = pagination
         related_ids = []
         for relation in QuestionRelation.for_question(question):
             related_ids.append(
                 relation.question_right_id if relation.question_left_id == question.id else relation.question_left_id
             )
         visible_related = _visible_relation_questions(request, question).filter(pk__in=related_ids)
-        items = [_relation_item(item) for item in visible_related.order_by('sort_order', 'id')]
-        page_data, page_error = _relation_page(request, items)
-        return page_error or _relation_response(page_data)
+        total = visible_related.count()
+        start = (page - 1) * page_size
+        page_questions = visible_related.order_by('sort_order', 'id')[start:start + page_size]
+        items = [_relation_item(item) for item in page_questions]
+        return _relation_response(_relation_page_data(total, page, page_size, items))
 
     question_ids = request.data.get('question_ids')
     if not isinstance(question_ids, list):
@@ -438,11 +446,30 @@ def question_relations(request, question_id):
             'trace_id': '',
         }, status=400)
 
+    unique_question_ids = []
+    seen_question_ids = set()
+    for raw_question_id in question_ids:
+        raw_value = str(raw_question_id)
+        if raw_value not in seen_question_ids:
+            seen_question_ids.add(raw_value)
+            unique_question_ids.append(raw_question_id)
+    if len(unique_question_ids) > 100:
+        return Response({
+            'code': 400,
+            'message': 'question_ids 最多100项',
+            'data': None,
+            'trace_id': '',
+        }, status=400)
+
+    visible_questions = _visible_relation_questions(request, question)
+    candidate_questions, _ = find_relation_candidates(question, visible_questions)
+    candidate_ids = {candidate.id for candidate in candidate_questions}
+
     created_count = 0
     existing_count = 0
     invalid_question_ids = []
     with transaction.atomic():
-        for raw_question_id in question_ids:
+        for raw_question_id in unique_question_ids:
             raw_value = str(raw_question_id)
             try:
                 related = ExamQuestion.objects.select_related('paper').get(pk=raw_question_id)
@@ -452,7 +479,16 @@ def question_relations(request, question_id):
             if related.id == question.id or _teacher_question_scope_error(request, related):
                 invalid_question_ids.append(raw_value)
                 continue
+            if not visible_questions.filter(pk=related.pk).exists():
+                invalid_question_ids.append(raw_value)
+                continue
             left, right = canonical_question_pair(question, related)
+            if QuestionRelation.objects.filter(question_left=left, question_right=right).exists():
+                existing_count += 1
+                continue
+            if related.id not in candidate_ids:
+                invalid_question_ids.append(raw_value)
+                continue
             _, created = QuestionRelation.objects.get_or_create(
                 question_left=left,
                 question_right=right,
@@ -475,17 +511,22 @@ def question_relation_candidates(request, question_id):
     question, error = _get_visible_question(request, question_id)
     if error:
         return error
+    pagination, page_error = _relation_pagination(request)
+    if page_error:
+        return page_error
+    page, page_size = pagination
     candidates, reason = find_relation_candidates(
         question,
         _visible_relation_questions(request, question),
     )
+    sorted_candidates = sorted(candidates, key=lambda candidate: (candidate.sort_order, str(candidate.id)))
+    total = len(sorted_candidates)
+    start = (page - 1) * page_size
     items = [
         _relation_item(candidate, _common_knowledge_point_names(question, candidate))
-        for candidate in sorted(candidates, key=lambda candidate: (candidate.sort_order, str(candidate.id)))
+        for candidate in sorted_candidates[start:start + page_size]
     ]
-    page_data, page_error = _relation_page(request, items)
-    if page_error:
-        return page_error
+    page_data = _relation_page_data(total, page, page_size, items)
     if reason:
         page_data['reason'] = reason
     return _relation_response(page_data)

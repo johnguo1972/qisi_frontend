@@ -1,5 +1,6 @@
 from decimal import Decimal
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -10,6 +11,7 @@ from apps.accounts.models import UserAccount
 from apps.papers.models import ExamPaper
 from apps.parser.models import ExamQuestion
 from apps.study.models import QuestionRelation
+from apps.study import question_views
 from apps.study.question_relation_service import (
     canonical_question_pair,
     find_relation_candidates,
@@ -126,6 +128,7 @@ def relation_questions(paper, relation_knowledge_point_table):
         other_subject=create('other-subject', subject='math', points=[{'module': 'motion'}]),
         too_hard=create('too-hard', difficulty=Decimal('3.51'), points=[{'module': 'motion'}]),
         unrelated=create('unrelated', points=[{'module': 'force'}]),
+        missing_metadata=create('missing-metadata'),
     )
 
 
@@ -368,3 +371,136 @@ def test_relation_reads_do_not_leak_questions_outside_teacher_scope(teacher_clie
     assert response.status_code == 200
     assert response.data['data']['items'] == []
     assert outside_origin.status_code == 403
+
+
+@pytest.mark.django_db
+def test_relation_creation_enforces_candidates_but_keeps_existing_relation_idempotent(
+    teacher_client, teacher, relation_questions
+):
+    teacher.subjects = ['physics', 'math']
+    teacher.save(update_fields=['subjects'])
+    relation_url = f'/api/v1/questions/{relation_questions.origin.id}/relations/'
+
+    created = teacher_client.post(
+        relation_url,
+        {
+            'question_ids': [
+                str(relation_questions.match.id),
+                str(relation_questions.other_subject.id),
+                str(relation_questions.too_hard.id),
+                str(relation_questions.unrelated.id),
+                str(relation_questions.missing_metadata.id),
+                str(relation_questions.origin.id),
+            ]
+        },
+        format='json',
+    )
+    repeated = teacher_client.post(
+        relation_url,
+        {'question_ids': [str(relation_questions.match.id)]},
+        format='json',
+    )
+
+    assert created.status_code == 200
+    assert created.data['data'] == {
+        'created_count': 1,
+        'existing_count': 0,
+        'invalid_question_ids': [
+            str(relation_questions.other_subject.id),
+            str(relation_questions.too_hard.id),
+            str(relation_questions.unrelated.id),
+            str(relation_questions.missing_metadata.id),
+            str(relation_questions.origin.id),
+        ],
+    }
+    assert repeated.data['data'] == {
+        'created_count': 0,
+        'existing_count': 1,
+        'invalid_question_ids': [],
+    }
+    assert QuestionRelation.for_question(relation_questions.origin).count() == 1
+
+
+@pytest.mark.django_db
+def test_relation_creation_deduplicates_requests_and_rejects_more_than_100_ids(
+    teacher_client, relation_questions
+):
+    relation_url = f'/api/v1/questions/{relation_questions.origin.id}/relations/'
+    deduplicated = teacher_client.post(
+        relation_url,
+        {'question_ids': [str(relation_questions.match.id)] * 2},
+        format='json',
+    )
+    oversized = teacher_client.post(
+        relation_url,
+        {'question_ids': [str(uuid4()) for _ in range(101)]},
+        format='json',
+    )
+
+    assert deduplicated.status_code == 200
+    assert deduplicated.data['data'] == {
+        'created_count': 1,
+        'existing_count': 0,
+        'invalid_question_ids': [],
+    }
+    assert oversized.status_code == 400
+    assert '100' in oversized.data['message']
+
+
+@pytest.mark.django_db
+def test_relation_gets_serialize_only_the_requested_page_and_default_to_50(
+    monkeypatch, teacher_client, teacher, relation_questions
+):
+    extra_candidates = [
+        ExamQuestion.objects.create(
+            paper=relation_questions.origin.paper,
+            question_no=f'extra-{number}',
+            question_type='single_choice',
+            subject='physics',
+            stem=f'Extra relation question {number}',
+            difficulty=Decimal('3.00'),
+            knowledge_points=[{'module': 'motion'}],
+        )
+        for number in range(4)
+    ]
+    serialized_ids = []
+    original_relation_item = question_views._relation_item
+
+    default_candidates = teacher_client.get(
+        f'/api/v1/questions/{relation_questions.origin.id}/relation-candidates/'
+    )
+    assert default_candidates.data['data']['page_size'] == 50
+
+    def track_relation_item(question, common_names=None):
+        serialized_ids.append(str(question.id))
+        return original_relation_item(question, common_names)
+
+    monkeypatch.setattr(question_views, '_relation_item', track_relation_item)
+    candidates = teacher_client.get(
+        f'/api/v1/questions/{relation_questions.origin.id}/relation-candidates/',
+        {'page': 1, 'page_size': 2},
+    )
+
+    assert candidates.status_code == 200
+    assert candidates.data['data']['page_size'] == 2
+    assert serialized_ids == [item['id'] for item in candidates.data['data']['items']]
+    assert len(serialized_ids) == 2
+
+    serialized_ids.clear()
+    all_related = [relation_questions.match, relation_questions.second_match, *extra_candidates]
+    for related in all_related:
+        QuestionRelation.create_for_questions(relation_questions.origin, related, teacher)
+    listed = teacher_client.get(
+        f'/api/v1/questions/{relation_questions.origin.id}/relations/',
+        {'page': 1, 'page_size': 2},
+    )
+
+    assert listed.status_code == 200
+    assert serialized_ids == [item['id'] for item in listed.data['data']['items']]
+    assert len(serialized_ids) == 2
+
+    serialized_ids.clear()
+    default_page = teacher_client.get(
+        f'/api/v1/questions/{relation_questions.origin.id}/relations/'
+    )
+    assert default_page.data['data']['page_size'] == 50
