@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import QuestionDetailCard from './QuestionDetailCard.vue'
+import RightActionPanel from './RightActionPanel.vue'
 
 const question = {
   id: 'question-1',
@@ -23,5 +24,16 @@ describe('QuestionDetailCard', () => {
 
     expect(wrapper.text()).toContain('关联题')
     expect(wrapper.find('[data-test="remove-course"]').exists()).toBe(true)
+  })
+})
+
+describe('RightActionPanel', () => {
+  it('keeps standard actions and renders supplied course actions', () => {
+    const wrapper = mount(RightActionPanel, {
+      slots: { 'course-actions': '<button data-test="course-action">课程操作</button>' },
+    })
+
+    expect(wrapper.text()).toContain('刷新题目')
+    expect(wrapper.find('[data-test="course-action"]').exists()).toBe(true)
   })
 })
