@@ -1234,7 +1234,9 @@ async function submitBatchAi() {
     })
     if (!submitted.submitted) {
       aiActionRunning.value.batch = false
-      selectionRequired()
+      if (selectedIds.value.length === 0) selectionRequired()
+      else if (submitted.noNewTask) uni.showToast({ title: '所选题目已有进行中的 AI 任务', icon: 'none' })
+      else uni.showToast({ title: '批量AI任务提交失败', icon: 'none' })
       return
     }
     uni.showToast({ title: '批量AI任务已提交', icon: 'success' })

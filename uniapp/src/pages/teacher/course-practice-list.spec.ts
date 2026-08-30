@@ -207,4 +207,14 @@ describe('course practice question list query state', () => {
     })
     expect(probe).toEqual({ submitted: 1, failed: 1, taskIds: ['task-1'] })
   })
+
+  it('classifies an accepted-but-deduplicated batch as no new task rather than no selection', async () => {
+    const helpers = await import('./course-practice-list') as Record<string, unknown>
+    const result = await (helpers.submitCourseBatchAi as (input: any) => Promise<any>)({
+      selectedIds: ['q-1'],
+      batchAi: vi.fn().mockResolvedValue({ data: { accepted: 0, deduplicated: ['q-1'] } }),
+    })
+
+    expect(result).toMatchObject({ submitted: 0, failed: 0, noNewTask: true })
+  })
 })

@@ -3,11 +3,12 @@ import { h, nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CoursePractice from './course-practice.vue'
 
-const { courseQuestionList, batchDelete, variantGenerate, variantBatchGenerate } = vi.hoisted(() => ({
+const { courseQuestionList, batchDelete, variantGenerate, variantBatchGenerate, questionBatchAi } = vi.hoisted(() => ({
   courseQuestionList: vi.fn(),
   batchDelete: vi.fn(),
   variantGenerate: vi.fn(),
   variantBatchGenerate: vi.fn(),
+  questionBatchAi: vi.fn(),
 }))
 
 vi.mock('@/api/courses', () => ({
@@ -21,7 +22,7 @@ vi.mock('@/api/courses', () => ({
 vi.mock('@/api/questions', () => ({
   questionApi: {
     dictKnowledgePoints: vi.fn().mockResolvedValue({ data: [] }),
-    batchAi: vi.fn(), aiProcessMode: vi.fn(), getTaskStatus: vi.fn(), getAiJobStatus: vi.fn(), list: vi.fn(),
+    batchAi: questionBatchAi, aiProcessMode: vi.fn(), getTaskStatus: vi.fn(), getAiJobStatus: vi.fn(), list: vi.fn(),
   },
   aiProcessProbe: vi.fn(), getQuestionTags: vi.fn(), addQuestionTag: vi.fn(), getTagList: vi.fn().mockResolvedValue({ data: [] }), removeQuestionTag: vi.fn(), importJsonPackage: vi.fn(),
 }))
@@ -54,9 +55,12 @@ const QuestionDetailCardStub = {
 }
 const RightActionPanelStub = {
   name: 'RightActionPanel',
-  emits: ['refresh'],
+  emits: ['refresh', 'batch-ai'],
   render() {
-    return h('button', { 'data-test': 'refresh-questions', onClick: () => this.$emit('refresh') }, '刷新')
+    return h('div', [
+      h('button', { 'data-test': 'refresh-questions', onClick: () => this.$emit('refresh') }, '刷新'),
+      h('button', { 'data-test': 'batch-ai', onClick: () => this.$emit('batch-ai') }, '批量AI'),
+    ])
   },
 }
 const InputStub = {
@@ -87,6 +91,7 @@ describe('course-practice page integration', () => {
     batchDelete.mockReset()
     variantGenerate.mockReset()
     variantBatchGenerate.mockReset()
+    questionBatchAi.mockReset()
     vi.stubGlobal('getCurrentPages', () => [{ options: { id: 'course-1' } }])
     vi.stubGlobal('__uniConfig', { locales: {} })
     vi.stubGlobal('uni', {
@@ -159,5 +164,22 @@ describe('course-practice page integration', () => {
     await variantButton.trigger('click')
     expect(variantGenerate).not.toHaveBeenCalled()
     expect(variantBatchGenerate).not.toHaveBeenCalled()
+  })
+
+  it('does not misreport a non-empty deduplicated batch as an empty selection', async () => {
+    const showToast = vi.fn()
+    vi.stubGlobal('uni', { ...(globalThis as any).uni, showToast })
+    courseQuestionList.mockResolvedValue({ data: { items: [{ question_id: 'q-1' }], total: 1, page_no: 1, page_size: 20 } })
+    questionBatchAi.mockResolvedValue({ data: { accepted: 0, deduplicated: ['q-1'] } })
+    const wrapper = mountPage()
+    await settle()
+    wrapper.findComponent(DirTreeStub).vm.$emit('select', { id: 1, name: '节点一' })
+    await settle()
+    await wrapper.find('[data-test="select-question"]').trigger('click')
+    await wrapper.find('[data-test="batch-ai"]').trigger('click')
+    await settle()
+
+    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ title: '所选题目已有进行中的 AI 任务' }))
+    expect(showToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: '请先选择题目' }))
   })
 })

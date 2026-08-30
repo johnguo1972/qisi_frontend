@@ -77,11 +77,17 @@ export async function submitCourseBatchAi(input: {
   poll?: (taskId: string) => Promise<BackgroundAiTerminalStatus>
   refresh?: () => Promise<unknown> | unknown
   onTerminal?: () => void
-}): Promise<{ submitted: number; failed: number; taskIds: string[] }> {
+}): Promise<{ submitted: number; failed: number; taskIds: string[]; noNewTask?: boolean }> {
   if (!input.selectedIds.length) return { submitted: 0, failed: 0, taskIds: [] }
   const response = await input.batchAi([...input.selectedIds])
   const taskId = extractBackgroundTaskId(response)
-  if (!taskId) return { submitted: 0, failed: input.selectedIds.length, taskIds: [] }
+  if (!taskId) {
+    const data = (response as { data?: { accepted?: unknown; deduplicated?: unknown } } | null)?.data
+    const accepted = Number(data?.accepted)
+    const deduplicated = Array.isArray(data?.deduplicated) ? data.deduplicated.length : 0
+    if (accepted === 0 && deduplicated > 0) return { submitted: 0, failed: 0, taskIds: [], noNewTask: true }
+    return { submitted: 0, failed: input.selectedIds.length, taskIds: [] }
+  }
   if (input.poll) {
     void input.poll(taskId).then(status => {
       if (isRefreshableAiStatus(status)) void input.refresh?.()
