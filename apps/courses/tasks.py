@@ -1,10 +1,13 @@
-"""Celery tasks for variant question generation."""
+"""Celery tasks for course features."""
 import logging
+import os
 import time
 from celery import shared_task
+from django.conf import settings
 from django.utils import timezone
 
-from apps.courses.models import VariantTask, CourseQuestionLink
+from apps.courses import convert_service
+from apps.courses.models import CourseMaterial, VariantTask, CourseQuestionLink
 from apps.courses.validator import VariantValidator
 from apps.courses.ai_service import (
     deepseek_verification_available,
@@ -18,6 +21,49 @@ from apps.common.exceptions import AIRequestError
 from apps.parser.models import ExamQuestion, QuestionOption
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task(bind=True)
+def convert_course_material(self, material_id: str) -> dict:
+    """在后台将 Word 课程资料转为 PDF，不阻塞预览请求。"""
+    try:
+        material = CourseMaterial.objects.get(id=material_id)
+    except CourseMaterial.DoesNotExist:
+        logger.warning('Course material conversion skipped: material does not exist: %s', material_id)
+        return {'status': 'skipped', 'material_id': material_id, 'reason': 'not_found'}
+
+    if material.is_deleted:
+        return {'status': 'skipped', 'material_id': material_id, 'reason': 'deleted'}
+    if material.file_type.lower() not in {'doc', 'docx'}:
+        return {'status': 'skipped', 'material_id': material_id, 'reason': 'not_word'}
+
+    material.conversion_status = CourseMaterial.ConversionStatus.CONVERTING
+    material.conversion_started_at = timezone.now()
+    material.conversion_error = ''
+    material.save(update_fields=['conversion_status', 'conversion_started_at', 'conversion_error'])
+
+    try:
+        source_path = os.path.join(settings.MEDIA_ROOT, material.file_path)
+        pdf_path = convert_service.convert_word_to_pdf(source_path)
+        if not pdf_path:
+            raise RuntimeError('Word conversion to PDF failed')
+
+        material.converted_pdf_path = os.path.relpath(pdf_path, settings.MEDIA_ROOT).replace(os.sep, '/')
+        material.conversion_status = CourseMaterial.ConversionStatus.COMPLETED
+        material.conversion_completed_at = timezone.now()
+        material.conversion_error = ''
+        material.save(update_fields=[
+            'converted_pdf_path', 'conversion_status', 'conversion_completed_at', 'conversion_error',
+        ])
+        logger.info('Course material conversion completed: %s', material.id)
+        return {'status': 'completed', 'material_id': str(material.id)}
+    except Exception as exc:
+        material.conversion_status = CourseMaterial.ConversionStatus.FAILED
+        material.conversion_completed_at = timezone.now()
+        material.conversion_error = str(exc)[:2000]
+        material.save(update_fields=['conversion_status', 'conversion_completed_at', 'conversion_error'])
+        logger.exception('Course material conversion failed: %s', material.id)
+        return {'status': 'failed', 'material_id': str(material.id), 'reason': str(exc)}
 
 
 def variant_generator_component_factory() -> VariantGeneratorComponent:

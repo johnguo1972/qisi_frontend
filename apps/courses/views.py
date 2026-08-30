@@ -4,7 +4,7 @@ import uuid
 import logging
 import mimetypes
 from django.conf import settings
-from django.db import models as db_models
+from django.db import models as db_models, transaction
 from django.http import FileResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
@@ -49,6 +49,21 @@ def batch_variant_task_dispatch(**kwargs):
     from .tasks import batch_generate_variants_task
 
     return batch_generate_variants_task.delay(**kwargs)
+
+
+def _dispatch_material_conversion(material_id):
+    """Queue conversion after the material row has been committed."""
+    from .tasks import convert_course_material
+
+    try:
+        convert_course_material.delay(str(material_id))
+    except Exception as exc:
+        CourseMaterial.objects.filter(id=material_id).update(
+            conversion_status=CourseMaterial.ConversionStatus.FAILED,
+            conversion_error=str(exc)[:2000],
+            conversion_completed_at=timezone.now(),
+        )
+        logger.exception('Failed to dispatch course material conversion: %s', material_id)
 
 
 def create_variant_task_and_dispatch(*, question, variant_mode, tree_node_id=None):
@@ -540,6 +555,7 @@ def material_upload(request, course_id):
     file_type = ext.lstrip('.').lower() if ext else 'unknown'
 
     # 创建资料记录
+    is_word = file_type in {'doc', 'docx'}
     material = CourseMaterial.objects.create(
         course=course,
         name=uploaded_file.name,
@@ -548,7 +564,13 @@ def material_upload(request, course_id):
         file_size=uploaded_file.size,
         mime_type=mime_type,
         uploaded_by=request.user,
+        conversion_status=(
+            CourseMaterial.ConversionStatus.PENDING
+            if is_word else CourseMaterial.ConversionStatus.NOT_REQUIRED
+        ),
     )
+    if is_word:
+        transaction.on_commit(lambda material_id=material.id: _dispatch_material_conversion(material_id))
 
     serializer = CourseMaterialSerializer(material, context={'request': request})
     return Response(
@@ -593,31 +615,53 @@ def material_preview(request, course_id, material_id):
     except CourseMaterial.DoesNotExist:
         raise NotFound(f'资料 {material_id} 不存在')
 
-    full_path = os.path.join(settings.MEDIA_ROOT, material.file_path)
-    if not os.path.exists(full_path):
-        raise NotFound('文件不存在')
-
-    # Word文档（.doc/.docx）转为PDF再预览
-    word_extensions = ['doc', 'docx', 'word']
-    preview_path = full_path
-    content_type = material.mime_type
-    filename = material.name
-
-    if material.file_type.lower() in word_extensions:
-        from .convert_service import convert_word_to_pdf
-        pdf_path = convert_word_to_pdf(full_path)
-        if pdf_path:
-            preview_path = pdf_path
-            content_type = 'application/pdf'
-            filename = os.path.splitext(material.name)[0] + '.pdf'
-        else:
-            # 转换失败，返回下载链接让用户下载后用Office打开
-            preview_url = f'/api/v1/courses/{course_id}/materials/{material_id}/download/'
+    word_extensions = {'doc', 'docx', 'word'}
+    is_word = material.file_type.lower() in word_extensions
+    if is_word:
+        if material.conversion_status in {
+            CourseMaterial.ConversionStatus.PENDING,
+            CourseMaterial.ConversionStatus.CONVERTING,
+        }:
             return Response({
                 'success': False,
-                'message': 'Word文档预览不可用，请下载后用Office/WPS打开',
-                'data': {'download_url': preview_url},
-            })
+                'code': 'conversion_in_progress',
+                'message': '格式转换中，请稍后再预览',
+            }, status=status.HTTP_409_CONFLICT)
+        if material.conversion_status == CourseMaterial.ConversionStatus.FAILED:
+            return Response({
+                'success': False,
+                'code': 'conversion_failed',
+                'message': '格式转换失败，请下载原文件后使用 Office/WPS 打开',
+            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        # Legacy Word materials are upgraded lazily, but preview never blocks.
+        if material.conversion_status != CourseMaterial.ConversionStatus.COMPLETED:
+            material.conversion_status = CourseMaterial.ConversionStatus.PENDING
+            material.conversion_error = ''
+            material.save(update_fields=['conversion_status', 'conversion_error'])
+            transaction.on_commit(lambda material_id=material.id: _dispatch_material_conversion(material_id))
+            return Response({
+                'success': False,
+                'code': 'conversion_in_progress',
+                'message': '格式转换中，请稍后再预览',
+            }, status=status.HTTP_409_CONFLICT)
+
+        if not material.converted_pdf_path:
+            return Response({
+                'success': False,
+                'code': 'conversion_failed',
+                'message': '转换后的 PDF 不存在，请重新上传该文件',
+            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        preview_path = os.path.join(settings.MEDIA_ROOT, material.converted_pdf_path)
+        content_type = 'application/pdf'
+        filename = os.path.splitext(material.name)[0] + '.pdf'
+    else:
+        preview_path = os.path.join(settings.MEDIA_ROOT, material.file_path)
+        content_type = material.mime_type
+        filename = material.name
+
+    if not os.path.exists(preview_path):
+        raise NotFound('预览文件不存在')
 
     # 返回文件内容（inline 方式让浏览器直接显示）
     response = FileResponse(

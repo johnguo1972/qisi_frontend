@@ -101,6 +101,13 @@ class CourseAuditLog(models.Model):
 
 class CourseMaterial(models.Model):
     """课程资料"""
+    class ConversionStatus(models.TextChoices):
+        NOT_REQUIRED = 'not_required', '无需转换'
+        PENDING = 'pending', '等待转换'
+        CONVERTING = 'converting', '格式转换中'
+        COMPLETED = 'completed', '格式转换完成'
+        FAILED = 'failed', '格式转换失败'
+
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     course = models.ForeignKey(
         Course,
@@ -114,6 +121,17 @@ class CourseMaterial(models.Model):
     file_type = models.CharField(max_length=20, verbose_name='文件类型')
     file_size = models.BigIntegerField(verbose_name='文件大小(字节)')
     mime_type = models.CharField(max_length=100, verbose_name='MIME类型')
+    conversion_status = models.CharField(
+        max_length=20,
+        choices=ConversionStatus.choices,
+        default=ConversionStatus.NOT_REQUIRED,
+        db_index=True,
+        verbose_name='格式转换状态',
+    )
+    converted_pdf_path = models.CharField(max_length=500, null=True, blank=True, verbose_name='转换后 PDF 路径')
+    conversion_error = models.TextField(null=True, blank=True, verbose_name='格式转换错误')
+    conversion_started_at = models.DateTimeField(null=True, blank=True, verbose_name='转换开始时间')
+    conversion_completed_at = models.DateTimeField(null=True, blank=True, verbose_name='转换完成时间')
     is_deleted = models.BooleanField(default=False, verbose_name='软删除标记')
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
