@@ -46,6 +46,9 @@ urlpatterns = [
     path('batch-update/', batch_views.batch_update, name='batch-update'),
     path('<str:question_id>/qr/', qr_views.question_qr, name='question-qr'),
     path('<str:question_id>/similar/', question_views.similar_questions, name='similar-questions'),
+    path('<uuid:question_id>/relations/', question_views.question_relations, name='question-relations'),
+    path('<uuid:question_id>/relations/<uuid:related_id>/', question_views.question_relation_detail, name='question-relation-detail'),
+    path('<uuid:question_id>/relation-candidates/', question_views.question_relation_candidates, name='question-relation-candidates'),
 
     # 条形码（需要 python-barcode 包）
     path('barcode/scan/', barcode_views.barcode_scan if HAS_BARCODE else lambda r: __import__('django.http', fromlist=['JsonResponse']).JsonResponse({'code': 503, 'message': 'python-barcode not installed'}, status=503), name='barcode-scan'),

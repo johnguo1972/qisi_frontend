@@ -2,16 +2,24 @@
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q, CharField
 from django.db.models.functions import Cast
 from apps.accounts.auth import get_request_role
 from apps.parser.models import ExamQuestion
-from apps.study.models import QuestionTagRelation
+from apps.study.models import QuestionRelation, QuestionTagRelation
 from apps.knowledge.models import KnowledgePoint
 from apps.knowledge.teacher_scope import (
     TeachingScopeForbidden,
     apply_stage_scope,
     resolve_teacher_question_scope,
+)
+from apps.common.question_display import preview_text
+from .question_relation_service import (
+    canonical_question_pair,
+    find_relation_candidates,
+    knowledge_point_keys,
 )
 from .serializers import QuestionListSerializer, QuestionDetailSerializer
 
@@ -280,6 +288,221 @@ def similar_questions(request, question_id):
 
     items = candidates.order_by('difficulty', 'sort_order')[:20]
     return Response({'code': 0, 'data': QuestionListSerializer(items, many=True).data})
+
+
+def _relation_response(data):
+    return Response({'code': 0, 'message': 'success', 'data': data, 'trace_id': ''})
+
+
+def _relation_not_found_response():
+    return Response(
+        {'code': 404, 'message': '题目不存在', 'data': None, 'trace_id': ''},
+        status=404,
+    )
+
+
+def _question_bank_manager_error(request):
+    if get_request_role(request) in {'admin', 'teacher'}:
+        return None
+    return Response({
+        'code': 'QUESTION_BANK_MANAGEMENT_FORBIDDEN',
+        'message': 'Only question bank managers can change question relations.',
+        'data': None,
+        'trace_id': '',
+    }, status=403)
+
+
+def _get_visible_question(request, question_id):
+    try:
+        question = ExamQuestion.objects.select_related('paper').get(pk=question_id)
+    except ExamQuestion.DoesNotExist:
+        return None, _relation_not_found_response()
+    scope_error = _teacher_question_scope_error(request, question)
+    if scope_error:
+        return None, scope_error
+    return question, None
+
+
+def _get_visible_question_pair(request, question_id, related_id):
+    question, error = _get_visible_question(request, question_id)
+    if error:
+        return None, None, error
+    related, error = _get_visible_question(request, related_id)
+    if error:
+        return None, None, error
+    return question, related, None
+
+
+def _visible_relation_questions(request, origin_question):
+    questions = ExamQuestion.objects.select_related('paper').all()
+    if get_request_role(request) == 'teacher':
+        scope = resolve_teacher_question_scope(
+            request,
+            requested_subject=origin_question.subject or '',
+        )
+        questions = questions.filter(
+            subject__in=[
+                scope.selected_subject,
+                SUBJECT_LABELS.get(scope.selected_subject, scope.selected_subject),
+            ]
+        )
+        questions = apply_stage_scope(questions, scope.stages)
+    return questions
+
+
+def _common_knowledge_point_names(question, related_question):
+    common_keys = knowledge_point_keys(question.knowledge_points) & knowledge_point_keys(
+        related_question.knowledge_points
+    )
+    names = []
+    raw_points = question.knowledge_points or []
+    if isinstance(raw_points, dict):
+        raw_points = raw_points.get('points') or raw_points.get('knowledge_points') or [raw_points]
+    if not isinstance(raw_points, (list, tuple)):
+        return names
+    for point in raw_points:
+        if isinstance(point, dict):
+            for field in ('id', 'module', 'name'):
+                value = point.get(field)
+                if value is not None and str(value).strip():
+                    if f'{field}:{str(value).strip()}' in common_keys:
+                        name = str(value).strip()
+                        if name not in names:
+                            names.append(name)
+                    break
+        elif isinstance(point, str) and point.strip() and f'name:{point.strip()}' in common_keys:
+            if point.strip() not in names:
+                names.append(point.strip())
+    return names
+
+
+def _relation_item(question, common_names=None):
+    return {
+        'id': str(question.id),
+        'question_no': question.question_no,
+        'stem_preview': preview_text(question.stem, question.subquestions, question.tables, limit=120),
+        'difficulty': question.difficulty,
+        'knowledge_points_display': QuestionListSerializer(question).get_knowledge_points_display(question),
+        'common_knowledge_point_names': common_names or [],
+    }
+
+
+def _relation_page(request, items):
+    try:
+        page = max(int(request.GET.get('page', 1)), 1)
+        page_size = min(max(int(request.GET.get('page_size', 20)), 1), 100)
+    except (TypeError, ValueError):
+        return None, Response(
+            {'code': 400, 'message': 'page/page_size 参数无效', 'data': None, 'trace_id': ''},
+            status=400,
+        )
+    total = len(items)
+    start = (page - 1) * page_size
+    return {
+        'items': items[start:start + page_size],
+        'total': total,
+        'page_no': page,
+        'page_size': page_size,
+    }, None
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def question_relations(request, question_id):
+    if request.method == 'POST':
+        manager_error = _question_bank_manager_error(request)
+        if manager_error:
+            return manager_error
+
+    question, error = _get_visible_question(request, question_id)
+    if error:
+        return error
+
+    if request.method == 'GET':
+        related_ids = []
+        for relation in QuestionRelation.for_question(question):
+            related_ids.append(
+                relation.question_right_id if relation.question_left_id == question.id else relation.question_left_id
+            )
+        visible_related = _visible_relation_questions(request, question).filter(pk__in=related_ids)
+        items = [_relation_item(item) for item in visible_related.order_by('sort_order', 'id')]
+        page_data, page_error = _relation_page(request, items)
+        return page_error or _relation_response(page_data)
+
+    question_ids = request.data.get('question_ids')
+    if not isinstance(question_ids, list):
+        return Response({
+            'code': 400,
+            'message': 'question_ids 必须是数组',
+            'data': None,
+            'trace_id': '',
+        }, status=400)
+
+    created_count = 0
+    existing_count = 0
+    invalid_question_ids = []
+    with transaction.atomic():
+        for raw_question_id in question_ids:
+            raw_value = str(raw_question_id)
+            try:
+                related = ExamQuestion.objects.select_related('paper').get(pk=raw_question_id)
+            except (ExamQuestion.DoesNotExist, ValidationError, ValueError, TypeError):
+                invalid_question_ids.append(raw_value)
+                continue
+            if related.id == question.id or _teacher_question_scope_error(request, related):
+                invalid_question_ids.append(raw_value)
+                continue
+            left, right = canonical_question_pair(question, related)
+            _, created = QuestionRelation.objects.get_or_create(
+                question_left=left,
+                question_right=right,
+                defaults={'created_by': request.user},
+            )
+            if created:
+                created_count += 1
+            else:
+                existing_count += 1
+    return _relation_response({
+        'created_count': created_count,
+        'existing_count': existing_count,
+        'invalid_question_ids': invalid_question_ids,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def question_relation_candidates(request, question_id):
+    question, error = _get_visible_question(request, question_id)
+    if error:
+        return error
+    candidates, reason = find_relation_candidates(
+        question,
+        _visible_relation_questions(request, question),
+    )
+    items = [
+        _relation_item(candidate, _common_knowledge_point_names(question, candidate))
+        for candidate in sorted(candidates, key=lambda candidate: (candidate.sort_order, str(candidate.id)))
+    ]
+    page_data, page_error = _relation_page(request, items)
+    if page_error:
+        return page_error
+    if reason:
+        page_data['reason'] = reason
+    return _relation_response(page_data)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def question_relation_detail(request, question_id, related_id):
+    manager_error = _question_bank_manager_error(request)
+    if manager_error:
+        return manager_error
+    question, related, error = _get_visible_question_pair(request, question_id, related_id)
+    if error:
+        return error
+    left, right = canonical_question_pair(question, related)
+    removed, _ = QuestionRelation.objects.filter(question_left=left, question_right=right).delete()
+    return _relation_response({'removed': bool(removed)})
 
 
 @api_view(['GET', 'PUT'])

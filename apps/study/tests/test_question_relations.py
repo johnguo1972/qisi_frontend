@@ -1,8 +1,10 @@
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
+from rest_framework.test import APIClient
 
 from apps.accounts.models import UserAccount
 from apps.papers.models import ExamPaper
@@ -31,6 +33,7 @@ def paper(db):
     return ExamPaper.objects.create(
         title='Relation Questions',
         subject='physics',
+        stage='junior',
         source_file_path='tests/relations.pdf',
     )
 
@@ -65,6 +68,65 @@ def questions(paper):
         'name_origin': create('name-origin', points=[{'name': 'Uniform motion'}]),
         'name_match': create('name-match', points=['Uniform motion']),
     }
+
+
+@pytest.fixture
+def teacher_client(teacher):
+    teacher.stages = ['junior']
+    teacher.save(update_fields=['stages'])
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+    return client
+
+
+@pytest.fixture
+def relation_knowledge_point_table(db):
+    with connection.cursor() as cursor:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_points (
+                id BIGINT PRIMARY KEY,
+                subject VARCHAR(50),
+                stage VARCHAR(20),
+                grade_index SMALLINT,
+                grade_name VARCHAR(20),
+                term VARCHAR(10),
+                chapter VARCHAR(255),
+                module VARCHAR(255),
+                node_type VARCHAR(20),
+                content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("DELETE FROM knowledge_points")
+    yield
+    with connection.cursor() as cursor:
+        cursor.execute("DELETE FROM knowledge_points")
+
+
+@pytest.fixture
+def relation_questions(paper, relation_knowledge_point_table):
+    def create(question_no, *, subject='physics', difficulty=Decimal('3.00'), points=None):
+        return ExamQuestion.objects.create(
+            paper=paper,
+            question_no=question_no,
+            question_type='single_choice',
+            subject=subject,
+            stem=f'Relation question {question_no}',
+            difficulty=difficulty,
+            knowledge_points=points or [],
+        )
+
+    origin = create('origin', points=[{'module': 'motion'}])
+    match = create('match', points=[{'module': 'motion'}])
+    second_match = create('second-match', points=[{'module': 'motion'}])
+    return SimpleNamespace(
+        origin=origin,
+        match=match,
+        second_match=second_match,
+        other_subject=create('other-subject', subject='math', points=[{'module': 'motion'}]),
+        too_hard=create('too-hard', difficulty=Decimal('3.51'), points=[{'module': 'motion'}]),
+        unrelated=create('unrelated', points=[{'module': 'force'}]),
+    )
 
 
 @pytest.mark.django_db
@@ -174,3 +236,135 @@ def test_relation_database_rejects_self_and_reverse_pairs_bypassing_the_factory(
                 question_right=left,
                 created_by=teacher,
             )
+
+
+@pytest.mark.django_db
+def test_relation_candidates_enforce_scope_subject_difficulty_knowledge_and_pagination(
+    teacher_client, relation_questions
+):
+    response = teacher_client.get(
+        f'/api/v1/questions/{relation_questions.origin.id}/relation-candidates/',
+        {'page': 1, 'page_size': 50},
+    )
+
+    assert response.status_code == 200
+    assert response.data['data']['total'] == 2
+    assert response.data['data']['page_no'] == 1
+    assert response.data['data']['page_size'] == 50
+    assert response.data['data']['items'][0]['common_knowledge_point_names'] == ['motion']
+    candidate_ids = {item['id'] for item in response.data['data']['items']}
+    assert candidate_ids == {str(relation_questions.match.id), str(relation_questions.second_match.id)}
+
+
+@pytest.mark.django_db
+def test_create_list_and_remove_relation_is_direction_independent_and_idempotent(
+    teacher_client, relation_questions
+):
+    relation_url = f'/api/v1/questions/{relation_questions.origin.id}/relations/'
+    created = teacher_client.post(
+        relation_url,
+        {'question_ids': [str(relation_questions.match.id)]},
+        format='json',
+    )
+    repeated_create = teacher_client.post(
+        relation_url,
+        {'question_ids': [str(relation_questions.match.id)]},
+        format='json',
+    )
+
+    assert created.status_code == 200
+    assert created.data['data'] == {
+        'created_count': 1,
+        'existing_count': 0,
+        'invalid_question_ids': [],
+    }
+    assert repeated_create.data['data']['created_count'] == 0
+    assert repeated_create.data['data']['existing_count'] == 1
+
+    candidates_while_related = teacher_client.get(
+        f'/api/v1/questions/{relation_questions.origin.id}/relation-candidates/'
+    )
+    assert {item['id'] for item in candidates_while_related.data['data']['items']} == {
+        str(relation_questions.second_match.id),
+    }
+
+    listed = teacher_client.get(f'/api/v1/questions/{relation_questions.match.id}/relations/')
+    assert listed.status_code == 200
+    assert [item['id'] for item in listed.data['data']['items']] == [str(relation_questions.origin.id)]
+
+    removed = teacher_client.delete(
+        f'/api/v1/questions/{relation_questions.origin.id}/relations/{relation_questions.match.id}/'
+    )
+    repeated_remove = teacher_client.delete(
+        f'/api/v1/questions/{relation_questions.match.id}/relations/{relation_questions.origin.id}/'
+    )
+    assert removed.data['data']['removed'] is True
+    assert repeated_remove.data['data']['removed'] is False
+    assert ExamQuestion.objects.filter(pk=relation_questions.match.pk).exists()
+
+    candidates_after_removal = teacher_client.get(
+        f'/api/v1/questions/{relation_questions.origin.id}/relation-candidates/'
+    )
+    assert {item['id'] for item in candidates_after_removal.data['data']['items']} == {
+        str(relation_questions.match.id),
+        str(relation_questions.second_match.id),
+    }
+
+
+@pytest.mark.django_db
+def test_relation_mutations_reject_non_manager_and_invalid_or_out_of_scope_questions(
+    teacher_client, teacher, relation_questions
+):
+    student = UserAccount.objects.create(
+        role_type='student',
+        mobile='13900008882',
+        display_name='Relation Student',
+    )
+    student_client = APIClient()
+    student_client.force_authenticate(user=student)
+    relation_url = f'/api/v1/questions/{relation_questions.origin.id}/relations/'
+
+    forbidden = student_client.post(
+        relation_url,
+        {'question_ids': [str(relation_questions.match.id)]},
+        format='json',
+    )
+    invalid = teacher_client.post(
+        relation_url,
+        {
+            'question_ids': [
+                str(relation_questions.origin.id),
+                str(relation_questions.other_subject.id),
+                'not-a-uuid',
+            ]
+        },
+        format='json',
+    )
+
+    assert forbidden.status_code == 403
+    assert invalid.status_code == 200
+    assert invalid.data['data'] == {
+        'created_count': 0,
+        'existing_count': 0,
+        'invalid_question_ids': [
+            str(relation_questions.origin.id),
+            str(relation_questions.other_subject.id),
+            'not-a-uuid',
+        ],
+    }
+
+
+@pytest.mark.django_db
+def test_relation_reads_do_not_leak_questions_outside_teacher_scope(teacher_client, teacher, relation_questions):
+    QuestionRelation.create_for_questions(
+        relation_questions.origin, relation_questions.other_subject, teacher
+    )
+
+    response = teacher_client.get(f'/api/v1/questions/{relation_questions.origin.id}/relations/')
+    outside_origin = teacher_client.get(
+        f'/api/v1/questions/{relation_questions.other_subject.id}/relation-candidates/'
+    )
+
+    assert response.status_code == 200
+    assert response.data['data']['items'] == []
+    assert outside_origin.status_code == 403
