@@ -1,4 +1,6 @@
+from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Q
 import uuid_utils.compat as uuid_compat
 from apps.accounts.models import UserAccount
 from apps.missions.models import LearningMission, MissionLevel
@@ -156,3 +158,52 @@ class QuestionTagRelation(models.Model):
         unique_together = ['question', 'tag']
         verbose_name = '题目标签关联'
         verbose_name_plural = '题目标签关联'
+
+
+class QuestionRelation(models.Model):
+    """A normalized, logically bidirectional relation between two questions."""
+
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    question_left = models.ForeignKey(
+        'parser.ExamQuestion',
+        on_delete=models.CASCADE,
+        related_name='left_relations',
+    )
+    question_right = models.ForeignKey(
+        'parser.ExamQuestion',
+        on_delete=models.CASCADE,
+        related_name='right_relations',
+    )
+    created_by = models.ForeignKey(
+        UserAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'tiku_question_relation'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['question_left', 'question_right'],
+                name='uq_question_relation_pair',
+            ),
+        ]
+
+    @classmethod
+    def create_for_questions(cls, question_a, question_b, created_by):
+        from .question_relation_service import canonical_question_pair
+
+        left, right = canonical_question_pair(question_a, question_b)
+        if left.pk == right.pk:
+            raise ValidationError('题目不能关联自身')
+        return cls.objects.create(
+            question_left=left,
+            question_right=right,
+            created_by=created_by,
+        )
+
+    @classmethod
+    def for_question(cls, question):
+        return cls.objects.filter(Q(question_left=question) | Q(question_right=question))
