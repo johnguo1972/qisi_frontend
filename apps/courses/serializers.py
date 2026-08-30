@@ -56,9 +56,13 @@ class CourseMaterialSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'course', 'name', 'file_path', 'file_type',
             'file_size', 'mime_type', 'uploaded_by', 'uploaded_by_name',
+            'conversion_status', 'converted_pdf_path',
             'is_deleted', 'created_at',
         ]
-        read_only_fields = ['id', 'course', 'uploaded_by', 'created_at']
+        read_only_fields = [
+            'id', 'course', 'uploaded_by', 'conversion_status',
+            'converted_pdf_path', 'created_at',
+        ]
 
 
 class CourseTreeNestedSerializer(serializers.ModelSerializer):

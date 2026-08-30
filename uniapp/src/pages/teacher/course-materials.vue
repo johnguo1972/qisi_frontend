@@ -56,7 +56,12 @@
           :key="item.id"
           class="table-row"
         >
-          <text class="col-name file-name" :title="item.name || item.file_path">{{ item.name || item.file_path?.split('/').pop() || '未知文件' }}</text>
+          <view class="col-name file-name" :title="item.name || item.file_path">
+            <text>{{ item.name || item.file_path?.split('/').pop() || '未知文件' }}</text>
+            <text v-if="conversionStatusLabel(item)" :class="['conversion-status', `conversion-${item.conversion_status}`]">
+              {{ conversionStatusLabel(item) }}
+            </text>
+          </view>
           <text class="col-type">
             <text :class="['type-badge', fileTypeClass(item.file_type)]">{{ fileTypeLabel(item.file_type) }}</text>
           </text>
@@ -64,8 +69,7 @@
           <text class="col-date">{{ formatDate(item.created_at) }}</text>
           <view class="col-actions">
             <button size="mini" type="primary" @click="handleDownload(item)">下载</button>
-            <button size="mini" @click="handlePreview(item)">预览</button>
-            <button size="mini" type="success" @click="handleImport(item)" v-if="canImport(item)">引入</button>
+            <button size="mini" :disabled="isConversionInProgress(item)" @click="handlePreview(item)">预览</button>
             <button size="mini" type="warn" @click="handleDeleteConfirm(item)">删除</button>
           </view>
         </view>
@@ -101,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onBeforeUnmount, onMounted } from 'vue'
 import TeacherSidebar from '@/components/TeacherSidebar.vue'
 import { materialApi, courseApi } from '@/api/courses'
 import { navigateRoleSection } from '@/utils/role-navigation'
@@ -136,15 +140,47 @@ const courseName = ref<string>('课程资料')
 // Materials list
 // ============================================================
 interface Material {
-  id: number
+  id: string
   name: string
+  file_path?: string
   file_type: string
   file_size: number
   created_at: string
+  conversion_status?: 'not_required' | 'pending' | 'converting' | 'completed' | 'failed'
+  converted_pdf_path?: string | null
 }
 
 const materials = ref<Material[]>([])
 const loading = ref(false)
+let conversionPollingTimer: ReturnType<typeof setInterval> | null = null
+
+function isWordMaterial(item: Material): boolean {
+  return ['doc', 'docx', 'word'].includes((item.file_type || '').toLowerCase())
+}
+
+function isConversionInProgress(item: Material): boolean {
+  return isWordMaterial(item) && ['pending', 'converting'].includes(item.conversion_status || '')
+}
+
+function conversionStatusLabel(item: Material): string {
+  if (!isWordMaterial(item)) return ''
+  if (isConversionInProgress(item)) return '（格式转换中）'
+  if (item.conversion_status === 'completed') return '（格式转换完成）'
+  if (item.conversion_status === 'failed') return '（格式转换失败）'
+  return ''
+}
+
+function updateConversionPolling() {
+  const hasActiveConversion = materials.value.some(isConversionInProgress)
+  if (hasActiveConversion && !conversionPollingTimer) {
+    conversionPollingTimer = setInterval(() => {
+      void loadMaterials()
+    }, 3000)
+  } else if (!hasActiveConversion && conversionPollingTimer) {
+    clearInterval(conversionPollingTimer)
+    conversionPollingTimer = null
+  }
+}
 
 async function loadMaterials() {
   loading.value = true
@@ -152,6 +188,7 @@ async function loadMaterials() {
     const res = await materialApi.list(courseId.value)
     // courseFetch 返回 {success: true, data: [...]}，所以数组在 res.data.data
     materials.value = res.data?.data || res.data || []
+    updateConversionPolling()
   } catch (e) {
     console.error('加载课程资料失败:', e)
     uni.showToast({ title: '加载失败，请重试', icon: 'none' })
@@ -286,6 +323,14 @@ function handleDownload(item: Material) {
 // Preview
 // ============================================================
 async function handlePreview(item: Material) {
+  if (isConversionInProgress(item)) {
+    uni.showToast({ title: '格式转换中，请稍后再预览', icon: 'none' })
+    return
+  }
+  if (item.conversion_status === 'failed') {
+    uni.showToast({ title: '格式转换失败，请下载原文件查看', icon: 'none' })
+    return
+  }
   try {
     const token = uni.getStorageSync('accessToken')
     const previewUrl = `/api/v1/courses/${courseId.value}/materials/${item.id}/preview/`
@@ -295,6 +340,18 @@ async function handlePreview(item: Material) {
         'Authorization': `Bearer ${token}`,
       },
     })
+    if (response.status === 409 || response.status === 422) {
+      let message = response.status === 409 ? '格式转换中，请稍后再预览' : '格式转换失败，请下载原文件查看'
+      try {
+        const result = await response.json()
+        message = result?.message || message
+      } catch {
+        // Keep the fallback message when the response is not JSON.
+      }
+      if (response.status === 409) await loadMaterials()
+      uni.showToast({ title: message, icon: 'none' })
+      return
+    }
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)
     }
@@ -305,27 +362,6 @@ async function handlePreview(item: Material) {
     console.error('预览失败:', e)
     uni.showToast({ title: '预览失败，请重试', icon: 'none' })
   }
-}
-
-// ============================================================
-// Import question from material
-// ============================================================
-const IMPORTABLE_TYPES = ['pdf', 'word', 'docx', 'doc', 'image']
-
-function canImport(item: Material): boolean {
-  if (!item.file_type) return false
-  return IMPORTABLE_TYPES.some(t => item.file_type.toLowerCase().includes(t))
-}
-
-function handleImport(item: Material) {
-  console.log('[Materials] handleImport called:', item)
-  uni.navigateTo({
-    url: `/pages/teacher/course-material-import?course_id=${courseId.value}&material_id=${item.id}`,
-    fail: (err) => {
-      console.error('[Materials] navigateTo failed:', err)
-      uni.showToast({ title: '页面跳转失败', icon: 'none' })
-    },
-  })
 }
 
 // ============================================================
@@ -437,6 +473,10 @@ onMounted(() => {
   courseId.value = id
   loadCourseInfo()
   loadMaterials()
+})
+
+onBeforeUnmount(() => {
+  if (conversionPollingTimer) clearInterval(conversionPollingTimer)
 })
 </script>
 
@@ -593,6 +633,20 @@ onMounted(() => {
 
 .file-name {
   cursor: default;
+}
+
+.conversion-status {
+  margin-left: 8rpx;
+  font-size: 22rpx;
+  color: #909399;
+}
+
+.conversion-completed {
+  color: #67c23a;
+}
+
+.conversion-failed {
+  color: #f56c6c;
 }
 
 .col-type {
