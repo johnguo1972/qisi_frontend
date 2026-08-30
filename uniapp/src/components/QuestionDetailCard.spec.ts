@@ -25,6 +25,16 @@ describe('QuestionDetailCard', () => {
     expect(wrapper.text()).toContain('关联题')
     expect(wrapper.find('[data-test="remove-course"]').exists()).toBe(true)
   })
+
+  it('keeps supplied course footer actions in compact mode', () => {
+    const wrapper = mount(QuestionDetailCard, {
+      props: { question, index: 1, showAnswer: false, compact: true },
+      slots: { 'course-footer-actions': '<button data-test="compact-remove-course">从课程移除</button>' },
+    })
+
+    expect(wrapper.find('[data-test="compact-remove-course"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('关联题')
+  })
 })
 
 describe('RightActionPanel', () => {

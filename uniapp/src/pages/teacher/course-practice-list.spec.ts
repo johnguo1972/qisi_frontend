@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   buildCourseQuestionQuery,
   loadCourseQuestionList,
@@ -52,5 +52,126 @@ describe('course practice question list query state', () => {
     expect(normalizeCourseQuestionList([{ question_id: 'legacy' }])).toEqual({
       items: [], total: 0, pageNo: 1, pageSize: 20,
     })
+  })
+
+  it('submits selected course questions to the background batch AI API', async () => {
+    const helpers = await import('./course-practice-list') as Record<string, unknown>
+    expect(helpers.submitCourseBatchAi).toBeTypeOf('function')
+
+    const batchAi = vi.fn().mockResolvedValue({ data: { job_id: 'job-1' } })
+    await (helpers.submitCourseBatchAi as (input: {
+      selectedIds: string[]
+      batchAi: (ids: string[]) => Promise<unknown>
+    }) => Promise<unknown>)({ selectedIds: ['q-1', 'q-2'], batchAi })
+
+    expect(batchAi).toHaveBeenCalledOnce()
+    expect(batchAi).toHaveBeenCalledWith(['q-1', 'q-2'])
+  })
+
+  it('does not invoke variant APIs for an explicitly disabled course action', async () => {
+    const helpers = await import('./course-practice-list') as Record<string, unknown>
+    expect(helpers.handleDisabledVariantAction).toBeTypeOf('function')
+
+    const generate = vi.fn()
+    const batchGenerate = vi.fn()
+    await (helpers.handleDisabledVariantAction as (input: {
+      generate: () => unknown
+      batchGenerate: () => unknown
+    }) => Promise<void>)({ generate, batchGenerate })
+
+    expect(generate).not.toHaveBeenCalled()
+    expect(batchGenerate).not.toHaveBeenCalled()
+  })
+
+  it('keeps the newest selected node result when the previous request resolves last', async () => {
+    const helpers = await import('./course-practice-list') as Record<string, unknown>
+    expect(helpers.createCourseQuestionListController).toBeTypeOf('function')
+
+    let resolveFirst!: (value: unknown) => void
+    let resolveSecond!: (value: unknown) => void
+    const fetchList = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveSecond = resolve }))
+    const controller = (helpers.createCourseQuestionListController as (fetch: typeof fetchList) => any)(fetchList)
+
+    const first = controller.selectNode('node-1', { pageSize: 20 })
+    controller.state.selectedIds = ['old-question']
+    const second = controller.selectNode('node-2', { pageSize: 20 })
+    expect(controller.state).toMatchObject({ treeNodeId: 'node-2', page: 1, items: [], selectedIds: [] })
+
+    resolveSecond({ data: { items: [{ question_id: 'new-question' }], total: 1, page_no: 1, page_size: 20 } })
+    await second
+    resolveFirst({ data: { items: [{ question_id: 'old-question' }], total: 1, page_no: 1, page_size: 20 } })
+    await first
+
+    expect(controller.state.items).toEqual([{ question_id: 'new-question' }])
+    expect(controller.state.selectedIds).toEqual([])
+    expect(fetchList.mock.calls.map(([query]) => query.tree_node_id)).toEqual(['node-1', 'node-2'])
+  })
+
+  it('flattens only selectable knowledge-point leaves with their real IDs', async () => {
+    const helpers = await import('./course-practice-list') as Record<string, unknown>
+    expect(helpers.flattenKnowledgePointOptions).toBeTypeOf('function')
+
+    const options = (helpers.flattenKnowledgePointOptions as (tree: unknown) => Array<{ id: string; name: string }>)([
+      { id: 'grade_1', label: '一年级', children: [{ id: 'term_1', label: '上学期', children: [{ id: 21, label: '整数' }, { id: -1, label: '未分类', is_unclassified: true }] }] },
+    ])
+
+    expect(options).toEqual([{ id: '21', name: '整数' }])
+  })
+
+  it('retries the corrected last page when a response reports an out-of-range page', async () => {
+    const helpers = await import('./course-practice-list') as Record<string, unknown>
+    const fetchList = vi.fn()
+      .mockResolvedValueOnce({ data: { items: [], total: 1, page_no: 3, page_size: 20 } })
+      .mockResolvedValueOnce({ data: { items: [{ question_id: 'q-1' }], total: 1, page_no: 1, page_size: 20 } })
+    const controller = (helpers.createCourseQuestionListController as (fetch: typeof fetchList) => any)(fetchList)
+    controller.state.treeNodeId = 'node-1'
+    controller.state.page = 3
+
+    await controller.load()
+
+    expect(fetchList.mock.calls.map(([query]) => query.page)).toEqual([3, 1])
+    expect(controller.state.page).toBe(1)
+  })
+
+  it('marks current-node mutations unavailable while a list refresh is in flight', async () => {
+    const helpers = await import('./course-practice-list') as Record<string, unknown>
+    let resolve!: (value: unknown) => void
+    const controller = (helpers.createCourseQuestionListController as (fetch: any) => any)(
+      () => new Promise(next => { resolve = next }),
+    )
+    controller.state.treeNodeId = 'node-1'
+    controller.state.selectedIds = ['q-1']
+
+    const loading = controller.load()
+    expect(controller.canMutateCurrentNode()).toBe(false)
+    resolve({ data: { items: [{ question_id: 'q-1' }], total: 1, page_no: 1, page_size: 20 } })
+    await loading
+    controller.state.selectedIds = ['q-1']
+    expect(controller.canMutateCurrentNode()).toBe(true)
+  })
+
+  it('polls submitted batch and probe background tasks then refreshes once for terminal work', async () => {
+    const helpers = await import('./course-practice-list') as Record<string, unknown>
+    expect(helpers.submitCourseBatchAi).toBeTypeOf('function')
+    expect(helpers.submitCourseAiTasks).toBeTypeOf('function')
+
+    const refresh = vi.fn()
+    const poll = vi.fn().mockResolvedValue('complete')
+    await (helpers.submitCourseBatchAi as (input: any) => Promise<unknown>)({
+      selectedIds: ['q-1'], batchAi: vi.fn().mockResolvedValue({ data: { job_id: 'job-1' } }), poll, refresh,
+    })
+    await (helpers.submitCourseAiTasks as (input: any) => Promise<unknown>)({
+      selectedIds: ['q-1', 'q-2'],
+      submit: vi.fn()
+        .mockResolvedValueOnce({ data: { task_id: 'task-1' } })
+        .mockRejectedValueOnce(new Error('network')),
+      poll: vi.fn().mockResolvedValue('partial'),
+      refresh,
+    })
+
+    expect(poll).toHaveBeenCalledWith('job-1')
+    expect(refresh).toHaveBeenCalledTimes(2)
   })
 })
