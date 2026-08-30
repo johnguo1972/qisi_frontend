@@ -122,6 +122,7 @@ describe('course-practice page integration', () => {
       .mockReturnValueOnce(second.promise)
       .mockReturnValueOnce(refresh.promise)
     const wrapper = mountPage()
+    await settle()
     const tree = wrapper.findComponent(DirTreeStub)
 
     tree.vm.$emit('select', { id: 1, name: '节点一' })
@@ -149,6 +150,7 @@ describe('course-practice page integration', () => {
   it('does not invoke variant APIs when the mounted disabled variant button is clicked', async () => {
     courseQuestionList.mockResolvedValue({ data: { items: [{ question_id: 'q-1' }], total: 1, page_no: 1, page_size: 20 } })
     const wrapper = mountPage()
+    await settle()
     wrapper.findComponent(DirTreeStub).vm.$emit('select', { id: 1, name: '节点一' })
     await settle()
 

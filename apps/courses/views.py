@@ -1031,12 +1031,25 @@ def question_batch_delete(request, course_id):
     _check_course_owner(course, request.user)
 
     question_ids = request.data.get('question_ids')
+    tree_node_id = request.data.get('tree_node_id')
     if not question_ids or not isinstance(question_ids, list):
         raise ValidationError('question_ids 必须是非空数组')
 
     # 软删除关联
+    if not tree_node_id:
+        raise ValidationError('tree_node_id is required')
+    try:
+        source_node_uuid = uuid.UUID(str(tree_node_id))
+    except (TypeError, ValueError, AttributeError):
+        raise ValidationError('tree_node_id is invalid')
+    try:
+        source_node = CourseTree.objects.get(id=source_node_uuid, course=course)
+    except CourseTree.DoesNotExist:
+        raise NotFound('source tree_node_id does not exist or does not belong to this course')
+
     updated = CourseQuestionLink.objects.filter(
         course=course,
+        tree_node=source_node,
         question_id__in=question_ids,
         is_deleted=False,
     ).update(is_deleted=True)
@@ -1057,11 +1070,23 @@ def question_batch_move(request, course_id):
 
     question_ids = request.data.get('question_ids')
     target_node_id = request.data.get('target_node_id')
+    tree_node_id = request.data.get('tree_node_id')
 
     if not question_ids or not isinstance(question_ids, list):
         raise ValidationError('question_ids 必须是非空数组')
     if target_node_id is None:
         raise ValidationError('target_node_id 不能为空')
+    if not tree_node_id:
+        raise ValidationError('tree_node_id is required')
+
+    try:
+        source_node_uuid = uuid.UUID(str(tree_node_id))
+    except (TypeError, ValueError, AttributeError):
+        raise ValidationError('tree_node_id is invalid')
+    try:
+        source_node = CourseTree.objects.get(id=source_node_uuid, course=course)
+    except CourseTree.DoesNotExist:
+        raise NotFound('source tree_node_id does not exist or does not belong to this course')
 
     # 验证目标节点存在且属于此课程
     try:
@@ -1072,6 +1097,7 @@ def question_batch_move(request, course_id):
     # 批量更新 tree_node_id
     updated = CourseQuestionLink.objects.filter(
         course=course,
+        tree_node=source_node,
         question_id__in=question_ids,
         is_deleted=False,
     ).update(tree_node=target_node)

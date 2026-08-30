@@ -133,12 +133,12 @@ export const courseQuestionApi = {
   },
   import: (courseId: UUID, data: { question_ids: UUID[]; tree_node_id?: UUID }) =>
     courseFetch<any>(`/courses/${courseId}/questions/import/`, { method: 'POST', body: JSON.stringify({ question_ids: data.question_ids, tree_node_id: data.tree_node_id }) }),
-  batchDelete: (courseId: UUID, questionIds: UUID[]) =>
-    courseFetch<any>(`/courses/${courseId}/questions/batch-delete/`, { method: 'POST', body: JSON.stringify({ question_ids: questionIds }) }),
-  batchMove: (courseId: UUID, questionIds: UUID[], targetNodeId: UUID) =>
+  batchDelete: (courseId: UUID, questionIds: UUID[], sourceNodeId: UUID) =>
+    courseFetch<any>(`/courses/${courseId}/questions/batch-delete/`, { method: 'POST', body: JSON.stringify({ question_ids: questionIds, tree_node_id: sourceNodeId }) }),
+  batchMove: (courseId: UUID, questionIds: UUID[], sourceNodeId: UUID, targetNodeId: UUID) =>
     courseFetch<any>(`/courses/${courseId}/questions/batch-move/`, {
       method: 'POST',
-      body: JSON.stringify({ question_ids: questionIds, target_node_id: targetNodeId }),
+      body: JSON.stringify({ question_ids: questionIds, tree_node_id: sourceNodeId, target_node_id: targetNodeId }),
     }),
 }
 

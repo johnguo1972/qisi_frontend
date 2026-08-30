@@ -120,6 +120,18 @@ describe('course practice question list query state', () => {
     expect(options).toEqual([{ id: '21', name: '整数' }])
   })
 
+  it('loads knowledge-point leaves using the course subject instead of the teacher default', async () => {
+    const helpers = await import('./course-practice-list') as Record<string, unknown>
+    const fetchTree = vi.fn().mockResolvedValue({
+      data: [{ id: 'grade_8', children: [{ id: 'term_up', children: [{ id: 88, label: '光学' }] }] }],
+    })
+
+    const options = await (helpers.loadCourseKnowledgePointOptions as (subject: string, fetch: (subject: string) => Promise<unknown>) => Promise<Array<{ id: string; name: string }>>)('physics', fetchTree)
+
+    expect(fetchTree).toHaveBeenCalledWith('physics')
+    expect(options).toEqual([{ id: '88', name: '光学' }])
+  })
+
   it('retries the corrected last page when a response reports an out-of-range page', async () => {
     const helpers = await import('./course-practice-list') as Record<string, unknown>
     const fetchList = vi.fn()
@@ -170,8 +182,29 @@ describe('course practice question list query state', () => {
       poll: vi.fn().mockResolvedValue('partial'),
       refresh,
     })
+    await Promise.resolve()
+    await Promise.resolve()
 
     expect(poll).toHaveBeenCalledWith('job-1')
     expect(refresh).toHaveBeenCalledTimes(2)
+  })
+
+  it('starts batch and probe polling without delaying submitted feedback, locks duplicate submissions, and reports partial failure', async () => {
+    const helpers = await import('./course-practice-list') as Record<string, unknown>
+    let releasePoll!: (status: string) => void
+    const poll = vi.fn(() => new Promise<string>(resolve => { releasePoll = resolve }))
+    const batch = vi.fn().mockResolvedValue({ data: { job_id: 'job-1' } })
+    const first = await (helpers.submitCourseBatchAi as (input: any) => Promise<any>)({ selectedIds: ['q-1'], batchAi: batch, poll, refresh: vi.fn() })
+
+    expect(first).toMatchObject({ submitted: 1, taskIds: ['job-1'] })
+    expect(poll).toHaveBeenCalledWith('job-1')
+    releasePoll('complete')
+
+    const probe = await (helpers.submitCourseAiTasks as (input: any) => Promise<any>)({
+      selectedIds: ['q-1', 'q-2'],
+      submit: vi.fn().mockResolvedValueOnce({ data: { task_id: 'task-1' } }).mockRejectedValueOnce(new Error('down')),
+      poll: vi.fn().mockResolvedValue('partial'), refresh: vi.fn(),
+    })
+    expect(probe).toEqual({ submitted: 1, failed: 1, taskIds: ['task-1'] })
   })
 })

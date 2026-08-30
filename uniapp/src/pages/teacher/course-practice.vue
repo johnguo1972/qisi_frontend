@@ -102,6 +102,7 @@
         :all-shown="allAnswersShown"
         :compact-mode="viewMode === 'compact'"
         :ai-mode-running="aiModeRunning"
+        :ai-action-running="aiActionRunning"
         @refresh="refreshQuestions"
         @toggle-answer="toggleAllAnswers"
         @toggle-mode="toggleViewMode"
@@ -312,7 +313,7 @@ import DirTree from '@/components/DirTree.vue'
 import { courseApi, treeApi, courseQuestionApi, materialApi, variantApi } from '@/api/courses'
 import {
   createCourseQuestionListController,
-  flattenKnowledgePointOptions,
+  loadCourseKnowledgePointOptions,
   handleDisabledVariantAction as ignoreDisabledVariantAction,
   normalizeBackgroundAiStatus,
   submitCourseAiTasks,
@@ -364,14 +365,17 @@ function goCourseList() {
 // ============================================================
 const courseId = ref<string>('')
 const courseName = ref('课程加载中...')
+const courseSubject = ref('')
 
 async function loadCourseInfo() {
   try {
     const res: any = await courseApi.detail(courseId.value)
     if (res?.data?.name) {
       courseName.value = res.data.name
+      courseSubject.value = String(res.data.subject || '')
     } else if (res?.name) {
       courseName.value = res.name
+      courseSubject.value = String(res.subject || '')
     }
   } catch (e) {
     console.error('加载课程信息失败:', e)
@@ -379,13 +383,13 @@ async function loadCourseInfo() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   const pages = getCurrentPages()
   const currentPage = pages[pages.length - 1] as any
   const id = currentPage.options?.id
   if (id) {
     courseId.value = String(id)
-    loadCourseInfo()
+    await loadCourseInfo()
   }
   loadTree()
   void loadKnowledgeOptions()
@@ -798,9 +802,7 @@ async function loadTags() {
 
 async function loadKnowledgeOptions() {
   try {
-    const response: any = await questionApi.dictKnowledgePoints()
-    const data = response?.data || response || []
-    knowledgeOptions.value = flattenKnowledgePointOptions(data)
+    knowledgeOptions.value = await loadCourseKnowledgePointOptions(courseSubject.value, subject => questionApi.dictKnowledgePoints(subject))
   } catch {
     knowledgeOptions.value = []
   }
@@ -1210,6 +1212,7 @@ type AiMode = 'A' | 'B' | 'C'
 type AiModeTerminalStatus = 'complete' | 'partial' | 'failed' | 'skipped' | 'cancelled'
 type AiModePoll = { taskId: string; generation: number; timer?: ReturnType<typeof setTimeout>; releaseDelay?: () => void; cancelled: boolean }
 const aiModeRunning = ref<Record<AiMode, boolean>>({ A: false, B: false, C: false })
+const aiActionRunning = ref<Record<'batch' | 'probe', boolean>>({ batch: false, probe: false })
 const aiModePolls = new Map<string, AiModePoll>()
 let aiModeGeneration = 0
 let aiModePageActive = true
@@ -1219,33 +1222,48 @@ function selectionRequired() {
 }
 
 async function submitBatchAi() {
-  if (loading.value) return
+  if (loading.value || aiActionRunning.value.batch) return
+  aiActionRunning.value.batch = true
   try {
     const submitted = await submitCourseBatchAi({
       selectedIds: selectedIds.value,
       batchAi: (ids) => questionApi.batchAi(ids),
       poll: taskId => pollAiTaskUntilTerminal(taskId, questionApi.getAiJobStatus),
       refresh: loadQuestions,
+      onTerminal: () => { aiActionRunning.value.batch = false },
     })
-    if (!submitted) return selectionRequired()
+    if (!submitted.submitted) {
+      aiActionRunning.value.batch = false
+      selectionRequired()
+      return
+    }
     uni.showToast({ title: '批量AI任务已提交', icon: 'success' })
   } catch {
+    aiActionRunning.value.batch = false
     uni.showToast({ title: '批量AI任务提交失败', icon: 'none' })
   }
 }
 
 async function submitAiExplore() {
-  if (loading.value) return
+  if (loading.value || aiActionRunning.value.probe) return
   if (!selectedIds.value.length) return selectionRequired()
+  aiActionRunning.value.probe = true
   try {
-    await submitCourseAiTasks({
+    const submitted = await submitCourseAiTasks({
       selectedIds: selectedIds.value,
       submit: id => aiProcessProbe(id),
       poll: taskId => pollAiTaskUntilTerminal(taskId, questionApi.getTaskStatus),
       refresh: loadQuestions,
+      onTerminal: () => { aiActionRunning.value.probe = false },
     })
-    uni.showToast({ title: 'AI探索任务已提交', icon: 'success' })
+    if (!submitted.submitted) {
+      aiActionRunning.value.probe = false
+      uni.showToast({ title: 'AI探索提交失败', icon: 'none' })
+    }
+    else if (submitted.failed) uni.showToast({ title: `AI探索部分提交（${submitted.submitted}题）`, icon: 'none' })
+    else uni.showToast({ title: 'AI探索任务已提交', icon: 'success' })
   } catch {
+    aiActionRunning.value.probe = false
     uni.showToast({ title: 'AI探索提交失败', icon: 'none' })
   }
 }
@@ -1413,13 +1431,19 @@ async function addSelectedToFavorites() {
 // ============================================================
 async function handleRemove(questionId: string) {
   if (loading.value) return
+  const sourceNodeId = String(selectedNode.value?.id || '')
+  if (!sourceNodeId) return
   uni.showModal({
     title: '确认移除',
     content: '确定要从课程中移除此题目吗？',
     success: async (res) => {
       if (res.confirm) {
+        if (loading.value || String(selectedNode.value?.id || '') !== sourceNodeId) {
+          uni.showToast({ title: '当前节点已切换，请刷新后重试', icon: 'none' })
+          return
+        }
         try {
-          await courseQuestionApi.batchDelete(courseId.value, [questionId])
+          await courseQuestionApi.batchDelete(courseId.value, [questionId], sourceNodeId)
           uni.showToast({ title: '已移除', icon: 'success' })
           loadQuestions()
         } catch (e: any) {
@@ -1433,14 +1457,19 @@ async function handleRemove(questionId: string) {
 async function batchRemove() {
   if (loading.value) return
   const ids = [...selectedIds.value]
-  if (ids.length === 0) return
+  const sourceNodeId = String(selectedNode.value?.id || '')
+  if (ids.length === 0 || !sourceNodeId) return
   uni.showModal({
     title: '确认批量移除',
     content: `确定要从课程中移除选中的 ${ids.length} 道题目吗？`,
     success: async (res) => {
       if (res.confirm) {
+        if (loading.value || String(selectedNode.value?.id || '') !== sourceNodeId) {
+          uni.showToast({ title: '当前节点已切换，请刷新后重试', icon: 'none' })
+          return
+        }
         try {
-          await courseQuestionApi.batchDelete(courseId.value, ids)
+          await courseQuestionApi.batchDelete(courseId.value, ids, sourceNodeId)
           uni.showToast({ title: `已移除 ${ids.length} 题`, icon: 'success' })
           selectedIds.value = []
           loadQuestions()
@@ -1457,11 +1486,13 @@ async function batchRemove() {
 // ============================================================
 const moveDialogVisible = ref(false)
 const moveTarget = ref<number | null>(null)
+const moveSourceNodeId = ref('')
 const moveTargetLabel = ref('')
 
 function showMoveDialog() {
   if (loading.value || !selectedIds.value.length) return
   moveTarget.value = null
+  moveSourceNodeId.value = String(selectedNode.value?.id || '')
   moveTargetLabel.value = ''
   moveDialogVisible.value = true
 }
@@ -1489,11 +1520,16 @@ function onMoveTargetChange(e: any) {
 
 async function confirmMove() {
   if (loading.value) return
-  if (!moveTarget.value) return
+  if (!moveTarget.value || !moveSourceNodeId.value) return
   const ids = [...selectedIds.value]
   if (ids.length === 0) return
+  if (String(selectedNode.value?.id || '') !== moveSourceNodeId.value) {
+    uni.showToast({ title: '当前节点已切换，请刷新后重试', icon: 'none' })
+    moveDialogVisible.value = false
+    return
+  }
   try {
-    await courseQuestionApi.batchMove(courseId.value, ids, moveTarget.value)
+    await courseQuestionApi.batchMove(courseId.value, ids, moveSourceNodeId.value, moveTarget.value)
     uni.showToast({ title: `已移动 ${ids.length} 题`, icon: 'success' })
     selectedIds.value = []
     moveDialogVisible.value = false

@@ -76,15 +76,18 @@ export async function submitCourseBatchAi(input: {
   batchAi: (ids: string[]) => Promise<unknown>
   poll?: (taskId: string) => Promise<BackgroundAiTerminalStatus>
   refresh?: () => Promise<unknown> | unknown
-}): Promise<boolean> {
-  if (!input.selectedIds.length) return false
+  onTerminal?: () => void
+}): Promise<{ submitted: number; failed: number; taskIds: string[] }> {
+  if (!input.selectedIds.length) return { submitted: 0, failed: 0, taskIds: [] }
   const response = await input.batchAi([...input.selectedIds])
   const taskId = extractBackgroundTaskId(response)
-  if (taskId && input.poll) {
-    const status = await input.poll(taskId)
-    if (isRefreshableAiStatus(status)) await input.refresh?.()
+  if (!taskId) return { submitted: 0, failed: input.selectedIds.length, taskIds: [] }
+  if (input.poll) {
+    void input.poll(taskId).then(status => {
+      if (isRefreshableAiStatus(status)) void input.refresh?.()
+    }).catch(() => undefined).finally(input.onTerminal)
   }
-  return true
+  return { submitted: input.selectedIds.length, failed: 0, taskIds: [taskId] }
 }
 
 export async function handleDisabledVariantAction(_input: {
@@ -118,14 +121,20 @@ export async function submitCourseAiTasks(input: {
   submit: (questionId: string) => Promise<unknown>
   poll: (taskId: string) => Promise<BackgroundAiTerminalStatus>
   refresh: () => Promise<unknown> | unknown
-}): Promise<BackgroundAiTerminalStatus[]> {
+  onTerminal?: () => void
+}): Promise<{ submitted: number; failed: number; taskIds: string[] }> {
   const responses = await Promise.all(input.selectedIds.map(async questionId => {
     try { return await input.submit(questionId) } catch { return null }
   }))
   const taskIds = responses.map(extractBackgroundTaskId).filter((id): id is string => Boolean(id))
-  const statuses = await Promise.all(taskIds.map(taskId => input.poll(taskId)))
-  if (statuses.some(isRefreshableAiStatus)) await input.refresh()
-  return statuses
+  if (taskIds.length) {
+    void Promise.all(taskIds.map(taskId => input.poll(taskId).catch(() => 'failed' as BackgroundAiTerminalStatus)))
+      .then(statuses => {
+        if (statuses.some(isRefreshableAiStatus)) void input.refresh()
+      })
+      .finally(input.onTerminal)
+  }
+  return { submitted: taskIds.length, failed: input.selectedIds.length - taskIds.length, taskIds }
 }
 
 export type CourseQuestionListControllerState<T> = {
@@ -217,4 +226,13 @@ export function flattenKnowledgePointOptions(tree: unknown): Array<{ id: string;
   }
   visit(tree)
   return result
+}
+
+export async function loadCourseKnowledgePointOptions(
+  subject: string,
+  fetchTree: (subject: string) => Promise<unknown>,
+): Promise<Array<{ id: string; name: string }>> {
+  const response = await fetchTree(subject)
+  const data = (response as { data?: unknown } | null)?.data || response || []
+  return flattenKnowledgePointOptions(data)
 }
