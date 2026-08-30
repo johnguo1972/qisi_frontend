@@ -2,8 +2,8 @@
   <view class="page">
     <view class="toolbar">
       <view>
-        <text class="title">作业学情矩阵</text>
-        <text class="sub">{{ matrix?.source_mission_id || '' }} · 已标记 {{ matrix?.marked_count || 0 }} 题</text>
+        <text class="title">{{ missionName || '作业' }} · 学生错题统计</text>
+        <text class="sub">已标记 {{ matrix?.marked_count || 0 }} 题</text>
       </view>
       <view class="actions">
         <picker :range="classLabels" :value="classIndex" @change="changeClass">
@@ -43,7 +43,7 @@
 
     <view v-if="questionPanelVisible && matrix?.questions?.length" class="question-panel">
       <view class="question-panel-head">
-        <text class="question-panel-title">{{ selectedQuestion ? `第 ${selectedQuestion.question_no} 题` : '矩阵全部题目' }}</text>
+        <text class="question-panel-title">{{ selectedQuestion ? `第 ${selectedQuestion.question_no} 题` : '全部题目' }}</text>
         <view class="question-panel-actions">
           <button v-if="selectedQuestion" size="mini" @click="showAllQuestions">全部题目</button>
           <button size="mini" @click="closeQuestionPanel">关闭</button>
@@ -94,6 +94,7 @@ import { onLoad } from '@dcloudio/uni-app'
 import { missionApi } from '@/api/missions'
 
 const missionId = ref('')
+const missionName = ref('')
 const matrix = ref<any>(null)
 const loading = ref(false)
 const classId = ref('')
@@ -129,6 +130,7 @@ let pollTimer: ReturnType<typeof setInterval> | undefined
 
 onLoad((options: any) => {
   missionId.value = String(options?.missionId || options?.id || '')
+  loadMissionName()
   loadMatrix()
 })
 
@@ -150,9 +152,19 @@ async function loadMatrix() {
     classLabels.value = ['全部班级', ...classes.values()]
     pending.value = []
   } catch (error: any) {
-    uni.showToast({ title: error?.message || '矩阵加载失败', icon: 'none' })
+    uni.showToast({ title: error?.message || '作业数据加载失败', icon: 'none' })
   } finally {
     loading.value = false
+  }
+}
+
+async function loadMissionName() {
+  if (!missionId.value) return
+  try {
+    const res: any = await missionApi.detail(missionId.value)
+    missionName.value = String(res?.data?.mission_name || '').trim()
+  } catch {
+    // 获取作业名称失败不阻断错题统计页面，保留通用标题。
   }
 }
 

@@ -21,7 +21,7 @@
     { "path": "pages/teacher/mission-detail", "style": { "navigationBarTitleText": "作业详情" } },
     { "path": "pages/teacher/mission-progress", "style": { "navigationBarTitleText": "学生完成进度" } },
     { "path": "pages/teacher/learning-stats", "style": { "navigationBarTitleText": "学情统计" } },
-    { "path": "pages/teacher/wrongbook-matrix", "style": { "navigationBarTitleText": "作业学情矩阵" } },
+    { "path": "pages/teacher/wrongbook-matrix", "style": { "navigationBarTitleText": "学生错题统计" } },
     { "path": "pages/teacher/level-practice", "style": { "navigationBarTitleText": "关卡练习" } },
     { "path": "pages/teacher/class-create", "style": { "navigationBarTitleText": "创建班级" } },
     { "path": "pages/teacher/class-edit", "style": { "navigationBarTitleText": "编辑班级" } },
