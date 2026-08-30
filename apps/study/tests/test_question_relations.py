@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
 from apps.accounts.models import UserAccount
@@ -471,9 +472,9 @@ def test_relation_gets_serialize_only_the_requested_page_and_default_to_50(
     )
     assert default_candidates.data['data']['page_size'] == 50
 
-    def track_relation_item(question, common_names=None):
+    def track_relation_item(question, common_names=None, knowledge_points_display=None):
         serialized_ids.append(str(question.id))
-        return original_relation_item(question, common_names)
+        return original_relation_item(question, common_names, knowledge_points_display)
 
     monkeypatch.setattr(question_views, '_relation_item', track_relation_item)
     candidates = teacher_client.get(
@@ -504,3 +505,41 @@ def test_relation_gets_serialize_only_the_requested_page_and_default_to_50(
         f'/api/v1/questions/{relation_questions.origin.id}/relations/'
     )
     assert default_page.data['data']['page_size'] == 50
+
+
+@pytest.mark.django_db
+def test_relation_get_knowledge_point_queries_do_not_grow_with_page_size(
+    teacher_client, teacher, relation_questions
+):
+    extra_questions = [
+        ExamQuestion.objects.create(
+            paper=relation_questions.origin.paper,
+            question_no=f'query-count-{number}',
+            question_type='single_choice',
+            subject='physics',
+            stem=f'Query count relation question {number}',
+            difficulty=Decimal('3.00'),
+            knowledge_points=[{'module': 'motion'}],
+        )
+        for number in range(4)
+    ]
+    candidates_url = f'/api/v1/questions/{relation_questions.origin.id}/relation-candidates/'
+    relations_url = f'/api/v1/questions/{relation_questions.origin.id}/relations/'
+
+    with CaptureQueriesContext(connection) as candidate_small_context:
+        candidate_small = teacher_client.get(candidates_url, {'page': 1, 'page_size': 2})
+    with CaptureQueriesContext(connection) as candidate_large_context:
+        candidate_large = teacher_client.get(candidates_url, {'page': 1, 'page_size': 6})
+
+    assert candidate_small.status_code == candidate_large.status_code == 200
+    assert len(candidate_large_context) <= len(candidate_small_context) + 2
+
+    for related in [relation_questions.match, relation_questions.second_match, *extra_questions]:
+        QuestionRelation.create_for_questions(relation_questions.origin, related, teacher)
+    with CaptureQueriesContext(connection) as relation_small_context:
+        relation_small = teacher_client.get(relations_url, {'page': 1, 'page_size': 2})
+    with CaptureQueriesContext(connection) as relation_large_context:
+        relation_large = teacher_client.get(relations_url, {'page': 1, 'page_size': 6})
+
+    assert relation_small.status_code == relation_large.status_code == 200
+    assert len(relation_large_context) <= len(relation_small_context) + 2

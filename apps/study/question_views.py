@@ -376,13 +376,78 @@ def _common_knowledge_point_names(question, related_question):
     return names
 
 
-def _relation_item(question, common_names=None):
+def _relation_knowledge_points_display(questions):
+    """Build existing knowledge-point display values with bounded page queries."""
+    raw_points_by_id = {}
+    numeric_ids = set()
+    modules = set()
+    for question in questions:
+        raw_points = question.knowledge_points or question.ai_knowledge_enrichment or []
+        if isinstance(raw_points, dict):
+            raw_points = raw_points.get('points') or raw_points.get('knowledge_points') or []
+        if not isinstance(raw_points, list):
+            raw_points = []
+        raw_points_by_id[question.id] = raw_points
+        for point in raw_points:
+            if not isinstance(point, dict):
+                continue
+            if point.get('module'):
+                modules.add(point['module'])
+            point_id = point.get('id')
+            if isinstance(point_id, bool):
+                continue
+            try:
+                numeric_ids.add(int(point_id))
+            except (TypeError, ValueError, OverflowError):
+                continue
+
+    if numeric_ids or modules:
+        points = list(KnowledgePoint.objects.filter(
+            Q(id__in=numeric_ids) | Q(module__in=modules)
+        ))
+    else:
+        points = []
+    points_by_id = {str(point.id): point for point in points}
+    displays = {}
+    for question in questions:
+        raw_points = raw_points_by_id[question.id]
+        question_modules = {
+            point.get('module') for point in raw_points
+            if isinstance(point, dict) and point.get('module')
+        }
+        subject_points = [
+            point for point in points
+            if point.subject == question.subject and point.module in question_modules
+        ]
+        module_points = subject_points or [
+            point for point in points if point.module in question_modules
+        ]
+        result = []
+        seen = set()
+        for item in raw_points:
+            module = item.get('module') if isinstance(item, dict) else None
+            key = str(item.get('id')) if isinstance(item, dict) and item.get('id') is not None else None
+            point = points_by_id.get(key)
+            if point is None and module:
+                point = next((item for item in module_points if item.module == module), None)
+            name = point.module if point else module
+            if name and name not in seen:
+                result.append({'id': str(point.id) if point else key, 'name': name})
+                seen.add(name)
+        displays[question.id] = result
+    return displays
+
+
+def _relation_item(question, common_names=None, knowledge_points_display=None):
     return {
         'id': str(question.id),
         'question_no': question.question_no,
         'stem_preview': preview_text(question.stem, question.subquestions, question.tables, limit=120),
         'difficulty': question.difficulty,
-        'knowledge_points_display': QuestionListSerializer(question).get_knowledge_points_display(question),
+        'knowledge_points_display': (
+            QuestionListSerializer(question).get_knowledge_points_display(question)
+            if knowledge_points_display is None else knowledge_points_display
+        ),
         'common_knowledge_point_names': common_names or [],
     }
 
@@ -433,8 +498,12 @@ def question_relations(request, question_id):
         visible_related = _visible_relation_questions(request, question).filter(pk__in=related_ids)
         total = visible_related.count()
         start = (page - 1) * page_size
-        page_questions = visible_related.order_by('sort_order', 'id')[start:start + page_size]
-        items = [_relation_item(item) for item in page_questions]
+        page_questions = list(visible_related.order_by('sort_order', 'id')[start:start + page_size])
+        displays = _relation_knowledge_points_display(page_questions)
+        items = [
+            _relation_item(item, knowledge_points_display=displays[item.id])
+            for item in page_questions
+        ]
         return _relation_response(_relation_page_data(total, page, page_size, items))
 
     question_ids = request.data.get('question_ids')
@@ -522,9 +591,15 @@ def question_relation_candidates(request, question_id):
     sorted_candidates = sorted(candidates, key=lambda candidate: (candidate.sort_order, str(candidate.id)))
     total = len(sorted_candidates)
     start = (page - 1) * page_size
+    page_candidates = sorted_candidates[start:start + page_size]
+    displays = _relation_knowledge_points_display(page_candidates)
     items = [
-        _relation_item(candidate, _common_knowledge_point_names(question, candidate))
-        for candidate in sorted_candidates[start:start + page_size]
+        _relation_item(
+            candidate,
+            _common_knowledge_point_names(question, candidate),
+            displays[candidate.id],
+        )
+        for candidate in page_candidates
     ]
     page_data = _relation_page_data(total, page, page_size, items)
     if reason:
