@@ -32,6 +32,29 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+it('loads ten candidates initially and swaps to a non-overlapping next batch when nothing is selected', async () => {
+  const first = { ...candidate, id: 'candidate-page-1' }
+  const second = { ...candidate, id: 'candidate-page-2' }
+  const candidateCalls: Array<{ page?: number; page_size?: number }> = []
+  const api: RelationApi = {
+    relationCandidates: async (_id, params) => {
+      candidateCalls.push(params || {})
+      return params?.page === 2 ? page([second], 2, 10, 20) : page([first], 1, 10, 20)
+    },
+    relations: async () => page([]),
+    createRelations: async () => ({ data: { created_count: 0, existing_count: 0, invalid_question_ids: [] } }),
+    removeRelation: async () => ({ data: { removed: true } }),
+  }
+  const controller = createQuestionRelationsController(api)
+
+  await controller.open('origin-1')
+  await controller.nextCandidateBatch()
+
+  expect(candidateCalls.map(call => call.page_size)).toEqual([10, 10])
+  expect(controller.state.candidatePage).toBe(2)
+  expect(controller.state.candidates.map(item => item.id)).toEqual(['candidate-page-2'])
+})
+
 describe('题库关联题状态', () => {
   it('建立关联后清空选择、刷新两页并切换到已关联题', async () => {
     let candidateItems = [candidate]
@@ -106,15 +129,15 @@ describe('题库关联题状态', () => {
     expect(controller.state.error).toBe('没有关联题权限')
   })
 
-  it('候选和已关联题都支持超过 50 条翻页，且候选勾选可跨页保留', async () => {
+  it('候选题按十题一批翻页，已关联题保持五十题分页且候选勾选可跨页保留', async () => {
     const candidatePageOne = { ...candidate, id: 'candidate-page-1' }
     const candidatePageTwo = { ...candidate, id: 'candidate-page-2' }
     const linkedPageOne = { ...linked, id: 'linked-page-1' }
     const linkedPageTwo = { ...linked, id: 'linked-page-2' }
     const api: RelationApi = {
       relationCandidates: async (_id, params) => params?.page === 2
-        ? page([candidatePageTwo], 2, 50, 51)
-        : page([candidatePageOne], 1, 50, 51),
+        ? page([candidatePageTwo], 2, 10, 51)
+        : page([candidatePageOne], 1, 10, 51),
       relations: async (_id, params) => params?.page === 2
         ? page([linkedPageTwo], 2, 50, 51)
         : page([linkedPageOne], 1, 50, 51),
@@ -130,7 +153,7 @@ describe('题库关联题状态', () => {
 
     expect(controller.state.candidatePage).toBe(2)
     expect(controller.state.candidateTotal).toBe(51)
-    expect(controller.state.candidatePageSize).toBe(50)
+    expect(controller.state.candidatePageSize).toBe(10)
     expect(controller.state.candidates).toEqual([candidatePageTwo])
     expect(controller.state.selectedIds).toEqual(['candidate-page-1'])
     expect(controller.state.linkedPage).toBe(2)

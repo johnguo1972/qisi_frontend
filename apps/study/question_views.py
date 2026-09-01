@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q, CharField
+from django.db.models import Q, CharField, prefetch_related_objects
 from django.db.models.functions import Cast
 from apps.accounts.auth import get_request_role
 from apps.parser.models import ExamQuestion
@@ -368,10 +368,15 @@ def _visible_relation_questions(request, origin_question):
     return questions
 
 
-def _common_knowledge_point_names(question, related_question):
+def _common_knowledge_point_names(question, related_question, question_knowledge_points_display=None):
     common_keys = knowledge_point_keys(question.knowledge_points) & knowledge_point_keys(
         related_question.knowledge_points
     )
+    display_by_id = {
+        str(point.get('id')): point.get('name')
+        for point in (question_knowledge_points_display or [])
+        if isinstance(point, dict) and point.get('id') is not None and point.get('name')
+    }
     names = []
     raw_points = question.knowledge_points or []
     if isinstance(raw_points, dict):
@@ -380,14 +385,17 @@ def _common_knowledge_point_names(question, related_question):
         return names
     for point in raw_points:
         if isinstance(point, dict):
-            for field in ('id', 'module', 'name'):
+            for field in ('module', 'name', 'id'):
                 value = point.get(field)
                 if value is not None and str(value).strip():
                     if f'{field}:{str(value).strip()}' in common_keys:
-                        name = str(value).strip()
-                        if name not in names:
+                        name = (
+                            display_by_id.get(str(value).strip())
+                            if field == 'id' else str(value).strip()
+                        )
+                        if name and name not in names:
                             names.append(name)
-                    break
+                        break
         elif isinstance(point, str) and point.strip() and f'name:{point.strip()}' in common_keys:
             if point.strip() not in names:
                 names.append(point.strip())
@@ -467,6 +475,16 @@ def _relation_item(question, common_names=None, knowledge_points_display=None):
             if knowledge_points_display is None else knowledge_points_display
         ),
         'common_knowledge_point_names': common_names or [],
+        'option_previews': [
+            {
+                'label': option.option_label,
+                'content': option.content,
+            }
+            for option in sorted(
+                question.options.all(),
+                key=lambda option: (option.sort_order, option.option_label),
+            )
+        ],
     }
 
 
@@ -517,9 +535,14 @@ def question_relations(request, question_id):
         total = visible_related.count()
         start = (page - 1) * page_size
         page_questions = list(visible_related.order_by('sort_order', 'id')[start:start + page_size])
-        displays = _relation_knowledge_points_display(page_questions)
+        prefetch_related_objects(page_questions, 'options')
+        displays = _relation_knowledge_points_display([question, *page_questions])
         items = [
-            _relation_item(item, knowledge_points_display=displays[item.id])
+            _relation_item(
+                item,
+                _common_knowledge_point_names(question, item, displays[question.id]),
+                displays[item.id],
+            )
             for item in page_questions
         ]
         return _relation_response(_relation_page_data(total, page, page_size, items))
@@ -610,11 +633,12 @@ def question_relation_candidates(request, question_id):
     total = len(sorted_candidates)
     start = (page - 1) * page_size
     page_candidates = sorted_candidates[start:start + page_size]
-    displays = _relation_knowledge_points_display(page_candidates)
+    prefetch_related_objects(page_candidates, 'options')
+    displays = _relation_knowledge_points_display([question, *page_candidates])
     items = [
         _relation_item(
             candidate,
-            _common_knowledge_point_names(question, candidate),
+            _common_knowledge_point_names(question, candidate, displays[question.id]),
             displays[candidate.id],
         )
         for candidate in page_candidates

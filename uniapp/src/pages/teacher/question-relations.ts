@@ -121,7 +121,7 @@ export function createQuestionRelationsController(api: RelationApi) {
     linked: [],
     candidatePage: 1,
     candidateTotal: 0,
-    candidatePageSize: 50,
+    candidatePageSize: 10,
     linkedPage: 1,
     linkedTotal: 0,
     linkedPageSize: 50,
@@ -293,6 +293,10 @@ export function createQuestionRelationsController(api: RelationApi) {
 
   async function nextCandidatePage(): Promise<void> { await changeCandidatePage(state.candidatePage + 1) }
   async function previousCandidatePage(): Promise<void> { await changeCandidatePage(state.candidatePage - 1) }
+  async function nextCandidateBatch(): Promise<void> {
+    if (state.selectedIds.length > 0) return
+    await nextCandidatePage()
+  }
   async function nextLinkedPage(): Promise<void> { await changeLinkedPage(state.linkedPage + 1) }
   async function previousLinkedPage(): Promise<void> { await changeLinkedPage(state.linkedPage - 1) }
 
@@ -312,7 +316,7 @@ export function createQuestionRelationsController(api: RelationApi) {
     state.linked = []
     state.candidatePage = 1
     state.candidateTotal = 0
-    state.candidatePageSize = 50
+    state.candidatePageSize = 10
     state.linkedPage = 1
     state.linkedTotal = 0
     state.linkedPageSize = 50
@@ -342,7 +346,7 @@ export function createQuestionRelationsController(api: RelationApi) {
     state.linked = []
     state.candidatePage = 1
     state.candidateTotal = 0
-    state.candidatePageSize = 50
+    state.candidatePageSize = 10
     state.linkedPage = 1
     state.linkedTotal = 0
     state.linkedPageSize = 50
@@ -470,6 +474,7 @@ export function createQuestionRelationsController(api: RelationApi) {
     changeLinkedPage,
     nextCandidatePage,
     previousCandidatePage,
+    nextCandidateBatch,
     nextLinkedPage,
     previousLinkedPage,
     createSelected,

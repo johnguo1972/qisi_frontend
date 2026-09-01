@@ -10,7 +10,7 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import UserAccount
 from apps.papers.models import ExamPaper
-from apps.parser.models import ExamQuestion
+from apps.parser.models import ExamQuestion, QuestionOption
 from apps.study.models import QuestionRelation
 from apps.study import question_views
 from apps.study.question_relation_service import (
@@ -258,6 +258,37 @@ def test_relation_candidates_enforce_scope_subject_difficulty_knowledge_and_pagi
     assert response.data['data']['items'][0]['common_knowledge_point_names'] == ['motion']
     candidate_ids = {item['id'] for item in response.data['data']['items']}
     assert candidate_ids == {str(relation_questions.match.id), str(relation_questions.second_match.id)}
+
+
+@pytest.mark.django_db
+def test_relation_candidates_return_module_name_difficulty_and_option_previews(
+    teacher_client, relation_questions, relation_knowledge_point_table,
+):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO knowledge_points (id, subject, module) VALUES (%s, %s, %s)",
+            [7, 'physics', 'motion'],
+        )
+
+    for question in (relation_questions.origin, relation_questions.match):
+        question.knowledge_points = [{'id': 7}]
+        question.save(update_fields=['knowledge_points'])
+    QuestionOption.objects.create(
+        question=relation_questions.match,
+        option_label='A',
+        content='$x^2$',
+        sort_order=1,
+    )
+
+    response = teacher_client.get(
+        f'/api/v1/questions/{relation_questions.origin.id}/relation-candidates/',
+        {'page': 1, 'page_size': 10},
+    )
+
+    item = next(item for item in response.data['data']['items'] if item['id'] == str(relation_questions.match.id))
+    assert item['common_knowledge_point_names'] == ['motion']
+    assert item['difficulty'] == 3.0
+    assert item['option_previews'] == [{'label': 'A', 'content': '$x^2$'}]
 
 
 @pytest.mark.django_db

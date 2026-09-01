@@ -8,6 +8,7 @@ export type QuestionRelationItem = {
   difficulty: string | number | null
   knowledge_points_display: Array<{ id?: string; name: string }>
   common_knowledge_point_names?: string[]
+  option_previews?: Array<{ label: string; content: string }>
 }
 
 export type QuestionRelationPageData = {

@@ -285,13 +285,28 @@
         <template v-else-if="relationState.tab === 'candidates'">
           <view v-if="relationState.reason" class="relation-empty">{{ relationState.reason }}</view>
           <view v-else-if="!relationState.candidates.length" class="relation-empty">暂无可关联题</view>
-          <view v-else class="relation-list"><view v-for="item in relationState.candidates" :key="item.id" class="relation-item"><checkbox :checked="relationState.selectedIds.includes(item.id)" @click.stop="relationController.toggleSelection(item.id)" /><text>{{ item.question_no }}：{{ item.stem_preview }}</text></view></view>
-          <view v-if="relationState.candidateTotal > relationState.candidatePageSize" class="relation-pagination"><button size="mini" :disabled="relationState.candidatePage <= 1" @click="relationController.previousCandidatePage">上一页</button><text>{{ relationState.candidatePage }} / {{ relationCandidatePages }} 页</text><button size="mini" :disabled="relationState.candidatePage >= relationCandidatePages" @click="relationController.nextCandidatePage">下一页</button></view>
+          <view v-else class="relation-list">
+            <view class="relation-candidate-toolbar">
+              <text>每批 10 题</text>
+              <button
+                size="mini"
+                :disabled="relationState.selectedIds.length > 0 || relationState.candidatePage >= relationCandidatePages"
+                @click="relationController.nextCandidateBatch"
+              >换一批</button>
+            </view>
+            <RelationQuestionPreview v-for="item in relationState.candidates" :key="item.id" :item="item">
+              <template #leading><checkbox :checked="relationState.selectedIds.includes(item.id)" @click.stop="relationController.toggleSelection(item.id)" /></template>
+            </RelationQuestionPreview>
+          </view>
           <view class="modal-footer"><button size="mini" type="primary" :disabled="!relationState.selectedIds.length" @click="createRelations">关联</button></view>
         </template>
         <template v-else>
           <view v-if="!relationState.linked.length" class="relation-empty">暂无已关联题</view>
-          <view v-else class="relation-list"><view v-for="item in relationState.linked" :key="item.id" class="relation-item"><text>{{ item.question_no }}：{{ item.stem_preview }}</text><button size="mini" @click="confirmRemoveRelation(item.id)">解除关联</button></view></view>
+          <view v-else class="relation-list">
+            <RelationQuestionPreview v-for="item in relationState.linked" :key="item.id" :item="item">
+              <template #trailing><button size="mini" class="relation-remove" @click="confirmRemoveRelation(item.id)">解除关联</button></template>
+            </RelationQuestionPreview>
+          </view>
           <view v-if="relationState.linkedTotal > relationState.linkedPageSize" class="relation-pagination"><button size="mini" :disabled="relationState.linkedPage <= 1" @click="relationController.previousLinkedPage">上一页</button><text>{{ relationState.linkedPage }} / {{ relationLinkedPages }} 页</text><button size="mini" :disabled="relationState.linkedPage >= relationLinkedPages" @click="relationController.nextLinkedPage">下一页</button></view>
         </template>
       </view>
@@ -323,6 +338,7 @@ import { questionApi, aiProcessProbe, getQuestionTags, addQuestionTag, getTagLis
 import { favoriteApi } from '@/api/favorites'
 import { createQuestionRelationsController } from './question-relations'
 import QuestionDetailCard from '@/components/QuestionDetailCard.vue'
+import RelationQuestionPreview from '@/components/RelationQuestionPreview.vue'
 import RightActionPanel from '@/components/RightActionPanel.vue'
 import AiAnswerModal from '@/components/AiAnswerModal.vue'
 import { navigateRoleSection } from '@/utils/role-navigation'
@@ -2015,17 +2031,20 @@ onUnmounted(() => {
   padding: 40px 0;
 }
 
-.relation-modal { width: min(640px, calc(100vw - 32px)); max-height: 80vh; overflow-y: auto; }
-.relation-modal-header, .relation-tabs, .relation-item { display: flex; align-items: center; gap: 8px; }
+.relation-modal { width: min(680px, calc(100vw - 32px)); max-height: 80vh; overflow-y: auto; padding: 16px; }
+.relation-modal-header, .relation-tabs { display: flex; align-items: center; gap: 8px; }
 .relation-modal-header { justify-content: space-between; }
+.relation-modal-header .modal-title { font-size: 17px; }
 .relation-tabs { margin: 12px 0; }
+.relation-tabs button { flex: 1; font-size: 13px; }
 .relation-tab-active { color: #fff; background: #409eff; border-color: #409eff; }
-.relation-list { display: flex; flex-direction: column; gap: 8px; }
-.relation-item { justify-content: space-between; padding: 8px; border-radius: 4px; background: #f5f7fa; font-size: 13px; }
-.relation-item > text { flex: 1; min-width: 0; }
+.relation-list { display: flex; flex-direction: column; max-height: 48vh; overflow-y: auto; }
+.relation-candidate-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; color: #8b98a8; font-size: 11px; }
+.relation-candidate-toolbar button { margin: 0; font-size: 12px; }
 .relation-pagination { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; color: #606266; font-size: 13px; }
-.relation-empty { padding: 24px 0; color: #909399; text-align: center; }
-.relation-error { margin: 8px 0; padding: 8px; color: #f56c6c; background: #fef0f0; border-radius: 4px; font-size: 13px; }
+.relation-empty { padding: 20px 0; color: #909399; text-align: center; font-size: 13px; }
+.relation-error { margin: 8px 0; padding: 7px 9px; color: #f56c6c; background: #fef0f0; border-radius: 4px; font-size: 12px; }
+.relation-remove { flex: 0 0 auto; color: #f56c6c; }
 .tag-editor { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .tag-chip { padding: 4px 8px; border-radius: 12px; background: #ecf5ff; color: #409eff; font-size: 12px; }
 
