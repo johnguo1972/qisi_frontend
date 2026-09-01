@@ -107,10 +107,14 @@ def questions(course, node, teacher, knowledge_point_table):
 
 
 @pytest.mark.django_db
-def test_course_question_list_requires_selected_course_node(api_client, course):
+def test_course_question_list_defaults_to_all_active_course_links(api_client, course, questions):
     response = api_client.get(f'/api/v1/courses/{course.id}/questions/')
 
-    assert response.status_code == 400
+    assert response.status_code == 200
+    assert {item['id'] for item in response.data['data']['items']} == {
+        str(questions.matching.id),
+        str(questions.other_node.id),
+    }
 
 
 @pytest.mark.django_db

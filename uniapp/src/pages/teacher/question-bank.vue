@@ -122,7 +122,7 @@
             :key="q.id"
             :question="q"
             :index="index + 1"
-            :show-answer="showAnswerMap[q.id]"
+            :show-answer="normalizeAnswerVisibility(showAnswerMap[q.id])"
             :selected="selectedQuestionIds.includes(String(q.id))"
             :compact="viewMode === 'compact'"
             @edit="goEdit"
@@ -239,6 +239,7 @@ import { questionApi, aiProcessProbe, importJsonPackage, getQuestionTags, addQue
 import { createQuestionRelationsController } from './question-relations'
 import { knowledgeApi } from '@/api/knowledge'
 import { favoriteApi } from '@/api/favorites'
+import { normalizeAnswerVisibility } from '@/utils/answer-visibility'
 
 import QuestionDetailCard from '@/components/QuestionDetailCard.vue'
 import AddMenuModal from '@/components/AddMenuModal.vue'

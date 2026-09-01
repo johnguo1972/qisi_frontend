@@ -10,7 +10,7 @@ export interface CourseQuestionListInput {
 }
 
 export interface CourseQuestionListQuery {
-  tree_node_id: string
+  tree_node_id?: string
   page: number
   page_size: number
   question_type?: string | null
@@ -36,14 +36,12 @@ export function serializeCourseQuestionQuery(query: CourseQuestionListQuery): UR
   return params
 }
 
-export function buildCourseQuestionQuery(input: CourseQuestionListInput): CourseQuestionListQuery | null {
-  if (!input.treeNodeId) return null
-
+export function buildCourseQuestionQuery(input: CourseQuestionListInput): CourseQuestionListQuery {
   const query: CourseQuestionListQuery = {
-    tree_node_id: input.treeNodeId,
     page: input.page,
     page_size: input.pageSize,
   }
+  if (input.treeNodeId) query.tree_node_id = input.treeNodeId
   if (input.questionType) query.question_type = input.questionType
   if (input.difficulty) query.difficulty = input.difficulty
   if (input.knowledgePointId) query.knowledge_point_id = input.knowledgePointId
@@ -67,7 +65,6 @@ export async function loadCourseQuestionList<T = unknown>(
   fetchList: (query: CourseQuestionListQuery) => Promise<unknown>,
 ): Promise<CourseQuestionListResult<T>> {
   const query = buildCourseQuestionQuery(input)
-  if (!query) return normalizeCourseQuestionList<T>(null)
   return normalizeCourseQuestionList<T>(await fetchList(query))
 }
 
@@ -169,12 +166,12 @@ export function createCourseQuestionListController<T = unknown>(
     state.items = []
     state.total = 0
     state.selectedIds = []
-    state.loading = Boolean(treeNodeId)
+    state.loading = true
   }
 
   async function load(input: Omit<CourseQuestionListInput, 'treeNodeId' | 'page' | 'pageSize'> = {}, allowPageCorrection = true) {
     const sequence = ++requestSequence
-    state.loading = Boolean(state.treeNodeId)
+    state.loading = true
     let result: CourseQuestionListResult<T>
     try {
       result = await loadCourseQuestionList<T>({

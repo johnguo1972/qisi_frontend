@@ -391,10 +391,10 @@ onMounted(async () => {
     courseId.value = String(id)
     await loadCourseInfo()
   }
-  loadTree()
+  await loadTree()
   void loadKnowledgeOptions()
   void loadTags()
-  loadQuestions()
+  await loadQuestions()
 })
 
 // Refresh the current directory after returning from question-edit so the
@@ -724,7 +724,7 @@ async function loadQuestions() {
   questionListController.state.page = pageNo.value
   questionListController.state.pageSize = pageSize.value
   questionListController.state.selectedIds = [...selectedIds.value]
-  loading.value = questionListController.state.loading || Boolean(treeNodeId)
+  loading.value = true
   try {
     const loaded = await questionListController.load({
       questionType: activeType.value,

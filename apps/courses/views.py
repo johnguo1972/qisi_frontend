@@ -1054,25 +1054,23 @@ def paginate_question_queryset(queryset, request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def question_list(request, course_id):
-    """List paginated questions linked to one selected course-tree node."""
+    """List course questions, optionally narrowed to a selected tree node."""
     course = _get_course_or_404(course_id)
     _check_course_access(course, request.user)
 
     tree_node_id = request.query_params.get('tree_node_id')
-    if not tree_node_id:
-        raise ValidationError('tree_node_id is required')
-    try:
-        tree_node_uuid = uuid.UUID(str(tree_node_id))
-    except (TypeError, ValueError, AttributeError):
-        raise ValidationError('tree_node_id is invalid')
-    if not CourseTree.objects.filter(id=tree_node_uuid, course=course).exists():
-        raise ValidationError('tree_node_id does not belong to this course')
-
     links = CourseQuestionLink.objects.filter(
         course=course,
-        tree_node_id=tree_node_uuid,
         is_deleted=False,
     )
+    if tree_node_id:
+        try:
+            tree_node_uuid = uuid.UUID(str(tree_node_id))
+        except (TypeError, ValueError, AttributeError):
+            raise ValidationError('tree_node_id is invalid')
+        if not CourseTree.objects.filter(id=tree_node_uuid, course=course).exists():
+            raise ValidationError('tree_node_id does not belong to this course')
+        links = links.filter(tree_node_id=tree_node_uuid)
     queryset = ExamQuestion.objects.select_related('paper').filter(
         id__in=links.values('question_id'),
     )

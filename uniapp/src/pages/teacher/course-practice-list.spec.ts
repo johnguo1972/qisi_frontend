@@ -19,8 +19,10 @@ describe('course practice question list query state', () => {
     })
   })
 
-  it('does not build a request when no course node is selected', () => {
-    expect(buildCourseQuestionQuery({ treeNodeId: '', page: 1, pageSize: 20 })).toBeNull()
+  it('builds an all-course request when no course node is selected', () => {
+    expect(buildCourseQuestionQuery({ treeNodeId: '', page: 1, pageSize: 20 })).toEqual({
+      page: 1, page_size: 20,
+    })
   })
 
   it('does not serialize undefined, null, or whitespace-only optional filters', () => {
@@ -32,14 +34,14 @@ describe('course practice question list query state', () => {
     expect(query.toString()).toBe('tree_node_id=node-1&page=1&page_size=20')
   })
 
-  it('does not call the fetch callback when no node is selected', async () => {
+  it('loads all course questions when no node is selected', async () => {
     let calls = 0
     const result = await loadCourseQuestionList(
       { treeNodeId: '', page: 1, pageSize: 20 },
-      async () => { calls += 1; return { data: { items: [], total: 0, page_no: 1, page_size: 20 } } },
+      async () => { calls += 1; return { data: { items: [{ question_id: 'q-1' }], total: 1, page_no: 1, page_size: 20 } } },
     )
-    expect(calls).toBe(0)
-    expect(result.items).toEqual([])
+    expect(calls).toBe(1)
+    expect(result.items).toEqual([{ question_id: 'q-1' }])
   })
 
   it('normalizes the paginated response envelope', () => {
