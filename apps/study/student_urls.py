@@ -3,7 +3,7 @@ from .student_views import (
     student_home, student_mission_detail, student_level_detail, growth_summary, export_pdf, upload_attempt_image,
     task_progress_stream
 )
-from .answer_views import submit_answer, retry_answer, get_mode_a, start_attempt, submit_attempt, submit_mission, related_questions
+from .answer_views import submit_answer, retry_answer, get_mode_a, start_attempt, submit_attempt, submit_mission, mission_results, related_questions
 from .guidance_views import start_guidance, guidance_reply
 from .knowledge_views import knowledge_mastery
 
@@ -16,6 +16,7 @@ urlpatterns = [
     path('attempts/<uuid:attempt_id>/submit', submit_attempt, name='submit-attempt'),
     path('attempts', submit_answer, name='submit-answer'),
     path('missions/<uuid:mission_id>/submit', submit_mission, name='submit-mission'),
+    path('missions/<uuid:mission_id>/results', mission_results, name='mission-results'),
     path('attempts/<uuid:attempt_id>/retry', retry_answer, name='retry-answer'),
     path('guidance/sessions', start_guidance, name='start-guidance'),
     # Legacy tests/clients may serialize UUID(int=n) as its compact integer.

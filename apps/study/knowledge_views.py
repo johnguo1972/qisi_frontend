@@ -6,11 +6,20 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from apps.parser.models import ExamQuestion
 from apps.study.permissions import IsStudentOrParentContext
+from apps.common.subject_codes import normalize_subject_code
 from .models import AnswerAttempt
 
 
 def make_trace_id():
     return uuid.uuid4().hex[:16]
+
+
+def _question_subjects(question):
+    """Return canonical subject codes from both current and legacy question data."""
+    values = [question.subject]
+    if question.paper:
+        values.append(question.paper.subject)
+    return {code for code in (normalize_subject_code(value) for value in values) if code}
 
 
 @api_view(['GET'])
@@ -20,16 +29,30 @@ def knowledge_mastery(request):
     返回每个知识点的 attempt/correct/accuracy（排除主观题待批阅）。弱项在前。
     新增 tree 字段：学科→学段→年级→知识点 的树形结构。
     """
+    requested_subject = (request.query_params.get('subject') or '').strip()
+    selected_subject = normalize_subject_code(requested_subject) if requested_subject else ''
+    if requested_subject and not selected_subject:
+        return Response({
+            'code': 'INVALID_SUBJECT',
+            'message': '不支持的科目',
+            'data': None,
+            'trace_id': make_trace_id(),
+        }, status=400)
+
     attempts = AnswerAttempt.objects.filter(
         student_user_id=request.user, is_subjective_pending=False
     )
     qids = [a.question_id for a in attempts]
-    q_map = {q.id: q for q in ExamQuestion.objects.filter(id__in=qids)}
+    q_map = {
+        q.id: q for q in ExamQuestion.objects.filter(id__in=qids).select_related('paper')
+    }
 
     agg = defaultdict(lambda: {'attempt': 0, 'correct': 0})
     for a in attempts:
         q = q_map.get(a.question_id)
         if not q:
+            continue
+        if selected_subject and selected_subject not in _question_subjects(q):
             continue
         for kp in (q.knowledge_points or []):
             label = (kp.get('module') if isinstance(kp, dict) else str(kp)) or '未分类'
@@ -120,4 +143,5 @@ def knowledge_mastery(request):
                          'items': items,        # 列表（保持原有）
                          'tree': tree_data,     # 树形（新增）
                          'total': len(items),
+                         'selected_subject': selected_subject,
                      }})

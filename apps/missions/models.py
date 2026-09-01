@@ -251,7 +251,8 @@ class TeacherWrongBookCell(models.Model):
 class WrongBookGenerationBatch(models.Model):
     STATUS_CHOICES = [
         ('queued', 'queued'), ('generating', 'generating'), ('snapshotting', 'snapshotting'),
-        ('publishing', 'publishing'), ('published', 'published'),
+        ('publishing', 'publishing'), ('awaiting_selection', 'awaiting_selection'),
+        ('published', 'published'),
         ('partially_failed', 'partially_failed'), ('failed', 'failed'), ('retrying', 'retrying'),
     ]
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
@@ -261,6 +262,9 @@ class WrongBookGenerationBatch(models.Model):
     request_cell_ids = models.JSONField(default=list, blank=True)
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='queued')
     related_limit = models.PositiveSmallIntegerField(default=3)
+    generation_mode = models.CharField(max_length=30, default='legacy')
+    candidate_limit = models.PositiveSmallIntegerField(default=10)
+    selection_limit = models.PositiveSmallIntegerField(default=3)
     requested_count = models.PositiveIntegerField(default=0)
     generated_count = models.PositiveIntegerField(default=0)
     failed_count = models.PositiveIntegerField(default=0)
@@ -269,6 +273,8 @@ class WrongBookGenerationBatch(models.Model):
     idempotency_key = models.CharField(max_length=100)
     ai_confirmation_key = models.CharField(max_length=100, blank=True, default='')
     ai_supplement_mission_id = models.UUIDField(null=True, blank=True)
+    teacher_selection_confirmation_key = models.CharField(max_length=100, blank=True, default='')
+    final_mission_id = models.UUIDField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -296,8 +302,10 @@ class WrongBookGenerationItem(models.Model):
     source_question_id = models.UUIDField()
     source_wrong_book_item = models.ForeignKey('wrongbook.WrongBookItem', on_delete=models.PROTECT, related_name='generation_items')
     related_question_ids = models.JSONField(default=list, blank=True)
+    selected_question_ids = models.JSONField(default=list, blank=True)
     selected_count = models.PositiveSmallIntegerField(default=0)
     shortage_reason = models.CharField(max_length=255, blank=True, default='')
+    selection_required = models.BooleanField(default=False)
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='queued')
     target_mission = models.ForeignKey(LearningMission, on_delete=models.SET_NULL, null=True, blank=True, related_name='wrongbook_generation_items')
     error_code = models.CharField(max_length=50, blank=True, default='')

@@ -31,6 +31,7 @@ from .services import (
     question_no_sort_key,
 )
 from .pdf_service import ensure_mission_pdf, mission_pdf_download_url
+from .snapshots import apply_snapshot_to_question, snapshot_payload
 
 
 def make_trace_id():
@@ -167,17 +168,43 @@ def mission_grading(request, mission_id):
     question_ids = {str(attempt.question_id) for attempt in attempts}
     question_map = {
         str(question.id): question for question in ExamQuestion.objects.filter(id__in=question_ids)
+        .prefetch_related('options', 'images')
     }
+    relations = ordered_mission_question_rels(mission)
+    relation_map = {
+        (str(relation.question_id), str(relation.level_id) if relation.level_id else ''): relation
+        for relation in relations
+    }
+    fallback_relations = {}
+    for relation in relations:
+        fallback_relations.setdefault(str(relation.question_id), relation)
     attempt_rows = []
     for attempt in attempts:
         question = question_map.get(str(attempt.question_id))
+        relation = relation_map.get(
+            (str(attempt.question_id), str(attempt.level_id) if attempt.level_id else ''),
+        ) or fallback_relations.get(str(attempt.question_id))
+        display_question = apply_snapshot_to_question(question, relation) if question else None
+        display_payload = snapshot_payload(question, relation) if question else {}
         attempt_rows.append({
             'id': str(attempt.id),
             'student_id': str(attempt.student_user_id_id),
             'question_id': str(attempt.question_id),
             'level_id': str(attempt.level_id) if attempt.level_id else '',
-            'question_no': getattr(question, 'question_no', ''),
-            'stem': getattr(question, 'stem', ''),
+            'question_no': display_payload.get('question_no') or getattr(display_question, 'question_no', ''),
+            'question_type': display_payload.get('question_type') or getattr(display_question, 'question_type', ''),
+            'stem': display_payload.get('stem') or getattr(display_question, 'stem', ''),
+            'stem_html': display_payload.get('stem_html') or getattr(display_question, 'stem_html', ''),
+            'options': display_payload.get('options') or [],
+            'correct_answer': (
+                display_payload.get('answer')
+                or getattr(display_question, 'answer', '')
+                or ((getattr(display_question, 'ai_answer_a', None) or {}).get('answer', '') if display_question else '')
+                or ''
+            ),
+            'analysis': display_payload.get('analysis') or getattr(display_question, 'analysis', '') or '',
+            'solution': display_payload.get('solution') or getattr(display_question, 'solution', '') or '',
+            'images': display_payload.get('images') or [],
             'answer_content': attempt.answer_content,
             'is_correct': attempt.is_correct,
             'is_subjective_pending': attempt.is_subjective_pending,

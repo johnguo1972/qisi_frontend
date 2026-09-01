@@ -12,7 +12,7 @@
       <view class="mission-card">
         <text class="title">{{ missionName }}</text>
         <text class="goal">{{ goalText || '暂无描述' }}</text>
-        <button v-if="assignmentMode === 'flat'" class="submit-all-btn" :disabled="submitting" @click="submitMission">{{ submitting ? '提交中...' : '提交整份作业' }}</button>
+        <button v-if="missionId" class="submit-all-btn" :disabled="submitting || missionSubmitted" @click="submitMission">{{ submitting ? '提交中...' : (missionSubmitted ? '整份作业已提交' : '提交整份作业') }}</button>
         <!-- 班级和截止日期 -->
         <view class="mission-meta">
           <view class="meta-item" v-if="className">
@@ -81,6 +81,8 @@ const deadline = ref('')
 const assignmentMode = ref<'flat' | 'levels'>('levels')
 const levels = ref<any[]>([])
 const submitting = ref(false)
+const progressStatus = ref('not_started')
+const missionSubmitted = computed(() => ['submitted', 'graded', 'passed'].includes(progressStatus.value))
 
 const deadlineText = computed(() => {
   return formatDateOnly(deadline.value, '')
@@ -116,6 +118,7 @@ async function loadMission() {
     className.value = res.data?.class_name || ''
     deadline.value = res.data?.deadline || ''
     assignmentMode.value = res.data?.assignment_mode || 'levels'
+    progressStatus.value = String(res.data?.progress_status || 'not_started')
     levels.value = res.data?.levels || []
   } catch (e) {
     uni.showToast({ title: '加载失败', icon: 'none' })
@@ -143,18 +146,48 @@ function goLevel(id: number) {
   uni.navigateTo({ url: `/pages/student/answer?levelId=${id}` })
 }
 
+function storedMissionAnswers() {
+  const key = `student-mission-answers-${missionId.value}`
+  const saved = uni.getStorageSync(key)
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return []
+  return Object.entries(saved).map(([questionId, state]: [string, any]) => {
+    const questionType = state.questionType || ''
+    const answerContent = ['single_choice', 'multiple_choice'].includes(questionType)
+      ? { selected_options: state.selectedOptions || [] }
+      : {
+          text: state.textAnswer || '',
+          images: (state.uploadedImages || []).map((image: any) => image.serverUrl),
+        }
+    return {
+      question_id: questionId,
+      level_id: state.levelId,
+      answer_content: answerContent,
+      attempt_id: state.attemptId || undefined,
+      idempotency_key: state.idempotencyKey || `mission-${missionId.value}-question-${questionId}`,
+      submitted: !!state.hasSubmitted,
+    }
+  })
+}
+
 async function submitMission() {
-  if (submitting.value) return
+  if (submitting.value || missionSubmitted.value) return
   submitting.value = true
   try {
-    const response: any = await studentApi.submitMission(missionId.value)
+    const response: any = await studentApi.submitMission(missionId.value, {
+      answers: storedMissionAnswers(),
+    })
     if (response.code === 0) {
+      progressStatus.value = String(response.data?.status || 'submitted')
+      uni.removeStorageSync(`student-mission-answers-${missionId.value}`)
       uni.showToast({ title: '作业已提交', icon: 'success' })
       await loadMission()
     } else {
       const missing = response.data?.missing_question_ids?.length || 0
       uni.showToast({ title: missing ? `还有 ${missing} 题未提交` : (response.message || '提交失败'), icon: 'none' })
     }
+  } catch (error) {
+    console.error('提交整份作业失败:', error)
+    uni.showToast({ title: '提交整份作业失败，请重试', icon: 'none' })
   } finally {
     submitting.value = false
   }

@@ -37,7 +37,7 @@ urlpatterns = [
     path('student-imports/<uuid:task_id>', import_views.import_status, name='student-import-status'),
     path('student-imports/<uuid:task_id>/errors', import_views.import_errors, name='student-import-errors'),
     path('classes/<uuid:class_id>/learning-stats', class_views.class_learning_stats, name='class-learning-stats'),
-    path('classes/<uuid:class_id>/students/<uuid:student_id>', class_views.remove_student, name='class-remove-student'),
+    path('classes/<uuid:class_id>/students/<uuid:student_id>', class_views.remove_student, name='class-student-manage'),
 
     # ── Teacher: Join request approval ──
     path('classes/<uuid:class_id>/join-requests', request_views.join_request_list, name='join-request-list'),

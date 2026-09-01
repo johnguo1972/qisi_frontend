@@ -12,6 +12,11 @@ from .wrongbook_matrix import (
     matrix_payload, request_generation, save_marks, summary_payload,
     student_history_payload,
 )
+from .teacher_wrongbook_selection import (
+    confirm_teacher_selection,
+    request_teacher_generation,
+    teacher_candidate_groups,
+)
 from .views import make_trace_id
 
 
@@ -54,6 +59,26 @@ def wrongbook_matrix_generate(request, mission_id):
         batch = request_generation(
             matrix, request.user, request.data.get('version'), request.data.get('idempotency_key'),
             request.data.get('cell_ids'), request.data.get('related_limit', 3), make_trace_id(),
+        )
+        return Response({'code': 0, 'data': batch_payload(batch), 'trace_id': make_trace_id()}, status=201)
+    except MatrixError as exc:
+        return _error(exc)
+    except (TypeError, ValueError):
+        return _error(MatrixError('请求参数格式错误', 'invalid'))
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
+def teacher_wrongbook_generate(request, mission_id):
+    """Start the optional AI-first, teacher-selection fallback workflow."""
+    try:
+        matrix = get_or_create_matrix(
+            get_source_mission(mission_id, request.user), request.user,
+            request.data.get('class_id'),
+        )
+        batch = request_teacher_generation(
+            matrix, request.user, request.data.get('version'),
+            request.data.get('idempotency_key'), request.data.get('cell_ids'), make_trace_id(),
         )
         return Response({'code': 0, 'data': batch_payload(batch), 'trace_id': make_trace_id()}, status=201)
     except MatrixError as exc:
@@ -243,6 +268,40 @@ def wrongbook_recommendations_nested(request, mission_id, batch_id):
             raise MatrixError('无权操作该生成任务', 'forbidden', 403)
         recs = batch_recommendations(batch, request.user, request.data.get('limit', 10), make_trace_id()) if request.method == 'POST' else batch.recommendations.all().order_by('source_student_id', '-score', 'id')
         return Response({'code': 0, 'data': [_recommendation_payload(rec) for rec in recs], 'trace_id': make_trace_id()})
+    except MatrixError as exc:
+        return _error(exc)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
+def teacher_wrongbook_candidate_groups_nested(request, mission_id, batch_id):
+    try:
+        batch = _validate_nested_batch(request, mission_id, batch_id)
+        if not can_manage_matrix(batch.matrix.source_mission, request.user):
+            raise MatrixError('无权查看该生成任务', 'forbidden', 403)
+        if batch.generation_mode != 'teacher_select':
+            raise MatrixError('该批次不是教师选择模式', 'conflict', 409)
+        return Response({'code': 0, 'data': teacher_candidate_groups(batch), 'trace_id': make_trace_id()})
+    except MatrixError as exc:
+        return _error(exc)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
+def teacher_wrongbook_candidate_groups_confirm_nested(request, mission_id, batch_id):
+    try:
+        batch = _validate_nested_batch(request, mission_id, batch_id)
+        if not can_manage_matrix(batch.matrix.source_mission, request.user):
+            raise MatrixError('无权确认该生成任务', 'forbidden', 403)
+        mission = confirm_teacher_selection(
+            batch, request.user, request.data.get('groups', []),
+            request.data.get('idempotency_key', ''), make_trace_id(),
+        )
+        return Response({
+            'code': 0,
+            'data': {'mission_id': str(mission.id), 'mission_name': mission.mission_name},
+            'trace_id': make_trace_id(),
+        }, status=201)
     except MatrixError as exc:
         return _error(exc)
 

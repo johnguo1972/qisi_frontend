@@ -52,9 +52,22 @@
           <view class="grading-question">
             <text class="grading-student">{{ studentName(attempt.student_id) }}</text>
             <text>{{ attempt.question_no || attempt.question_id }}</text>
-            <text class="grading-stem">{{ attempt.stem }}</text>
+            <text class="grading-type">{{ questionTypeText(attempt.question_type) }}</text>
+            <text class="grading-stem">{{ plainText(attempt.stem) }}</text>
+            <view v-if="attempt.options?.length" class="grading-options">
+              <text v-for="option in attempt.options" :key="option.label" class="grading-option">
+                {{ option.label }}. {{ plainText(option.content) }}
+              </text>
+            </view>
           </view>
-          <text class="grading-answer">学生答案：{{ answerText(attempt.answer_content) }}</text>
+          <view class="grading-answer answer-row">
+            <text class="answer-label">学生答案</text>
+            <text class="answer-value">{{ answerText(attempt.answer_content, attempt.options) }}</text>
+          </view>
+          <view class="grading-answer correct-answer answer-row">
+            <text class="answer-label">正确答案</text>
+            <text class="answer-value">{{ correctAnswerText(attempt.correct_answer, attempt.options) }}</text>
+          </view>
           <view class="grading-controls">
             <input class="score-input" type="number" v-model.number="attempt.score" placeholder="分数" />
             <input class="feedback-input" v-model="attempt.feedback" placeholder="批语（可选）" />
@@ -159,7 +172,77 @@ async function loadGrading() {
   } finally { gradingLoading.value = false }
 }
 function studentName(id: string) { return gradingStudents.value.find(item => String(item.id) === String(id))?.name || id }
-function answerText(value: any) { return typeof value === 'string' ? value : JSON.stringify(value || '') }
+function plainText(value: any): string {
+  return String(value ?? '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .trim()
+}
+
+function optionLabel(value: any, options: any[] = []): string {
+  const label = String(value ?? '').trim()
+  const option = options.find(item => String(item?.label ?? '').trim().toUpperCase() === label.toUpperCase())
+  return option ? `${option.label}. ${plainText(option.content)}` : label
+}
+
+function choiceText(value: any, options: any[] = []): string {
+  const values = Array.isArray(value) ? value : [value]
+  return values
+    .map(item => optionLabel(item, options))
+    .filter(Boolean)
+    .join('、') || '未作答'
+}
+
+function answerText(value: any, options: any[] = []): string {
+  if (value === null || value === undefined || value === '') return '未作答'
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return '未作答'
+    if (text.startsWith('{') || text.startsWith('[')) {
+      try { return answerText(JSON.parse(text), options) } catch { /* keep legacy text */ }
+    }
+    return text
+  }
+  if (typeof value !== 'object') return String(value)
+  if (Array.isArray(value)) return choiceText(value, options)
+  if (Array.isArray(value.selected_options)) return choiceText(value.selected_options, options)
+  if (value.selected !== undefined && value.selected !== '') {
+    const selected = String(value.selected).trim().toLowerCase()
+    if (selected === 'true') return '正确'
+    if (selected === 'false') return '错误'
+    return optionLabel(value.selected, options)
+  }
+  for (const key of ['text', 'answer', 'content']) {
+    if (value[key] !== undefined && String(value[key]).trim()) return String(value[key]).trim()
+  }
+  if (Array.isArray(value.images) && value.images.length) return `已上传 ${value.images.length} 张图片答案`
+  return '未作答'
+}
+
+function correctAnswerText(value: any, options: any[] = []): string {
+  if (value === null || value === undefined || value === '') return '暂无参考答案'
+  if (typeof value === 'object') return answerText(value, options)
+  const raw = String(value).trim()
+  if (!raw) return '暂无参考答案'
+  if (options.length && /^[A-Za-z]+(?:[,，、;；|\s]+[A-Za-z]+)*$/.test(raw)) {
+    const values = raw.toUpperCase().split(/[,，、;；|\s]+/).filter(Boolean)
+    return choiceText(values.length > 1 ? values : raw.toUpperCase().split(''), options)
+  }
+  return raw
+}
+
+function questionTypeText(type: string): string {
+  const map: Record<string, string> = {
+    single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题',
+    fill_blank: '填空题', short_answer: '简答题', essay: '论述题',
+    computation: '计算题', calculation: '计算题', proof: '证明题',
+  }
+  return map[String(type || '').trim().toLowerCase()] || ''
+}
 async function saveGrade(attempt: any) {
   try {
     await missionApi.gradeAttempt(missionId.value, attempt.id, { score: Number(attempt.score), feedback: attempt.feedback })
@@ -365,8 +448,15 @@ function saveQrcodeImage() {
 .grading-item { padding: 20rpx 0; border-bottom: 1rpx solid #eee; }
 .grading-question { display: flex; gap: 14rpx; align-items: flex-start; flex-wrap: wrap; color: #555; }
 .grading-student { color: #409eff; font-weight: bold; }
-.grading-stem { width: 100%; color: #333; white-space: normal; overflow-wrap: anywhere; }
-.grading-answer { display: block; margin: 14rpx 0; color: #666; white-space: normal; overflow-wrap: anywhere; }
+.grading-type { color: #409eff; background: #ecf5ff; padding: 3rpx 10rpx; border-radius: 4rpx; font-size: 20rpx; }
+.grading-stem { width: 100%; color: #333; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.grading-options { width: 100%; display: flex; flex-direction: column; gap: 6rpx; padding: 8rpx 0 2rpx 24rpx; box-sizing: border-box; }
+.grading-option { color: #606266; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.grading-answer { display: flex; gap: 12rpx; margin: 14rpx 0; white-space: normal; overflow-wrap: anywhere; }
+.answer-label { flex: 0 0 auto; color: #606266; font-weight: 600; }
+.answer-value { color: #303133; white-space: pre-wrap; overflow-wrap: anywhere; }
+.correct-answer { padding: 10rpx 14rpx; background: #f0f9eb; border-radius: 6rpx; }
+.correct-answer .answer-label { color: #67c23a; }
 .grading-controls { display: flex; gap: 12rpx; align-items: center; }
 .score-input { width: 110rpx; border: 1rpx solid #ddd; padding: 10rpx; }
 .feedback-input { flex: 1; border: 1rpx solid #ddd; padding: 10rpx; }

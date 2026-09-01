@@ -70,8 +70,26 @@
               <text class="col-phone">{{ maskPhone(s.phone || s.mobile || s.student_mobile) || '未设置' }}</text>
               <text class="col-join" :class="'badge-' + s.join_type">{{ joinTypeText(s.join_type) }}</text>
               <view class="col-action">
-                <button size="mini" class="remove-student" @click="removeStudent(s)">移除</button>
+                <button size="mini" class="student-action-btn edit-student" @click.stop="openEditStudent(s)">编辑</button>
+                <button size="mini" class="student-action-btn remove-student" @click="removeStudent(s)">移除</button>
               </view>
+            </view>
+          </view>
+        </view>
+        <view v-if="editingStudent" class="modal-mask" @click.self="closeEditStudent">
+          <view class="edit-dialog">
+            <text class="edit-dialog-title">修改学生姓名</text>
+            <input
+              v-model="editingName"
+              class="edit-name-input"
+              maxlength="64"
+              focus
+              placeholder="请输入学生姓名"
+              @confirm="saveStudentName"
+            />
+            <view class="edit-dialog-actions">
+              <button class="edit-cancel" @click="closeEditStudent">取消</button>
+              <button class="edit-confirm" :disabled="savingStudentName" @click="saveStudentName">{{ savingStudentName ? '保存中...' : '保存' }}</button>
             </view>
           </view>
         </view>
@@ -109,6 +127,9 @@ interface Student {
 const loading = ref(false)
 const classInfo = reactive<ClassInfo>({} as ClassInfo)
 const students = ref<Student[]>([])
+const editingStudent = ref<Student | null>(null)
+const editingName = ref('')
+const savingStudentName = ref(false)
 
 let classId = ''
 
@@ -201,6 +222,43 @@ function goBack() { uni.navigateBack() }
 function goEdit() { uni.navigateTo({ url: `/pages/teacher/class-edit?id=${classId}` }) }
 function goRequests() { uni.navigateTo({ url: `/pages/teacher/class-requests?classId=${classId}` }) }
 function goImport() { uni.navigateTo({ url: `/pages/teacher/student-import?classId=${classId}` }) }
+
+function openEditStudent(student: Student) {
+  editingStudent.value = student
+  editingName.value = String(student.display_name || student.student_name || '').trim()
+}
+
+function closeEditStudent() {
+  editingStudent.value = null
+  editingName.value = ''
+}
+
+async function saveStudentName() {
+  const student = editingStudent.value
+  const name = editingName.value.trim()
+  if (!student) return
+  if (!name) {
+    uni.showToast({ title: '学生姓名不能为空', icon: 'none' })
+    return
+  }
+  const studentId = String(student.student || student.id)
+  savingStudentName.value = true
+  try {
+    const response: any = await classApi.updateStudent(classId, studentId, { display_name: name })
+    if (response?.code !== 0) {
+      uni.showToast({ title: response?.message || '修改失败', icon: 'none' })
+      return
+    }
+    student.display_name = name
+    student.student_name = name
+    closeEditStudent()
+    uni.showToast({ title: '姓名修改成功', icon: 'success' })
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || '修改失败，请重试', icon: 'none' })
+  } finally {
+    savingStudentName.value = false
+  }
+}
 
 async function removeStudent(student: Student) {
   const studentId = String(student.student || student.id)
@@ -443,20 +501,29 @@ async function confirmDelete() {
   font-size: 22rpx;
   color: #606266;
 }
-.remove-student {
+.student-action-btn {
   width: 72px !important;
   min-width: 72px;
   flex: 0 0 72px;
+  height: 44px !important;
+  line-height: 44px !important;
   margin: 0;
-  padding: 0 12px;
+  padding: 0 !important;
   box-sizing: border-box;
+  border-radius: 6px;
+  font-size: 22rpx;
+  text-align: center;
+}
+.edit-student {
+  margin-right: 8px;
+  color: #409eff;
+  background: #ecf5ff;
+  border: 1rpx solid #b3d8ff;
+}
+.remove-student {
   color: #f56c6c;
   background: #fff5f5;
   border: 1rpx solid #fbc4c4;
-  border-radius: 6rpx;
-  font-size: 22rpx;
-  line-height: 44rpx;
-  text-align: center;
 }
 .badge-direct {
   background: #e8f5e9;
@@ -479,6 +546,60 @@ async function confirmDelete() {
   padding: 80rpx;
   color: #999;
   font-size: 26rpx;
+}
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+.edit-dialog {
+  width: 440rpx;
+  max-width: calc(100vw - 64rpx);
+  padding: 32rpx;
+  background: #fff;
+  border-radius: 12rpx;
+  box-sizing: border-box;
+}
+.edit-dialog-title {
+  display: block;
+  margin-bottom: 24rpx;
+  color: #303133;
+  font-size: 30rpx;
+  font-weight: 600;
+}
+.edit-name-input {
+  width: 100%;
+  height: 72rpx;
+  padding: 0 20rpx;
+  border: 1rpx solid #dcdfe6;
+  border-radius: 8rpx;
+  box-sizing: border-box;
+  color: #303133;
+  font-size: 26rpx;
+}
+.edit-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16rpx;
+  margin-top: 28rpx;
+}
+.edit-dialog-actions button {
+  margin: 0;
+  padding: 8rpx 28rpx;
+  border-radius: 8rpx;
+  font-size: 24rpx;
+}
+.edit-cancel {
+  color: #606266;
+  background: #f5f7fa;
+}
+.edit-confirm {
+  color: #fff;
+  background: #409eff;
 }
 
 /* 小屏适配 */

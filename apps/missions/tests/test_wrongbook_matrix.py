@@ -70,6 +70,10 @@ def test_matrix_mark_cancel_and_generate_publishes_personal_mission(
     matrix = response.data['data']
     assert len(matrix['students']) == 1
     assert [row['question_no'] for row in matrix['questions']] == ['1', '2', '10']
+    assert matrix['marked_count'] == 0
+    assert matrix['generated_count'] == 0
+    assert matrix['has_generation_history'] is False
+    assert matrix['latest_batch'] is None
 
     student_id = str(student_user.id)
     question_id = str(original.id)
@@ -94,6 +98,14 @@ def test_matrix_mark_cancel_and_generate_publishes_personal_mission(
     generate_wrongbook_batch_task.run(str(batch.id))
     batch.refresh_from_db()
     assert batch.status == 'published'
+    matrix_after_generation = client.get(f'/api/v1/missions/{source.id}/wrongbook-matrix')
+    assert matrix_after_generation.status_code == 200
+    generated_matrix = matrix_after_generation.data['data']
+    assert generated_matrix['marked_count'] == 0
+    assert generated_matrix['generated_count'] == 1
+    assert generated_matrix['has_generation_history'] is True
+    assert generated_matrix['latest_batch']['id'] == str(batch.id)
+    assert generated_matrix['latest_batch']['final_mission_id'] is not None
     generated = LearningMission.objects.get(source_generation_batch_id=batch.id)
     assert generated.status == 'published'
     assert generated.mission_kind == 'wrongbook_personal'

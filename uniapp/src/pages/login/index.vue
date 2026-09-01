@@ -301,7 +301,7 @@ onUnmounted(() => {
 input { width: 100%; height: 56px; box-sizing: border-box; padding: 14px 16px; border: 2rpx solid #ddd; border-radius: 8px; background: #fff; font-size: 26rpx; }
 .code-row { display: flex; gap: 12rpx; }
 .code-row input { flex: 1; min-width: 0; }
-.code-btn { flex: 0 0 112px; height: 56px; margin: 0; padding: 0; border-radius: 8rpx; background: #409eff; color: #fff; font-size: 22rpx; }
+.code-btn { flex: 0 0 112px; height: 56px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; margin: 0; padding: 0; border-radius: 8rpx; background: #409eff; color: #fff; font-size: 22rpx; line-height: 1.2; text-align: center; }
 .remember-row, .wechat-consent { display: flex; align-items: center; gap: 10rpx; cursor: pointer; }
 .checkbox { display: flex; width: 32rpx; height: 32rpx; align-items: center; justify-content: center; border: 2rpx solid #ddd; border-radius: 6rpx; }
 .checkbox.checked { border-color: #409eff; background: #409eff; }

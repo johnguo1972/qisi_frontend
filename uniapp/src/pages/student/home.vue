@@ -6,11 +6,21 @@
         <text class="panel-title">我的作业</text>
       </view>
 
-      <!-- 班级选择器 -->
-      <ClassSelector
-        :selected-class-id="selectedClassId"
-        @select="onClassSelect"
-      />
+      <!-- 科目、班级筛选 -->
+      <view class="filter-panel">
+        <view class="filter-item">
+          <text class="filter-label">科目</text>
+          <picker :range="subjectRange" :value="subjectIndex" @change="onSubjectChange">
+            <view class="filter-picker">{{ selectedSubjectLabel }}</view>
+          </picker>
+        </view>
+        <view class="filter-item">
+          <text class="filter-label">班级</text>
+          <picker :range="classRange" :value="classIndex" @change="onClassChange">
+            <view class="filter-picker">{{ selectedClassLabel }}</view>
+          </picker>
+        </view>
+      </view>
 
       <!-- 时间筛选栏 -->
       <TimeFilterBar
@@ -63,25 +73,39 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { studentApi } from '@/api/student.ts'
-import ClassSelector from '@/components/ClassSelector.vue'
 import TimeFilterBar from '@/components/TimeFilterBar.vue'
 import { formatDateOnly } from '@/utils/display-format'
 import { getPublicMediaUrl } from '@/utils/media-url'
+import { studentClassApi } from '@/api/index.ts'
+import { STUDENT_SUBJECT_OPTIONS } from '@/constants/student-filters'
 
 const missions = ref<any[]>([])
 
 // 班级选择器状态
-const selectedClassId = ref(0)
+const selectedClassId = ref('')
+const classOptions = ref<Array<{ id: string; name: string }>>([{ id: '', name: '全部班级' }])
 
 // 时间筛选状态
 const selectedScope = ref('all')
 
-// 按 deadline 升序排序后的作业
+const selectedSubject = ref('')
+const subjectOptions = ref([STUDENT_SUBJECT_OPTIONS[0]])
+const subjectRange = computed(() => subjectOptions.value.map(item => item.name))
+const subjectIndex = computed(() => Math.max(0, subjectOptions.value.findIndex(item => item.code === selectedSubject.value)))
+const selectedSubjectLabel = computed(() => subjectOptions.value.find(item => item.code === selectedSubject.value)?.name || '全部科目')
+const classRange = computed(() => classOptions.value.map(item => item.name))
+const classIndex = computed(() => Math.max(0, classOptions.value.findIndex(item => item.id === selectedClassId.value)))
+const selectedClassLabel = computed(() => classOptions.value.find(item => item.id === selectedClassId.value)?.name || '全部班级')
+
+// 接口已按创建时间倒序返回；这里保留同样的兜底排序，确保最新作业始终在最前面。
 const sortedMissions = computed(() => {
   return [...missions.value].sort((a, b) => {
-    const aDeadline = a.mission?.deadline || '9999-12-31'
-    const bDeadline = b.mission?.deadline || '9999-12-31'
-    return aDeadline.localeCompare(bDeadline)
+    const aCreatedAt = Date.parse(a.mission?.created_at || '')
+    const bCreatedAt = Date.parse(b.mission?.created_at || '')
+    if (Number.isFinite(aCreatedAt) && Number.isFinite(bCreatedAt)) return bCreatedAt - aCreatedAt
+    if (Number.isFinite(aCreatedAt)) return -1
+    if (Number.isFinite(bCreatedAt)) return 1
+    return 0
   })
 })
 
@@ -89,11 +113,14 @@ const sortedMissions = computed(() => {
 async function loadMissions() {
   try {
     // “全部班级”使用 0 作为前端占位值，接口只接受真实 UUID，因此不要把 0 发送到后端。
-    const params: { class_id?: string; scope: string } = {
+    const params: { class_id?: string; scope: string; subject?: string } = {
       scope: selectedScope.value,
     }
     if (selectedClassId.value) {
       params.class_id = String(selectedClassId.value)
+    }
+    if (selectedSubject.value) {
+      params.subject = selectedSubject.value
     }
     const res = await studentApi.home({
       ...params,
@@ -105,8 +132,9 @@ async function loadMissions() {
 }
 
 // 班级选择事件
-function onClassSelect(classId: number) {
-  selectedClassId.value = classId
+function onClassChange(event?: any) {
+  const index = Number(event?.detail?.value ?? 0)
+  selectedClassId.value = classOptions.value[index]?.id || ''
   loadMissions()
 }
 
@@ -116,10 +144,38 @@ function onScopeChange(scope: string) {
   loadMissions()
 }
 
+function onSubjectChange(event?: any) {
+  const index = Number(event?.detail?.value ?? 0)
+  selectedSubject.value = subjectOptions.value[index]?.code || ''
+  loadMissions()
+}
+
 onMounted(async () => {
   uni.$on('student-layout-show', handleLayoutShow)
+  await loadClasses()
   await loadMissions()
 })
+
+async function loadClasses() {
+  try {
+    const res: any = await studentClassApi.myClasses()
+    const rawClasses = res.data?.items || res.data || []
+    const classes = rawClasses.map((item: any) => ({
+      id: String(item.class_id || item.id),
+      name: item.class_name || item.name || '未命名班级',
+    }))
+    classOptions.value = [{ id: '', name: '全部班级' }, ...classes]
+    const subjectCodes = Array.isArray(res.data?.subjects)
+      ? res.data.subjects
+      : rawClasses.flatMap((item: any) => item.teacher_subjects || (item.subject ? [item.subject] : []))
+    const allowed = new Set(subjectCodes.map((value: unknown) => String(value || '').trim().toLowerCase()))
+    const matched = STUDENT_SUBJECT_OPTIONS.filter(item => item.code && allowed.has(item.code))
+    subjectOptions.value = [STUDENT_SUBJECT_OPTIONS[0], ...matched]
+  } catch (e) {
+    classOptions.value = [{ id: '', name: '全部班级' }]
+    subjectOptions.value = [STUDENT_SUBJECT_OPTIONS[0]]
+  }
+}
 
 function handleLayoutShow() {
   // layout 页面从答题页返回显示时，首页组件不会重新挂载
@@ -170,6 +226,11 @@ function statusText(status: string): string {
     'not_started': '未开始',
     'in_progress': '进行中',
     'completed': '已完成',
+    'submitted': '已提交',
+    'graded': '已批改',
+    'passed': '已通过',
+    'locked': '未开始',
+    'running': '进行中',
   }
   return map[status] || status
 }
@@ -193,6 +254,41 @@ function statusText(status: string): string {
   font-size: 36rpx;
   font-weight: bold;
   color: #333;
+}
+.filter-panel {
+  display: flex;
+  gap: 20rpx;
+  margin-bottom: 24rpx;
+  padding: 20rpx 24rpx;
+  background: #fff;
+  border-radius: 12rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.05);
+}
+.filter-item {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  min-width: 240rpx;
+}
+.filter-label {
+  flex-shrink: 0;
+  color: #606266;
+  font-size: 24rpx;
+}
+.filter-item picker {
+  flex: 1;
+  min-width: 0;
+}
+.filter-picker {
+  min-width: 160rpx;
+  padding: 10rpx 16rpx;
+  border: 1rpx solid #dcdfe6;
+  border-radius: 8rpx;
+  color: #303133;
+  font-size: 24rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mission-grid {
   display: grid;
@@ -324,6 +420,13 @@ function statusText(status: string): string {
   }
   .mission-grid {
     grid-template-columns: 1fr;
+  }
+  .filter-panel {
+    flex-direction: column;
+    gap: 12rpx;
+  }
+  .filter-item {
+    width: 100%;
   }
 }
 </style>

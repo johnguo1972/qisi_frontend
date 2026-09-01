@@ -93,7 +93,9 @@ def my_classes(request):
     """GET /api/v1/student/my-classes - List my active classes."""
     qs = ClassStudent.objects.filter(
         student=request.user, status='active',
-    ).select_related('class_obj__institution', 'class_obj__creator_teacher').order_by('-joined_at')
+    ).select_related('class_obj__institution', 'class_obj__creator_teacher').prefetch_related(
+        'class_obj__class_teachers__teacher',
+    ).order_by('-joined_at')
 
     page_number = request.GET.get('page', 1)
     page_size = int(request.GET.get('page_size', 20))
@@ -104,6 +106,11 @@ def my_classes(request):
 
     serializer = MyClassesSerializer()
     serialized_items = [serializer.to_representation(item) for item in items]
+    subjects = []
+    for item in serialized_items:
+        for subject in item.get('teacher_subjects', []):
+            if subject not in subjects:
+                subjects.append(subject)
 
     return Response({
         'code': 0,
@@ -113,6 +120,7 @@ def my_classes(request):
             'page': int(page_number),
             'page_size': page_size,
             'items': serialized_items,
+            'subjects': subjects,
         },
         'trace_id': _trace(),
     })

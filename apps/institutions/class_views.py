@@ -361,46 +361,24 @@ def class_learning_stats(request, class_id):
         return Response({'code': 404, 'message': '班级不存在', 'data': None}, status=404)
     if not _check_teacher_of_class(request, class_id):
         return Response({'code': 403, 'message': '无权访问'}, status=403)
+    from apps.institutions.learning_stats_service import build_class_learning_stats
 
-    from apps.missions.models import LearningMission
-    from apps.study.models import StudentMissionProgress, AnswerAttempt
-
-    from django.db.models import Q
-    missions = LearningMission.objects.filter(
-        Q(class_obj_id=class_id) | Q(class_assignments__class_obj_id=class_id, class_assignments__status='active')
-    ).distinct()
-    rows = []
-    for relation in cls.class_students.filter(status='active').select_related('student'):
-        student_id = relation.student_id
-        progress = StudentMissionProgress.objects.filter(
-            mission__in=missions, student_user_id_id=student_id,
-        )
-        attempts = AnswerAttempt.objects.filter(
-            mission__in=missions, student_user_id_id=student_id,
-        )
-        attempt_count = attempts.count()
-        correct_count = attempts.filter(is_correct=True).count()
-        rows.append({
-            'student_id': student_id,
-            'student_name': relation.student.display_name or relation.student.mobile,
-            'mission_count': progress.count(),
-            'completed_count': progress.filter(progress_status__in=('completed', 'passed')).count(),
-            'attempt_count': attempt_count,
-            'correct_count': correct_count,
-            'accuracy': round(correct_count * 100 / attempt_count, 2) if attempt_count else 0,
-        })
-    return Response({'code': 0, 'data': {
-        'class_id': class_id,
-        'class_name': cls.class_name,
-        'mission_count': missions.count(),
-        'students': rows,
-    }, 'trace_id': _trace()})
+    return Response({
+        'code': 0,
+        'data': build_class_learning_stats(cls),
+        'trace_id': _trace(),
+    })
 
 
-@api_view(['PUT'])
+@api_view(['PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def remove_student(request, class_id, student_id):
-    """PUT /api/v1/classes/<id>/students/<student_id> - Remove student (set status=removed)."""
+    """Manage a class student.
+
+    PUT without a display_name keeps the legacy remove behavior. PATCH with
+    display_name updates the student's account name without changing class
+    membership.
+    """
     try:
         cls = Class.objects.get(id=class_id)
     except Class.DoesNotExist:
@@ -420,12 +398,29 @@ def remove_student(request, class_id, student_id):
             'code': 4004, 'message': '学生不在该班级', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    rel.status = 'removed'
-    rel.save()
+    if request.method == 'PATCH' or 'display_name' in request.data:
+        display_name = str(request.data.get('display_name') or '').strip()
+        if not display_name:
+            return Response({
+                'code': 4001, 'message': '学生姓名不能为空', 'data': None,
+                'trace_id': _trace(),
+            }, status=status.HTTP_400_BAD_REQUEST)
+        if len(display_name) > 64:
+            return Response({
+                'code': 4001, 'message': '学生姓名不能超过64个字符', 'data': None,
+                'trace_id': _trace(),
+            }, status=status.HTTP_400_BAD_REQUEST)
+        rel.student.display_name = display_name
+        rel.student.save(update_fields=['display_name', 'updated_at'])
+        message = '学生姓名已更新'
+    else:
+        rel.status = 'removed'
+        rel.save()
+        message = '移除成功'
 
     return Response({
         'code': 0,
-        'message': '移除成功',
+        'message': message,
         'data': ClassStudentSerializer(rel).data,
         'trace_id': _trace(),
     })

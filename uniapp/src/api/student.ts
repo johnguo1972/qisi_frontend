@@ -2,14 +2,22 @@ import { del, get, post } from '@/utils/request'
 import type { UUID } from '@/types/uuid'
 
 export const studentApi = {
-  home: (params?: { class_id?: UUID; scope?: string }, refreshKey?: number) =>
+  home: (params?: { class_id?: UUID; scope?: string; subject?: string }, refreshKey?: number) =>
     get('/student/home', refreshKey ? { ...params, _t: refreshKey } : params),
   missionDetail: (id: UUID, refreshKey?: number) =>
     get(`/student/missions/${id}`, refreshKey ? { _t: refreshKey } : undefined),
   levelDetail: (id: UUID) => get(`/student/levels/${id}`),
   submitAnswer: (data: { question_id: UUID; answer_content: object; mission_id?: UUID; level_id?: UUID; idempotency_key?: string }) =>
     post('/student/attempts', data),
-  submitMission: (id: UUID) => post<any>(`/student/missions/${id}/submit`),
+  submitMission: (id: UUID, data?: { answers?: Array<{
+    question_id: UUID
+    level_id?: UUID
+    answer_content: object
+    attempt_id?: UUID
+    idempotency_key?: string
+    submitted?: boolean
+  }> }) => post<any>(`/student/missions/${id}/submit`, data),
+  missionResults: (id: UUID) => get<any>(`/student/missions/${id}/results`),
   relatedQuestions: (questionId: UUID) => get<any[]>(`/student/questions/${questionId}/related`),
   startAttempt: (data: { question_id: UUID; mission_id?: UUID; level_id?: UUID }) =>
     post<{ attempt_id: UUID }>('/student/attempts/start', data),
@@ -23,11 +31,11 @@ export const studentApi = {
     post(`/student/guidance/sessions/${sessionId}/reply`, { reply }),
   getModeA: (questionId: UUID) => get(`/student/questions/${questionId}/mode-a`),
   growth: () => get('/student/growth'),
-  knowledgeMastery: () => get('/student/knowledge-mastery'),
+  knowledgeMastery: (params?: { subject?: string }) => get('/student/knowledge-mastery', params),
 }
 
 export const wrongbookApi = {
-  list: () => get('/student/wrong-book/'),
+  list: (params?: { status?: string; subject?: string; class_id?: string }) => get('/student/wrong-book/', params),
   detail: (id: UUID) => get(`/student/wrong-book/${id}/`),
   variants: (id: UUID) => get(`/student/wrong-book/${id}/variants/`),
   variantSubmit: (itemId: UUID, data: { question_id: UUID; answer_content: object }) =>

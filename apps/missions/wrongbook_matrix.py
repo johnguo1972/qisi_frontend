@@ -308,12 +308,24 @@ def matrix_payload(matrix, class_id=None):
             'student_no': student.student_no_snapshot, 'class_id': str(student.class_obj_id),
             'class_name': student.class_name_snapshot, 'cells': row_cells,
         })
+    # Keep the counts aligned with the cells currently visible in the matrix.
+    # A generated/locked cell is historical output and must not be counted as
+    # a new item that can be submitted again.
+    marked_count = cells.filter(status='marked').count()
+    generated_count = cells.filter(status='generated').count()
+    locked_count = cells.filter(status='locked').count()
+    cancelled_count = cells.filter(status='cancelled').count()
+    latest_batch = matrix.generation_batches.first()
     return {
         'matrix_id': str(matrix.id), 'source_mission_id': str(matrix.source_mission_id),
         'class_id': str(matrix.class_obj_id) if matrix.class_obj_id else None,
         'version': matrix.version, 'status': matrix.status,
-        'marked_count': matrix.cells.filter(status__in=('marked', 'generated', 'locked')).count(),
-        'generated_count': matrix.cells.filter(status='generated').count(),
+        'marked_count': marked_count,
+        'generated_count': generated_count,
+        'locked_count': locked_count,
+        'cancelled_count': cancelled_count,
+        'has_generation_history': latest_batch is not None,
+        'latest_batch': batch_payload(latest_batch) if latest_batch else None,
         'failed_count': matrix.failed_count, 'students': rows,
         'questions': [{
             'id': str(q.source_question_id), 'question_no': q.question_no_snapshot,
@@ -629,24 +641,36 @@ def request_generation(matrix, teacher, version, idempotency_key, cell_ids=None,
 
 
 def batch_payload(batch):
+    final_mission_id = batch.final_mission_id
+    # Legacy generation batches were created before final_mission_id was
+    # persisted. Resolve the published mission by its stable batch marker so
+    # the UI can still point teachers to an already generated exercise.
+    if not final_mission_id:
+        final_mission_id = LearningMission.objects.filter(
+            source_generation_batch_id=batch.id, status='published',
+        ).order_by('-created_at').values_list('id', flat=True).first()
     return {
         'id': str(batch.id), 'matrix_id': str(batch.matrix_id), 'status': batch.status,
         'request_version': batch.request_version, 'related_limit': batch.related_limit,
+        'generation_mode': batch.generation_mode, 'candidate_limit': batch.candidate_limit,
+        'selection_limit': batch.selection_limit, 'selection_required': batch.status == 'awaiting_selection',
+        'final_mission_id': str(final_mission_id) if final_mission_id else None,
         'requested_count': batch.requested_count, 'generated_count': batch.generated_count,
         'failed_count': batch.failed_count, 'published_task_count': batch.published_task_count,
-        'completed_at': batch.completed_at, 'error': batch.error_json,
+        'created_at': batch.created_at, 'completed_at': batch.completed_at, 'error': batch.error_json,
         'items': [{
             'id': str(i.id), 'cell_id': str(i.cell_id), 'student_id': str(i.student_id),
             'source_question_id': str(i.source_question_id), 'related_question_ids': i.related_question_ids,
-            'selected_count': i.selected_count, 'shortage_reason': i.shortage_reason,
+            'selected_question_ids': i.selected_question_ids, 'selected_count': i.selected_count,
+            'selection_required': i.selection_required, 'shortage_reason': i.shortage_reason,
             'status': i.status, 'target_mission_id': str(i.target_mission_id) if i.target_mission_id else None,
             'error_stage': i.error_stage, 'error_code': i.error_code, 'error_message': i.error_message,
         } for i in batch.items.all().order_by('created_at')],
     }
 
 
-def batch_recommendations(batch, teacher, limit=10, trace_id=''):
-    if batch.status not in ('published', 'partially_failed') or not batch.published_task_count:
+def batch_recommendations(batch, teacher, limit=10, trace_id='', allow_unpublished=False):
+    if not allow_unpublished and (batch.status not in ('published', 'partially_failed') or not batch.published_task_count):
         raise MatrixError('基础错题练习尚未发布，暂不能请求推荐', 'conflict', 409)
     limit = int(limit)
     if limit < 1 or limit > 10:

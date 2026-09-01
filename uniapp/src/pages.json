@@ -20,6 +20,7 @@
     { "path": "pages/teacher/mission-list", "style": { "navigationBarTitleText": "作业列表" } },
     { "path": "pages/teacher/mission-detail", "style": { "navigationBarTitleText": "作业详情" } },
     { "path": "pages/teacher/mission-progress", "style": { "navigationBarTitleText": "学生完成进度" } },
+    { "path": "pages/teacher/mission-learning-stats", "style": { "navigationBarTitleText": "学情统计" } },
     { "path": "pages/teacher/learning-stats", "style": { "navigationBarTitleText": "学情统计" } },
     { "path": "pages/teacher/wrongbook-matrix", "style": { "navigationBarTitleText": "学生错题统计" } },
     { "path": "pages/teacher/level-practice", "style": { "navigationBarTitleText": "关卡练习" } },

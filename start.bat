@@ -22,6 +22,12 @@ echo [2/4] Redis 就绪（端口 6379）
 echo.
 
 rem ---- 3) 后端 Django :8001（已运行则跳过）----
+rem ---- Celery Worker: Windows uses the solo pool to avoid prefork permission errors ----
+echo [3/5] Starting Celery Worker ...
+start "qisi-Celery" cmd.exe /d /k venv\Scripts\celery.exe -A config worker -P solo -l info -Q celery,ai.batch
+echo [3/5] Celery Worker ready
+echo.
+
 netstat -ano | findstr "LISTENING" | findstr ":8001" >nul && goto backend_done
 echo [3/4] 启动后端 Django ...
 start "qisi-Backend-8001" cmd /k "venv\Scripts\python.exe manage.py runserver 0.0.0.0:8001"

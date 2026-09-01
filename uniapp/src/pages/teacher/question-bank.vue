@@ -238,6 +238,7 @@ import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
 import { questionApi, aiProcessProbe, importJsonPackage, getQuestionTags, addQuestionTag, removeQuestionTag, getTagList } from '@/api/questions'
 import { createQuestionRelationsController } from './question-relations'
 import { knowledgeApi } from '@/api/knowledge'
+import { STUDENT_SUBJECT_OPTIONS } from '@/constants/student-filters'
 import { favoriteApi } from '@/api/favorites'
 import { normalizeAnswerVisibility } from '@/utils/answer-visibility'
 
@@ -268,10 +269,13 @@ const totalCount = ref(0)
 const pageSize = ref(20)
 const pageSizeOptions = [10, 20, 30, 50]
 const pageNumbers = computed(() => Array.from({ length: totalPages.value }, (_, index) => index + 1))
-const subjectLabels: Record<string, string> = {
-  chinese: '语文', math: '数学', english: '英语', physics: '物理',
-  chemistry: '化学', biology: '生物', geography: '地理', history: '历史',
-}
+// 题库科目字典作为全端展示字典，学生首页和错题页复用同一份数据。
+const subjectLabels: Record<string, string> = Object.fromEntries(
+  STUDENT_SUBJECT_OPTIONS
+    .filter(item => item.code)
+    .map(item => [item.code, item.name]),
+)
+const subjectOrder = STUDENT_SUBJECT_OPTIONS.filter(item => item.code).map(item => item.code)
 const subjectRange = computed(() => allowedSubjects.value.map((subject) => subjectLabels[subject] || subject))
 const subjectIndex = computed(() => Math.max(0, allowedSubjects.value.indexOf(selectedSubject.value)))
 const selectedSubjectLabel = computed(() => subjectLabels[selectedSubject.value] || selectedSubject.value || '未配置科目')
@@ -385,7 +389,11 @@ async function loadKnowledgeTree() {
     const res: any = await knowledgeApi.getTree(selectedSubject.value ? { subject: selectedSubject.value } : undefined)
     const treeData = res.data || {}
     const returnedSubjects = Array.isArray(treeData.allowed_subjects) ? treeData.allowed_subjects.filter((subject: unknown): subject is string => typeof subject === 'string' && subject.length > 0) : []
-    if (returnedSubjects.length) allowedSubjects.value = returnedSubjects
+    if (returnedSubjects.length) {
+      const knownSubjects = subjectOrder.filter(subject => returnedSubjects.includes(subject))
+      const extraSubjects = returnedSubjects.filter(subject => !subjectOrder.includes(subject))
+      allowedSubjects.value = [...knownSubjects, ...extraSubjects]
+    }
     const returnedSubject = typeof treeData.selected_subject === 'string' ? treeData.selected_subject : ''
     const nextSubject = returnedSubject || allowedSubjects.value[0] || selectedSubject.value
     if (nextSubject) selectedSubject.value = nextSubject

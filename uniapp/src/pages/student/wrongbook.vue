@@ -20,6 +20,20 @@
           <text class="stat-label">已掌握</text>
         </view>
       </view>
+      <view class="filter-panel">
+        <view class="filter-item">
+          <text class="filter-label">科目</text>
+          <picker :range="subjectRange" :value="subjectIndex" @change="onSubjectChange">
+            <view class="filter-picker">{{ selectedSubjectLabel }}</view>
+          </picker>
+        </view>
+        <view class="filter-item">
+          <text class="filter-label">班级</text>
+          <picker :range="classRange" :value="classIndex" @change="onClassChange">
+            <view class="filter-picker">{{ selectedClassLabel }}</view>
+          </picker>
+        </view>
+      </view>
       <!-- 错题列表 -->
       <view class="list-panel">
         <view class="panel-header">
@@ -61,6 +75,7 @@
             <view class="wrong-footer">
               <text class="retry-count">重做 {{ item.retry_count }} 次</text>
               <view class="question-meta">
+                <text class="meta-chip">📚 {{ item.subject_label || '未设置科目' }}</text>
                 <text class="meta-chip">🔖 {{ item.difficulty_label || '难度未标注' }}</text>
                 <text v-for="point in (item.knowledge_point_labels || [])" :key="`kp-${item.id}-${point}`" class="meta-chip">💡 {{ point }}</text>
                 <text v-for="tag in (item.tags || [])" :key="`tag-${item.id}-${tag}`" class="meta-chip">🏷️ {{ tag }}</text>
@@ -78,18 +93,68 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { wrongbookApi } from '@/api/student.ts'
+import { studentClassApi } from '@/api/index.ts'
 import { renderWithKatex } from '@/utils/katex-renderer'
 import { getMediaUrl } from '@/utils/media-url'
+import { STUDENT_SUBJECT_OPTIONS } from '@/constants/student-filters'
 
 const items = ref<any[]>([])
 const renderedStemMap = ref<Record<string, string>>({})
 
+// 与教师题库使用相同的 canonical subject code 和中文名称。
+const selectedSubject = ref('')
+const classOptions = ref<Array<{ id: string; name: string }>>([{ id: '', name: '全部班级' }])
+const selectedClassId = ref('')
+const subjectOptions = ref([STUDENT_SUBJECT_OPTIONS[0]])
+const subjectRange = computed(() => subjectOptions.value.map(item => item.name))
+const classRange = computed(() => classOptions.value.map(item => item.name))
+const subjectIndex = computed(() => Math.max(0, subjectOptions.value.findIndex(item => item.code === selectedSubject.value)))
+const classIndex = computed(() => Math.max(0, classOptions.value.findIndex(item => item.id === selectedClassId.value)))
+const selectedSubjectLabel = computed(() => subjectOptions.value.find(item => item.code === selectedSubject.value)?.name || '全部科目')
+const selectedClassLabel = computed(() => classOptions.value.find(item => item.id === selectedClassId.value)?.name || '全部班级')
+
 onMounted(async () => {
+  await loadClasses()
+  await loadItems()
+})
+
+async function loadClasses() {
   try {
-    const res = await wrongbookApi.list()
-    items.value = res.data || []
+    const res: any = await studentClassApi.myClasses()
+    const rawClasses = res.data?.items || res.data || []
+    const classes = rawClasses.map((item: any) => ({
+      id: String(item.class_id || item.id),
+      name: item.class_name || item.name || '未命名班级',
+    }))
+    classOptions.value = [{ id: '', name: '全部班级' }, ...classes]
+    const subjectCodes = Array.isArray(res.data?.subjects)
+      ? res.data.subjects
+      : rawClasses.flatMap((item: any) => item.teacher_subjects || (item.subject ? [item.subject] : []))
+    const allowed = new Set(subjectCodes.map((value: unknown) => String(value || '').trim().toLowerCase()))
+    const matched = STUDENT_SUBJECT_OPTIONS.filter(item => item.code && allowed.has(item.code))
+    subjectOptions.value = [STUDENT_SUBJECT_OPTIONS[0], ...matched]
+  } catch (e) {
+    console.error('加载班级筛选项失败:', e)
+    subjectOptions.value = [STUDENT_SUBJECT_OPTIONS[0]]
+  }
+}
+
+async function loadItems() {
+  try {
+    const res = await wrongbookApi.list({
+      subject: selectedSubject.value || undefined,
+      class_id: selectedClassId.value || undefined,
+    })
+    const source = res.data || []
+    const seen = new Set<string>()
+    items.value = source.filter((item: any) => {
+      const questionId = String(item.question_id || item.id)
+      if (seen.has(questionId)) return false
+      seen.add(questionId)
+      return true
+    })
     await renderStems()
     if (items.value.length === 0) {
       console.log('错题本为空，可能原因：1) 答错的题为主观题（不会自动进错题本） 2) 答对的题不会进入错题本 3) 数据还未落库')
@@ -98,7 +163,17 @@ onMounted(async () => {
     console.error('Failed to load wrong book:', e)
     uni.showToast({ title: '加载错题本失败', icon: 'none', duration: 3000 })
   }
-})
+}
+
+function onSubjectChange(event: any) {
+  selectedSubject.value = subjectOptions.value[Number(event?.detail?.value || 0)]?.code || ''
+  loadItems()
+}
+
+function onClassChange(event: any) {
+  selectedClassId.value = classOptions.value[Number(event?.detail?.value || 0)]?.id || ''
+  loadItems()
+}
 
 async function renderStems() {
   const rendered: Record<string, string> = {}
@@ -235,6 +310,41 @@ function goPractice(id: string) {
   color: #999;
   display: block;
   margin-top: 6rpx;
+}
+.filter-panel {
+  display: flex;
+  gap: 20rpx;
+  margin-bottom: 24rpx;
+  padding: 20rpx 24rpx;
+  background: #fff;
+  border-radius: 12rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.05);
+}
+.filter-item {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  min-width: 240rpx;
+}
+.filter-label {
+  flex-shrink: 0;
+  color: #606266;
+  font-size: 24rpx;
+}
+.filter-item picker {
+  flex: 1;
+  min-width: 0;
+}
+.filter-picker {
+  min-width: 160rpx;
+  padding: 10rpx 16rpx;
+  border: 1rpx solid #dcdfe6;
+  border-radius: 8rpx;
+  color: #303133;
+  font-size: 24rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .panel-header {
   margin-bottom: 24rpx;
@@ -375,6 +485,14 @@ function goPractice(id: string) {
   }
   .stat-item {
     min-width: calc(33% - 14rpx);
+  }
+  .filter-panel {
+    flex-direction: column;
+    gap: 12rpx;
+  }
+  .filter-item {
+    width: 100%;
+    min-width: 0;
   }
 }
 .btn-practice { margin: 0; padding: 6rpx 20rpx; color: #fff; background: #67c23a; border-radius: 8rpx; font-size: 22rpx; line-height: 1.4; }

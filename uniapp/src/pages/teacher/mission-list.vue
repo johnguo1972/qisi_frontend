@@ -45,7 +45,8 @@
           <text class="mission-end">截止: {{ formatMissionDate(m.end_at) }}</text>
         </view>
         <view class="card-actions">
-          <button size="mini" @click.stop="goLearningStats(m.id)">学情统计</button>
+          <button size="mini" @click.stop="goMissionLearningStats(m.id)">学情统计</button>
+          <button size="mini" @click.stop="goWrongbookStats(m.id)">错题统计</button>
           <button size="mini" @click.stop="goGradeMission(m.id)">批改作业</button>
         </view>
       </view>
@@ -156,7 +157,11 @@ function goGradeMission(id: string) {
   uni.navigateTo({ url: `/pages/teacher/mission-detail?id=${id}&mode=grading` })
 }
 
-function goLearningStats(id: string) {
+function goMissionLearningStats(id: string) {
+  uni.navigateTo({ url: `/pages/teacher/mission-learning-stats?missionId=${id}` })
+}
+
+function goWrongbookStats(id: string) {
   uni.navigateTo({ url: `/pages/teacher/wrongbook-matrix?missionId=${id}` })
 }
 </script>
@@ -164,6 +169,8 @@ function goLearningStats(id: string) {
 <style scoped>
 .container {
   min-height: 100vh;
+  padding-bottom: 30px;
+  box-sizing: border-box;
   background: #f5f7fa;
 }
 .page-header {
@@ -311,5 +318,11 @@ function goLearningStats(id: string) {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
+}
+.card-actions button {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 88px;
+  margin: 0 0 0 8px;
 }
 </style>

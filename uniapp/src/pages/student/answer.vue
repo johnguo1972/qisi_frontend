@@ -113,8 +113,51 @@
         <button v-if="hasSubmitted" class="btn-related" @click="loadRelatedQuestions">同类题</button>
       </view>
 
+      <!-- P1-06：逐题答题页的整份作业提交入口。整份提交由后端统一检查必答题。 -->
+      <view v-if="missionId" class="whole-submit-section">
+        <button
+          class="btn-submit-mission"
+          :disabled="missionSubmitting || missionSubmitted"
+          @click="submitMission"
+        >
+          {{ missionSubmitting ? '提交整份作业中...' : (missionSubmitted ? '整份作业已提交' : '提交整份作业') }}
+        </button>
+        <text v-if="missingQuestionCount > 0" class="whole-submit-hint">
+          还有 {{ missingQuestionCount }} 道题未提交，请先完成逐题提交
+        </text>
+      </view>
+
+      <!-- 整份提交成功后展示本次作业的全部判分结果、答案和解析。 -->
+      <view v-if="missionSubmitted && missionResults.length" class="mission-result-panel">
+        <view class="mission-result-header">
+          <text class="mission-result-title">整份作业结果</text>
+          <text class="mission-result-count">共 {{ missionResults.length }} 题</text>
+        </view>
+        <view v-for="item in missionResults" :key="item.question_id" class="mission-result-item">
+          <view class="mission-result-item-header">
+            <text class="mission-result-no">第 {{ item.question_no || '—' }} 题</text>
+            <text v-if="item.is_pending" class="mission-result-pending">待老师批阅</text>
+            <text v-else :class="item.is_correct ? 'mission-result-correct' : 'mission-result-wrong'">
+              {{ item.is_correct ? '回答正确' : '回答错误' }}
+            </text>
+          </view>
+          <view v-if="item.answer" class="mission-result-section">
+            <text class="mission-result-label">正确答案</text>
+            <view class="mission-result-content" v-html="item.answer"></view>
+          </view>
+          <view v-if="item.analysis" class="mission-result-section">
+            <text class="mission-result-label">解析</text>
+            <view class="mission-result-content" v-html="item.analysis"></view>
+          </view>
+          <view v-if="item.solution" class="mission-result-section">
+            <text class="mission-result-label">解答过程</text>
+            <view class="mission-result-content" v-html="item.solution"></view>
+          </view>
+        </view>
+      </view>
+
       <!-- 答案解析面板（提交后展开） -->
-      <view v-if="showAnswer" class="answer-panel">
+      <view v-if="showAnswer && !missionSubmitted" class="answer-panel">
         <view class="answer-panel-header">
           <text class="answer-panel-title">
             {{ isCorrect ? '解析' : '正确答案 & 解析' }}
@@ -204,6 +247,10 @@ const hasSubmitted = ref(false)
 const showAnswer = ref(false)
 const modeAData = ref<any>(null)
 const submitting = ref(false)
+const missionSubmitting = ref(false)
+const missionSubmitted = ref(false)
+const missingQuestionCount = ref(0)
+const missionResults = ref<any[]>([])
 const renderedStem = ref('')
 const renderedOptions = ref<Record<string, string>>({})
 const renderedAnswer = ref('')
@@ -214,7 +261,7 @@ const relatedItems = ref<any[]>([])
 const idempotencyKey = ref('')
 
 // 每题状态缓存（切换题目时保存/恢复）
-const answersMap = ref<Record<number, any>>({})
+const answersMap = ref<Record<string, any>>({})
 
 // 拍照上传相关
 const uploadedImages = ref<Array<{ previewUrl: string; serverUrl: string }>>([])
@@ -227,6 +274,10 @@ cameraSupported.value = camCheck.supported
 // #endif
 
 const currentQuestion = computed(() => questions.value[currentIndex.value] || {})
+
+function draftStorageKey() {
+  return missionId.value ? `student-mission-answers-${missionId.value}` : ''
+}
 
 function questionImageUrl(image: any): string {
   return getMediaUrl(image?.url || image?.file_path || '')
@@ -257,8 +308,7 @@ const questionTypeLabel = computed(() => {
   )
 })
 
-const isObjective = computed(() => {
-  const q = currentQuestion.value
+function isObjectiveQuestion(q: any): boolean {
   if (q.question_type === 'fill_blank') return false
   if (['single_choice', 'multiple_choice'].includes(q.question_type)) {
     // 容错：标记为多选题但没有选项，且题干含 ____，按填空题处理
@@ -268,7 +318,9 @@ const isObjective = computed(() => {
     return true
   }
   return false
-})
+}
+
+const isObjective = computed(() => isObjectiveQuestion(currentQuestion.value))
 
 const textPlaceholder = computed(() => {
   if (currentQuestion.value.question_type === 'fill_blank') {
@@ -322,7 +374,12 @@ onMounted(async () => {
     const res = await studentApi.levelDetail(levelId.value)
     questions.value = res.data?.questions || []
     missionId.value = String(res.data?.mission_id || '')
+    loadDraftAnswers()
+    const missionStatus = String(res.data?.mission_progress_status || '')
+    missionSubmitted.value = ['submitted', 'graded', 'passed'].includes(missionStatus)
+    if (missionSubmitted.value) await loadMissionResults()
     await renderCurrentQuestion()
+    restoreQuestionState(String(currentQuestion.value.id || ''))
   } catch (e) {
     console.error('加载题目失败:', e)
     uni.showToast({ title: '加载题目失败', icon: 'none' })
@@ -333,7 +390,7 @@ onMounted(async () => {
 function saveQuestionState() {
   const q = currentQuestion.value
   if (!q || !q.id) return
-  answersMap.value[q.id] = {
+  answersMap.value[String(q.id)] = {
     selectedOptions: [...selectedOptions.value],
     textAnswer: textAnswer.value,
     uploadedImages: [...uploadedImages.value],
@@ -346,12 +403,25 @@ function saveQuestionState() {
     modeAData: modeAData.value,
     suggestGuidance: suggestGuidance.value,
     idempotencyKey: idempotencyKey.value,
+    questionType: q.question_type,
+    levelId: currentQuestion.value.level_id || levelId.value,
+  }
+  const key = draftStorageKey()
+  if (key) uni.setStorageSync(key, answersMap.value)
+}
+
+function loadDraftAnswers() {
+  const key = draftStorageKey()
+  if (!key) return
+  const saved = uni.getStorageSync(key)
+  if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+    answersMap.value = saved
   }
 }
 
 // 从缓存恢复指定题目的状态
-function restoreQuestionState(questionId: number) {
-  const saved = answersMap.value[questionId]
+function restoreQuestionState(questionId: string) {
+  const saved = answersMap.value[String(questionId)]
   if (saved) {
     selectedOptions.value = saved.selectedOptions || []
     textAnswer.value = saved.textAnswer || ''
@@ -512,6 +582,10 @@ async function submitAnswer() {
     hasSubmitted.value = true
     showAnswer.value = false
 
+    if (res.data?.attempt_id) {
+      attemptId.value = String(res.data.attempt_id)
+    }
+
     // 加载 Mode A 答案
     try {
       const modeARes = await studentApi.getModeA(currentQuestion.value.id)
@@ -526,6 +600,115 @@ async function submitAnswer() {
     uni.showToast({ title: '提交失败，请重试', icon: 'none' })
   } finally {
     submitting.value = false
+  }
+}
+
+function answerContentForQuestion(question: any, state: any) {
+  return isObjectiveQuestion(question)
+    ? { selected_options: state?.selectedOptions || [] }
+    : {
+        text: state?.textAnswer || '',
+        images: (state?.uploadedImages || []).map((image: any) => image.serverUrl),
+      }
+}
+
+function buildMissionAnswers() {
+  // 先保存当前题，避免用户填写后直接点击整份提交时遗漏当前输入。
+  saveQuestionState()
+  return Object.entries(answersMap.value)
+    .map(([questionId, state]: [string, any]) => {
+      const question = questions.value.find((item: any) => String(item.id) === questionId)
+        || { question_type: state.questionType }
+      const key = state.idempotencyKey || `mission-${missionId.value}-question-${questionId}`
+      state.idempotencyKey = key
+      return {
+        question_id: questionId,
+        level_id: state.levelId || levelId.value,
+        answer_content: answerContentForQuestion(question, state),
+        attempt_id: state.attemptId || undefined,
+        idempotency_key: key,
+        submitted: !!state.hasSubmitted,
+      }
+    })
+    .filter(Boolean)
+}
+
+async function loadMissionResults() {
+  if (!missionId.value) return
+  try {
+    const response: any = await studentApi.missionResults(missionId.value)
+    if (Number(response?.code) === 0 && Array.isArray(response.data?.results)) {
+      missionResults.value = response.data.results
+      markMissionQuestionsSubmitted()
+    }
+  } catch (error) {
+    console.warn('加载整份作业结果失败:', error)
+  }
+}
+
+function markMissionQuestionsSubmitted() {
+  for (const item of missionResults.value) {
+    const questionId = String(item.question_id)
+    answersMap.value[questionId] = {
+      ...(answersMap.value[questionId] || {}),
+      hasSubmitted: true,
+    }
+  }
+  const currentState = answersMap.value[String(currentQuestion.value.id)]
+  if (currentState) hasSubmitted.value = true
+}
+
+// ---------------------------------------------------------------------------
+// P1-06：提交整份作业
+// ---------------------------------------------------------------------------
+
+async function submitMission() {
+  if (!missionId.value || missionSubmitting.value || missionSubmitted.value) return
+
+  missionSubmitting.value = true
+  missingQuestionCount.value = 0
+  try {
+    const response: any = await studentApi.submitMission(missionId.value, {
+      answers: buildMissionAnswers() as any,
+    })
+    if (Number(response?.code) === 0) {
+      missionSubmitted.value = true
+      // 整份结果已经包含全部题目的答案和解析，不再重复显示当前题的
+      // 单题即时解析面板。
+      showAnswer.value = false
+      const key = draftStorageKey()
+      if (key) uni.removeStorageSync(key)
+      missionResults.value = Array.isArray(response.data?.results) ? response.data.results : []
+      if (!missionResults.value.length) await loadMissionResults()
+      markMissionQuestionsSubmitted()
+      for (const item of missionResults.value) {
+        const questionId = String(item.question_id)
+        const state = answersMap.value[questionId] || {}
+        answersMap.value[questionId] = { ...state, hasSubmitted: true }
+      }
+      const currentState = answersMap.value[String(currentQuestion.value.id)]
+      if (currentState) {
+        hasSubmitted.value = true
+      }
+      uni.$emit('student-mission-submitted', { missionId: missionId.value })
+      uni.$emit('student-answer-completed', { levelId: levelId.value })
+      uni.showToast({ title: '整份作业已提交', icon: 'success' })
+      return
+    }
+
+    const missingIds = response?.data?.missing_question_ids
+    missingQuestionCount.value = Array.isArray(missingIds) ? missingIds.length : 0
+    uni.showToast({
+      title: missingQuestionCount.value > 0
+        ? `还有 ${missingQuestionCount.value} 道题未提交`
+        : (response?.message || '整份作业提交失败'),
+      icon: 'none',
+    })
+  } catch (error) {
+    console.error('提交整份作业失败:', error)
+    uni.showToast({ title: '提交整份作业失败，请重试', icon: 'none' })
+  } finally {
+    missionSubmitting.value = false
   }
 }
 
@@ -569,6 +752,7 @@ async function nextQuestion() {
     saveQuestionState()
     currentIndex.value++
   } else {
+    saveQuestionState()
     // 返回关卡页前主动通知其刷新进度，同时通知首页更新任务完成度
     uni.$emit('student-answer-completed', { levelId: levelId.value })
     uni.$emit('student-layout-show')
@@ -1064,6 +1248,70 @@ async function nextQuestion() {
     flex-direction: column;
   }
 }
+
+.whole-submit-section {
+  width: 100%;
+  padding: 0 20rpx 24rpx;
+  box-sizing: border-box;
+}
+.btn-submit-mission {
+  width: 100%;
+  margin: 0;
+  background: #67c23a;
+  color: #fff;
+  border: none;
+  border-radius: 8rpx;
+  font-size: 26rpx;
+  line-height: 1.4;
+  padding: 16rpx 0;
+}
+.btn-submit-mission::after { border: none; }
+.btn-submit-mission[disabled] {
+  background: #a8d08d;
+  color: #f5f5f5;
+}
+.whole-submit-hint {
+  display: block;
+  margin-top: 10rpx;
+  color: #e6a23c;
+  text-align: center;
+  font-size: 22rpx;
+}
+.mission-result-panel {
+  margin: 0 20rpx 24rpx;
+  padding: 20rpx;
+  background: #fff;
+  border: 1rpx solid #e8e8e8;
+  border-radius: 10rpx;
+}
+.mission-result-header,
+.mission-result-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.mission-result-title {
+  font-size: 28rpx;
+  font-weight: bold;
+  color: #303133;
+}
+.mission-result-count,
+.mission-result-label {
+  color: #909399;
+  font-size: 22rpx;
+}
+.mission-result-item {
+  padding: 18rpx 0;
+  border-top: 1rpx solid #ebeef5;
+}
+.mission-result-item:first-of-type { margin-top: 16rpx; }
+.mission-result-no { color: #303133; font-size: 26rpx; font-weight: bold; }
+.mission-result-correct { color: #67c23a; font-size: 22rpx; }
+.mission-result-wrong { color: #f56c6c; font-size: 22rpx; }
+.mission-result-pending { color: #e6a23c; font-size: 22rpx; }
+.mission-result-section { margin-top: 12rpx; }
+.mission-result-label { display: block; margin-bottom: 6rpx; }
+.mission-result-content { color: #606266; font-size: 24rpx; line-height: 1.6; }
 
 /* #ifdef MP-WEIXIN */
 .answer-page {

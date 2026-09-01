@@ -1,4 +1,4 @@
-import { get, post, put, del, type RequestOptions } from '@/utils/request'
+import { get, post, put, patch, del, type RequestOptions } from '@/utils/request'
 import type { UUID } from '@/types/uuid'
 
 export type InstitutionRole = 'admin' | 'teacher'
@@ -121,6 +121,8 @@ export const classApi = {
   learningStats: (id: UUID) => get(`/classes/${id}/learning-stats`),
   removeStudent: (classId: UUID, studentId: UUID) =>
     put(`/classes/${classId}/students/${studentId}`),
+  updateStudent: (classId: UUID, studentId: UUID, data: { display_name: string }) =>
+    patch(`/classes/${classId}/students/${studentId}`, data),
   joinRequests: (classId: UUID) => get(`/classes/${classId}/join-requests`),
   approveRequest: (requestId: UUID) => post(`/classes/join-requests/${requestId}/approve`),
   rejectRequest: (requestId: UUID) => post(`/classes/join-requests/${requestId}/reject`),

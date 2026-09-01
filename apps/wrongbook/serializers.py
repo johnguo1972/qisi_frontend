@@ -2,6 +2,18 @@ from rest_framework import serializers
 from .models import WrongBookItem, MasteryRecord
 from apps.common.media import media_url
 from apps.common.question_display import difficulty_label
+from apps.common.subject_codes import SUBJECT_LABELS, normalize_subject_code
+
+
+LEGACY_SUBJECT_CODES = {
+    'm': 'math', 'p': 'physics', 'c': 'chemistry', 'e': 'english',
+    'cnl': 'chinese', 'b': 'biology', 'g': 'geography', 'h': 'history',
+}
+
+
+def _canonical_subject(value):
+    raw = str(value or '').strip()
+    return normalize_subject_code(raw) or LEGACY_SUBJECT_CODES.get(raw.lower(), '')
 
 
 class WrongBookItemSerializer(serializers.ModelSerializer):
@@ -15,11 +27,14 @@ class WrongBookItemSerializer(serializers.ModelSerializer):
     stem = serializers.SerializerMethodField()
     stem_html = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
+    subject = serializers.SerializerMethodField()
+    subject_label = serializers.SerializerMethodField()
 
     class Meta:
         model = WrongBookItem
         fields = ['id', 'question_id', 'question_no', 'question_type', 'question_type_label',
                   'difficulty', 'difficulty_label', 'knowledge_point_labels', 'tags',
+                  'subject', 'subject_label',
                   'stem', 'stem_html', 'images',
                   'status', 'wrong_reason_type', 'retry_count',
                   'variant_done_count', 'first_wrong_at', 'latest_wrong_at']
@@ -55,6 +70,16 @@ class WrongBookItemSerializer(serializers.ModelSerializer):
     def get_difficulty_label(self, obj):
         q = self._get_question(obj)
         return difficulty_label(q.difficulty if q else None)
+
+    def get_subject(self, obj):
+        q = self._get_question(obj)
+        if not q:
+            return ''
+        return _canonical_subject(q.subject or (q.paper.subject if q.paper else ''))
+
+    def get_subject_label(self, obj):
+        code = self.get_subject(obj)
+        return SUBJECT_LABELS.get(code, code or '未设置科目')
 
     def get_knowledge_point_labels(self, obj):
         q = self._get_question(obj)

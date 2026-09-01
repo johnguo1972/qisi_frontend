@@ -84,6 +84,7 @@ export const missionApi = {
   grading: (id: UUID) => get<any>(`/missions/${id}/grading/`),
   progress: (id: UUID, params?: { class_id?: UUID }) => get<any>(`/missions/${id}/progress/`, params),
   statistics: (id: UUID, params?: { class_id?: UUID }) => get<any>(`/missions/${id}/statistics/`, params),
+  learningStats: (id: UUID, params?: { class_id?: UUID }) => get<any>(`/missions/${id}/learning-stats/`, params),
   gradeAttempt: (id: UUID, attemptId: UUID, data: { score: number; feedback?: string }) =>
     patch<any>(`/missions/${id}/grading/attempts/${attemptId}/`, data),
   generateVariant: (id: UUID, data: { question_id: UUID; level_id: UUID; student_id: UUID; variant_mode?: string }) =>
@@ -112,6 +113,8 @@ export const missionApi = {
   wrongbookMatrix: (id: UUID, params?: { class_id?: UUID }) => get<any>(`/missions/${id}/wrongbook-matrix`, params),
   saveWrongbookMatrix: (id: UUID, data: { version: number; cells: Array<{ student_id: UUID; source_question_id: UUID; wrong: boolean }> }) => patch<any>(`/missions/${id}/wrongbook-matrix`, data),
   generateWrongbook: (id: UUID, data: { version: number; idempotency_key: string; cell_ids?: UUID[]; related_limit?: number }) => post<any>(`/missions/${id}/wrongbook-matrix/generate`, data),
+  // AI-first teacher selection fallback. The legacy generator above remains unchanged.
+  generateTeacherWrongbook: (id: UUID, data: { version: number; idempotency_key: string; cell_ids?: UUID[]; class_id?: UUID }) => post<any>(`/missions/${id}/wrongbook-matrix/teacher-generate`, data),
   wrongbookGeneration: (id: UUID, batchId: UUID) => get<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}`),
   wrongbookHistory: (id: UUID) => get<any>(`/missions/${id}/wrongbook-matrix/history`),
   wrongbookStudentHistory: (id: UUID, studentId: UUID) => get<any>(`/missions/${id}/wrongbook-matrix/students/${studentId}`),
@@ -121,4 +124,6 @@ export const missionApi = {
   retryWrongbookGeneration: (id: UUID, batchId: UUID) => post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/retry`),
   wrongbookRecommendations: (id: UUID, batchId: UUID, data?: { limit?: number }) => data ? post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/recommendations`, data) : get<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/recommendations`),
   confirmWrongbookRecommendations: (id: UUID, batchId: UUID, data: { recommendation_ids: UUID[]; idempotency_key: string }) => post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/recommendations/confirm`, data),
+  teacherWrongbookCandidateGroups: (id: UUID, batchId: UUID) => get<any[]>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/candidate-groups`),
+  confirmTeacherWrongbookCandidateGroups: (id: UUID, batchId: UUID, data: { groups: Array<{ student_id: UUID; source_wrong_book_item_id: UUID; candidate_question_ids: UUID[] }>; idempotency_key: string }) => post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/candidate-groups/confirm`, data),
 }

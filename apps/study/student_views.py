@@ -25,10 +25,46 @@ from apps.missions.services import (
 )
 from apps.missions.snapshots import snapshot_payload
 from apps.missions.pdf_service import _mission_questions, mission_pdf_download_url
+from apps.common.subject_codes import SUBJECT_LABELS, normalize_subject_code
 
 
 def make_trace_id():
     return uuid.uuid4().hex[:16]
+
+
+# 题库历史数据中还存在单字母学科值；对外统一返回教师题库页面使用的
+# canonical subject code，避免学生端筛选出现同一学科多个选项。
+LEGACY_SUBJECT_CODES = {
+    'm': 'math', 'p': 'physics', 'c': 'chemistry', 'e': 'english',
+    'cnl': 'chinese', 'b': 'biology', 'g': 'geography', 'h': 'history',
+}
+
+
+def _canonical_subject(value):
+    raw = str(value or '').strip()
+    if not raw:
+        return ''
+    return normalize_subject_code(raw) or LEGACY_SUBJECT_CODES.get(raw.lower(), '')
+
+
+def _mission_subject_codes(mission, question_relations):
+    """Return the canonical subjects represented by one visible mission."""
+    raw_subjects = []
+    if getattr(mission, 'course', None):
+        raw_subjects.append(mission.course.subject)
+
+    question_ids = {relation.question_id for relation in question_relations}
+    if question_ids:
+        questions = ExamQuestion.objects.filter(id__in=question_ids).select_related('paper')
+        for question in questions:
+            raw_subjects.extend((question.subject, question.paper.subject if question.paper else ''))
+
+    subjects = []
+    for raw_subject in raw_subjects:
+        subject = _canonical_subject(raw_subject)
+        if subject and subject not in subjects:
+            subjects.append(subject)
+    return subjects
 
 
 def _visible_mission_rels(level_or_mission, student_id):
@@ -84,7 +120,7 @@ def student_home(request):
     ).filter(
         Q(class_obj_id__in=student_class_ids) |
         Q(class_assignments__class_obj_id__in=student_class_ids)
-    ).select_related('class_obj').prefetch_related('class_assignments__class_obj').distinct().order_by('-created_at'))
+    ).select_related('class_obj', 'course').prefetch_related('class_assignments__class_obj').distinct().order_by('-created_at'))
     published_missions = [
         mission for mission in published_missions
         if mission_visible_to_student(mission, student.id, student_class_ids)
@@ -113,7 +149,7 @@ def student_home(request):
     progresses = StudentMissionProgress.objects.filter(
         student_user_id=student, mission__status='published',
         mission_id__in=published_mission_ids,
-    ).select_related('mission', 'mission__class_obj').prefetch_related('mission__class_assignments__class_obj')
+    ).select_related('mission', 'mission__class_obj', 'mission__course').prefetch_related('mission__class_assignments__class_obj').order_by('-mission__created_at')
 
     class_id = request.query_params.get('class_id')
     # 前端“全部班级”使用 0 作为占位值，将其视为不筛选班级；真实班级 ID 仍必须是 UUID。
@@ -138,7 +174,9 @@ def student_home(request):
         week_end = now + timedelta(days=7)
         progresses = progresses.filter(mission__end_at__lte=week_end)
 
+    requested_subject = _canonical_subject(request.query_params.get('subject'))
     missions = []
+    available_subject_codes = []
     for p in progresses:
         mission = p.mission
         assignment_classes = [item.class_obj for item in mission.class_assignments.all()
@@ -146,7 +184,15 @@ def student_home(request):
         class_obj = assignment_classes[0] if assignment_classes else mission.class_obj
         visible_levels = assignment_levels(mission)
         level_count = len(visible_levels)
-        question_count = len(_visible_mission_rels(mission, student.id))
+        visible_relations = _visible_mission_rels(mission, student.id)
+        question_count = len(visible_relations)
+        mission_subject_codes = _mission_subject_codes(mission, visible_relations)
+        for subject_code in mission_subject_codes:
+            if subject_code not in available_subject_codes:
+                available_subject_codes.append(subject_code)
+
+        if requested_subject and requested_subject not in mission_subject_codes:
+            continue
 
         # 实时计算各关卡进度，取平均值作为任务整体进度
         levels = visible_levels
@@ -165,9 +211,9 @@ def student_home(request):
         # 同步更新数据库
         if get_request_role(request) == 'student':
             p.progress_percent = overall_progress
-            if overall_progress >= 100:
+            if overall_progress >= 100 and p.progress_status not in ('submitted', 'graded', 'passed'):
                 p.progress_status = 'completed'
-            elif overall_progress > 0:
+            elif overall_progress > 0 and p.progress_status not in ('submitted', 'graded', 'passed', 'completed'):
                 p.progress_status = 'in_progress'
             p.save(update_fields=['progress_percent', 'progress_status'])
 
@@ -176,11 +222,14 @@ def student_home(request):
                 'id': mission.id,
                 'mission_no': mission.mission_no,
                 'mission_name': mission.mission_name,
+                'created_at': mission.created_at.isoformat() if mission.created_at else None,
             },
             'class_label': '、'.join(cls.class_name for cls in assignment_classes) if assignment_classes else (class_obj.class_name if class_obj else None),
             'class_ids': [str(cls.id) for cls in assignment_classes],
             'deadline': mission.end_at.isoformat() if mission.end_at else None,
             'assignment_mode': mission.assignment_mode,
+            'subject': mission_subject_codes[0] if mission_subject_codes else '',
+            'subjects': mission_subject_codes,
             'level_count': level_count,
             'question_count': question_count,
             'progress_status': p.progress_status,
@@ -189,8 +238,17 @@ def student_home(request):
             'pdf_download_url': mission_pdf_download_url(mission),
         })
 
+    # Keep the option shape and canonical codes aligned with the teacher
+    # question-bank subject selector (e.g. {code: "physics", name: "物理"}).
+    subject_options = [
+        {'code': code, 'name': SUBJECT_LABELS[code]}
+        for code in SUBJECT_LABELS
+        if code in available_subject_codes
+    ]
     return Response({
-        'code': 0, 'message': 'success', 'data': {'missions': missions, 'classes': classes}, 'trace_id': make_trace_id(),
+        'code': 0, 'message': 'success',
+        'data': {'missions': missions, 'classes': classes, 'subjects': subject_options},
+        'trace_id': make_trace_id(),
     })
 
 
@@ -255,13 +313,13 @@ def student_mission_detail(request, mission_id):
         )
         if get_request_role(request) == 'student':
             sp.progress_percent = overall_progress
-            if overall_progress >= 100:
+            if overall_progress >= 100 and sp.progress_status not in ('submitted', 'graded', 'passed'):
                 sp.progress_status = 'completed'
             elif sp.progress_status == 'not_started' and overall_progress > 0:
                 sp.progress_status = 'in_progress'
             sp.save()
     except StudentMissionProgress.DoesNotExist:
-        pass
+        sp = None
 
     assignment_classes = [item.class_obj for item in mission.class_assignments.all()
                           if item.status == 'active' and ClassStudent.objects.filter(
@@ -277,6 +335,8 @@ def student_mission_detail(request, mission_id):
             'class_ids': [str(cls.id) for cls in assignment_classes],
             'deadline': mission.end_at.isoformat() if mission.end_at else None,
             'assignment_mode': mission.assignment_mode,
+            'progress_status': sp.progress_status if sp else 'not_started',
+            'progress_percent': float(sp.progress_percent) if sp else overall_progress,
             'pdf_download_url': mission_pdf_download_url(mission),
             'levels': levels,
         }, 'trace_id': make_trace_id(),
@@ -328,10 +388,14 @@ def student_level_detail(request, level_id):
     if level.mission_id:
         StudentMissionProgress.objects.filter(
             mission_id=level.mission_id, student_user_id=student
-        ).exclude(progress_status='in_progress').exclude(progress_status='completed').update(
+        ).exclude(progress_status__in=('in_progress', 'completed', 'submitted', 'graded', 'passed')).update(
             progress_status='in_progress',
             current_level_id=level.id,
         )
+
+    mission_progress = StudentMissionProgress.objects.filter(
+        mission_id=level.mission_id, student_user_id=student,
+    ).first() if level.mission_id else None
 
     return Response({
         'code': 0, 'message': 'success',
@@ -341,6 +405,7 @@ def student_level_detail(request, level_id):
             'level_name': level.level_name,
             'mode_policy': level.mode_policy,
             'questions': questions,
+            'mission_progress_status': mission_progress.progress_status if mission_progress else 'not_started',
             'progress': {'attempt_count': lp.attempt_count, 'status': lp.status},
         }, 'trace_id': make_trace_id(),
     })

@@ -123,6 +123,7 @@ describe('course-practice page integration', () => {
     const second = deferred<any>()
     const refresh = deferred<any>()
     courseQuestionList
+      .mockResolvedValueOnce({ data: { items: [], total: 0, page_no: 1, page_size: 20 } })
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise)
       .mockReturnValueOnce(refresh.promise)

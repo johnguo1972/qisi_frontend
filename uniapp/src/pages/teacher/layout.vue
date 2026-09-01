@@ -1,7 +1,7 @@
 <template>
   <view class="layout">
     <TeacherSidebar :activeItem="currentPage" @navigate="switchPage" />
-    <view class="content-area">
+    <view class="content-area" :class="{ 'content-area--scrollable': currentPage === 'assignment-list' || currentPage === 'learning-stats' }">
       <!-- MP-WEIXIN 不支持动态组件，使用条件渲染保持相同的页面切换行为。 -->
       <WorkbenchPage v-if="currentPage === 'workbench'" />
       <QuestionBankPage v-else-if="currentPage === 'question-bank'" />
@@ -69,6 +69,9 @@ onLoad((options: any) => {
   box-sizing: border-box;
   overflow: hidden;
   padding: 30rpx 40rpx;
+}
+.content-area--scrollable {
+  overflow-y: auto;
 }
 
 @media (max-width: 768px) {

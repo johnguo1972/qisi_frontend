@@ -355,6 +355,17 @@ class MyClassesSerializer(serializers.Serializer):
         """instance is a ClassStudent queryset item."""
         class_obj = instance.class_obj
         creator = class_obj.creator_teacher
+        teachers = []
+        if creator:
+            teachers.append(creator)
+        for relation in class_obj.class_teachers.all():
+            if relation.teacher and relation.teacher not in teachers:
+                teachers.append(relation.teacher)
+        teacher_subjects = []
+        for teacher in teachers:
+            for subject in normalize_subject_codes(teacher.subjects or teacher.subject):
+                if subject not in teacher_subjects:
+                    teacher_subjects.append(subject)
         return {
             'id': instance.id,
             'class_id': instance.class_obj_id,
@@ -369,6 +380,7 @@ class MyClassesSerializer(serializers.Serializer):
                 if class_obj.institution else None
             ),
             'subject': creator.subject if creator else None,
+            'teacher_subjects': teacher_subjects,
             'student_count': class_obj.class_students.filter(status='active').count(),
         }
 
