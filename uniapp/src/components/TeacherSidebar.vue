@@ -2,7 +2,10 @@
   <view class="sidebar">
     <view class="sidebar-logo" @click="goWorkbench">优途AI辅学系统</view>
     <view class="sidebar-user">
-      <text class="user-name">{{ userInfo.display_name }}</text>
+      <view class="user-info-row">
+        <text class="user-name">{{ userInfo.display_name }}</text>
+        <NicknameEditor :display-name="userInfo.display_name" @updated="handleProfileUpdated" />
+      </view>
       <text class="user-role">教师</text>
       <RoleSwitcher />
     </view>
@@ -54,6 +57,7 @@ import { ref, computed, onMounted } from 'vue'
 import { authApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
 import RoleSwitcher from '@/components/RoleSwitcher.vue'
+import NicknameEditor from '@/components/NicknameEditor.vue'
 
 const props = defineProps<{
   activeItem: string
@@ -87,6 +91,11 @@ function toggleClassMenu() {
 function goStudentManagement() { classMenuExpanded.value = true; emit('navigate', 'student-management') }
 function goAssignmentList() { classMenuExpanded.value = true; emit('navigate', 'assignment-list') }
 function goLearningStats() { classMenuExpanded.value = true; emit('navigate', 'learning-stats') }
+
+function handleProfileUpdated(profile: any) {
+  userInfo.value = profile
+  userStore.setUserInfo(profile)
+}
 
 async function handleLogout() {
   uni.showModal({
@@ -128,11 +137,16 @@ async function handleLogout() {
   padding: 24rpx;
   border-bottom: 1rpx solid #f0f0f0;
 }
+.user-info-row {
+  display: flex;
+  align-items: center;
+}
 .user-name {
   font-size: 26rpx;
   font-weight: bold;
   color: #333;
-  display: block;
+  flex: 1;
+  min-width: 0;
 }
 .user-role {
   font-size: 22rpx;

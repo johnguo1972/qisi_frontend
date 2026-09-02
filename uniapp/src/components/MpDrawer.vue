@@ -1,8 +1,11 @@
 <template>
   <view v-if="visible" class="layer" @click="$emit('close')">
-    <view class="drawer" @click.stop>
-      <view class="profile">
-        👤 {{ userName }}
+      <view class="drawer" @click.stop>
+        <view class="profile">
+        <view class="profile-name-row">
+          <text>👤 {{ userName }}</text>
+          <NicknameEditor :display-name="userName" @updated="handleProfileUpdated" />
+        </view>
         <text>{{ roleLabel }}</text>
         <!-- #ifdef MP-WEIXIN -->
         <MpRoleSwitcher />
@@ -21,6 +24,8 @@
 
 <script setup lang="ts">
 import RoleSwitcher from '@/components/RoleSwitcher.vue'
+import NicknameEditor from '@/components/NicknameEditor.vue'
+import { useUserStore } from '@/store/index'
 // #ifdef MP-WEIXIN
 import MpRoleSwitcher from '@/components/MpRoleSwitcher.vue'
 // #endif
@@ -45,13 +50,21 @@ const props = withDefaults(defineProps<{
 })
 
 defineEmits<{ close: []; navigate: [key: string]; logout: [] }>()
+
+const userStore = useUserStore()
+
+function handleProfileUpdated(profile: any) {
+  userStore.setUserInfo(profile)
+}
 </script>
 
 <style scoped>
 .layer { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); z-index: 99; }
 .drawer { width: 600rpx; max-width: 82vw; height: 100%; background: #fff; padding: 100rpx 28rpx 30rpx; box-sizing: border-box; }
 .profile { font-size: 30rpx; font-weight: 600; padding: 26rpx 10rpx; border-bottom: 1rpx solid #eee; }
-.profile text { display: block; color: #999; font-size: 22rpx; margin-top: 8rpx; }
+.profile-name-row { display: flex; align-items: center; }
+.profile-name-row > text { flex: 1; min-width: 0; color: #303133; font-size: 30rpx; font-weight: 600; }
+.profile > text { display: block; color: #999; font-size: 22rpx; margin-top: 8rpx; }
 .item, .logout { padding: 28rpx 14rpx; font-size: 28rpx; border-bottom: 1rpx solid #f3f3f3; }
 .logout { color: #e74c3c; margin-top: 30rpx; }
 </style>

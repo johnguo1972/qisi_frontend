@@ -4,6 +4,7 @@
     <view class="sidebar-user">
       <view class="user-info-row">
         <text class="user-name">{{ userInfo.display_name || '同学' }}</text>
+        <NicknameEditor :display-name="userInfo.display_name" @updated="handleNicknameUpdated" />
         <view class="edit-btn" @click="showEditDialog">
           <text class="edit-icon">✎</text>
         </view>
@@ -87,6 +88,7 @@ import { ref, computed, onMounted } from 'vue'
 import { authApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
 import RoleSwitcher from '@/components/RoleSwitcher.vue'
+import NicknameEditor from '@/components/NicknameEditor.vue'
 
 const props = defineProps<{
   activeItem: string
@@ -140,6 +142,11 @@ function goGrowth() { emit('navigate', 'growth') }
 function goJoinClass() { emit('navigate', 'join-class') }
 function goParentBind() { emit('navigate', 'parent-bind') }
 function goScanEntry() { emit('navigate', 'scan-entry') }
+
+function handleNicknameUpdated(profile: any) {
+  userInfo.value = profile
+  userStore.setUserInfo(profile)
+}
 
 async function handleLogout() {
   uni.showModal({

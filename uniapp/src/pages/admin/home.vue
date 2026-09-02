@@ -4,7 +4,10 @@
     <view class="sidebar">
       <view class="sidebar-logo">优途AI辅学系统</view>
       <view class="sidebar-user">
-        <text class="user-name">{{ userInfo.display_name }}</text>
+        <view class="user-info-row">
+          <text class="user-name">{{ userInfo.display_name }}</text>
+          <NicknameEditor :display-name="userInfo.display_name" @updated="handleProfileUpdated" />
+        </view>
         <text class="user-role">管理员</text>
         <RoleSwitcher />
       </view>
@@ -60,6 +63,7 @@ import { institutionApi, authApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
 import { currentSessionRole, ensurePageRole } from '@/utils/roles'
 import RoleSwitcher from '@/components/RoleSwitcher.vue'
+import NicknameEditor from '@/components/NicknameEditor.vue'
 
 const userInfo = ref({ display_name: '管理员' })
 const items = ref<any[]>([])
@@ -130,6 +134,11 @@ async function initializeAdminHome() {
   } finally {
     if (initializationPromise === promise) initializationPromise = null
   }
+}
+
+function handleProfileUpdated(profile: any) {
+  userInfo.value = profile
+  userStore.setUserInfo(profile)
 }
 
 onMounted(async () => {
@@ -220,11 +229,16 @@ async function handleLogout() {
   padding: 24rpx;
   border-bottom: 1rpx solid #f0f0f0;
 }
+.user-info-row {
+  display: flex;
+  align-items: center;
+}
 .user-name {
   font-size: 26rpx;
   font-weight: bold;
   color: #333;
-  display: block;
+  flex: 1;
+  min-width: 0;
 }
 .user-role {
   font-size: 22rpx;
