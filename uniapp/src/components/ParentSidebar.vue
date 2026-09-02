@@ -2,7 +2,10 @@
   <view class="sidebar">
     <view class="sidebar-logo">优途AI辅学系统</view>
     <view class="sidebar-user">
-      <text class="user-name">{{ userName }}</text>
+      <view class="user-info-row">
+        <text class="user-name">{{ userName }}</text>
+        <NicknameEditor :display-name="userName" @updated="handleProfileUpdated" />
+      </view>
       <text class="user-role">家长</text>
       <RoleSwitcher />
     </view>
@@ -30,6 +33,7 @@ import { computed } from 'vue'
 import { authApi } from '@/api/index'
 import { useUserStore } from '@/store/index'
 import RoleSwitcher from '@/components/RoleSwitcher.vue'
+import NicknameEditor from '@/components/NicknameEditor.vue'
 
 defineProps<{ activeItem: string }>()
 const emit = defineEmits<{ navigate: [key: string] }>()
@@ -47,6 +51,10 @@ const items = [
 
 function navigate(key: string) {
   emit('navigate', key)
+}
+
+function handleProfileUpdated(profile: any) {
+  userStore.setUserInfo(profile)
 }
 
 async function logout() {
@@ -67,7 +75,8 @@ async function logout() {
 .sidebar { width: 240px; background: #fff; box-shadow: 2px 0 8px rgba(0, 0, 0, .06); display: flex; flex-direction: column; position: fixed; left: 0; top: 0; bottom: 0; z-index: 10; }
 .sidebar-logo { padding: 30rpx 24rpx; color: #409eff; font-size: 32rpx; font-weight: 700; border-bottom: 1rpx solid #f0f0f0; }
 .sidebar-user { padding: 24rpx; border-bottom: 1rpx solid #f0f0f0; }
-.user-name { display: block; overflow: hidden; color: #333; font-size: 26rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.user-info-row { display: flex; align-items: center; }
+.user-name { flex: 1; min-width: 0; overflow: hidden; color: #333; font-size: 26rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .user-role { display: block; margin-top: 6rpx; color: #999; font-size: 22rpx; }
 .nav-items { flex: 1; padding: 16rpx 0; overflow-y: auto; }
 .nav-item { display: flex; align-items: center; padding: 18rpx 24rpx; cursor: pointer; }
