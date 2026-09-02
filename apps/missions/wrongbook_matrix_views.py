@@ -14,6 +14,7 @@ from .wrongbook_matrix import (
 )
 from .teacher_wrongbook_selection import (
     confirm_teacher_selection,
+    next_teacher_candidate_group,
     request_teacher_generation,
     teacher_candidate_groups,
 )
@@ -282,6 +283,22 @@ def teacher_wrongbook_candidate_groups_nested(request, mission_id, batch_id):
         if batch.generation_mode != 'teacher_select':
             raise MatrixError('该批次不是教师选择模式', 'conflict', 409)
         return Response({'code': 0, 'data': teacher_candidate_groups(batch), 'trace_id': make_trace_id()})
+    except MatrixError as exc:
+        return _error(exc)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
+def teacher_wrongbook_candidate_group_next_nested(request, mission_id, batch_id, item_id):
+    try:
+        batch = _validate_nested_batch(request, mission_id, batch_id)
+        if not can_manage_matrix(batch.matrix.source_mission, request.user):
+            raise MatrixError('无权操作该生成任务。', 'forbidden', 403)
+        excluded_ids = request.data.get('excluded_question_ids') or []
+        if not isinstance(excluded_ids, list):
+            raise MatrixError('excluded_question_ids 必须是数组。', 'invalid')
+        group = next_teacher_candidate_group(batch, item_id, excluded_ids)
+        return Response({'code': 0, 'data': group, 'trace_id': make_trace_id()})
     except MatrixError as exc:
         return _error(exc)
 

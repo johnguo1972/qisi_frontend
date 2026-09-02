@@ -62,6 +62,7 @@ urlpatterns = [
     path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/retry', matrix_views.wrongbook_generation_retry_nested, name='wrongbook-generation-retry-nested'),
     path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/recommendations', matrix_views.wrongbook_recommendations_nested, name='wrongbook-recommendations-nested'),
     path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/candidate-groups', matrix_views.teacher_wrongbook_candidate_groups_nested, name='teacher-wrongbook-candidate-groups'),
+    path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/candidate-groups/<uuid:item_id>/next', matrix_views.teacher_wrongbook_candidate_group_next_nested, name='teacher-wrongbook-candidate-group-next'),
     path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/candidate-groups/confirm', matrix_views.teacher_wrongbook_candidate_groups_confirm_nested, name='teacher-wrongbook-candidate-groups-confirm'),
     path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/recommendations/confirm', matrix_views.wrongbook_recommendations_confirm_nested, name='wrongbook-recommendations-confirm-nested'),
     path('wrongbook-generation/<uuid:batch_id>', matrix_views.wrongbook_generation_detail, name='wrongbook-generation-detail'),

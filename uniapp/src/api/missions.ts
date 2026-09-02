@@ -125,5 +125,6 @@ export const missionApi = {
   wrongbookRecommendations: (id: UUID, batchId: UUID, data?: { limit?: number }) => data ? post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/recommendations`, data) : get<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/recommendations`),
   confirmWrongbookRecommendations: (id: UUID, batchId: UUID, data: { recommendation_ids: UUID[]; idempotency_key: string }) => post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/recommendations/confirm`, data),
   teacherWrongbookCandidateGroups: (id: UUID, batchId: UUID) => get<any[]>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/candidate-groups`),
+  teacherWrongbookCandidateGroupNext: (id: UUID, batchId: UUID, itemId: UUID, data: { excluded_question_ids: string[] }) => post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/candidate-groups/${itemId}/next`, data),
   confirmTeacherWrongbookCandidateGroups: (id: UUID, batchId: UUID, data: { groups: Array<{ student_id: UUID; source_wrong_book_item_id: UUID; candidate_question_ids: UUID[] }>; idempotency_key: string }) => post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/candidate-groups/confirm`, data),
 }

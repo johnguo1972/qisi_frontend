@@ -118,6 +118,7 @@
       :groups="candidateGroups"
       :submitting="candidateSubmitting"
       @close="candidateSelectorVisible = false"
+      @next="nextTeacherCandidates"
       @confirm="confirmTeacherCandidates"
     />
   </view>
@@ -396,6 +397,20 @@ async function openCandidateSelector() {
     else uni.showToast({ title: '暂无需要手动选择的错题', icon: 'none' })
   } catch (error: any) {
     uni.showToast({ title: error?.message || '同类题加载失败', icon: 'none' })
+  }
+}
+
+async function nextTeacherCandidates(payload: { item_id: string; excluded_question_ids: string[] }) {
+  if (!batch.value?.id) return
+  try {
+    const res: any = await missionApi.teacherWrongbookCandidateGroupNext(
+      missionId.value, batch.value.id, payload.item_id, { excluded_question_ids: payload.excluded_question_ids },
+    )
+    candidateGroups.value = candidateGroups.value.map(group => (
+      group.item_id === payload.item_id ? res.data : group
+    ))
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || '没有更多符合条件的同类题', icon: 'none' })
   }
 }
 

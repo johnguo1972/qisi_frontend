@@ -327,7 +327,10 @@ class RelatedQuestionRecommendation(models.Model):
         ('suggested', 'suggested'), ('teacher_selected', 'teacher_selected'),
         ('rejected', 'rejected'), ('discarded', 'discarded'),
     ]
-    PROVIDER_CHOICES = [('rule', 'rule'), ('ai', 'ai')]
+    PROVIDER_CHOICES = [
+        ('rule', 'rule'), ('ai', 'ai'),
+        ('relation', 'relation'), ('criteria', 'criteria'),
+    ]
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     matrix = models.ForeignKey(TeacherWrongBookMatrix, on_delete=models.CASCADE, related_name='recommendations')
     source_batch = models.ForeignKey(WrongBookGenerationBatch, on_delete=models.CASCADE, related_name='recommendations')
