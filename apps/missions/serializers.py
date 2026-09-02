@@ -46,13 +46,14 @@ class MissionListSerializer(serializers.ModelSerializer):
     subject = serializers.SerializerMethodField()
     class_names = serializers.SerializerMethodField()
     class_ids = serializers.SerializerMethodField()
+    assignment_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = LearningMission
         fields = ['id', 'mission_no', 'mission_name', 'goal_text',
                   'status', 'start_at', 'end_at', 'creator_name',
                   'assignment_mode', 'mission_kind', 'source_type', 'level_count', 'class_name', 'class_names', 'class_ids', 'question_count', 'unfinished_count', 'completion_progress', 'subject',
-                  'default_mode_policy', 'class_obj', 'target_student_ids', 'course',
+                  'default_mode_policy', 'class_obj', 'target_student_ids', 'assignment_summary', 'course',
                   'source_matrix_id', 'source_generation_batch_id', 'parent_mission_id']
 
     def get_level_count(self, obj):
@@ -72,6 +73,48 @@ class MissionListSerializer(serializers.ModelSerializer):
 
     def get_class_ids(self, obj):
         return [str(item.class_obj_id) for item in self._assignments(obj) if getattr(item, 'class_obj_id', None)]
+
+    def get_assignment_summary(self, obj):
+        """Describe whether a mission is for whole classes or named students."""
+        from apps.accounts.models import UserAccount
+
+        global_targets = {str(student_id) for student_id in (obj.target_student_ids or [])}
+        full_class_names = []
+        target_ids = []
+        for assignment in self._assignments(obj):
+            class_name = getattr(getattr(assignment, 'class_obj', None), 'class_name', '')
+            effective_targets = {
+                str(student_id)
+                for student_id in (getattr(assignment, 'target_student_ids', None) or [])
+            } or global_targets
+            if effective_targets:
+                target_ids.extend(sorted(effective_targets))
+            elif class_name:
+                full_class_names.append(class_name)
+
+        parts = []
+        if full_class_names:
+            parts.append(f"全班：{'、'.join(dict.fromkeys(full_class_names))}")
+        unique_targets = list(dict.fromkeys(target_ids))
+        if unique_targets:
+            users = {
+                str(user.id): user
+                for user in UserAccount.objects.filter(id__in=unique_targets, status='active')
+            }
+            labels = []
+            for student_id in unique_targets:
+                user = users.get(student_id)
+                if user is None:
+                    continue
+                display_name = (user.display_name or user.login_name or user.mobile or '未命名学生').strip()
+                login_name = (user.login_name or '').strip()
+                labels.append(
+                    f'{display_name}（{login_name}）'
+                    if login_name and login_name != display_name else display_name
+                )
+            if labels:
+                parts.append(f"指定学生：{'、'.join(labels)}")
+        return '；'.join(parts) or '未分配学生'
 
     def get_question_count(self, obj):
         return MissionQuestionRel.objects.filter(mission=obj).count()
