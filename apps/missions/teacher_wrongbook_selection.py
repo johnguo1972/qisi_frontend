@@ -6,19 +6,18 @@ workflow used when automatic recommendations are missing or insufficient.
 """
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from apps.parser.models import ExamQuestion
-from apps.practice.models import PracticePoolItem
 from apps.practice.recommendation import (
     knowledge_point_keys,
-    normalize_difficulty_star,
     normalize_stage,
     question_display,
 )
-from apps.wrongbook.models import WrongBookItem
+from apps.study.models import QuestionRelation
 
 from .models import (
     LearningMission,
@@ -30,10 +29,8 @@ from .models import (
 from .wrongbook_matrix import (
     MatrixError,
     _audit,
-    _candidate_questions,
     _create_published_mission,
     _sid,
-    batch_recommendations,
     publish_generated_mission,
 )
 
@@ -108,89 +105,96 @@ def request_teacher_generation(matrix, teacher, version, idempotency_key, cell_i
     return batch
 
 
-def _fallback_candidates(item, limit, excluded_ids=None):
-    """Return visible question-bank candidates for teacher fallback selection.
+MANUAL_CANDIDATE_PROVIDERS = ('relation', 'criteria')
+CRITERIA_CANDIDATE_LIMIT = 5
 
-    The strict provider remains the first source.  A controlled question-type
-    fallback is used only to make manual selection useful when the strict AI
-    recommendation contains fewer than three items.  It never returns the
-    original question, the student's active practice questions, or historical
-    related questions.
-    """
+
+def _difficulty_coefficient(value):
+    try:
+        coefficient = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return coefficient if coefficient.is_finite() else None
+
+
+def _relation_candidates(item):
+    """Return explicit question relations for the original wrong question."""
+    original_id = _sid(item.source_question_id)
+    relations = QuestionRelation.for_question(item.source_question_id).order_by('created_at', 'id')
+    related_ids = []
+    for relation in relations:
+        related_id = relation.question_right_id if _sid(relation.question_left_id) == original_id else relation.question_left_id
+        related_id = _sid(related_id)
+        if related_id not in related_ids:
+            related_ids.append(related_id)
+    if not related_ids:
+        return []
+    by_id = {
+        _sid(question.id): question
+        for question in ExamQuestion.objects.filter(pk__in=related_ids)
+        .select_related('paper').prefetch_related('images', 'options')
+    }
+    return [question_display(by_id[question_id]) for question_id in related_ids if question_id in by_id]
+
+
+def _criteria_candidates(item, excluded_ids=None, limit=CRITERIA_CANDIDATE_LIMIT):
+    """Select question-bank candidates using the teacher-approved criteria."""
     excluded = {_sid(value) for value in (excluded_ids or [])}
-    strict, meta = _candidate_questions(item, limit)
-    candidates = list(strict)
-    excluded.update(_sid(value['id']) for value in candidates)
-    if len(candidates) >= limit:
-        return candidates[:limit], meta
-
     original = ExamQuestion.objects.select_related('paper').filter(pk=item.source_question_id).first()
     if original is None:
-        return candidates, meta
-    active_pool_ids = {
-        _sid(value) for value in PracticePoolItem.objects.filter(
-            student_user=item.student, status='active',
-        ).values_list('question_id', flat=True)
-    }
-    historical_ids = {
-        _sid(value) for value in WrongBookItem.objects.filter(
-            student_user_id=item.student, question_id__isnull=False,
-        ).values_list('question_id', flat=True)
-    }
+        return []
     original_stage = normalize_stage(getattr(original.paper, 'stage', None))
-    original_star = normalize_difficulty_star(original.difficulty)
-    original_keys = knowledge_point_keys(original.knowledge_points)
+    original_difficulty = _difficulty_coefficient(original.difficulty)
+    original_points = knowledge_point_keys(original.knowledge_points)
+    if not original.subject or not original_stage or original_difficulty is None or not original_points:
+        return []
     query = ExamQuestion.objects.filter(
         paper__is_deleted=False,
         review_status__in=('reviewed', 'confirmed'),
         need_review=False,
-    ).exclude(stem__isnull=True).exclude(stem='').exclude(pk=original.id)
-    query = query.filter(Q(paper__uploaded_by__isnull=True) | Q(paper__uploaded_by=item.batch.requested_by_id))
-    query = query.select_related('paper').prefetch_related('images', 'options')
+        subject=original.subject,
+    ).exclude(pk=original.id).exclude(stem__isnull=True).exclude(stem='')
     ranked = []
-    for question in query:
+    for question in query.select_related('paper').prefetch_related('images', 'options'):
         question_id = _sid(question.id)
-        if question_id in excluded or question_id in active_pool_ids or question_id in historical_ids:
+        if question_id in excluded:
             continue
-        if original.subject and str(question.subject or '').strip() != str(original.subject).strip():
+        if normalize_stage(getattr(question.paper, 'stage', None)) != original_stage:
             continue
-        if original_stage and normalize_stage(getattr(question.paper, 'stage', None)) != original_stage:
+        difficulty = _difficulty_coefficient(question.difficulty)
+        if difficulty is None or abs(difficulty - original_difficulty) > Decimal('0.5'):
             continue
-        candidate_star = normalize_difficulty_star(question.difficulty)
-        if original_star is not None and (candidate_star is None or abs(candidate_star - original_star) > 1):
+        if not (original_points & knowledge_point_keys(question.knowledge_points)):
             continue
-        same_type = str(question.question_type or '').strip().lower() == str(original.question_type or '').strip().lower()
-        candidate_keys = knowledge_point_keys(question.knowledge_points)
-        matched_count = len(original_keys & candidate_keys)
-        ranked.append((0 if same_type else 1, -matched_count, question.sort_order, question_id, question))
-    ranked.sort(key=lambda row: row[:4])
-    for _, _, _, question_id, question in ranked:
-        if len(candidates) >= limit:
-            break
-        candidates.append(question_display(question))
-        excluded.add(question_id)
-    return candidates[:limit], meta
+        ranked.append((abs(difficulty - original_difficulty), question.sort_order, question_id, question))
+    ranked.sort(key=lambda row: row[:3])
+    return [question_display(question) for _, _, _, question in ranked[:limit]]
 
 
 def _upsert_candidate(batch, item, candidate, provider, rank, reason=''):
     candidate_id = candidate['id']
-    rec, _ = RelatedQuestionRecommendation.objects.get_or_create(
+    defaults = {
+        'provider': provider,
+        'model_name': 'teacher-question-relation' if provider == 'relation' else 'teacher-question-criteria',
+        'prompt_version': 'teacher-select-v2',
+        'score': max(0, 1 - rank / 10),
+        'confidence': max(0, 1 - rank / 10),
+        'requested_by': batch.requested_by,
+        'result_json': {'candidate': candidate, 'fallback_reason': reason, 'rank': rank + 1},
+    }
+    rec, created = RelatedQuestionRecommendation.objects.get_or_create(
         matrix=batch.matrix,
         source_batch=batch,
         source_student_id=item.student_id,
         source_question_id=item.source_question_id,
         source_wrong_book_item_id=item.source_wrong_book_item_id,
         candidate_question_id=candidate_id,
-        defaults={
-            'provider': provider,
-            'model_name': 'teacher-question-bank-fallback' if provider == 'rule' else 'strict-question-bank-fallback',
-            'prompt_version': 'teacher-select-v1',
-            'score': max(0, 1 - rank / 10),
-            'confidence': max(0, 1 - rank / 10),
-            'requested_by': batch.requested_by,
-            'result_json': {'candidate': candidate, 'fallback_reason': reason, 'rank': rank + 1},
-        },
+        defaults=defaults,
     )
+    if not created and rec.status == 'suggested':
+        for field, value in defaults.items():
+            setattr(rec, field, value)
+        rec.save(update_fields=[*defaults.keys(), 'updated_at'])
     return rec
 
 
@@ -206,7 +210,7 @@ def _candidate_payload(rec):
     }
 
 
-def teacher_candidate_groups(batch):
+def _legacy_teacher_candidate_groups(batch):
     groups = []
     items = batch.items.select_related('student', 'source_wrong_book_item').filter(selection_required=True).order_by('student_id', 'source_question_id')
     for item in items:
@@ -231,6 +235,65 @@ def teacher_candidate_groups(batch):
             'candidates': [_candidate_payload(rec) for rec in recs[:batch.candidate_limit]],
         })
     return groups
+
+
+def _manual_candidates(batch, item, excluded_ids=None):
+    """Prefer established relations; use deterministic criteria only if none exist."""
+    related = _relation_candidates(item)
+    if related:
+        provider, candidates, reason = 'relation', related, 'existing_relations'
+    else:
+        provider, candidates, reason = 'criteria', _criteria_candidates(item, excluded_ids), 'criteria_match'
+    recs = [_upsert_candidate(batch, item, candidate, provider, rank, reason) for rank, candidate in enumerate(candidates)]
+    return provider, recs
+
+
+def _candidate_group_payload(batch, item, recs, provider, excluded_ids=None):
+    displayed_ids = {_sid(rec.candidate_question_id) for rec in recs}
+    has_more = False
+    if provider == 'criteria':
+        next_candidates = _criteria_candidates(item, set(excluded_ids or []) | displayed_ids, limit=1)
+        has_more = bool(next_candidates)
+    meta = item.result_json or {}
+    return {
+        'item_id': str(item.id),
+        'student_id': str(item.student_id),
+        'student_name': item.student.display_name,
+        'source_wrong_book_item_id': str(item.source_wrong_book_item_id),
+        'source_question_id': str(item.source_question_id),
+        'source_question_no': meta.get('source_question_no', ''),
+        'source_question': meta.get('source_question') or {},
+        'reason': 'existing_relations' if provider == 'relation' else 'criteria_match',
+        'reason_label': '已加载本题已建立的关联题，请选择同类题。' if provider == 'relation' else '未建立关联题，已按相同知识点、同学段同学科和难度系数正负 0.5 筛选。',
+        'candidate_source': provider,
+        'selection_limit': batch.selection_limit,
+        'has_more': has_more,
+        'candidates': [_candidate_payload(rec) for rec in recs],
+    }
+
+
+def teacher_candidate_groups(batch):
+    groups = []
+    items = batch.items.select_related('student', 'source_wrong_book_item').filter(selection_required=True).order_by('student_id', 'source_question_id')
+    for item in items:
+        provider, recs = _manual_candidates(batch, item)
+        groups.append(_candidate_group_payload(batch, item, recs, provider))
+    return groups
+
+
+def next_teacher_candidate_group(batch, item_id, excluded_ids=None):
+    if batch.generation_mode != 'teacher_select' or batch.status != 'awaiting_selection':
+        raise MatrixError('当前批次不支持更换候选题。', 'conflict', 409)
+    item = batch.items.select_related('student', 'source_wrong_book_item').filter(pk=item_id, selection_required=True).first()
+    if item is None:
+        raise MatrixError('待选择错题不存在或已完成。', 'not_found', 404)
+    excluded = {_sid(value) for value in (excluded_ids or [])}
+    provider, recs = _manual_candidates(batch, item, excluded)
+    if provider != 'criteria':
+        raise MatrixError('本题已有关联题，无需更换候选题。', 'conflict', 409)
+    if not recs:
+        raise MatrixError('没有更多符合条件的同类题。', 'no_more_candidates', 409)
+    return _candidate_group_payload(batch, item, recs, provider, excluded)
 
 
 def _source_snapshot(batch, item):
@@ -282,7 +345,7 @@ def _finish_batch(batch, mission, items, failed=0):
     batch.matrix.save(update_fields=['last_generation_batch_id', 'generated_count', 'failed_count', 'status', 'updated_at'])
 
 
-def generate_teacher_batch(batch_id, trace_id=''):
+def _legacy_generate_teacher_batch(batch_id, trace_id=''):
     batch = WrongBookGenerationBatch.objects.select_related('matrix__source_mission').get(pk=batch_id)
     if batch.generation_mode != 'teacher_select':
         raise MatrixError('该批次不是教师选择模式', 'conflict', 409)
@@ -407,6 +470,62 @@ def generate_teacher_batch(batch_id, trace_id=''):
     return batch
 
 
+def generate_teacher_batch(batch_id, trace_id=''):
+    """Create a teacher-selection batch without AI recommendations or rule fallback."""
+    batch = WrongBookGenerationBatch.objects.select_related('matrix__source_mission').get(pk=batch_id)
+    if batch.generation_mode != 'teacher_select':
+        raise MatrixError('该批次不是教师选择模式。', 'conflict', 409)
+    if batch.status in ('published', 'partially_failed') and batch.final_mission_id:
+        return batch
+    batch.status = 'generating'
+    batch.started_at = timezone.now()
+    batch.save(update_fields=['status', 'started_at'])
+    items = list(batch.items.select_related('student', 'source_wrong_book_item'))
+    failed = 0
+    for item in items:
+        try:
+            item.status = 'generating'
+            item.save(update_fields=['status', 'updated_at'])
+            source_snapshot, source_question_no = _source_snapshot(batch, item)
+            provider, recs = _manual_candidates(batch, item)
+            candidate_ids = [_sid(rec.candidate_question_id) for rec in recs]
+            item.related_question_ids = candidate_ids
+            item.selected_question_ids = []
+            item.selected_count = 0
+            item.selection_required = True
+            item.shortage_reason = '' if candidate_ids else 'no_manual_candidates'
+            item.result_json = {
+                'source_question_no': source_question_no,
+                'source_question': source_snapshot,
+                'selection_reason': 'existing_relations' if provider == 'relation' else 'criteria_match',
+                'selection_reason_label': '已加载本题已建立的关联题，请选择同类题。' if provider == 'relation' else '未建立关联题，已按相同知识点、同学段同学科和难度系数正负 0.5 筛选。',
+                'candidate_count': len(candidate_ids),
+                'candidate_source': provider,
+            }
+            item.status = 'generated'
+            item.save(update_fields=[
+                'related_question_ids', 'selected_question_ids', 'selected_count',
+                'selection_required', 'shortage_reason', 'result_json', 'status', 'updated_at',
+            ])
+        except Exception as exc:
+            failed += 1
+            item.status = 'failed'
+            item.error_code = getattr(exc, 'code', 'generation_error')
+            item.error_stage = 'candidate'
+            item.error_message = str(exc)[:500]
+            item.save(update_fields=['status', 'error_code', 'error_stage', 'error_message', 'updated_at'])
+    batch.status = 'awaiting_selection'
+    batch.generated_count = len(items) - failed
+    batch.failed_count = failed
+    batch.completed_at = timezone.now()
+    batch.error_json = {'code': 'teacher_selection_required', 'message': '请为每道错题选择同类题。'}
+    batch.save(update_fields=['status', 'generated_count', 'failed_count', 'completed_at', 'error_json'])
+    batch.matrix.status = 'saved'
+    batch.matrix.failed_count = failed
+    batch.matrix.save(update_fields=['status', 'failed_count', 'updated_at'])
+    return batch
+
+
 @transaction.atomic
 def confirm_teacher_selection(batch, teacher, groups, idempotency_key='', trace_id=''):
     if batch.generation_mode != 'teacher_select':
@@ -439,6 +558,7 @@ def confirm_teacher_selection(batch, teacher, groups, idempotency_key='', trace_
             source_question_id=item.source_question_id,
             source_wrong_book_item_id=item.source_wrong_book_item_id,
             status='suggested',
+            provider__in=MANUAL_CANDIDATE_PROVIDERS,
         ).values_list('candidate_question_id', flat=True))
         available = {_sid(value) for value in available}
         required = _selected_count(batch.selection_limit, len(available))
@@ -456,7 +576,16 @@ def confirm_teacher_selection(batch, teacher, groups, idempotency_key='', trace_
     for item in items:
         key = (str(item.student_id), str(item.source_wrong_book_item_id))
         selected_ids = submitted[key] if item.selection_required else [str(value) for value in item.selected_question_ids]
-        provider = 'rule' if item.selection_required else 'ai'
+        if item.selection_required:
+            provider = batch.recommendations.filter(
+                source_student_id=item.student_id,
+                source_question_id=item.source_question_id,
+                source_wrong_book_item_id=item.source_wrong_book_item_id,
+                candidate_question_id__in=selected_ids,
+                provider__in=MANUAL_CANDIDATE_PROVIDERS,
+            ).values_list('provider', flat=True).first() or 'criteria'
+        else:
+            provider = 'criteria'
         selections.append(_selection_row(batch, item, selected_ids, provider))
         item.selected_question_ids = selected_ids
         item.related_question_ids = selected_ids
