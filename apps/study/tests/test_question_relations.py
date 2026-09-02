@@ -292,6 +292,44 @@ def test_relation_candidates_return_module_name_difficulty_and_option_previews(
 
 
 @pytest.mark.django_db
+def test_relation_candidates_preserve_inline_options_and_complete_latex_without_truncation(
+    teacher_client, relation_questions, relation_knowledge_point_table,
+):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO knowledge_points (id, subject, module) VALUES (%s, %s, %s)",
+            [8, 'physics', 'motion'],
+        )
+
+    for question in (relation_questions.origin, relation_questions.match):
+        question.knowledge_points = [{'id': 8}]
+        question.save(update_fields=['knowledge_points'])
+
+    relation_questions.match.stem = (
+        '下列估测数据最接近生活实际的是（ ）\n'
+        '$\\mathrm{A}$. 一个乒乓球的直径约为 ${2.5}\\mathrm{\\;cm}$\n\n'
+        '$\\mathrm{B}$. 盐城冬季平均温度约为 $- {20}{}^{ \\circ }\\mathrm{C}$\n\n'
+        '$\\mathrm{C}$. 早上升旗时放一遍国歌时间约 46 s\n\n'
+        '$\\mathrm{D}$. 平时人们在河边散步的速度约是 ${10}\\mathrm{\\;m}/\\mathrm{s}$'
+    )
+    relation_questions.match.save(update_fields=['stem'])
+
+    response = teacher_client.get(
+        f'/api/v1/questions/{relation_questions.origin.id}/relation-candidates/',
+        {'page': 1, 'page_size': 10},
+    )
+
+    item = next(item for item in response.data['data']['items'] if item['id'] == str(relation_questions.match.id))
+    assert item['stem_preview'] == '下列估测数据最接近生活实际的是（ ）'
+    assert item['option_previews'] == [
+        {'label': 'A', 'content': '一个乒乓球的直径约为 ${2.5}\\mathrm{\\;cm}$'},
+        {'label': 'B', 'content': '盐城冬季平均温度约为 $- {20}{}^{ \\circ }\\mathrm{C}$'},
+        {'label': 'C', 'content': '早上升旗时放一遍国歌时间约 46 s'},
+        {'label': 'D', 'content': '平时人们在河边散步的速度约是 ${10}\\mathrm{\\;m}/\\mathrm{s}$'},
+    ]
+
+
+@pytest.mark.django_db
 def test_create_list_and_remove_relation_is_direction_independent_and_idempotent(
     teacher_client, relation_questions
 ):

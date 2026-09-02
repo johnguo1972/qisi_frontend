@@ -16,7 +16,7 @@ from apps.knowledge.teacher_scope import (
     apply_stage_scope,
     resolve_teacher_question_scope,
 )
-from apps.common.question_display import preview_text
+from apps.common.question_display import display_stem, preview_text
 from .question_relation_service import (
     canonical_question_pair,
     find_relation_candidates,
@@ -464,27 +464,60 @@ def _relation_knowledge_points_display(questions):
     return displays
 
 
+_INLINE_OPTION_MARKER = re.compile(
+    r'''(?mx)
+    (?:^|\n)\s*
+    (?:
+        \$\s*\\(?:mathrm|text)\{\s*(?P<latex>[A-H])\s*\}\s*\$
+        | \\(?:mathrm|text)\{\s*(?P<command>[A-H])\s*\}
+        | [（(]\s*(?P<wrapped>[A-H])\s*[）)]
+        | (?P<plain>[A-H])
+    )
+    \s*[\.．、:：]
+    ''',
+)
+
+
+def _inline_options_from_stem(stem):
+    """Split legacy in-stem A/B/C/D choices without cutting LaTex delimiters."""
+    matches = list(_INLINE_OPTION_MARKER.finditer(stem or ''))
+    if not matches:
+        return stem, []
+
+    options = []
+    for index, match in enumerate(matches):
+        option_end = matches[index + 1].start() if index + 1 < len(matches) else len(stem)
+        label = next((value for value in match.groupdict().values() if value), '')
+        content = stem[match.end():option_end].strip()
+        if label and content:
+            options.append({'label': label, 'content': content})
+    return stem[:matches[0].start()].strip(), options
+
+
 def _relation_item(question, common_names=None, knowledge_points_display=None):
+    stored_options = [
+        {
+            'label': option.option_label,
+            'content': option.content,
+        }
+        for option in sorted(
+            question.options.all(),
+            key=lambda option: (option.sort_order, option.option_label),
+        )
+    ]
+    stem = display_stem(question.stem, question.subquestions, question.tables)
+    stem_preview, inline_options = _inline_options_from_stem(stem)
     return {
         'id': str(question.id),
         'question_no': question.question_no,
-        'stem_preview': preview_text(question.stem, question.subquestions, question.tables, limit=120),
+        'stem_preview': stem_preview,
         'difficulty': question.difficulty,
         'knowledge_points_display': (
             QuestionListSerializer(question).get_knowledge_points_display(question)
             if knowledge_points_display is None else knowledge_points_display
         ),
         'common_knowledge_point_names': common_names or [],
-        'option_previews': [
-            {
-                'label': option.option_label,
-                'content': option.content,
-            }
-            for option in sorted(
-                question.options.all(),
-                key=lambda option: (option.sort_order, option.option_label),
-            )
-        ],
+        'option_previews': stored_options or inline_options,
     }
 
 

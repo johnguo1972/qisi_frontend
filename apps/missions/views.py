@@ -63,8 +63,12 @@ def _validate_mission_classes(user, class_ids, course=None):
     managed = {str(value) for value in _managed_class_ids(user)}
     if any(str(cls.id) not in managed for cls in classes):
         return None, '只能选择自己管理的班级'
-    if course and course.institution_id and any(cls.institution_id != course.institution_id for cls in classes):
-        return None, '班级与课程所属机构不一致'
+    # A teacher can manage a class independently from the institution that owns
+    # the source course.  This is required for shared/imported course practice:
+    # the class assignment is authorised by the teacher's class membership,
+    # while course access is handled by the course entry point.  Rejecting a
+    # different institution here prevented a teacher from assigning questions
+    # they were already allowed to use.
     if any(not class_grade_in_teacher_scope(cls, user) for cls in classes):
         return None, '所选班级年级超出教师任教范围'
     return classes, None
