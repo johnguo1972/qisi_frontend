@@ -35,6 +35,7 @@
         <view class="card-body">
           <text class="mission-no">编号: {{ m.mission_no }}</text>
           <text class="mission-subject">科目: {{ subjectText(m.subject) }}</text>
+          <text class="mission-assignees">分配对象: {{ m.assignment_summary || '未分配学生' }}</text>
           <text v-if="m.goal_text" class="mission-goal">{{ m.goal_text }}</text>
           <text v-if="m.level_count" class="mission-levels">关卡数: {{ m.level_count }}</text>
           <text class="mission-progress progress-link" @click.stop="goMissionProgress(m.id)">完成进度: {{ completionText(m) }}</text>
@@ -288,6 +289,10 @@ function goWrongbookStats(id: string) {
 .mission-subject {
   font-size: 13px;
   color: #409eff;
+}
+.mission-assignees {
+  font-size: 13px;
+  color: #606266;
 }
 .mission-goal {
   font-size: 13px;

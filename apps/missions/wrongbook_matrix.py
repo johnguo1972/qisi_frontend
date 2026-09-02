@@ -404,9 +404,27 @@ def _source_deadline(source, generated_at):
     return generated_at + timedelta(days=7)
 
 
-def _mission_name(source, suffix=''):
+def _mission_name(source, suffix='', target_students=None):
     date_text = timezone.localtime(timezone.now()).strftime('%Y%m%d')
-    return f'{source.mission_name}-错题练习-{date_text}{suffix}'
+    student_ids = list(dict.fromkeys(_sid(student_id) for student_id in (target_students or [])))
+    if not student_ids:
+        return f'{source.mission_name}-错题练习-{date_text}{suffix}'
+    users = {
+        _sid(user.id): user
+        for user in UserAccount.objects.filter(id__in=student_ids, status='active')
+    }
+    labels = [
+        (users[student_id].display_name or users[student_id].login_name or users[student_id].mobile).strip()
+        for student_id in student_ids
+        if student_id in users
+    ]
+    if not labels:
+        return f'{source.mission_name}-错题练习-{date_text}{suffix}'
+    shown_labels = labels[:3]
+    student_label = '、'.join(shown_labels)
+    if len(labels) > len(shown_labels):
+        student_label = f'{student_label}等{len(labels)}人'
+    return f'{source.mission_name}-错题练习-{date_text}-{student_label}{suffix}'[:120]
 
 
 def _create_progress_and_assignments(mission, source, students):
@@ -460,7 +478,7 @@ def _create_published_mission(source, matrix, batch, selections, suffix='', incl
             source_generation_batch_id=batch.id, mission_kind='wrongbook_personal',
         ).order_by('created_at').values_list('id', flat=True).first()
     mission = LearningMission.objects.create(
-        mission_name=_mission_name(source, suffix), goal_text='教师学情矩阵错题练习',
+        mission_name=_mission_name(source, suffix, target_students=target_students), goal_text='教师学情矩阵错题练习',
         creator_teacher_id=source.creator_teacher_id, start_at=generated_at,
         end_at=_source_deadline(source, generated_at), status='draft',
         assignment_mode='flat', mission_kind='wrongbook_personal', source_type='teacher_matrix',

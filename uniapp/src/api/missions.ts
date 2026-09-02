@@ -14,6 +14,7 @@ export interface Mission {
   source_type?: string
   class_ids?: UUID[]
   class_names?: string[]
+  assignment_summary?: string
   level_count?: number
   class_name?: string
   question_count?: number
