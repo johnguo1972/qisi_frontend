@@ -3,22 +3,13 @@ import logging
 from django.urls import path
 from django.shortcuts import render, get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
-from apps.papers.models import ExamPaper, ParseTask
-from apps.parser.models import ExamQuestion, ExamPage, AIParseResult, QuestionImage
+from apps.papers.models import ExamPaper
+from apps.parser.models import ExamQuestion, ExamPage, QuestionImage
 from apps.review.services.image_recrop_service import recrop_question_image, delete_question_image
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse
 from django.views.decorators.http import require_POST
-import os
-from django.conf import settings
-from apps.common import status as const
-from django.views.decorators.http import require_http_methods
 
 logger = logging.getLogger(__name__)
-
-
-def upload_modal_htmx(request):
-    """Return the upload modal HTML."""
-    return render(request, 'papers/upload_modal.html')
 
 
 def paper_list_htmx(request):
@@ -26,76 +17,11 @@ def paper_list_htmx(request):
     return render(request, 'papers/list.html', {'papers': papers})
 
 
-@csrf_exempt
-def upload_paper_htmx(request):
-    """Handle paper upload via HTMX form submission."""
-    if request.method == 'POST':
-        file = request.FILES.get('file')
-        if not file:
-            return HttpResponse('<div class="alert alert-danger">请选择文件</div>')
-
-        title = (request.POST.get('title') or '').strip()
-        if not title:
-            title = file.name.replace('.docx', '')
-        subject = request.POST.get('subject', '数学')
-        stage = request.POST.get('stage', '')
-        grade = request.POST.get('grade', '')
-        region = (request.POST.get('region') or '').strip()
-
-        # Save file to media directory
-        import uuid
-        paper_id = str(uuid.uuid4())[:8]
-        import os
-        from django.conf import settings
-        paper_dir = os.path.join(settings.MEDIA_ROOT, 'exams', paper_id, 'source')
-        os.makedirs(paper_dir, exist_ok=True)
-        file_path = os.path.join(paper_dir, file.name)
-        with open(file_path, 'wb+') as dest:
-            for chunk in file.chunks():
-                dest.write(chunk)
-
-        paper = ExamPaper.objects.create(
-            title=title,
-            subject=subject,
-            stage=stage,
-            grade=grade,
-            region=region,
-            source_file_path=os.path.relpath(file_path, settings.MEDIA_ROOT),
-            status=const.PAPER_UPLOADED,
-        )
-
-        task = ParseTask.objects.create(
-            paper=paper,
-            task_type='full_parse',
-            status=const.TASK_RUNNING,
-        )
-
-        # Dispatch Celery task
-        return HttpResponse('<div class="alert alert-warning">试卷解析功能已停用</div>', status=410)
-
-        return render(request, 'papers/upload_success.html', {
-            'paper': paper, 'task': task
-        })
-
-    return HttpResponse('', status=405)
-
-
 def paper_detail_htmx(request, paper_id):
     paper = get_object_or_404(ExamPaper, id=paper_id, is_deleted=False)
-    parse_task = ParseTask.objects.filter(paper=paper).order_by('-created_at').first()
-    pages = ExamPage.objects.filter(paper=paper).order_by('page_no')
     return render(request, 'papers/detail.html', {
-        'paper': paper, 'parse_task': parse_task, 'pages': pages
-    })
-
-
-def paper_progress_htmx(request, paper_id):
-    """Return only the progress card HTML fragment for polling."""
-    paper = get_object_or_404(ExamPaper, id=paper_id, is_deleted=False)
-    parse_task = ParseTask.objects.filter(paper=paper).order_by('-created_at').first()
-    pages = ExamPage.objects.filter(paper=paper).order_by('page_no')
-    return render(request, 'papers/progress_fragment.html', {
-        'paper': paper, 'parse_task': parse_task, 'pages': pages
+        'paper': paper,
+        'pages': ExamPage.objects.filter(paper=paper).order_by('page_no'),
     })
 
 
@@ -172,39 +98,6 @@ def paper_edit_inline_htmx(request, paper_id):
 
     # GET: return editable form
     return render(request, 'papers/fragments/paper_row_edit.html', {'paper': paper})
-
-
-@require_POST
-def paper_reparse_htmx(request, paper_id):
-    """Reset a failed paper, clean old parse data, and re-dispatch parsing."""
-    paper = get_object_or_404(ExamPaper, id=paper_id, is_deleted=False)
-
-    # Clean up existing parse results to avoid duplicate key conflicts
-    ExamQuestion.objects.filter(paper=paper).delete()
-    AIParseResult.objects.filter(paper=paper).delete()
-    ExamPage.objects.filter(paper=paper).delete()
-
-    paper.status = const.PAPER_PARSING
-    paper.error_message = ''
-    paper.save(update_fields=['status', 'error_message'])
-
-    # Create a new parse task
-    task = ParseTask.objects.create(
-        paper=paper,
-        task_type='full_parse',
-        status=const.TASK_RUNNING,
-    )
-
-    return HttpResponse('<div class="alert alert-warning">试卷解析功能已停用</div>', status=410)
-
-    # Check if this is a list page request (has hx-current-url header) or detail page
-    if 'HX-Current-URL' in request.headers:
-        return render(request, 'papers/fragments/paper_row_readonly.html', {'paper': paper})
-
-    # Detail page: return progress card
-    return render(request, 'papers/fragments/progress_restarted.html', {
-        'paper': paper, 'task': task
-    })
 
 
 @require_POST
@@ -318,68 +211,9 @@ def image_delete_htmx(request, question_id, image_id):
     })
 
 
-def question_reparse_htmx(request, question_id):
-    """Trigger a single-question re-parse via Celery."""
-    from apps.parser.models import ExamQuestion
-
-    question = get_object_or_404(ExamQuestion.objects.select_related('paper'), id=question_id)
-
-    # Save page range from form if provided (user may have edited before clicking reparse)
-    new_page_start = request.POST.get('page_start', '').strip()
-    new_page_end = request.POST.get('page_end', '').strip()
-    if new_page_start:
-        question.page_start = int(new_page_start)
-    if new_page_end:
-        question.page_end = int(new_page_end) if new_page_end else None
-    question.save(update_fields=['page_start', 'page_end'])
-
-    # Check if already running
-    existing_task = ParseTask.objects.filter(
-        question=question, task_type='question_reparse',
-        status__in=[const.TASK_PENDING, const.TASK_RUNNING]
-    ).first()
-    if existing_task:
-        return render(request, 'review/fragments/question_reparse_progress.html', {
-            'question': question, 'task': existing_task, 'paper': question.paper,
-        })
-
-    # Create new task record
-    task = ParseTask.objects.create(
-        paper=question.paper,
-        question=question,
-        task_type='question_reparse',
-        status=const.TASK_RUNNING,
-        progress=0,
-        current_step='正在启动 AI 解析',
-    )
-
-    # Dispatch Celery task
-    return HttpResponse('<div class="alert alert-warning">单题重新解析功能已停用</div>', status=410)
-
-    return render(request, 'review/fragments/question_reparse_progress.html', {
-        'question': question, 'task': task, 'paper': question.paper,
-    })
-
-
-def question_reparse_progress_htmx(request, question_id):
-    """Poll for single-question re-parse progress."""
-    from apps.parser.models import ExamQuestion
-
-    question = get_object_or_404(ExamQuestion.objects.select_related('paper'), id=question_id)
-    task = ParseTask.objects.filter(
-        question=question, task_type='question_reparse'
-    ).order_by('-created_at').first()
-
-    return render(request, 'review/fragments/question_reparse_progress.html', {
-        'question': question, 'task': task, 'paper': question.paper,
-    })
-
-
 urlpatterns = [
     path('', paper_list_htmx, name='paper-list-htmx'),
-    path('upload-modal/', upload_modal_htmx, name='upload-modal-htmx'),
     path('papers/<uuid:paper_id>/', paper_detail_htmx, name='paper-detail-htmx'),
-    path('papers/<uuid:paper_id>/progress/', paper_progress_htmx, name='paper-progress-htmx'),
     path('papers/<uuid:paper_id>/edit-inline/', paper_edit_inline_htmx, name='paper-edit-inline-htmx'),
     path('papers/<uuid:paper_id>/delete-htmx/', paper_delete_htmx, name='paper-delete-htmx'),
     path('review/<uuid:paper_id>/', review_list_htmx, name='review-list-htmx'),

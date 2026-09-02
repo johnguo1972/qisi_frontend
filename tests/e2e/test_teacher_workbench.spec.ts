@@ -31,12 +31,6 @@ test.describe('Teacher Workbench', () => {
     expect(count).toBeGreaterThan(0);
   });
 
-  test('should navigate to import page', async ({ page }) => {
-    await page.locator('.nav-item', { hasText: '上传试卷' }).click();
-    await page.waitForTimeout(1000);
-    expect(page.url()).toContain('import');
-  });
-
   test('should navigate to new question page', async ({ page }) => {
     await page.locator('.nav-item', { hasText: '新增试题' }).click();
     await page.waitForTimeout(1000);

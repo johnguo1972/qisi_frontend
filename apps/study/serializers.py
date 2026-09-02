@@ -1,7 +1,6 @@
 """Serializers for study app (question search, import, dicts)."""
 from rest_framework import serializers
 from apps.parser.models import ExamQuestion
-from apps.papers.models import ParseTask, ExamPaper
 from apps.knowledge.models import KnowledgePoint
 from apps.common.media import media_url
 from apps.common.question_display import difficulty_label, normalize_tables, preview_text
@@ -231,20 +230,3 @@ class QuestionDetailSerializer(serializers.ModelSerializer):
             }
             for image in obj.images.order_by('image_type', 'sort_order', 'id')
         ]
-
-
-class ImportBatchSerializer(serializers.ModelSerializer):
-    paper_title = serializers.CharField(source='paper.title', read_only=True)
-    paper_subject = serializers.CharField(source='paper.subject', read_only=True)
-
-    class Meta:
-        model = ParseTask
-        fields = ['id', 'paper', 'paper_title', 'paper_subject', 'task_type',
-                  'status', 'progress', 'current_step', 'created_at', 'finished_at']
-
-
-class PaperListSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ExamPaper
-        fields = ['id', 'title', 'paper_code', 'subject', 'grade',
-                  'total_questions', 'status', 'created_at']

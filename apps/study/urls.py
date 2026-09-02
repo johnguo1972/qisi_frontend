@@ -1,6 +1,6 @@
-"""Study app URLs: question search, import batches, and dict endpoints."""
+"""Study app URLs: question search, JSON import, and dict endpoints."""
 from django.urls import path
-from . import question_views, import_views, dict_views, create_views, photo_views
+from . import question_views, dict_views, create_views, photo_views
 from . import json_import_views, basket_views, batch_views
 # 新增导入（barcode_views 依赖 python-barcode，设为可选）
 from . import tag_views
@@ -20,10 +20,6 @@ urlpatterns = [
     path('upload-image/', create_views.upload_question_image, name='upload-question-image'),
     path('photo-create/', photo_views.photo_create_question, name='photo-create'),
     path('photo-list/', photo_views.photo_list_questions, name='photo-list'),
-    path('import-batches', import_views.import_batch_list, name='import-batch-list'),
-    path('import-batches/<uuid:batch_id>', import_views.import_batch_detail, name='import-batch-detail'),
-    path('papers', import_views.paper_list, name='paper-list'),
-
     # === 新增路由（必须在通用题目 UUID 路由之前注册！）===
 
     # 标签管理

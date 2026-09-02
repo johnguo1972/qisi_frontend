@@ -24,15 +24,6 @@ POSITION_DETECTION_FAILURE = SafeFailureContract(
 QUESTION_PARSE_FAILURE = SafeFailureContract(
     "QUESTION_PARSE_FAILED", "题目解析失败"
 )
-PAPER_PARSE_FAILURE = SafeFailureContract(
-    "PAPER_PARSE_FAILED", "试卷解析失败"
-)
-QUESTION_REPARSE_FAILURE = SafeFailureContract(
-    "QUESTION_REPARSE_FAILED", "题目重解析失败"
-)
-PAGE_REPARSE_FAILURE = SafeFailureContract(
-    "PAGE_REPARSE_FAILED", "页面重解析失败"
-)
 PHOTO_RECOGNITION_FAILURE = SafeFailureContract(
     "PHOTO_RECOGNITION_FAILED", "图片识别失败"
 )

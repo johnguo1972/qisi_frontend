@@ -57,50 +57,6 @@ export const questionApi = {
   // POST /api/v1/questions/{id}/publish
   publish: (id: UUID) => post(`/questions/${id}/publish`),
 
-  // POST /api/v1/questions/import-batches (upload file via FormData)
-  importFile: (filePath: string, fileName?: string) => {
-    return new Promise<any>(async (resolve, reject) => {
-      const token = uni.getStorageSync('accessToken')
-      const formData = new FormData()
-
-      // H5 platform: filePath is a blob URL
-      try {
-        const response = await fetch(filePath)
-        const blob = await response.blob()
-        // Create a File object with the original name (not just a plain Blob)
-        const file = new File([blob], fileName || 'upload.docx', { type: blob.type })
-        formData.append('file', file)
-      } catch (e) {
-        reject(new Error('无法读取文件'))
-        return
-      }
-
-      try {
-        const res = await fetch(`${UPLOAD_BASE}/questions/import-batches`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-          body: formData,
-        })
-        const data = await res.json()
-        if (res.ok) {
-          resolve(data)
-        } else {
-          reject(new Error(data.message || `上传失败 (${res.status})`))
-        }
-      } catch (e) {
-        reject(e)
-      }
-    })
-  },
-
-  // GET /api/v1/questions/import-batches
-  importBatches: () => get<any[]>('/questions/import-batches'),
-
-  // GET /api/v1/questions/import-batches/{batch_id}
-  importBatchDetail: (batchId: UUID) => get<any>(`/questions/import-batches/${batchId}`),
-
   // Dictionaries
   dictSubjects: () => get<any[]>('/dicts/subjects'),
   dictKnowledgePoints: (subject?: string) => get<any[]>(`/dicts/knowledge-points${subject ? `?subject=${encodeURIComponent(subject)}` : ''}`),
@@ -166,35 +122,6 @@ export const questionApi = {
   },
   cameraParse: (paperId: number) =>
     post<any>(`/questions/camera-paper/${paperId}/parse/`),
-}
-
-export function stopParse(paperId: number) {
-  return post(`/papers/${paperId}/stop-parse/`)
-}
-
-export function reparsePaper(paperId: number) {
-  return post(`/papers/${paperId}/reparse/`)
-}
-
-export function getParseProgress(paperId: number) {
-  return get<any>(`/papers/${paperId}/progress/`)
-}
-
-export function deletePaper(paperId: number) {
-  const token = uni.getStorageSync('accessToken')
-  return new Promise<any>((resolve, reject) => {
-    uni.request({
-      url: `${UPLOAD_BASE}/papers/${paperId}/`,
-      method: 'DELETE',
-      header: {
-        'Authorization': `Bearer ${token}`,
-      },
-      success: (res) => {
-        resolve(res.data)
-      },
-      fail: (err) => reject(err),
-    })
-  })
 }
 
 // Review list page APIs

@@ -5,12 +5,9 @@ from django.conf.urls.static import static
 from apps.accounts.views import profile_me
 from apps.knowledge.teacher_api_views import knowledge_tree
 from apps.study.favorites_views import favorites_list, favorites_add, favorites_remove
-from apps.papers.views import paper_list_page, paper_detail_page
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('', paper_list_page, name='paper-list-page'),
-    path('papers/<str:paper_id>/', paper_detail_page, name='paper-detail-page'),
     path('api/v1/auth/', include('apps.accounts.urls')),
     path('api/v1/profile/me', profile_me, name='profile-me'),
     # Institutions must come before /student/ to avoid prefix collision
