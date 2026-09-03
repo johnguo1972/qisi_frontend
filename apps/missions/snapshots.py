@@ -43,39 +43,58 @@ def snapshot_payload(question, relation):
         'answer': question.answer or '',
         'analysis': question.analysis or '',
         'solution': question.solution or '',
+        'subquestions': question.subquestions or [],
+        'tables': question.tables or [],
         'images': [],
         'options': [],
     }
+    source_images = [
+        {
+            'id': img.id, 'file_path': img.file_path,
+            'url': media_url(img.file_path),
+            'image_type': img.image_type, 'placement': img.placement,
+            'sort_order': img.sort_order, 'display_width': img.display_width,
+            'description': img.description or '',
+        }
+        for img in question.images.all().order_by('sort_order')
+        if img.file_path and img.image_type != 'formula'
+    ]
+    source_options = [
+        {'label': option.option_label, 'content': option.content}
+        for option in question.options.all().order_by('sort_order', 'id')
+    ]
     if not snapshot:
-        payload['images'] = [
-            {
-                'id': img.id, 'file_path': img.file_path,
-                'url': media_url(img.file_path),
-                'image_type': img.image_type, 'display_width': img.display_width,
-                'description': img.description or '',
-            }
-            for img in question.images.all().order_by('sort_order')
-            if img.file_path and img.image_type != 'formula'
-        ]
-        payload['options'] = [
-            {'label': option.option_label, 'content': option.content}
-            for option in question.options.all().order_by('sort_order', 'id')
-        ]
+        payload['images'] = source_images
+        payload['options'] = source_options
         return payload
-    for field in ('question_no', 'question_type', 'stem', 'stem_html', 'answer', 'analysis', 'solution'):
+    for field in (
+        'question_no', 'question_type', 'stem', 'stem_html', 'answer',
+        'analysis', 'solution', 'subquestions', 'tables', 'difficulty',
+    ):
         if field in snapshot:
             payload[field] = snapshot[field]
-    payload['difficulty'] = snapshot.get('difficulty')
-    payload['options'] = [
-        {'label': item.get('label') or item.get('option_label', ''), 'content': item.get('content', '')}
-        for item in (snapshot.get('options_html') or []) if isinstance(item, dict)
-    ]
-    payload['images'] = [
-        {
-            'id': item.get('id'), 'file_path': item.get('file_path', ''),
-            'url': item.get('url', ''), 'image_type': item.get('image_type', 'other'),
-            'display_width': item.get('display_width'), 'description': item.get('description', ''),
-        }
-        for item in (snapshot.get('image_items') or []) if isinstance(item, dict) and item.get('file_path')
-    ]
+    # Older publication snapshots do not carry all structural fields.  Keep
+    # their published scalar values, but use the source relation data only for
+    # fields that were never captured.  An explicit [] remains an immutable
+    # published empty value.
+    if 'options_html' in snapshot:
+        payload['options'] = [
+            {'label': item.get('label') or item.get('option_label', ''), 'content': item.get('content', '')}
+            for item in (snapshot.get('options_html') or []) if isinstance(item, dict)
+        ]
+    else:
+        payload['options'] = source_options
+    if 'image_items' in snapshot:
+        payload['images'] = [
+            {
+                'id': item.get('id'), 'file_path': item.get('file_path', ''),
+                'url': item.get('url', ''), 'image_type': item.get('image_type', 'other'),
+                'placement': item.get('placement', 'stem'), 'sort_order': item.get('sort_order', 0),
+                'display_width': item.get('display_width'), 'description': item.get('description', ''),
+            }
+            for item in (snapshot.get('image_items') or [])
+            if isinstance(item, dict) and (item.get('file_path') or item.get('url'))
+        ]
+    else:
+        payload['images'] = source_images
     return payload
