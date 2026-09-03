@@ -45,7 +45,7 @@ const UPLOAD_BASE = '/api/v1'
 
 export const questionApi = {
   // GET /api/v1/questions
-  list: (params?: { page?: number; page_size?: number; keyword?: string; question_no?: string; status?: string; question_type?: string; difficulty?: string; knowledge_point_id?: string | number; stages?: string; tag?: string; uuid?: string; subject?: string }) =>
+  list: (params?: { page?: number; page_size?: number; keyword?: string; question_no?: string; status?: string; question_type?: string; difficulty?: string; knowledge_point_id?: string | number; stages?: string; tag?: string; uuid?: string; subject?: string; error_rate_min?: number; error_rate_max?: number }) =>
     get<any>('/questions/', params),
 
   // GET /api/v1/questions/{id}

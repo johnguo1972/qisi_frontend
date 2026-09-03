@@ -218,22 +218,6 @@
             </view>
             <view class="filter-row">
               <view class="filter-item">
-                <text class="filter-label">知识点数</text>
-                <view class="range-inputs">
-                  <input v-model.number="filterKpCountMin" type="number" placeholder="最小" class="range-input" />
-                  <text class="range-sep">~</text>
-                  <input v-model.number="filterKpCountMax" type="number" placeholder="最大" class="range-input" />
-                </view>
-              </view>
-              <view class="filter-item">
-                <text class="filter-label">做题人数</text>
-                <view class="range-inputs">
-                  <input v-model.number="filterAttemptMin" type="number" placeholder="最小" class="range-input" />
-                  <text class="range-sep">~</text>
-                  <input v-model.number="filterAttemptMax" type="number" placeholder="最大" class="range-input" />
-                </view>
-              </view>
-              <view class="filter-item">
                 <text class="filter-label">错误率</text>
                 <view class="range-inputs">
                   <input v-model.number="filterErrorMin" type="number" placeholder="最小%" class="range-input" />
@@ -242,12 +226,22 @@
                 </view>
               </view>
               <view class="filter-item">
-                <text class="filter-label">题号搜索</text>
-                <input v-model="searchQuery" placeholder="输入题号关键词" class="search-input" />
+                <text class="filter-label">关键词</text>
+                <input v-model="searchQuery" placeholder="输入关键字（可多个）" class="search-input" />
+              </view>
+              <view class="filter-item">
+                <text class="filter-label">题号（UUID）</text>
+                <input v-model="questionUuid" placeholder="输入 UUID 或片段" class="search-input" />
               </view>
               <view class="filter-item">
                 <text class="filter-label">标签</text>
-                <input v-model="filterTag" placeholder="输入标签名称" class="search-input" />
+                <picker mode="selector" :range="tagPickerRange" :value="tagPickerIndex" @change="onTagChange">
+                  <view class="multi-select type-select">
+                    <text class="multi-select-text">{{ tagFilterLabel }}</text>
+                    <text class="dropdown-arrow">▼</text>
+                  </view>
+                </picker>
+                <button size="mini" class="tag-refresh-btn" :loading="tagLoading" @click="loadTags">刷新标签</button>
               </view>
               <view class="filter-actions">
                 <button class="filter-btn" @click="applyFilters">🔍 筛选</button>
@@ -540,11 +534,12 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { missionApi } from '@/api/index.ts'
-import { questionApi } from '@/api/questions.ts'
+import { getTagList, questionApi } from '@/api/questions.ts'
 import { knowledgeApi } from '@/api/knowledge.ts'
 import { classApi } from '@/api/institutions.ts'
 import { useUserStore } from '@/store/index.ts'
 import { formatDateOnly } from '@/utils/display-format'
+import { buildMissionQuestionFilterParams } from './mission-question-filters'
 
 const userStore = useUserStore()
 
@@ -591,7 +586,10 @@ const questionTypeLabel = computed(() => questionTypeOptions[questionTypeIndex.v
 const sortNos = ref<Record<string, number>>({})
 const draggingIndex = ref(-1)
 const searchQuery = ref('')
+const questionUuid = ref('')
 const filterTag = ref('')
+const allTags = ref<any[]>([])
+const tagLoading = ref(false)
 const showDatePicker = ref(false)
 const tempDate = ref('')
 const showStartDatePicker = ref(false)
@@ -632,10 +630,6 @@ const kpSearchText = ref('')
 const filterKpIds = ref<Array<string | number>>([])
 const filterDifficulty = ref<number[]>([])
 const selectedStages = ref<string[]>([])
-const filterKpCountMin = ref<number | null>(null)
-const filterKpCountMax = ref<number | null>(null)
-const filterAttemptMin = ref<number | null>(null)
-const filterAttemptMax = ref<number | null>(null)
 const filterErrorMin = ref<number | null>(null)
 const filterErrorMax = ref<number | null>(null)
 
@@ -697,6 +691,17 @@ const filteredKpList = computed(() => {
   const q = kpSearchText.value.trim().toLowerCase()
   return flatKpList.value.filter(kp => kp.name.toLowerCase().includes(q))
 })
+
+const tagPickerRange = computed(() => [
+  '全部标签',
+  ...allTags.value.map((tag: any) => `${tag.name}（${tag.question_count ?? 0}）`),
+])
+const tagPickerIndex = computed(() => {
+  if (!filterTag.value) return 0
+  const index = allTags.value.findIndex((tag: any) => tag.name === filterTag.value)
+  return index >= 0 ? index + 1 : 0
+})
+const tagFilterLabel = computed(() => filterTag.value || '全部标签')
 
 // 已选题目的详细信息
 const selectedQuestions = computed(() => {
@@ -871,17 +876,20 @@ function onSubjectChange(e: any) {
 async function loadQuestions() {
   loading.value = true
   try {
-    const params: any = {
+    const params = buildMissionQuestionFilterParams({
       page: currentPage.value,
-      page_size: pageSize.value,
+      pageSize: pageSize.value,
       subject: selectedSubject.value,
-    }
-    if (filterKpIds.value.length) params.knowledge_point_id = filterKpIds.value.join(',')
-    if (filterDifficulty.value.length) params.difficulty = filterDifficulty.value.join(',')
-    if (selectedStages.value.length) params.stages = selectedStages.value.join(',')
-    if (selectedQuestionType.value) params.question_type = selectedQuestionType.value
-    if (searchQuery.value.trim()) params.question_no = searchQuery.value.trim()
-    if (filterTag.value.trim()) params.tag = filterTag.value.trim()
+      knowledgePointIds: filterKpIds.value,
+      difficulties: filterDifficulty.value,
+      stages: selectedStages.value,
+      questionType: selectedQuestionType.value,
+      keyword: searchQuery.value,
+      questionUuid: questionUuid.value,
+      tag: filterTag.value,
+      errorRateMin: filterErrorMin.value,
+      errorRateMax: filterErrorMax.value,
+    })
 
     const res: any = await questionApi.list(params)
     const data = res.data || {}
@@ -918,14 +926,34 @@ function resetFilters() {
   filterDifficulty.value = []
   selectedStages.value = []
   selectedQuestionType.value = ''
-  filterKpCountMin.value = null
-  filterKpCountMax.value = null
-  filterAttemptMin.value = null
-  filterAttemptMax.value = null
   filterErrorMin.value = null
   filterErrorMax.value = null
   searchQuery.value = ''
+  questionUuid.value = ''
   filterTag.value = ''
+  applyFilters()
+}
+
+async function loadTags() {
+  tagLoading.value = true
+  try {
+    const response: any = await getTagList()
+    const data = Array.isArray(response.data) ? response.data : (response.data?.items || [])
+    allTags.value = data
+    if (filterTag.value && !allTags.value.some((tag: any) => tag.name === filterTag.value)) {
+      filterTag.value = ''
+    }
+  } catch (error) {
+    console.error('加载标签失败:', error)
+    uni.showToast({ title: '加载标签失败，请检查网络', icon: 'none' })
+  } finally {
+    tagLoading.value = false
+  }
+}
+
+function onTagChange(event: any) {
+  const index = Number(event?.detail?.value ?? 0)
+  filterTag.value = index > 0 ? (allTags.value[index - 1]?.name || '') : ''
   applyFilters()
 }
 
@@ -1266,7 +1294,7 @@ onMounted(async () => {
     await loadMissionData(id)
   }
 
-  await loadKnowledgeTree()
+  await Promise.all([loadKnowledgeTree(), loadTags()])
   await loadQuestions()
 })
 
@@ -1825,6 +1853,12 @@ input, .form-textarea {
   line-height: 54rpx;
 }
 .range-sep { color: #999; font-size: 22rpx; }
+.tag-refresh-btn {
+  margin-top: 6rpx;
+  padding: 4rpx 12rpx;
+  font-size: 20rpx;
+  line-height: 1.4;
+}
 .search-input {
   width: 240rpx;
   max-width: 100%;
