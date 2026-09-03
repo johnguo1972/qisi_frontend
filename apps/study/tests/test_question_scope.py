@@ -5,7 +5,7 @@ from rest_framework.test import APIClient
 from apps.accounts.models import UserAccount
 from apps.papers.models import ExamPaper
 from apps.parser.models import ExamQuestion, QuestionOption
-from apps.study.models import QuestionTag, QuestionTagRelation
+from apps.study.models import AnswerAttempt, QuestionTag, QuestionTagRelation
 
 
 @pytest.fixture
@@ -192,3 +192,33 @@ def test_question_list_requires_every_keyword_and_keeps_tag_and_knowledge_filter
     assert response.status_code == 200
     question_ids = {item['id'] for item in response.data['data']['items']}
     assert question_ids == {str(matching_question.id)}
+
+
+@pytest.mark.django_db
+def test_question_list_filters_by_error_rate(teacher_client, junior_physics_paper, physics_teacher):
+    high_error_question = ExamQuestion.objects.create(
+        paper=junior_physics_paper,
+        question_no='high-error', question_type='single_choice', subject='physics', stem='High error rate',
+    )
+    low_error_question = ExamQuestion.objects.create(
+        paper=junior_physics_paper,
+        question_no='low-error', question_type='single_choice', subject='physics', stem='Low error rate',
+    )
+    for is_correct in (False, True):
+        AnswerAttempt.objects.create(
+            student_user_id=physics_teacher, question_id=high_error_question.id, is_correct=is_correct,
+        )
+    for is_correct in (False, True, True, True):
+        AnswerAttempt.objects.create(
+            student_user_id=physics_teacher, question_id=low_error_question.id, is_correct=is_correct,
+        )
+
+    response = teacher_client.get('/api/v1/questions/', {
+        'error_rate_min': 40,
+        'error_rate_max': 60,
+    })
+
+    assert response.status_code == 200
+    question_ids = {item['id'] for item in response.data['data']['items']}
+    assert str(high_error_question.id) in question_ids
+    assert str(low_error_question.id) not in question_ids

@@ -5,11 +5,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q, CharField, prefetch_related_objects
-from django.db.models.functions import Cast
+from django.db.models import (
+    Case, CharField, Count, ExpressionWrapper, F, FloatField, IntegerField,
+    OuterRef, Q, Subquery, Value, When, prefetch_related_objects,
+)
+from django.db.models.functions import Cast, Coalesce
 from apps.accounts.auth import get_request_role
 from apps.parser.models import ExamQuestion
 from apps.study.models import QuestionRelation, QuestionTagRelation
+from apps.study.models import AnswerAttempt
 from apps.knowledge.models import KnowledgePoint
 from apps.knowledge.teacher_scope import (
     TeachingScopeForbidden,
@@ -63,6 +67,8 @@ def question_list(request):
     paper_id = request.GET.get('paper_id')
     knowledge_point_id = request.GET.get('knowledge_point_id', '')
     stages = request.GET.get('stages', '')
+    error_rate_min = request.GET.get('error_rate_min', '').strip()
+    error_rate_max = request.GET.get('error_rate_max', '').strip()
 
     try:
         scope = resolve_teacher_question_scope(
@@ -208,6 +214,44 @@ def question_list(request):
                         continue
             if kp_query:
                 qs = qs.filter(kp_query)
+
+    error_rate_bounds = {}
+    for key, value in (('gte', error_rate_min), ('lte', error_rate_max)):
+        if not value:
+            continue
+        try:
+            error_rate_bounds[key] = float(value)
+        except (TypeError, ValueError):
+            continue
+    if error_rate_bounds:
+        attempts = AnswerAttempt.objects.filter(question_id=OuterRef('pk')).order_by().values('question_id')
+        wrong_attempts = attempts.filter(is_correct=False)
+        qs = qs.annotate(
+            _attempt_count=Coalesce(
+                Subquery(attempts.annotate(total=Count('id')).values('total')[:1], output_field=IntegerField()),
+                Value(0),
+            ),
+            _wrong_count=Coalesce(
+                Subquery(wrong_attempts.annotate(total=Count('id')).values('total')[:1], output_field=IntegerField()),
+                Value(0),
+            ),
+        ).annotate(
+            _error_rate=Case(
+                When(
+                    _attempt_count__gt=0,
+                    then=ExpressionWrapper(
+                        F('_wrong_count') * Value(100.0) / F('_attempt_count'),
+                        output_field=FloatField(),
+                    ),
+                ),
+                default=Value(-1.0),
+                output_field=FloatField(),
+            ),
+        )
+        if 'gte' in error_rate_bounds:
+            qs = qs.filter(_error_rate__gte=error_rate_bounds['gte'])
+        if 'lte' in error_rate_bounds:
+            qs = qs.filter(_error_rate__lte=error_rate_bounds['lte'])
 
     try:
         page = max(int(request.GET.get('page', 1)), 1)
