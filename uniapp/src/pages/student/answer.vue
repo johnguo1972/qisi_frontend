@@ -22,9 +22,9 @@
       <view class="stem-section" v-if="currentQuestion.stem_html || currentQuestion.stem">
         <view class="stem-content" v-html="renderedStem"></view>
         <!-- 题目图片 -->
-        <view v-if="currentQuestion.images && currentQuestion.images.length > 0" class="stem-images">
+        <view v-if="stemImages.length > 0" class="stem-images">
           <image
-            v-for="(img, idx) in currentQuestion.images"
+            v-for="(img, idx) in stemImages"
             :key="idx"
             :src="questionImageUrl(img)"
             mode="widthFix"
@@ -38,12 +38,40 @@
       </view>
 
 
-      <!-- 客观题：选项 -->
-      <view v-if="isObjective" class="options-section">
+      <view v-if="currentQuestion.subquestions && currentQuestion.subquestions.length > 0" class="subquestions-section">
+        <view class="section-title">小题</view>
+        <view v-for="(subquestion, idx) in currentQuestion.subquestions" :key="subquestion.id || idx" class="subquestion-item">
+          <text class="subquestion-label">{{ subquestionLabel(subquestion, idx) }}</text>
+          <!-- #ifdef H5 -->
+          <view class="subquestion-content" v-html="renderSubquestionHtml(idx, subquestionText(subquestion))"></view>
+          <!-- #endif -->
+          <!-- #ifndef H5 -->
+          <text class="subquestion-content">{{ subquestionText(subquestion) }}</text>
+          <!-- #endif -->
+        </view>
+      </view>
+
+      <view v-if="currentQuestion.tables && currentQuestion.tables.length > 0" class="question-tables">
+        <view v-for="(table, tableIndex) in currentQuestion.tables" :key="table.id || tableIndex" class="question-table">
+          <view v-for="(row, rowIndex) in table.rows || []" :key="rowIndex" class="question-table-row">
+            <view v-for="(cell, cellIndex) in row" :key="cellIndex" class="question-table-cell">
+              <!-- #ifdef H5 -->
+              <view v-html="renderTableCellHtml(tableIndex, rowIndex, cellIndex, cell)"></view>
+              <!-- #endif -->
+              <!-- #ifndef H5 -->
+              <text>{{ cell }}</text>
+              <!-- #endif -->
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <!-- 选项：题目有选项时完整展示，只有客观题允许选择。 -->
+      <view v-if="currentQuestion.options && currentQuestion.options.length > 0" class="options-section">
         <view class="section-title">选项</view>
         <view v-for="opt in currentQuestion.options" :key="opt.label"
-              class="option-card" :class="{ selected: selectedOptions.includes(opt.label) }"
-              @click="selectOption(opt.label)">
+              class="option-card" :class="{ selected: isObjective && selectedOptions.includes(opt.label), selectable: isObjective }"
+              @click="isObjective && selectOption(opt.label)">
           <view class="option-label">{{ opt.label }}</view>
           <!-- #ifdef H5 -->
           <view class="option-content" v-html="renderOptionHtml(opt.content)"></view>
@@ -52,10 +80,20 @@
           <text class="option-content">{{ opt.content }}</text>
           <!-- #endif -->
         </view>
+        <view v-if="optionImages.length > 0" class="stem-images">
+          <image
+            v-for="(img, idx) in optionImages"
+            :key="idx"
+            :src="questionImageUrl(img)"
+            mode="widthFix"
+            class="stem-image"
+            :style="questionImageStyle(img)"
+          />
+        </view>
       </view>
 
       <!-- 主观题：文本输入 + 拍照上传 -->
-      <view v-else class="subjective-area">
+      <view v-if="!isObjective" class="subjective-area">
         <view class="section-title">我的答案</view>
         <textarea v-model="textAnswer" :placeholder="textPlaceholder" class="text-input" />
         <text v-if="currentQuestion.question_type === 'fill_blank'" class="fill-hint">多个空位请用中文分号（；）分隔每个答案，例如：2；-3</text>
@@ -253,6 +291,8 @@ const missingQuestionCount = ref(0)
 const missionResults = ref<any[]>([])
 const renderedStem = ref('')
 const renderedOptions = ref<Record<string, string>>({})
+const renderedSubquestions = ref<Record<number, string>>({})
+const renderedTableCells = ref<Record<string, string>>({})
 const renderedAnswer = ref('')
 const renderedAnalysis = ref('')
 const renderedSolution = ref('')
@@ -274,6 +314,12 @@ cameraSupported.value = camCheck.supported
 // #endif
 
 const currentQuestion = computed(() => questions.value[currentIndex.value] || {})
+const stemImages = computed(() => (currentQuestion.value.images || []).filter(
+  (image: any) => !image.placement || image.placement === 'stem',
+))
+const optionImages = computed(() => (currentQuestion.value.images || []).filter(
+  (image: any) => image.placement === 'options',
+))
 
 function draftStorageKey() {
   return missionId.value ? `student-mission-answers-${missionId.value}` : ''
@@ -350,6 +396,21 @@ async function renderCurrentQuestion() {
   for (const opt of (q.options || [])) {
     if (opt.content) renderedOptions.value[opt.content] = await renderWithKatex(opt.content)
   }
+  renderedSubquestions.value = {}
+  for (const [index, subquestion] of (q.subquestions || []).entries()) {
+    const content = subquestionText(subquestion)
+    renderedSubquestions.value[index] = content ? await renderWithKatex(content) : ''
+  }
+  renderedTableCells.value = {}
+  for (const [tableIndex, table] of (q.tables || []).entries()) {
+    for (const [rowIndex, row] of (table?.rows || []).entries()) {
+      for (const [cellIndex, cell] of (row || []).entries()) {
+        const key = `${tableIndex}:${rowIndex}:${cellIndex}`
+        renderedTableCells.value[key] = cell === undefined || cell === null
+          ? '' : await renderWithKatex(String(cell))
+      }
+    }
+  }
   // 渲染答案、解析、解答中的 LaTeX 公式
   renderedAnswer.value = q.answer ? await renderWithKatex(q.answer) : ''
   renderedAnalysis.value = q.analysis ? await renderWithKatex(q.analysis) : ''
@@ -358,6 +419,29 @@ async function renderCurrentQuestion() {
 
 function renderOptionHtml(content: string): string {
   return renderedOptions.value[content] || content
+}
+
+function renderSubquestionHtml(index: number, content: string): string {
+  return renderedSubquestions.value[index] || content
+}
+
+function subquestionText(subquestion: unknown): string {
+  if (typeof subquestion === 'string') return subquestion
+  if (!subquestion || typeof subquestion !== 'object') return ''
+  const value = subquestion as Record<string, unknown>
+  return String(value.stem || value.content || value.question || '')
+}
+
+function subquestionLabel(subquestion: unknown, index: number): string {
+  if (subquestion && typeof subquestion === 'object') {
+    const label = (subquestion as Record<string, unknown>).label
+    if (label) return String(label)
+  }
+  return `(${index + 1})`
+}
+
+function renderTableCellHtml(tableIndex: number, rowIndex: number, cellIndex: number, content: unknown): string {
+  return renderedTableCells.value[`${tableIndex}:${rowIndex}:${cellIndex}`] || String(content ?? '')
 }
 
 onLoad((options: any) => {
@@ -877,6 +961,53 @@ async function nextQuestion() {
   display: block;
 }
 
+.subquestions-section,
+.question-tables {
+  margin-bottom: 24rpx;
+}
+.subquestion-item {
+  display: flex;
+  gap: 12rpx;
+  padding: 18rpx 20rpx;
+  margin-bottom: 12rpx;
+  background: #fff;
+  border-radius: 10rpx;
+  color: #333;
+  font-size: 27rpx;
+  line-height: 1.7;
+}
+.subquestion-label {
+  flex: 0 0 auto;
+  color: #409eff;
+  font-weight: bold;
+}
+.subquestion-content {
+  flex: 1;
+  min-width: 0;
+}
+.question-table {
+  overflow: hidden;
+  margin-bottom: 16rpx;
+  border: 1rpx solid #dcdfe6;
+  border-radius: 8rpx;
+  background: #fff;
+}
+.question-table-row {
+  display: flex;
+  border-bottom: 1rpx solid #ebeef5;
+}
+.question-table-row:last-child { border-bottom: none; }
+.question-table-cell {
+  flex: 1;
+  min-width: 0;
+  padding: 14rpx 16rpx;
+  color: #333;
+  font-size: 24rpx;
+  line-height: 1.5;
+  border-right: 1rpx solid #ebeef5;
+}
+.question-table-cell:last-child { border-right: none; }
+
 /* 选项 */
 .options-section {
   margin-bottom: 24rpx;
@@ -893,10 +1024,11 @@ async function nextQuestion() {
   border: 2rpx solid #ddd;
   border-radius: 12rpx;
   padding: 20rpx;
-  cursor: pointer;
+  cursor: default;
   background: #fff;
   transition: border-color 0.2s, background 0.2s;
 }
+.option-card.selectable { cursor: pointer; }
 .option-card.selected {
   border-color: #409eff;
   background: #ecf5ff;
