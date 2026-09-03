@@ -74,7 +74,7 @@
               @click="isObjective && selectOption(opt.label)">
           <view class="option-label">{{ opt.label }}</view>
           <!-- #ifdef H5 -->
-          <view class="option-content" v-html="renderOptionHtml(opt.content)"></view>
+          <view class="option-content" v-html="renderOptionHtml(opt)"></view>
           <!-- #endif -->
           <!-- #ifndef H5 -->
           <text class="option-content">{{ opt.content }}</text>
@@ -394,7 +394,9 @@ async function renderCurrentQuestion() {
   }
   renderedOptions.value = {}
   for (const opt of (q.options || [])) {
-    if (opt.content) renderedOptions.value[opt.content] = await renderWithKatex(opt.content)
+    const source = opt.content_html || opt.content
+    if (source) renderedOptions.value[opt.label] = source.includes('data-formula-key')
+      ? source : await renderWithKatex(source)
   }
   renderedSubquestions.value = {}
   for (const [index, subquestion] of (q.subquestions || []).entries()) {
@@ -412,13 +414,15 @@ async function renderCurrentQuestion() {
     }
   }
   // 渲染答案、解析、解答中的 LaTeX 公式
-  renderedAnswer.value = q.answer ? await renderWithKatex(q.answer) : ''
-  renderedAnalysis.value = q.analysis ? await renderWithKatex(q.analysis) : ''
+  renderedAnswer.value = q.answer
+    ? (q.answer.includes('data-formula-key') ? q.answer : await renderWithKatex(q.answer)) : ''
+  renderedAnalysis.value = q.analysis
+    ? (q.analysis.includes('data-formula-key') ? q.analysis : await renderWithKatex(q.analysis)) : ''
   renderedSolution.value = q.solution ? await renderWithKatex(q.solution) : ''
 }
 
-function renderOptionHtml(content: string): string {
-  return renderedOptions.value[content] || content
+function renderOptionHtml(option: any): string {
+  return renderedOptions.value[option.label] || option.content_html || option.content
 }
 
 function renderSubquestionHtml(index: number, content: string): string {

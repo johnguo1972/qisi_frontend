@@ -38,7 +38,7 @@ class QuestionListSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExamQuestion
         fields = ['id', 'question_no', 'system_id', 'question_type', 'difficulty', 'difficulty_level',
-                  'subject', 'review_status', 'stem', 'stem_preview', 'answer', 'analysis', 'solution',
+                  'subject', 'review_status', 'stem', 'stem_html', 'stem_preview', 'answer', 'analysis', 'solution',
                   'knowledge_points_count', 'knowledge_points_display',
                   'ai_answer_a', 'ai_answer_b', 'ai_answer_c',
                   'ai_answer_a_confirmed', 'ai_answer_b_confirmed', 'ai_answer_c_confirmed',
@@ -167,6 +167,7 @@ class QuestionListSerializer(serializers.ModelSerializer):
             {
                 'label': opt.option_label,
                 'content': opt.content,
+                'content_html': opt.content_html,
             }
             for opt in obj.options.all()
         ]
@@ -203,6 +204,7 @@ class QuestionDetailSerializer(serializers.ModelSerializer):
             {
                 'label': option.option_label,
                 'content': option.content,
+                'content_html': option.content_html,
             }
             for option in obj.options.order_by('sort_order', 'id')
         ]

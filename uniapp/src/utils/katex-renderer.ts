@@ -49,7 +49,7 @@ function escapeHtml(text: string): string {
  * 将常见 LaTeX 命令转为可读的 HTML 文本。
  */
 function simpleLatexRender(text: string): string {
-  let result = text
+  let result = escapeHtml(text)
   // 块级公式 $$...$$ → 居中显示
   result = result.replace(/\$\$([\s\S]*?)\$\$/g, (_m, formula) => {
     return `<div style="text-align:center;margin:8px 0;font-style:italic">${simpleLatexRender(formula.trim())}</div>`
@@ -69,6 +69,25 @@ function simpleLatexRender(text: string): string {
   // 平方根 \sqrt{x}, \sqrt[n]{x}
   result = result.replace(/\\(?:sqrt)\[([^\]]+)\]\{([^}]+)\}/g, '√<sup>$1</sup>($2)')
   result = result.replace(/\\(?:sqrt)\{([^}]+)\}/g, '√($1)')
+  // 字体命令。CDN 不可用时也不能把 \mathrm{A} 显示成普通源码。
+  result = result.replace(/\\(?:mathrm|textrm|textnormal|operatorname)\{([^{}]*)\}/g, '$1')
+  result = result.replace(/\\(?:mathbf|textbf)\{([^{}]*)\}/g, '<strong>$1</strong>')
+  result = result.replace(/\\(?:mathit|textit|emph)\{([^{}]*)\}/g, '<em>$1</em>')
+
+  // 填空横线与水平留白。先处理嵌套的 \underline{\hspace{...}}，
+  // 再处理普通 underline/hspace，避免嵌套大括号被截断。
+  result = result.replace(
+    /\\underline\{\s*\\hspace\{([0-9.]+(?:px|em|rem|cm|mm|in|pt|pc|ex))\}\s*\}/g,
+    '<span class="latex-blank" style="display:inline-block;min-width:$1;border-bottom:1px solid currentColor;line-height:1em">&nbsp;</span>',
+  )
+  result = result.replace(
+    /\\underline\{([^{}]*)\}/g,
+    '<span style="text-decoration:underline;text-underline-offset:2px">$1</span>',
+  )
+  result = result.replace(
+    /\\hspace\{([0-9.]+(?:px|em|rem|cm|mm|in|pt|pc|ex))\}/g,
+    '<span style="display:inline-block;width:$1">&nbsp;</span>',
+  )
   // 常见数学符号映射
   const mathSymbols: Record<string, string> = {
     cdot: '·', times: '×', div: '÷', frac: '/',

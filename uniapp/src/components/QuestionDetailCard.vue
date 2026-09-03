@@ -262,8 +262,9 @@ async function renderContent() {
   const q = props.question
 
   // 题干：直接渲染，不追加公式文本
-  stemHtml.value = quickRender(q.stem || '')
-  if (!stemHtml.value) stemHtml.value = await renderWithKatex(q.stem || '')
+  const stemSource = q.stem_html || q.stem || ''
+  stemHtml.value = quickRender(stemSource)
+  if (!stemHtml.value) stemHtml.value = await renderWithKatex(stemSource)
 
   // 答案和解析
   answerHtml.value = quickRender(q.answer || '')
@@ -275,8 +276,9 @@ async function renderContent() {
   // 渲染选项
   const newOptHtmls: Record<string, string> = {}
   for (const opt of q.options || []) {
-    const html = quickRender(opt.content || '')
-    newOptHtmls[opt.label] = html || await renderWithKatex(opt.content || '')
+    const optionSource = opt.content_html || opt.content || ''
+    const html = quickRender(optionSource)
+    newOptHtmls[opt.label] = html || await renderWithKatex(optionSource)
   }
   optionHtmls.value = newOptHtmls
 
@@ -289,7 +291,7 @@ async function renderContent() {
   subquestionHtmls.value = newSubHtmls
 }
 
-watch(() => props.question.id, renderContent, { immediate: true })
+watch(() => props.question, renderContent, { immediate: true, deep: true })
 onMounted(renderContent)
 </script>
 

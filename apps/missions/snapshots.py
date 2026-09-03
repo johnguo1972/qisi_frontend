@@ -59,10 +59,12 @@ def snapshot_payload(question, relation):
         for img in question.images.all().order_by('sort_order')
         if img.file_path and img.image_type != 'formula'
     ]
-    source_options = [
-        {'label': option.option_label, 'content': option.content}
-        for option in question.options.all().order_by('sort_order', 'id')
-    ]
+    source_options = []
+    for option in question.options.all().order_by('sort_order', 'id'):
+        item = {'label': option.option_label, 'content': option.content}
+        if option.content_html:
+            item['content_html'] = option.content_html
+        source_options.append(item)
     if not snapshot:
         payload['images'] = source_images
         payload['options'] = source_options
@@ -78,10 +80,17 @@ def snapshot_payload(question, relation):
     # fields that were never captured.  An explicit [] remains an immutable
     # published empty value.
     if 'options_html' in snapshot:
-        payload['options'] = [
-            {'label': item.get('label') or item.get('option_label', ''), 'content': item.get('content', '')}
-            for item in (snapshot.get('options_html') or []) if isinstance(item, dict)
-        ]
+        payload['options'] = []
+        for item in (snapshot.get('options_html') or []):
+            if not isinstance(item, dict):
+                continue
+            option = {
+                'label': item.get('label') or item.get('option_label', ''),
+                'content': item.get('content', ''),
+            }
+            if item.get('content_html'):
+                option['content_html'] = item['content_html']
+            payload['options'].append(option)
     else:
         payload['options'] = source_options
     if 'image_items' in snapshot:

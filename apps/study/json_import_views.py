@@ -7,6 +7,7 @@ import shutil
 import logging
 from pathlib import Path
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -15,6 +16,13 @@ from rest_framework.response import Response
 from apps.parser.models import ExamQuestion, QuestionOption, QuestionImage
 from apps.papers.models import ExamPaper, ParseTask
 from apps.common.codegen import generate_question_system_id
+from apps.common.media import media_url
+from apps.study.formula_assets import (
+    FormulaAssetConversionError,
+    convert_formula_asset,
+    formula_key_from_asset,
+    render_formula_placeholders,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +326,7 @@ def _process_json_import(temp_dir, task, paper, user):
     }
 
 
+@transaction.atomic
 def _import_single_question(qdata, paper, assets_dir, base_dir):
     """导入单道题目及其关联图片。"""
     qtype_raw = qdata.get('question_type', 'unknown')
@@ -367,32 +376,60 @@ def _import_single_question(qdata, paper, assets_dir, base_dir):
     )
 
     # 创建选项
+    created_options = []
     options = qdata.get('options', [])
     if options and qtype in ('single_choice', 'multiple_choice'):
         for i, opt in enumerate(options):
-            QuestionOption.objects.create(
+            created_options.append(QuestionOption.objects.create(
                 question=question,
                 option_label=opt.get('label', chr(65 + i)),
                 content=opt.get('content', ''),
                 sort_order=i,
-            )
+            ))
 
     # 导入插图
-    for ill in qdata.get('illustrations', []):
-        _import_asset_image(ill, question, paper, assets_dir, image_type='diagram')
+    for index, ill in enumerate(qdata.get('illustrations', [])):
+        _import_asset_image(
+            ill, question, paper, assets_dir, image_type='diagram', sort_order=index
+        )
 
     # 导入公式图片
-    for fa in qdata.get('formula_assets', []):
-        _import_asset_image(fa, question, paper, assets_dir, image_type='formula')
+    formula_urls = {}
+    for index, fa in enumerate(qdata.get('formula_assets', [])):
+        image = _import_asset_image(
+            fa, question, paper, assets_dir, image_type='formula', sort_order=index
+        )
+        if image:
+            formula_urls[formula_key_from_asset(fa)] = media_url(image.file_path)
+
+    missing_formula_keys = []
+    question.stem_html, missing = render_formula_placeholders(question.stem, formula_urls)
+    missing_formula_keys.extend(missing)
+    question.answer, missing = render_formula_placeholders(question.answer, formula_urls)
+    missing_formula_keys.extend(missing)
+    question.analysis, missing = render_formula_placeholders(question.analysis, formula_urls)
+    missing_formula_keys.extend(missing)
+
+    for option in created_options:
+        option.content_html, missing = render_formula_placeholders(option.content, formula_urls)
+        missing_formula_keys.extend(missing)
+        option.save(update_fields=['content_html', 'updated_at'])
+
+    question.formula_need_review = bool(missing_formula_keys)
+    question.save(update_fields=[
+        'stem_html', 'answer', 'analysis', 'formula_need_review', 'updated_at'
+    ])
 
     return question
 
 
-def _import_asset_image(asset_data, question, paper, assets_dir, image_type='other'):
+def _import_asset_image(
+    asset_data, question, paper, assets_dir, image_type='other', sort_order=0
+):
     """导入单个资源图片（插图或公式图片）。"""
     file_rel = asset_data.get('file', '')
     if not file_rel:
-        return
+        return None
 
     # 解析图片实际路径
     # JSON中路径如 "../assets/q01_stem.png" 或 "../assets/formula_02.png"
@@ -400,27 +437,37 @@ def _import_asset_image(asset_data, question, paper, assets_dir, image_type='oth
     src_path = assets_dir / asset_filename
 
     if not src_path.exists():
+        if image_type == 'formula':
+            raise FormulaAssetConversionError(f'Formula image not found: {file_rel}')
         logger.warning(f'Image not found: {file_rel} (looked in {assets_dir})')
-        return
+        return None
 
     # 复制到 media 目录
     dest_dir = settings.MEDIA_ROOT / 'exams' / 'json_imports' / str(paper.id)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    dest_name = f'{question.id}_{asset_filename}'
-    dest_path = dest_dir / dest_name
+    original_dest_name = f'{question.id}_{asset_filename}'
+    original_dest_path = dest_dir / original_dest_name
+    shutil.copy2(str(src_path), str(original_dest_path))
 
-    shutil.copy2(str(src_path), str(dest_path))
+    display_path = original_dest_path
+    if image_type == 'formula':
+        display_path = convert_formula_asset(original_dest_path, original_dest_path)
 
-    rel_media = f'exams/json_imports/{paper.id}/{dest_name}'
+    rel_media = f'exams/json_imports/{paper.id}/{display_path.name}'
+    rel_original = f'exams/json_imports/{paper.id}/{original_dest_name}'
+    description = asset_data.get('alt_text') or asset_data.get('recognized_text')
+    if image_type == 'formula' and not description:
+        description = formula_key_from_asset(asset_data)
 
-    QuestionImage.objects.create(
+    return QuestionImage.objects.create(
         paper=paper,
         question=question,
         image_type=image_type,
         file_path=rel_media,
-        description=asset_data.get('alt_text', asset_data.get('recognized_text', '')),
-        sort_order=0,
+        original_file_path=rel_original,
+        description=description or '',
+        sort_order=sort_order,
     )
 
 

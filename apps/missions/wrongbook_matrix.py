@@ -105,10 +105,12 @@ def _question_snapshot(question):
         for image in question.images.all().order_by('sort_order')
         if image.file_path and image.image_type != 'formula'
     ]
-    options = [
-        {'label': option.option_label, 'content': option.content}
-        for option in question.options.all().order_by('sort_order')
-    ]
+    options = []
+    for option in question.options.all().order_by('sort_order'):
+        item = {'label': option.option_label, 'content': option.content}
+        if option.content_html:
+            item['content_html'] = option.content_html
+        options.append(item)
     return {
         'id': _sid(question.id), 'question_no': question.question_no,
         'question_type': question.question_type, 'subject': question.subject,

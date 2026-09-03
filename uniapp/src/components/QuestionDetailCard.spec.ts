@@ -16,6 +16,58 @@ const question = {
 }
 
 describe('QuestionDetailCard', () => {
+  it('prefers imported formula-ready HTML for the stem and options', async () => {
+    const wrapper = mount(QuestionDetailCard, {
+      props: {
+        question: {
+          ...question,
+          stem: 'raw [[formula:q001_formula_01]]',
+          stem_html: '<span data-test="stem-formula">AB</span>',
+          options: [{
+            label: 'A',
+            content: 'raw [[formula:q001_formula_02]]',
+            content_html: '<span data-test="option-formula">CD</span>',
+          }],
+        },
+        index: 1,
+        showAnswer: false,
+      },
+    })
+
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="stem-formula"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="option-formula"]').exists()).toBe(true)
+    expect(wrapper.html()).not.toContain('[[formula:')
+  })
+
+  it('rerenders formula HTML when a refreshed question keeps the same id', async () => {
+    const wrapper = mount(QuestionDetailCard, {
+      props: {
+        question: {
+          ...question,
+          stem: 'raw [[formula:q001_formula_01]]',
+        },
+        index: 1,
+        showAnswer: false,
+      },
+    })
+
+    expect(wrapper.text()).toContain('[[formula:q001_formula_01]]')
+
+    await wrapper.setProps({
+      question: {
+        ...question,
+        stem: 'raw [[formula:q001_formula_01]]',
+        stem_html: '<img data-test="refreshed-formula" src="/media/formula.png" />',
+      },
+    })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="refreshed-formula"]').exists()).toBe(true)
+    expect(wrapper.html()).not.toContain('[[formula:')
+  })
+
   it('keeps standard actions and renders supplied course footer actions', () => {
     const wrapper = mount(QuestionDetailCard, {
       props: { question, index: 1, showAnswer: false },
