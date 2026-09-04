@@ -136,14 +136,14 @@ python manage.py backfill_question_fingerprints --apply
 | 字段 | 用途 |
 | --- | --- |
 | `actor` | 发起操作的登录用户 |
-| `source_type` | `json_import`、`manual_create`、`photo_create`、`course_material_import` |
+| `source_type` | `json_import`、`manual_create`、`photo_create`、`course_material_import`、`course_link_import` |
 | `course` / `paper` | 可空的课程与试卷关联，用于界面范围过滤 |
 | `source_name` | 上传包、课程资料或人工操作的可读名称 |
 | `status` | `running`、`success`、`partial_success`、`failed` |
 | `total_read`、`created_count`、`skipped_existing_count`、`skipped_in_package_count`、`failed_count` | 本批次的统计数据 |
 | `started_at`、`finished_at`、`created_at` | 时间审计字段 |
 
-JSON 导入每个上传包建立一条批次记录；手工新增和拍照新增各建立一条 `created_count=1` 的记录；课程资料导入按一次资料导入建立一条记录。题目没有真正写入时，批次仍保留，用 `created_count=0` 和对应跳过/失败数说明结果。
+JSON 导入每个上传包建立一条批次记录；手工新增和拍照新增各建立一条 `created_count=1` 的记录；课程资料导入按一次资料导入建立一条记录；从题库引入当前课程的批量操作建立一条 `course_link_import` 记录。题目没有真正写入或没有建立课程关联时，批次仍保留，用 `created_count=0` 和对应跳过/失败数说明结果。
 
 现有 `ParseTask` 继续服务于 JSON 导入的处理进度，不能作为唯一历史来源；`QuestionIngestionBatch` 是跨来源、面向教师界面的统一审计记录。
 
@@ -171,7 +171,7 @@ GET /questions/ingestion-history/?scope=course&course_id=<UUID>
 
 ### 9.4 本项验收
 
-1. JSON 上传、手工新增、拍照新增、课程资料导入均产生可查询的入库批次记录。
+1. JSON 上传、手工新增、拍照新增、课程资料导入、从题库引入当前课程均产生可查询的入库批次记录。
 2. 题库管理只显示当前教师最近 30 天的全部入库记录。
 3. 课程练习只显示当前课程的记录，不显示其他课程或无课程关联的题库导入。
 4. 全重复导入包在历史中可见，新增数为 0，重复跳过数正确。
