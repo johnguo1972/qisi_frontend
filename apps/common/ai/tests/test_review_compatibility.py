@@ -193,6 +193,28 @@ def test_controlled_probe_persists_scope_when_module_selection_fails(
 
 
 @pytest.mark.django_db
+def test_controlled_probe_invalid_type_marks_question_for_review(
+    controlled_module_topic,
+):
+    question = _make_question(stem='A controlled motion question.')
+
+    def component_factory(component_type):
+        component = MagicMock()
+        if component_type is TaxonomyScopeComponent:
+            component.run.side_effect = AIRequestError('invalid_question_type')
+        return component
+
+    service = common_ai_service.AIReviewService(component_factory=component_factory)
+    service._get_question_image_urls = MagicMock(return_value=[])
+
+    result = service.process_question_probe(str(question.id))
+
+    question.refresh_from_db()
+    assert result['errors'] == {'taxonomy_scope': 'invalid_question_type'}
+    assert question.review_status == 'need_review'
+
+
+@pytest.mark.django_db
 def test_controlled_probe_selects_module_and_persists_resolved_tree_node(
     controlled_module_topic,
 ):

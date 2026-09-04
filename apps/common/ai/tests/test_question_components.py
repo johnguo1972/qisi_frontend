@@ -330,6 +330,81 @@ def test_question_component_retries_schema_invalid_response_contract_once():
     assert len(client.calls) == 2
 
 
+def test_probe_invalid_question_type_retries_once_under_default_configuration():
+    """The probe contract must not inherit the provider's three-retry budget."""
+    components = _components()
+    client = SequencedAIClient(
+        [
+            json.dumps(_valid_probe_payload(question_type="阅读理解")),
+            json.dumps(_valid_probe_payload(question_type="未知")),
+        ]
+    )
+
+    with pytest.raises(AIResponseError, match="invalid_question_type"):
+        components.QuestionProbeComponent(client).run(
+            components.QuestionInput(stem="识别题型")
+        )
+
+    assert len(client.calls) == 2
+
+
+def test_probe_normalizes_multiple_choice_from_original_options_and_answer():
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "question_probe": json.dumps(
+                _valid_probe_payload(question_type="", normalized_text="请选择"),
+                ensure_ascii=False,
+            )
+        }
+    )
+
+    result = components.QuestionProbeComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(
+            stem="请选择正确答案",
+            options=["A", "B", "C", "D"],
+            answer="AB",
+        )
+    )
+
+    assert result["question_type"] == "multiple_choice"
+
+
+def test_controlled_scope_normalizes_multiple_choice_from_original_options_and_answer():
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "controlled_taxonomy_scope": json.dumps(
+                {
+                    "subject": "math",
+                    "stage": "junior",
+                    "topic_id": "topic-1",
+                    "question_type": "",
+                    "difficulty_level": "L2",
+                    "normalized_text": "请选择",
+                    "confidence": 0.9,
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+
+    result = components.TaxonomyScopeComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(
+            stem="请选择正确答案",
+            options=["A", "B", "C", "D"],
+            answer="AB",
+            metadata={"topic_candidates": [{"id": "topic-1"}]},
+        )
+    )
+
+    assert result["question_type"] == "multiple_choice"
+
+
 def test_mode_answer_retries_a_control_character_corrupted_response():
     invalid = _mode_answer_response("mode_a_answer")
     invalid["summary"] = "bad\times"

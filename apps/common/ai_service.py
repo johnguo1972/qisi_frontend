@@ -1351,6 +1351,9 @@ class AIReviewService:
         except AIRequestError as error:
             errors['taxonomy_scope'] = str(error)
             results['controlled_taxonomy']['scope'] = {'error': str(error)}
+            if str(error) == 'invalid_question_type':
+                question.review_status = 'need_review'
+                question.save(update_fields=['review_status'])
             results['errors'] = errors
             return results
 

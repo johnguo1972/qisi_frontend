@@ -186,19 +186,6 @@ class QuestionProbeComponent(QuestionAIComponent):
         _normalize_scalar_alias_pair(
             normalized, "question_type", "question_style", ""
         )
-        try:
-            normalized_question_type = require_ai_question_type(
-                normalize_question_type(
-                    normalized.get('question_type'),
-                    stem=normalized.get('normalized_text', ''),
-                    options=(),
-                    answer='',
-                )
-            )
-        except ValueError:
-            raise AIResponseError('invalid_question_type') from None
-        normalized['question_type'] = normalized_question_type
-        normalized['question_style'] = normalized_question_type
         _normalize_scalar_alias_pair(
             normalized, "difficulty", "difficulty_est", ""
         )
@@ -243,6 +230,33 @@ class QuestionProbeComponent(QuestionAIComponent):
         normalized["recommended_route"] = str(
             normalized.get("recommended_route") or ""
         ).strip().upper()
+        return normalized
+
+    def response_retry_count_for_error(
+        self, error: AIResponseError, retry_count: int
+    ) -> int:
+        """A malformed AI type gets exactly one corrective response attempt."""
+        if str(error) == 'invalid_question_type':
+            return min(retry_count, 1)
+        return retry_count
+
+    def normalize_with_question(
+        self, result: dict, question: QuestionInput
+    ) -> dict:
+        normalized = dict(result)
+        try:
+            normalized_question_type = require_ai_question_type(
+                normalize_question_type(
+                    normalized.get('question_type'),
+                    stem=question.stem or normalized.get('normalized_text', ''),
+                    options=question.options,
+                    answer=question.answer,
+                )
+            )
+        except ValueError:
+            raise AIResponseError('invalid_question_type') from None
+        normalized['question_type'] = normalized_question_type
+        normalized['question_style'] = normalized_question_type
         return normalized
 
     def response_correction_messages(
@@ -295,15 +309,17 @@ class TaxonomyScopeComponent(QuestionAIComponent):
             ),
         }
 
-    def normalize(self, result: dict) -> dict:
+    def normalize_with_question(
+        self, result: dict, question: QuestionInput
+    ) -> dict:
         normalized = dict(result)
         try:
             normalized['question_type'] = require_ai_question_type(
                 normalize_question_type(
                     normalized.get('question_type'),
-                    stem=normalized.get('normalized_text', ''),
-                    options=(),
-                    answer='',
+                    stem=question.stem or normalized.get('normalized_text', ''),
+                    options=question.options,
+                    answer=question.answer,
                 )
             )
         except ValueError:
