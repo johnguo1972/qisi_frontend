@@ -7,6 +7,10 @@ import re
 from collections.abc import Mapping
 
 from apps.common.ai.exceptions import AIResponseError
+from apps.common.question_types import (
+    normalize_question_type,
+    require_ai_question_type,
+)
 from apps.common.ai.schemas import (
     KnowledgeAnalysisResponse,
     QuestionProbeResponse,
@@ -182,6 +186,19 @@ class QuestionProbeComponent(QuestionAIComponent):
         _normalize_scalar_alias_pair(
             normalized, "question_type", "question_style", ""
         )
+        try:
+            normalized_question_type = require_ai_question_type(
+                normalize_question_type(
+                    normalized.get('question_type'),
+                    stem=normalized.get('normalized_text', ''),
+                    options=(),
+                    answer='',
+                )
+            )
+        except ValueError:
+            raise AIResponseError('invalid_question_type') from None
+        normalized['question_type'] = normalized_question_type
+        normalized['question_style'] = normalized_question_type
         _normalize_scalar_alias_pair(
             normalized, "difficulty", "difficulty_est", ""
         )
@@ -239,6 +256,8 @@ class QuestionProbeComponent(QuestionAIComponent):
         correction = (
             "\n\nSTRICT_SCHEMA_CORRECTION: 上一次响应无法通过结构校验。"
             "请只返回一个 JSON 对象；不得使用 Markdown。subject 只能是 math/physics；"
+            "question_type 只能是 single_choice/multiple_choice/fill_blank/true_false/"
+            "short_answer/question_answer/proof/experiment/computation/drawing/essay；"
             "difficulty 只能是 L1-L5；knowledge_points 必须是 1-5 个非空字符串；"
             "multi_part 必须是布尔值；proof_or_calc 只能是 proof/calc；"
             "两个 risk_score 必须是 0-100 的整数；recommended_route 只能是 "
@@ -275,6 +294,21 @@ class TaxonomyScopeComponent(QuestionAIComponent):
                 ensure_ascii=False,
             ),
         }
+
+    def normalize(self, result: dict) -> dict:
+        normalized = dict(result)
+        try:
+            normalized['question_type'] = require_ai_question_type(
+                normalize_question_type(
+                    normalized.get('question_type'),
+                    stem=normalized.get('normalized_text', ''),
+                    options=(),
+                    answer='',
+                )
+            )
+        except ValueError:
+            raise AIResponseError('invalid_question_type') from None
+        return normalized
 
 
 class TaxonomySubtopicComponent(QuestionAIComponent):

@@ -3,6 +3,7 @@ from django.db import models
 import uuid_utils.compat as uuid_compat
 from apps.papers.models import ExamPaper
 from apps.common import status as const
+from apps.common.question_types import QUESTION_TYPE_LABELS
 
 
 _PAGE_STATUS_LABELS = {
@@ -233,17 +234,7 @@ class ExamQuestion(models.Model):
         no = self.paper_question_no or f'Q{self.question_no}'
         return f'{no}: {self.stem[:50]}'
 
-    QUESTION_TYPE_LABELS = {
-        const.QT_SINGLE_CHOICE: '单选题',
-        const.QT_MULTIPLE_CHOICE: '多选题',
-        const.QT_FILL_BLANK: '填空题',
-        const.QT_SHORT_ANSWER: '简答题',
-        const.QT_ESSAY: '作文题',
-        const.QT_TRUE_FALSE: '判断题',
-        const.QT_COMPUTATION: '计算题',
-        const.QT_PROOF: '证明题',
-        const.QT_UNKNOWN: '未知',
-    }
+    QUESTION_TYPE_LABELS = QUESTION_TYPE_LABELS
 
     REVIEW_STATUS_LABELS = {
         'unreviewed': '未审核',
