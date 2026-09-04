@@ -2,7 +2,7 @@
 
 **日期：** 2026-09-04
 **状态：** 已确认设计，待实施计划评审
-**范围：** `apps/study` JSON 习题包导入、`apps/parser` 题目模型、AI 探查题型输出、题型字典 API 与 UniApp 题型展示/筛选。
+**范围：** `apps/study` JSON 习题包导入、`apps/parser` 题目模型、AI 探查题型输出、入库批次审计 API，以及 UniApp 题型展示/筛选和入库历史弹窗。
 
 ## 1. 目标
 
@@ -126,3 +126,53 @@ python manage.py backfill_question_fingerprints --apply
 6. 11 类题型、常用别名、未知题型和 AI 非法返回分别符合题型契约。
 7. 历史回填在 `--dry-run` 不写库，`--apply` 不删除或合并历史题。
 8. JSON 导入现有公式占位符和图片资源回归通过，导入后前端可正确渲染。
+
+## 9. 新增/导入习题历史
+
+### 9.1 审计模型
+
+新增 `QuestionIngestionBatch`，记录一次具有明确操作者和来源的入库动作，而不从 `ExamQuestion.created_at` 反推。该模型至少包含：
+
+| 字段 | 用途 |
+| --- | --- |
+| `actor` | 发起操作的登录用户 |
+| `source_type` | `json_import`、`manual_create`、`photo_create`、`course_material_import` |
+| `course` / `paper` | 可空的课程与试卷关联，用于界面范围过滤 |
+| `source_name` | 上传包、课程资料或人工操作的可读名称 |
+| `status` | `running`、`success`、`partial_success`、`failed` |
+| `total_read`、`created_count`、`skipped_existing_count`、`skipped_in_package_count`、`failed_count` | 本批次的统计数据 |
+| `started_at`、`finished_at`、`created_at` | 时间审计字段 |
+
+JSON 导入每个上传包建立一条批次记录；手工新增和拍照新增各建立一条 `created_count=1` 的记录；课程资料导入按一次资料导入建立一条记录。题目没有真正写入时，批次仍保留，用 `created_count=0` 和对应跳过/失败数说明结果。
+
+现有 `ParseTask` 继续服务于 JSON 导入的处理进度，不能作为唯一历史来源；`QuestionIngestionBatch` 是跨来源、面向教师界面的统一审计记录。
+
+### 9.2 历史查询 API
+
+新增受登录保护的入库历史查询接口，默认仅返回最近 30 天、按完成/创建时间倒序的记录：
+
+```text
+GET /questions/ingestion-history/?scope=bank
+GET /questions/ingestion-history/?scope=course&course_id=<UUID>
+```
+
+- `scope=bank`：返回当前教师发起的全部入库批次。
+- `scope=course`：仅返回当前教师在指定课程范围内发起、且明确关联该课程的批次；不混入其他课程或题库全局记录。
+- 返回项包含时间、来源、来源名称、状态、新增数、数据库重复跳过数、包内重复跳过数和失败数；默认单页 30 条。
+- 仅教师本人可查看自己的历史；无权限课程直接返回 403，不泄露批次是否存在。
+
+### 9.3 界面
+
+- 题库管理的“新增”按钮旁增加文字链接 **“导入习题历史”**。
+- 课程练习的“新增习题”按钮旁增加同名链接。
+- 点击后打开同一可复用弹窗组件，标题为“新增/导入习题历史”，右上角提供关闭按钮。
+- 题库管理调用 `scope=bank`；课程练习调用 `scope=course` 并传入当前课程 ID。
+- 弹窗每行显示：操作时间、来源、来源名称、新增题数；导入类记录同时显示重复跳过和失败数量。无记录时显示“近 1 个月暂无新增或导入记录”。
+
+### 9.4 本项验收
+
+1. JSON 上传、手工新增、拍照新增、课程资料导入均产生可查询的入库批次记录。
+2. 题库管理只显示当前教师最近 30 天的全部入库记录。
+3. 课程练习只显示当前课程的记录，不显示其他课程或无课程关联的题库导入。
+4. 全重复导入包在历史中可见，新增数为 0，重复跳过数正确。
+5. 弹窗正确展示时间、来源和数量；空历史、失败批次和权限拒绝均有明确状态。
