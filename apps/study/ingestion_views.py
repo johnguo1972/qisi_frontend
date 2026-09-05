@@ -5,7 +5,7 @@ import uuid
 
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -60,7 +60,10 @@ def ingestion_history(request):
             uuid.UUID(str(course_id))
         except (TypeError, ValueError, AttributeError):
             return _error_response('course_id must be a UUID', 400)
-        course = _get_course_or_404(course_id)
+        try:
+            course = _get_course_or_404(course_id)
+        except NotFound as exc:
+            return _error_response(exc.detail, 404)
         try:
             _check_course_owner(course, request.user)
         except PermissionDenied as exc:

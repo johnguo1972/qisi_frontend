@@ -1,4 +1,5 @@
 from datetime import timedelta
+import uuid
 
 import pytest
 from django.utils import timezone
@@ -98,6 +99,32 @@ def test_invalid_history_query_uses_project_error_envelope(api_client, url):
 
     assert response.status_code == 400
     assert response.data['code'] == 400
+    assert response.data['data'] is None
+    assert response.data['message']
+    assert response.data['trace_id']
+
+
+@pytest.mark.django_db
+def test_malformed_course_id_uses_project_error_envelope(api_client):
+    response = api_client.get(
+        '/api/v1/questions/ingestion-history/?scope=course&course_id=not-a-uuid',
+    )
+
+    assert response.status_code == 400
+    assert response.data['code'] == 400
+    assert response.data['data'] is None
+    assert response.data['message']
+    assert response.data['trace_id']
+
+
+@pytest.mark.django_db
+def test_missing_course_uses_project_not_found_envelope(api_client):
+    response = api_client.get(
+        f'/api/v1/questions/ingestion-history/?scope=course&course_id={uuid.uuid4()}',
+    )
+
+    assert response.status_code == 404
+    assert response.data['code'] == 404
     assert response.data['data'] is None
     assert response.data['message']
     assert response.data['trace_id']
