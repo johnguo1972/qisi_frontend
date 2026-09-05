@@ -405,6 +405,34 @@ def test_controlled_scope_normalizes_multiple_choice_from_original_options_and_a
     assert result["question_type"] == "multiple_choice"
 
 
+def test_controlled_scope_invalid_question_type_retries_once_with_large_budget():
+    components = _components()
+    invalid_scope = {
+        "subject": "math",
+        "stage": "junior",
+        "topic_id": "topic-1",
+        "question_type": "阅读理解",
+        "difficulty_level": "L2",
+        "normalized_text": "识别题型",
+        "confidence": 0.9,
+    }
+    client = SequencedAIClient(
+        [json.dumps(invalid_scope, ensure_ascii=False)] * 2
+    )
+
+    with pytest.raises(AIResponseError, match="invalid_question_type"):
+        components.TaxonomyScopeComponent(
+            client, prompt_registry=RetryPromptRegistry(3)
+        ).run(
+            components.QuestionInput(
+                stem="识别题型",
+                metadata={"topic_candidates": [{"id": "topic-1"}]},
+            )
+        )
+
+    assert len(client.calls) == 2
+
+
 def test_mode_answer_retries_a_control_character_corrupted_response():
     invalid = _mode_answer_response("mode_a_answer")
     invalid["summary"] = "bad\times"

@@ -326,6 +326,14 @@ class TaxonomyScopeComponent(QuestionAIComponent):
             raise AIResponseError('invalid_question_type') from None
         return normalized
 
+    def response_retry_count_for_error(
+        self, error: AIResponseError, retry_count: int
+    ) -> int:
+        """A malformed controlled scope type gets one correction attempt."""
+        if str(error) == 'invalid_question_type':
+            return min(retry_count, 1)
+        return retry_count
+
 
 class TaxonomySubtopicComponent(QuestionAIComponent):
     """Select an enabled child topic when the selected root has children."""
