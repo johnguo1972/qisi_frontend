@@ -253,6 +253,38 @@ class ExamQuestion(models.Model):
         return self.REVIEW_STATUS_LABELS.get(self.review_status, self.review_status)
 
 
+class QuestionContentFingerprint(models.Model):
+    """Unique content reservation and canonical-question link for imported items."""
+
+    class State(models.TextChoices):
+        RESERVING = 'reserving', 'Reserving'
+        ACTIVE = 'active', 'Active'
+
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    fingerprint = models.CharField(max_length=64, unique=True)
+    algorithm_version = models.CharField(max_length=32, default='content-v1')
+    canonical_question = models.OneToOneField(
+        ExamQuestion,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='content_fingerprint',
+        db_column='canonical_question_id',
+    )
+    state = models.CharField(
+        max_length=16,
+        choices=State.choices,
+        default=State.RESERVING,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'tiku_question_content_fingerprint'
+        verbose_name = 'Question content fingerprint'
+        verbose_name_plural = 'Question content fingerprints'
+
+
 class QuestionOption(models.Model):
     """Represents an option (A/B/C/D) of a multiple choice question."""
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
