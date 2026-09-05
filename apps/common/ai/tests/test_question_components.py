@@ -405,7 +405,10 @@ def test_controlled_scope_normalizes_multiple_choice_from_original_options_and_a
     assert result["question_type"] == "multiple_choice"
 
 
-def test_controlled_scope_invalid_question_type_retries_once_with_large_budget():
+@pytest.mark.parametrize("retry_count", [0, 3])
+def test_controlled_scope_invalid_question_type_retries_once_regardless_of_budget(
+    retry_count,
+):
     components = _components()
     invalid_scope = {
         "subject": "math",
@@ -422,7 +425,7 @@ def test_controlled_scope_invalid_question_type_retries_once_with_large_budget()
 
     with pytest.raises(AIResponseError, match="invalid_question_type"):
         components.TaxonomyScopeComponent(
-            client, prompt_registry=RetryPromptRegistry(3)
+            client, prompt_registry=RetryPromptRegistry(retry_count)
         ).run(
             components.QuestionInput(
                 stem="识别题型",

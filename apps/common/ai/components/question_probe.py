@@ -331,7 +331,7 @@ class TaxonomyScopeComponent(QuestionAIComponent):
     ) -> int:
         """A malformed controlled scope type gets one correction attempt."""
         if str(error) == 'invalid_question_type':
-            return min(retry_count, 1)
+            return 1
         return retry_count
 
 
