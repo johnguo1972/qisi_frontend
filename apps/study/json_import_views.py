@@ -5,6 +5,8 @@ import uuid
 import zipfile
 import shutil
 import logging
+import hashlib
+import re
 from pathlib import Path
 from django.conf import settings
 from django.db import transaction
@@ -13,7 +15,17 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.parser.models import ExamQuestion, QuestionOption, QuestionImage
+from apps.parser.models import (
+    ExamQuestion,
+    QuestionContentFingerprint,
+    QuestionImage,
+    QuestionOption,
+)
+from apps.parser.question_identity import (
+    activate_content_fingerprint,
+    build_content_fingerprint,
+    reserve_content_fingerprint,
+)
 from apps.papers.models import ExamPaper, ParseTask
 from apps.common.codegen import generate_question_system_id
 from apps.common.media import media_url
@@ -23,8 +35,11 @@ from apps.study.formula_assets import (
     formula_key_from_asset,
     render_formula_placeholders,
 )
+from apps.study.ingestion import finish_ingestion_batch, start_ingestion_batch
 
 logger = logging.getLogger(__name__)
+
+FORMULA_PLACEHOLDER_RE = re.compile(r'\[\[formula:([^\]]+)\]\]')
 
 
 def make_trace_id() -> str:
@@ -106,45 +121,25 @@ def import_json_package(request):
         for chunk in uploaded_file.chunks():
             f.write(chunk)
 
+    batch = None
     try:
-        # 先解压读取paper信息，创建ExamPaper后再创建ParseTask
         with zipfile.ZipFile(zip_path, 'r') as zf:
             for name in zf.namelist():
                 if name.startswith('/') or '..' in name:
                     raise ValueError(f'不安全的文件路径: {name}')
             zf.extractall(temp_dir)
 
-        # 读取题目数据获取paper信息
-        paper_info = _read_paper_info(temp_dir)
-        subject_name = paper_info.get('subject', '物理')
-
-        # 创建 ExamPaper（paper_code 由 signal 自动生成）
-        paper = ExamPaper.objects.create(
-            title=paper_info.get('title', 'JSON导入试卷'),
-            subject=subject_name,
-            grade=paper_info.get('grade', ''),
-            stage='junior' if '年级' in str(paper_info.get('grade', '')) else 'senior',
-            paper_type='json_import',
-            region=paper_info.get('source_file', ''),
+        batch = start_ingestion_batch(
+            actor=request.user,
+            source_type='json_import',
+            source_name=uploaded_file.name,
+        )
+        result = _process_json_import(
+            temp_dir=temp_dir,
+            user=request.user,
+            batch=batch,
             source_file_path=str(zip_path.relative_to(settings.MEDIA_ROOT)),
-            status='reviewing',
-            uploaded_by=request.user,
         )
-
-        # 创建解析任务记录（必须有paper）
-        task = ParseTask.objects.create(
-            paper=paper,
-            task_type='json_import',
-            status='running',
-            progress=0,
-            current_step='正在导入题目',
-        )
-
-        result = _process_json_import(temp_dir, task, paper, request.user)
-        task.status = 'success'
-        task.progress = 100
-        task.current_step = '导入完成'
-        task.save()
 
         return Response({
             'code': 0,
@@ -154,9 +149,15 @@ def import_json_package(request):
         })
     except Exception as e:
         logger.exception(f'JSON import failed: {e}')
-        task.status = 'failed'
-        task.error_message = str(e)
-        task.save()
+        if batch and batch.status == batch.Status.RUNNING:
+            finish_ingestion_batch(
+                batch,
+                total_read=0,
+                created_count=0,
+                skipped_existing_count=0,
+                skipped_in_package_count=0,
+                failed_count=1,
+            )
         return Response(
             {'code': 500, 'message': f'导入失败: {str(e)}', 'data': None, 'trace_id': make_trace_id()},
             status=500
@@ -205,124 +206,207 @@ def _read_paper_info(temp_dir):
     return {}
 
 
-def _process_json_import(temp_dir, task, paper, user):
-    """处理JSON导入的核心逻辑（paper已创建）。"""
+def _process_json_import(*, temp_dir, user, batch, source_file_path):
+    """Preflight a package, then lazily create import records for new content only."""
+    paper_info, questions_data, assets_dir = _load_json_package(temp_dir)
+    counters = {
+        'total_read': len(questions_data),
+        'imported': 0,
+        'skipped_existing': 0,
+        'skipped_in_package': 0,
+        'failed': 0,
+    }
+    errors = []
+    prepared = []
+    fingerprints_in_package = set()
+
+    for index, raw_question in enumerate(questions_data):
+        try:
+            qdata, fingerprint = _preflight_question(raw_question, assets_dir)
+        except Exception as exc:
+            counters['failed'] += 1
+            errors.append(_question_error(raw_question, index, exc))
+            continue
+        if fingerprint in fingerprints_in_package:
+            counters['skipped_in_package'] += 1
+            continue
+        fingerprints_in_package.add(fingerprint)
+        if QuestionContentFingerprint.objects.filter(fingerprint=fingerprint).exists():
+            counters['skipped_existing'] += 1
+            continue
+        prepared.append((qdata, fingerprint, index))
+
+    paper = None
+    task = None
+    for qdata, fingerprint, index in prepared:
+        created_paper = False
+        try:
+            with transaction.atomic():
+                registry, reserved = reserve_content_fingerprint(fingerprint)
+                if not reserved:
+                    counters['skipped_existing'] += 1
+                    continue
+                if paper is None:
+                    paper = _create_json_import_paper(paper_info, user, source_file_path)
+                    task = ParseTask.objects.create(
+                        paper=paper,
+                        task_type='json_import',
+                        status='running',
+                        progress=0,
+                        current_step='正在导入题目',
+                    )
+                    batch.paper = paper
+                    batch.save(update_fields=['paper'])
+                    created_paper = True
+                question = _import_single_question(qdata, paper, assets_dir, temp_dir)
+                activate_content_fingerprint(registry, question)
+                counters['imported'] += 1
+        except Exception as exc:
+            if created_paper:
+                paper = None
+                task = None
+            counters['failed'] += 1
+            errors.append(_question_error(qdata, index, exc))
+            logger.warning('Failed to import JSON question %s: %s', qdata.get('question_no'), exc)
+
+    if paper:
+        paper.total_questions = counters['imported']
+        paper.save(update_fields=['total_questions'])
+        task.status = 'success'
+        task.progress = 100
+        task.current_step = '导入完成'
+        task.save(update_fields=['status', 'progress', 'current_step'])
+
+    finish_ingestion_batch(
+        batch,
+        total_read=counters['total_read'],
+        created_count=counters['imported'],
+        skipped_existing_count=counters['skipped_existing'],
+        skipped_in_package_count=counters['skipped_in_package'],
+        failed_count=counters['failed'],
+    )
+    return {
+        'paper_id': str(paper.id) if paper else None,
+        'paper_title': paper.title if paper else None,
+        'ingestion_batch_id': str(batch.id),
+        **counters,
+        'errors': counters['failed'],
+        'error_details': errors[:20],
+    }
+
+
+def _load_json_package(temp_dir):
+    """Load supported package layouts without writing papers, tasks, or media."""
     temp_dir = Path(temp_dir)
-    task.progress = 5
-    task.current_step = '正在查找题目数据'
-    task.save()
-
-    # 查找并加载题目数据
+    paper_info = _read_paper_info(temp_dir)
     questions_data = []
-
-    # 查找 all_questions.json（可能在根目录或子目录中）
-    all_q_path = temp_dir / 'all_questions.json'
-    if not all_q_path.exists():
-        matches = list(temp_dir.glob('**/all_questions.json'))
-        if matches:
-            all_q_path = matches[0]
-
-    if all_q_path.exists():
-        with open(all_q_path, 'r', encoding='utf-8') as f:
-            package = json.load(f)
-        paper_info = package.get('paper', {})
+    all_q_path = _find_package_file(temp_dir, 'all_questions.json')
+    if all_q_path:
+        with open(all_q_path, 'r', encoding='utf-8') as package_file:
+            package = json.load(package_file)
         raw_questions = package.get('questions', [])
-        # 如果是 paper_with_questions 格式
-        if isinstance(raw_questions, list):
-            questions_data = raw_questions
-        else:
-            questions_data = [raw_questions] if raw_questions else []
-
-    # 方案2: manifest.json + combined_json
+        questions_data = raw_questions if isinstance(raw_questions, list) else [raw_questions] if raw_questions else []
     if not questions_data:
-        manifest_path = temp_dir / 'manifest.json'
-        if not manifest_path.exists():
-            matches = list(temp_dir.glob('**/manifest.json'))
-            if matches:
-                manifest_path = matches[0]
-
-        if manifest_path.exists():
-            with open(manifest_path, 'r', encoding='utf-8') as f:
-                manifest = json.load(f)
-            paper_info = manifest.get('paper', manifest)
-
+        manifest_path = _find_package_file(temp_dir, 'manifest.json')
+        if manifest_path:
+            with open(manifest_path, 'r', encoding='utf-8') as manifest_file:
+                manifest = json.load(manifest_file)
             combined_file = manifest.get('combined_json')
-            if combined_file:
-                combined_path = manifest_path.parent / combined_file
-                if combined_path.exists():
-                    with open(combined_path, 'r', encoding='utf-8') as f:
-                        pkg = json.load(f)
-                    questions_data = pkg.get('questions', [])
-
-            # 方案3: manifest.json + files 列表
+            if combined_file and (combined_path := manifest_path.parent / combined_file).exists():
+                with open(combined_path, 'r', encoding='utf-8') as combined:
+                    questions_data = json.load(combined).get('questions', [])
             if not questions_data:
                 for qfile in manifest.get('files', []):
                     qpath = manifest_path.parent / qfile
                     if qpath.exists():
-                        with open(qpath, 'r', encoding='utf-8') as f:
-                            questions_data.append(json.load(f))
-
-    # 方案4: 直接扫描 questions/ 目录
+                        with open(qpath, 'r', encoding='utf-8') as question_file:
+                            questions_data.append(json.load(question_file))
     if not questions_data:
-        q_dir = temp_dir / 'questions'
-        if not q_dir.exists():
-            matches = list(temp_dir.glob('**/questions'))
-            if matches:
-                q_dir = matches[0]
-        if q_dir.exists():
-            for qfile in sorted(q_dir.glob('*.json')):
-                with open(qfile, 'r', encoding='utf-8') as f:
-                    questions_data.append(json.load(f))
-
+        questions_dir = _find_package_file(temp_dir, 'questions')
+        if questions_dir and questions_dir.is_dir():
+            for qfile in sorted(questions_dir.glob('*.json')):
+                with open(qfile, 'r', encoding='utf-8') as question_file:
+                    questions_data.append(json.load(question_file))
     if not questions_data:
         raise ValueError('未在ZIP中找到有效的题目数据（需要 all_questions.json 或 manifest.json）')
+    assets_dir = _find_package_file(temp_dir, 'assets') or temp_dir / 'assets'
+    return paper_info, questions_data, assets_dir
 
-    task.progress = 10
-    task.current_step = f'找到 {len(questions_data)} 道题目，开始导入'
-    task.save()
 
-    # 更新试卷题目总数
-    paper.total_questions = len(questions_data)
-    paper.save(update_fields=['total_questions'])
+def _find_package_file(temp_dir, name):
+    direct = Path(temp_dir) / name
+    if direct.exists():
+        return direct
+    matches = list(Path(temp_dir).glob(f'**/{name}'))
+    return matches[0] if matches else None
 
-    # 逐题导入
-    imported_count = 0
-    error_count = 0
-    errors = []
-    total = len(questions_data)
 
-    # 找到 assets 目录（可能在根目录或子目录中）
-    assets_dir = temp_dir / 'assets'
-    if not assets_dir.exists():
-        matches = list(temp_dir.glob('**/assets'))
-        if matches:
-            assets_dir = matches[0]
+def _preflight_question(raw_question, assets_dir):
+    """Resolve assets and build a stable content-v1 fingerprint before importing."""
+    qdata = dict(raw_question)
+    source_type = str(qdata.get('question_type', 'unknown')).strip().lower()
+    qdata['question_type'] = QUESTION_TYPE_MAP.get(source_type, 'unknown')
+    formula_identities = {}
+    image_hashes = []
+    for asset in qdata.get('illustrations', []):
+        asset_hash = _hash_source_asset(asset, assets_dir, required=False)
+        if asset_hash:
+            image_hashes.append(asset_hash)
+    for asset in qdata.get('formula_assets', []):
+        asset_hash = _hash_source_asset(asset, assets_dir, required=True)
+        image_hashes.append(asset_hash)
+        identity = str(asset.get('recognized_text') or asset.get('alt_text') or asset_hash)
+        formula_identities[formula_key_from_asset(asset)] = identity
 
-    for i, qdata in enumerate(questions_data):
-        try:
-            _import_single_question(qdata, paper, assets_dir, temp_dir)
-            imported_count += 1
-        except Exception as e:
-            error_count += 1
-            qno = qdata.get('question_no', f'未知(索引{i})')
-            errors.append({'question_no': qno, 'error': str(e)[:200]})
-            logger.warning(f'Failed to import question {qno}: {e}')
+    def normalize_formulas(value):
+        return FORMULA_PLACEHOLDER_RE.sub(
+            lambda match: f'[[formula:{formula_identities.get(match.group(1), match.group(1))}]]',
+            str(value or ''),
+        )
 
-        # 更新进度 (10% ~ 95%)
-        task.progress = 10 + int(85 * (i + 1) / total)
-        task.current_step = f'正在导入第 {i + 1}/{total} 题'
-        task.save()
+    options = qdata.get('options') or []
+    fingerprint = build_content_fingerprint(
+        stem=normalize_formulas(qdata.get('stem', '')),
+        options=[normalize_formulas(option.get('content', '')) for option in options],
+        formula_texts=list(formula_identities.values()),
+        image_hashes=image_hashes,
+    )
+    return qdata, fingerprint
 
-    # 5. 更新试卷
-    paper.total_questions = imported_count
-    paper.save(update_fields=['total_questions'])
 
+def _hash_source_asset(asset_data, assets_dir, *, required):
+    file_rel = asset_data.get('file', '')
+    if not file_rel:
+        if required:
+            raise FormulaAssetConversionError('Formula image path is required')
+        return ''
+    source_path = Path(assets_dir) / os.path.basename(file_rel)
+    if not source_path.exists():
+        if required:
+            raise FormulaAssetConversionError(f'Formula image not found: {file_rel}')
+        return ''
+    return hashlib.sha256(source_path.read_bytes()).hexdigest()
+
+
+def _create_json_import_paper(paper_info, user, source_file_path):
+    subject = paper_info.get('subject', '物理')
+    return ExamPaper.objects.create(
+        title=paper_info.get('title', 'JSON导入试卷'),
+        subject=subject,
+        grade=paper_info.get('grade', ''),
+        stage='junior' if '年级' in str(paper_info.get('grade', '')) else 'senior',
+        paper_type='json_import',
+        region=paper_info.get('source_file', ''),
+        source_file_path=source_file_path,
+        status='reviewing',
+        uploaded_by=user,
+    )
+
+
+def _question_error(qdata, index, exc):
     return {
-        'paper_id': str(paper.id),
-        'paper_title': paper.title,
-        'imported': imported_count,
-        'errors': error_count,
-        'error_details': errors[:20],
+        'question_no': qdata.get('question_no', f'未知(索引{index})'),
+        'error': str(exc)[:200],
     }
 
 
