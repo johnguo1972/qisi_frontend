@@ -91,11 +91,31 @@ def test_content_fingerprint_keeps_punctuation_numbers_and_formula_commands_mean
     assert build_content_fingerprint(**baseline) != build_content_fingerprint(**changed)
 
 
+@pytest.mark.parametrize("fingerprint", ("x", "D" * 64, "d" * 63, "d" * 65))
 @pytest.mark.django_db
-def test_reservation_rejects_invalid_fingerprint_and_accepts_valid_hash():
-    """Removing boundary validation would let malformed values enter the registry."""
+def test_reservation_rejects_malformed_fingerprint(fingerprint):
+    """Weakening length or lowercase validation would let malformed values enter."""
     with pytest.raises(ValidationError):
-        reserve_content_fingerprint("x")
+        reserve_content_fingerprint(fingerprint)
+
+
+@pytest.mark.django_db
+def test_model_validation_rejects_malformed_fingerprint():
+    """Removing the shared model validator would permit invalid model instances."""
+    for fingerprint in ("D" * 64, "d" * 63, "d" * 65):
+        with pytest.raises(ValidationError):
+            QuestionContentFingerprint(fingerprint=fingerprint).full_clean()
+
+
+@pytest.mark.django_db
+def test_model_validation_accepts_valid_fingerprint():
+    """An exact lowercase SHA-256 digest remains a valid model value."""
+    QuestionContentFingerprint(fingerprint="d" * 64).full_clean()
+
+
+@pytest.mark.django_db
+def test_reservation_accepts_valid_hash():
+    """Rejecting valid SHA-256 values would prevent every normal reservation."""
 
     registry, created = reserve_content_fingerprint("d" * 64)
 
