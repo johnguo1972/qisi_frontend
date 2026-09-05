@@ -8,7 +8,9 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import UserAccount
 from apps.papers.models import ExamPaper, ParseTask
+from apps.parser.question_identity import build_content_fingerprint
 from apps.parser.models import ExamQuestion, QuestionContentFingerprint
+from apps.study import json_import_views
 from apps.study.models import QuestionIngestionBatch
 
 
@@ -173,3 +175,186 @@ def test_json_import_uses_source_image_bytes_to_distinguish_same_text_questions(
     assert response.data['data']['skipped_in_package'] == 0
     assert ExamQuestion.objects.count() == 2
     assert QuestionContentFingerprint.objects.count() == 2
+
+
+@pytest.mark.django_db
+def test_json_import_returns_bounded_duplicate_details_with_canonical_question(tmp_path, settings):
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    teacher = UserAccount.objects.create(
+        mobile='13900009204', display_name='Duplicate detail teacher', role_type='teacher'
+    )
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+    package = {
+        'paper': {'title': 'Duplicate details', 'subject': 'math', 'grade': 'Grade 8'},
+        'questions': [
+            {'question_no': '1', 'question_type': 'single_choice', 'stem': 'Same?',
+             'options': [{'label': 'A', 'content': 'One'}]},
+            {'question_no': '2', 'question_type': 'single_choice', 'stem': 'Same?',
+             'options': [{'label': 'A', 'content': 'One'}]},
+        ],
+    }
+
+    first = _upload_json_package(client, 'details-first.zip', package, {})
+    assert first.status_code == 200
+    canonical = ExamQuestion.objects.get()
+    second = _upload_json_package(client, 'details-second.zip', package, {})
+
+    details = second.data['data']['details']
+    assert len(details) <= 20
+    assert {detail['category'] for detail in details} == {'existing', 'in_package'}
+    assert {detail['source_index'] for detail in details} == {0, 1}
+    for detail in details:
+        assert detail['existing_canonical_question_id'] == str(canonical.id)
+        assert detail['existing_paper_id'] == str(canonical.paper_id)
+        assert detail['summary'] == 'Same?'
+
+
+@pytest.mark.django_db
+def test_json_import_normalizes_common_question_type_and_preserves_source_type(tmp_path, settings):
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    teacher = UserAccount.objects.create(
+        mobile='13900009205', display_name='Type normalization teacher', role_type='teacher'
+    )
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+    response = _upload_json_package(client, 'types.zip', {
+        'paper': {'title': 'Types', 'subject': 'math', 'grade': 'Grade 8'},
+        'questions': [{
+            'question_no': '1', 'question_type': 'calculation', 'stem': '计算 1 + 1',
+            'answer': {'raw': '2'},
+        }],
+    }, {})
+
+    assert response.status_code == 200
+    question = ExamQuestion.objects.get()
+    assert question.question_type == 'computation'
+    assert question.source_question_type == 'calculation'
+
+
+@pytest.mark.django_db
+def test_corrupt_json_zip_creates_failed_ingestion_batch(tmp_path, settings):
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    teacher = UserAccount.objects.create(
+        mobile='13900009206', display_name='Corrupt archive teacher', role_type='teacher'
+    )
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+
+    response = client.post(
+        '/api/v1/questions/import-json-package',
+        {'file': SimpleUploadedFile('corrupt.zip', b'not a zip', 'application/zip')},
+        format='multipart',
+    )
+
+    assert response.status_code == 500
+    batch = QuestionIngestionBatch.objects.get(actor=teacher)
+    assert batch.source_name == 'corrupt.zip'
+    assert batch.status == QuestionIngestionBatch.Status.FAILED
+    assert batch.failed_count == 1
+
+
+@pytest.mark.django_db
+def test_unsafe_json_zip_creates_failed_ingestion_batch(tmp_path, settings):
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    teacher = UserAccount.objects.create(
+        mobile='13900009210', display_name='Unsafe archive teacher', role_type='teacher'
+    )
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, 'w') as zf:
+        zf.writestr('../outside.json', '{}')
+
+    response = client.post(
+        '/api/v1/questions/import-json-package',
+        {'file': SimpleUploadedFile('unsafe.zip', archive.getvalue(), 'application/zip')},
+        format='multipart',
+    )
+
+    assert response.status_code == 500
+    batch = QuestionIngestionBatch.objects.get(actor=teacher)
+    assert batch.source_name == 'unsafe.zip'
+    assert batch.status == QuestionIngestionBatch.Status.FAILED
+    assert batch.failed_count == 1
+
+
+@pytest.mark.django_db
+def test_missing_illustration_fails_preflight_without_creating_paper_or_task(tmp_path, settings):
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    teacher = UserAccount.objects.create(
+        mobile='13900009207', display_name='Missing illustration teacher', role_type='teacher'
+    )
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+    response = _upload_json_package(client, 'missing-image.zip', {
+        'paper': {'title': 'Missing image', 'subject': 'math', 'grade': 'Grade 8'},
+        'questions': [{
+            'question_no': '1', 'question_type': 'single_choice', 'stem': 'Diagram?',
+            'options': [{'label': 'A', 'content': 'One'}],
+            'illustrations': [{'file': '../assets/not-present.png'}],
+        }],
+    }, {})
+
+    assert response.status_code == 200
+    assert response.data['data']['failed'] == 1
+    assert response.data['data']['paper_id'] is None
+    assert not ExamPaper.objects.exists()
+    assert not ParseTask.objects.exists()
+
+
+@pytest.mark.django_db
+def test_reserving_fingerprint_is_failed_instead_of_reported_as_existing(tmp_path, settings):
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    teacher = UserAccount.objects.create(
+        mobile='13900009208', display_name='Reservation teacher', role_type='teacher'
+    )
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+    fingerprint = build_content_fingerprint(
+        stem='Reserved?', options=['One'], formula_texts=[], image_hashes=[]
+    )
+    QuestionContentFingerprint.objects.create(fingerprint=fingerprint)
+    response = _upload_json_package(client, 'reserving.zip', {
+        'paper': {'title': 'Reserving', 'subject': 'math', 'grade': 'Grade 8'},
+        'questions': [{
+            'question_no': '1', 'question_type': 'single_choice', 'stem': 'Reserved?',
+            'options': [{'label': 'A', 'content': 'One'}],
+        }],
+    }, {})
+
+    assert response.status_code == 200
+    assert response.data['data']['failed'] == 1
+    assert response.data['data']['skipped_existing'] == 0
+    assert response.data['data']['paper_id'] is None
+
+
+@pytest.mark.django_db
+def test_failed_json_import_removes_media_copied_before_database_rollback(
+    tmp_path, settings, monkeypatch
+):
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    teacher = UserAccount.objects.create(
+        mobile='13900009209', display_name='Media rollback teacher', role_type='teacher'
+    )
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+
+    def fail_activation(*_args):
+        raise RuntimeError('registry activation failed')
+
+    monkeypatch.setattr(json_import_views, 'activate_content_fingerprint', fail_activation)
+    response = _upload_json_package(client, 'rollback-media.zip', {
+        'paper': {'title': 'Media rollback', 'subject': 'math', 'grade': 'Grade 8'},
+        'questions': [{
+            'question_no': '1', 'question_type': 'single_choice', 'stem': 'Diagram?',
+            'options': [{'label': 'A', 'content': 'One'}],
+            'illustrations': [{'file': '../assets/diagram.png'}],
+        }],
+    }, {'diagram.png': b'diagram'})
+
+    assert response.status_code == 200
+    assert response.data['data']['failed'] == 1
+    assert not ExamQuestion.objects.exists()
+    import_root = settings.MEDIA_ROOT / 'exams' / 'json_imports'
+    assert not import_root.exists() or not list(import_root.rglob('*'))

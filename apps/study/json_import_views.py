@@ -7,6 +7,7 @@ import shutil
 import logging
 import hashlib
 import re
+import time
 from pathlib import Path
 from django.conf import settings
 from django.db import transaction
@@ -29,6 +30,7 @@ from apps.parser.question_identity import (
 from apps.papers.models import ExamPaper, ParseTask
 from apps.common.codegen import generate_question_system_id
 from apps.common.media import media_url
+from apps.common.question_types import normalize_question_type
 from apps.study.formula_assets import (
     FormulaAssetConversionError,
     convert_formula_asset,
@@ -40,29 +42,21 @@ from apps.study.ingestion import finish_ingestion_batch, start_ingestion_batch
 logger = logging.getLogger(__name__)
 
 FORMULA_PLACEHOLDER_RE = re.compile(r'\[\[formula:([^\]]+)\]\]')
+FINGERPRINT_RECHECK_ATTEMPTS = 3
+FINGERPRINT_RECHECK_DELAY_SECONDS = 0.01
+
+
+class FingerprintReservationPendingError(RuntimeError):
+    """Raised when another import has not yet activated a fingerprint."""
+
+
+class SourceAssetNotFoundError(ValueError):
+    """Raised when a declared JSON image asset cannot be resolved."""
 
 
 def make_trace_id() -> str:
     return uuid.uuid4().hex[:16]
 
-
-# 题型映射：JSON格式 → 数据库格式
-QUESTION_TYPE_MAP = {
-    'single_choice': 'single_choice',
-    'multiple_choice': 'multiple_choice',
-    'fill_blank': 'fill_blank',
-    'short_answer': 'short_answer',
-    'essay': 'essay',
-    'true_false': 'true_false',
-    'computation': 'computation',
-    'proof': 'proof',
-    'solution': 'short_answer',  # 解答题映射为简答题
-    # 真实数据包中出现的题型（深圳中学八年级物理期中试题）
-    'calculation': 'computation',           # 计算题→计算题
-    'experiment': 'short_answer',           # 实验探究题→简答题
-    'reading_comprehension': 'short_answer', # 阅读理解题→简答题
-    'unknown': 'unknown',
-}
 
 # 学科映射：中文/英文 → 英文代码（与 KnowledgePoint.SUBJECT_CHOICES 一致）
 SUBJECT_MAP = {
@@ -99,7 +93,21 @@ def import_json_package(request):
             status=400
         )
 
+    batch = start_ingestion_batch(
+        actor=request.user,
+        source_type='json_import',
+        source_name=uploaded_file.name,
+    )
+
     if not uploaded_file.name.lower().endswith('.zip'):
+        finish_ingestion_batch(
+            batch,
+            total_read=0,
+            created_count=0,
+            skipped_existing_count=0,
+            skipped_in_package_count=0,
+            failed_count=1,
+        )
         return Response(
             {'code': 400, 'message': '仅支持 .zip 格式文件', 'data': None, 'trace_id': make_trace_id()},
             status=400
@@ -107,6 +115,14 @@ def import_json_package(request):
 
     # 限制文件大小 (50MB)
     if uploaded_file.size > 50 * 1024 * 1024:
+        finish_ingestion_batch(
+            batch,
+            total_read=0,
+            created_count=0,
+            skipped_existing_count=0,
+            skipped_in_package_count=0,
+            failed_count=1,
+        )
         return Response(
             {'code': 400, 'message': '文件大小不能超过50MB', 'data': None, 'trace_id': make_trace_id()},
             status=400
@@ -121,7 +137,6 @@ def import_json_package(request):
         for chunk in uploaded_file.chunks():
             f.write(chunk)
 
-    batch = None
     try:
         with zipfile.ZipFile(zip_path, 'r') as zf:
             for name in zf.namelist():
@@ -129,11 +144,6 @@ def import_json_package(request):
                     raise ValueError(f'不安全的文件路径: {name}')
             zf.extractall(temp_dir)
 
-        batch = start_ingestion_batch(
-            actor=request.user,
-            source_type='json_import',
-            source_name=uploaded_file.name,
-        )
         result = _process_json_import(
             temp_dir=temp_dir,
             user=request.user,
@@ -217,6 +227,7 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
         'failed': 0,
     }
     errors = []
+    duplicate_details = []
     prepared = []
     fingerprints_in_package = set()
 
@@ -229,10 +240,29 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
             continue
         if fingerprint in fingerprints_in_package:
             counters['skipped_in_package'] += 1
+            _append_duplicate_detail(
+                duplicate_details,
+                source_index=index,
+                category='in_package',
+                fingerprint=fingerprint,
+            )
             continue
         fingerprints_in_package.add(fingerprint)
-        if QuestionContentFingerprint.objects.filter(fingerprint=fingerprint).exists():
+        try:
+            registry = _active_fingerprint_or_raise(fingerprint)
+        except FingerprintReservationPendingError as exc:
+            counters['failed'] += 1
+            errors.append(_question_error(raw_question, index, exc))
+            continue
+        if registry:
             counters['skipped_existing'] += 1
+            _append_duplicate_detail(
+                duplicate_details,
+                source_index=index,
+                category='existing',
+                fingerprint=fingerprint,
+                registry=registry,
+            )
             continue
         prepared.append((qdata, fingerprint, index))
 
@@ -240,12 +270,25 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
     task = None
     for qdata, fingerprint, index in prepared:
         created_paper = False
+        created_media_paths = []
         try:
             with transaction.atomic():
                 registry, reserved = reserve_content_fingerprint(fingerprint)
                 if not reserved:
-                    counters['skipped_existing'] += 1
-                    continue
+                    registry = _active_fingerprint_or_raise(fingerprint)
+                    if registry:
+                        counters['skipped_existing'] += 1
+                        _append_duplicate_detail(
+                            duplicate_details,
+                            source_index=index,
+                            category='existing',
+                            fingerprint=fingerprint,
+                            registry=registry,
+                        )
+                        continue
+                    raise FingerprintReservationPendingError(
+                        'Fingerprint reservation did not resolve to an active question'
+                    )
                 if paper is None:
                     paper = _create_json_import_paper(paper_info, user, source_file_path)
                     task = ParseTask.objects.create(
@@ -258,10 +301,17 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
                     batch.paper = paper
                     batch.save(update_fields=['paper'])
                     created_paper = True
-                question = _import_single_question(qdata, paper, assets_dir, temp_dir)
+                question = _import_single_question(
+                    qdata,
+                    paper,
+                    assets_dir,
+                    temp_dir,
+                    created_media_paths=created_media_paths,
+                )
                 activate_content_fingerprint(registry, question)
                 counters['imported'] += 1
         except Exception as exc:
+            _cleanup_media_paths(created_media_paths)
             if created_paper:
                 paper = None
                 task = None
@@ -276,6 +326,8 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
         task.progress = 100
         task.current_step = '导入完成'
         task.save(update_fields=['status', 'progress', 'current_step'])
+
+    _complete_duplicate_details(duplicate_details)
 
     finish_ingestion_batch(
         batch,
@@ -292,6 +344,7 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
         **counters,
         'errors': counters['failed'],
         'error_details': errors[:20],
+        'details': duplicate_details,
     }
 
 
@@ -344,14 +397,23 @@ def _find_package_file(temp_dir, name):
 def _preflight_question(raw_question, assets_dir):
     """Resolve assets and build a stable content-v1 fingerprint before importing."""
     qdata = dict(raw_question)
-    source_type = str(qdata.get('question_type', 'unknown')).strip().lower()
-    qdata['question_type'] = QUESTION_TYPE_MAP.get(source_type, 'unknown')
+    source_type = str(qdata.get('question_type', '') or '')
+    answer = _answer_raw(qdata.get('answer', ''))
+    canonical_type = normalize_question_type(
+        source_type,
+        stem=qdata.get('stem', ''),
+        options=qdata.get('options') or [],
+        answer=answer,
+    )
+    qdata['question_type'] = canonical_type
+    if source_type and source_type != canonical_type:
+        qdata['source_question_type'] = source_type
+    else:
+        qdata.pop('source_question_type', None)
     formula_identities = {}
     image_hashes = []
     for asset in qdata.get('illustrations', []):
-        asset_hash = _hash_source_asset(asset, assets_dir, required=False)
-        if asset_hash:
-            image_hashes.append(asset_hash)
+        image_hashes.append(_hash_source_asset(asset, assets_dir, required=True))
     for asset in qdata.get('formula_assets', []):
         asset_hash = _hash_source_asset(asset, assets_dir, required=True)
         image_hashes.append(asset_hash)
@@ -378,14 +440,94 @@ def _hash_source_asset(asset_data, assets_dir, *, required):
     file_rel = asset_data.get('file', '')
     if not file_rel:
         if required:
-            raise FormulaAssetConversionError('Formula image path is required')
+            raise SourceAssetNotFoundError('Image asset path is required')
         return ''
     source_path = Path(assets_dir) / os.path.basename(file_rel)
     if not source_path.exists():
         if required:
-            raise FormulaAssetConversionError(f'Formula image not found: {file_rel}')
+            raise SourceAssetNotFoundError(f'Image asset not found: {file_rel}')
         return ''
     return hashlib.sha256(source_path.read_bytes()).hexdigest()
+
+
+def _answer_raw(value):
+    return value.get('raw', '') if isinstance(value, dict) else value
+
+
+def _active_fingerprint_or_raise(fingerprint):
+    """Return a canonical active fingerprint or fail safely for an in-flight reservation."""
+    for attempt in range(FINGERPRINT_RECHECK_ATTEMPTS):
+        registry = QuestionContentFingerprint.objects.select_related(
+            'canonical_question__paper'
+        ).filter(fingerprint=fingerprint).first()
+        if not registry:
+            return None
+        if (
+            registry.state == QuestionContentFingerprint.State.ACTIVE
+            and registry.canonical_question_id
+        ):
+            return registry
+        if attempt < FINGERPRINT_RECHECK_ATTEMPTS - 1:
+            time.sleep(FINGERPRINT_RECHECK_DELAY_SECONDS)
+    raise FingerprintReservationPendingError(
+        f'Fingerprint {fingerprint} remains reserved without a canonical question'
+    )
+
+
+def _append_duplicate_detail(details, *, source_index, category, fingerprint, registry=None):
+    """Keep duplicate diagnostics bounded while retaining source-level context."""
+    if len(details) >= 20:
+        return
+    details.append({
+        'source_index': source_index,
+        'category': category,
+        'fingerprint': fingerprint,
+        'existing_canonical_question_id': (
+            str(registry.canonical_question_id) if registry and registry.canonical_question_id else None
+        ),
+        'existing_paper_id': (
+            str(registry.canonical_question.paper_id)
+            if registry and registry.canonical_question_id else None
+        ),
+        'summary': (
+            registry.canonical_question.stem[:200]
+            if registry and registry.canonical_question_id else None
+        ),
+    })
+
+
+def _complete_duplicate_details(details):
+    """Attach canonical metadata to package duplicates once the representative is active."""
+    for detail in details:
+        if detail['existing_canonical_question_id']:
+            continue
+        registry = QuestionContentFingerprint.objects.select_related(
+            'canonical_question__paper'
+        ).filter(
+            fingerprint=detail['fingerprint'],
+            state=QuestionContentFingerprint.State.ACTIVE,
+        ).first()
+        if registry and registry.canonical_question_id:
+            detail['existing_canonical_question_id'] = str(registry.canonical_question_id)
+            detail['existing_paper_id'] = str(registry.canonical_question.paper_id)
+            detail['summary'] = registry.canonical_question.stem[:200]
+
+
+def _cleanup_media_paths(paths):
+    """Remove media copied by a failed database transaction and prune empty import folders."""
+    for path in {Path(path) for path in paths}:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning('Unable to clean failed JSON import media: %s', path)
+    root = settings.MEDIA_ROOT / 'exams' / 'json_imports'
+    for path in {Path(path).parent for path in paths}:
+        while path != root.parent and path.is_relative_to(root):
+            try:
+                path.rmdir()
+            except OSError:
+                break
+            path = path.parent
 
 
 def _create_json_import_paper(paper_info, user, source_file_path):
@@ -411,18 +553,22 @@ def _question_error(qdata, index, exc):
 
 
 @transaction.atomic
-def _import_single_question(qdata, paper, assets_dir, base_dir):
+def _import_single_question(qdata, paper, assets_dir, base_dir, created_media_paths=None):
     """导入单道题目及其关联图片。"""
-    qtype_raw = qdata.get('question_type', 'unknown')
-    qtype = QUESTION_TYPE_MAP.get(qtype_raw, 'unknown')
+    answer_raw = _answer_raw(qdata.get('answer', ''))
+    qtype = normalize_question_type(
+        qdata.get('question_type', ''),
+        stem=qdata.get('stem', ''),
+        options=qdata.get('options') or [],
+        answer=answer_raw,
+    )
+    raw_type = str(qdata.get('question_type', '') or '')
+    source_question_type = qdata.get('source_question_type') or (
+        raw_type if raw_type and raw_type != qtype else ''
+    )
 
     # 使用字母代码生成 system_id（与现有 QuestionIDCounter 保持一致）
     system_id = generate_question_system_id(SUBJECT_LETTER_MAP.get(paper.subject, 'P'))
-
-    # 提取答案
-    answer_raw = qdata.get('answer', '')
-    if isinstance(answer_raw, dict):
-        answer_raw = answer_raw.get('raw', '')
 
     # 提取页码
     source = qdata.get('source', {})
@@ -439,6 +585,7 @@ def _import_single_question(qdata, paper, assets_dir, base_dir):
         question_no=str(qdata.get('question_no', '')),
         paper_question_no=f"JSON-{paper.paper_code or 'JSON'}-{qdata.get('question_no', '')}",
         question_type=qtype,
+        source_question_type=source_question_type,
         subject=SUBJECT_MAP.get(paper.subject, 'P'),  # 设置为字母代码，与前端查询一致
         section_title=qdata.get('section', ''),
         stem=qdata.get('stem', ''),
@@ -474,14 +621,26 @@ def _import_single_question(qdata, paper, assets_dir, base_dir):
     # 导入插图
     for index, ill in enumerate(qdata.get('illustrations', [])):
         _import_asset_image(
-            ill, question, paper, assets_dir, image_type='diagram', sort_order=index
+            ill,
+            question,
+            paper,
+            assets_dir,
+            image_type='diagram',
+            sort_order=index,
+            created_media_paths=created_media_paths,
         )
 
     # 导入公式图片
     formula_urls = {}
     for index, fa in enumerate(qdata.get('formula_assets', [])):
         image = _import_asset_image(
-            fa, question, paper, assets_dir, image_type='formula', sort_order=index
+            fa,
+            question,
+            paper,
+            assets_dir,
+            image_type='formula',
+            sort_order=index,
+            created_media_paths=created_media_paths,
         )
         if image:
             formula_urls[formula_key_from_asset(fa)] = media_url(image.file_path)
@@ -508,12 +667,18 @@ def _import_single_question(qdata, paper, assets_dir, base_dir):
 
 
 def _import_asset_image(
-    asset_data, question, paper, assets_dir, image_type='other', sort_order=0
+    asset_data,
+    question,
+    paper,
+    assets_dir,
+    image_type='other',
+    sort_order=0,
+    created_media_paths=None,
 ):
     """导入单个资源图片（插图或公式图片）。"""
     file_rel = asset_data.get('file', '')
     if not file_rel:
-        return None
+        raise SourceAssetNotFoundError('Image asset path is required')
 
     # 解析图片实际路径
     # JSON中路径如 "../assets/q01_stem.png" 或 "../assets/formula_02.png"
@@ -521,10 +686,7 @@ def _import_asset_image(
     src_path = assets_dir / asset_filename
 
     if not src_path.exists():
-        if image_type == 'formula':
-            raise FormulaAssetConversionError(f'Formula image not found: {file_rel}')
-        logger.warning(f'Image not found: {file_rel} (looked in {assets_dir})')
-        return None
+        raise SourceAssetNotFoundError(f'Image asset not found: {file_rel}')
 
     # 复制到 media 目录
     dest_dir = settings.MEDIA_ROOT / 'exams' / 'json_imports' / str(paper.id)
@@ -532,11 +694,17 @@ def _import_asset_image(
 
     original_dest_name = f'{question.id}_{asset_filename}'
     original_dest_path = dest_dir / original_dest_name
+    if created_media_paths is not None:
+        created_media_paths.append(original_dest_path)
+        if image_type == 'formula':
+            created_media_paths.append(original_dest_path.with_suffix('.png'))
     shutil.copy2(str(src_path), str(original_dest_path))
 
     display_path = original_dest_path
     if image_type == 'formula':
         display_path = convert_formula_asset(original_dest_path, original_dest_path)
+        if created_media_paths is not None and display_path != original_dest_path:
+            created_media_paths.append(display_path)
 
     rel_media = f'exams/json_imports/{paper.id}/{display_path.name}'
     rel_original = f'exams/json_imports/{paper.id}/{original_dest_name}'
