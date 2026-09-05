@@ -82,6 +82,25 @@ def test_course_history_for_foreign_course_is_forbidden(api_client, other_course
     )
 
     assert response.status_code == 403
+    assert response.data['code'] == 403
+    assert response.data['data'] is None
+    assert response.data['message']
+    assert response.data['trace_id']
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize('url', [
+    '/api/v1/questions/ingestion-history/?scope=unsupported',
+    '/api/v1/questions/ingestion-history/?scope=course',
+])
+def test_invalid_history_query_uses_project_error_envelope(api_client, url):
+    response = api_client.get(url)
+
+    assert response.status_code == 400
+    assert response.data['code'] == 400
+    assert response.data['data'] is None
+    assert response.data['message']
+    assert response.data['trace_id']
 
 
 @pytest.mark.django_db
@@ -104,3 +123,52 @@ def test_all_duplicate_import_has_visible_zero_created_batch(teacher):
     batch.refresh_from_db()
     assert batch.status == 'success'
     assert batch.created_count == 0
+
+
+@pytest.mark.django_db
+def test_batch_with_failures_and_completed_questions_is_partial_success(teacher):
+    batch = start_ingestion_batch(
+        actor=teacher,
+        source_type='json_import',
+        source_name='partially-imported.zip',
+    )
+
+    finish_ingestion_batch(
+        batch,
+        total_read=3,
+        created_count=1,
+        skipped_existing_count=1,
+        skipped_in_package_count=0,
+        failed_count=1,
+    )
+
+    batch.refresh_from_db()
+    assert batch.status == 'partial_success'
+    assert batch.created_count == 1
+    assert batch.skipped_existing_count == 1
+    assert batch.failed_count == 1
+    assert batch.finished_at is not None
+
+
+@pytest.mark.django_db
+def test_batch_with_only_failures_is_failed(teacher):
+    batch = start_ingestion_batch(
+        actor=teacher,
+        source_type='json_import',
+        source_name='failed.zip',
+    )
+
+    finish_ingestion_batch(
+        batch,
+        total_read=2,
+        created_count=0,
+        skipped_existing_count=0,
+        skipped_in_package_count=0,
+        failed_count=2,
+    )
+
+    batch.refresh_from_db()
+    assert batch.status == 'failed'
+    assert batch.total_read == 2
+    assert batch.failed_count == 2
+    assert batch.finished_at is not None

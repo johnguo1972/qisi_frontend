@@ -5,13 +5,22 @@ import uuid
 
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.courses.views import _check_course_owner, _get_course_or_404
 
 from .models import QuestionIngestionBatch
+
+
+def _error_response(message, status):
+    return Response({
+        'code': status,
+        'message': str(message),
+        'data': None,
+        'trace_id': uuid.uuid4().hex[:16],
+    }, status=status)
 
 
 def _batch_item(batch):
@@ -46,16 +55,19 @@ def ingestion_history(request):
     if scope == 'course':
         course_id = request.query_params.get('course_id')
         if not course_id:
-            raise ValidationError({'course_id': 'course_id is required for course scope'})
+            return _error_response('course_id is required for course scope', 400)
         try:
             uuid.UUID(str(course_id))
         except (TypeError, ValueError, AttributeError):
-            raise ValidationError({'course_id': 'course_id must be a UUID'})
+            return _error_response('course_id must be a UUID', 400)
         course = _get_course_or_404(course_id)
-        _check_course_owner(course, request.user)
+        try:
+            _check_course_owner(course, request.user)
+        except PermissionDenied as exc:
+            return _error_response(exc.detail, 403)
         batches = batches.filter(course=course)
     elif scope != 'bank':
-        raise ValidationError({'scope': 'scope must be bank or course'})
+        return _error_response('scope must be bank or course', 400)
 
     items = [_batch_item(batch) for batch in batches.order_by('-finished_at', '-created_at')[:30]]
     return Response({
