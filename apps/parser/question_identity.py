@@ -1,9 +1,22 @@
 """Content identities used to de-duplicate imported questions."""
 import hashlib
 import json
+import re
 import unicodedata
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+
+
+_FINGERPRINT_PATTERN = re.compile(r"[0-9a-f]{64}")
+
+
+def validate_content_fingerprint(fingerprint):
+    """Require a canonical lowercase SHA-256 hexadecimal digest."""
+    if not isinstance(fingerprint, str) or not _FINGERPRINT_PATTERN.fullmatch(fingerprint):
+        raise ValidationError(
+            "Fingerprint must be exactly 64 lowercase hexadecimal characters."
+        )
 
 
 def _normalize_text(value):
@@ -32,6 +45,8 @@ def build_content_fingerprint(*, stem, options, formula_texts, image_hashes) -> 
 def reserve_content_fingerprint(fingerprint):
     """Create a reservation or return the row already reserved by another writer."""
     from apps.parser.models import QuestionContentFingerprint
+
+    validate_content_fingerprint(fingerprint)
 
     try:
         with transaction.atomic():

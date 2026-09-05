@@ -1,6 +1,8 @@
 import re
 
 import pytest
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError
 
 from apps.parser.question_identity import (
     activate_content_fingerprint,
@@ -52,6 +54,60 @@ def test_content_fingerprint_preserves_order_for_content_parts(
     changed = {**baseline, changed_field: changed_value}
 
     assert build_content_fingerprint(**baseline) != build_content_fingerprint(**changed)
+
+
+def test_content_fingerprint_rejects_source_metadata_as_an_input():
+    """Adding source metadata to the content identity API must be impossible."""
+    with pytest.raises(TypeError, match="unexpected keyword argument 'source'"):
+        build_content_fingerprint(
+            stem="1 + 1 = ?",
+            options=["A. 1", "B. 2"],
+            formula_texts=[],
+            image_hashes=[],
+            source="paper-2026",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    (
+        ("stem", "x=2!"),
+        ("stem", "x=3."),
+        ("formula_texts", [r"\\dfrac{1}{2}"]),
+    ),
+)
+def test_content_fingerprint_keeps_punctuation_numbers_and_formula_commands_meaningful(
+    field, changed_value
+):
+    """Stripping punctuation, digits, or formula commands would hide content changes."""
+    baseline = {
+        "stem": "x=2.",
+        "options": [],
+        "formula_texts": [r"\\frac{1}{2}"],
+        "image_hashes": [],
+    }
+    changed = {**baseline, field: changed_value}
+
+    assert build_content_fingerprint(**baseline) != build_content_fingerprint(**changed)
+
+
+@pytest.mark.django_db
+def test_reservation_rejects_invalid_fingerprint_and_accepts_valid_hash():
+    """Removing boundary validation would let malformed values enter the registry."""
+    with pytest.raises(ValidationError):
+        reserve_content_fingerprint("x")
+
+    registry, created = reserve_content_fingerprint("d" * 64)
+
+    assert created is True
+    assert registry.fingerprint == "d" * 64
+
+
+@pytest.mark.django_db
+def test_database_constraint_rejects_malformed_fingerprint():
+    """Removing the database check constraint would let direct writes bypass validation."""
+    with pytest.raises(IntegrityError):
+        QuestionContentFingerprint.objects.create(fingerprint="x")
 
 
 @pytest.mark.django_db

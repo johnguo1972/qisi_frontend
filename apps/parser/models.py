@@ -4,6 +4,7 @@ import uuid_utils.compat as uuid_compat
 from apps.papers.models import ExamPaper
 from apps.common import status as const
 from apps.common.question_types import QUESTION_TYPE_LABELS
+from apps.parser.question_identity import validate_content_fingerprint
 
 
 _PAGE_STATUS_LABELS = {
@@ -261,7 +262,11 @@ class QuestionContentFingerprint(models.Model):
         ACTIVE = 'active', 'Active'
 
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
-    fingerprint = models.CharField(max_length=64, unique=True)
+    fingerprint = models.CharField(
+        max_length=64,
+        unique=True,
+        validators=[validate_content_fingerprint],
+    )
     algorithm_version = models.CharField(max_length=32, default='content-v1')
     canonical_question = models.OneToOneField(
         ExamQuestion,
@@ -283,6 +288,12 @@ class QuestionContentFingerprint(models.Model):
         db_table = 'tiku_question_content_fingerprint'
         verbose_name = 'Question content fingerprint'
         verbose_name_plural = 'Question content fingerprints'
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(fingerprint__regex=r'^[0-9a-f]{64}$'),
+                name='qcf_fingerprint_lower_sha256',
+            ),
+        ]
 
 
 class QuestionOption(models.Model):
