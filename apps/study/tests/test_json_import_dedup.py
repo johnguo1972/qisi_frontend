@@ -233,6 +233,38 @@ def test_json_import_normalizes_common_question_type_and_preserves_source_type(t
 
 
 @pytest.mark.django_db
+def test_json_import_rejects_unsupported_question_type_without_persisting_side_effects(
+    tmp_path, settings
+):
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    teacher = UserAccount.objects.create(
+        mobile='13900009211', display_name='Unsupported type teacher', role_type='teacher'
+    )
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+
+    response = _upload_json_package(client, 'unsupported-type.zip', {
+        'paper': {'title': 'Unsupported type', 'subject': 'math', 'grade': 'Grade 8'},
+        'questions': [{
+            'question_no': '1',
+            'question_type': 'not_a_supported_type',
+            'stem': 'Unsupported type with no structural evidence.',
+        }],
+    }, {})
+
+    assert response.status_code == 200
+    assert response.data['code'] == 0
+    assert response.data['data']['imported'] == 0
+    assert response.data['data']['failed'] == 1
+    assert response.data['data']['paper_id'] is None
+    assert not ExamQuestion.objects.exists()
+    assert not QuestionContentFingerprint.objects.filter(
+        state=QuestionContentFingerprint.State.ACTIVE
+    ).exists()
+    assert response.data['data']['error_details'][0]['error'] == 'unsupported_question_type'
+
+
+@pytest.mark.django_db
 def test_corrupt_json_zip_creates_failed_ingestion_batch(tmp_path, settings):
     settings.MEDIA_ROOT = tmp_path / 'media'
     teacher = UserAccount.objects.create(

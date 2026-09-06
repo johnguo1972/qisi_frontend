@@ -30,7 +30,7 @@ from apps.parser.question_identity import (
 from apps.papers.models import ExamPaper, ParseTask
 from apps.common.codegen import generate_question_system_id
 from apps.common.media import media_url
-from apps.common.question_types import normalize_question_type
+from apps.common.question_types import CANONICAL_QUESTION_TYPES, normalize_question_type
 from apps.study.formula_assets import (
     FormulaAssetConversionError,
     convert_formula_asset,
@@ -405,6 +405,8 @@ def _preflight_question(raw_question, assets_dir):
         options=qdata.get('options') or [],
         answer=answer,
     )
+    if canonical_type not in CANONICAL_QUESTION_TYPES:
+        raise ValueError('unsupported_question_type')
     qdata['question_type'] = canonical_type
     if source_type and source_type != canonical_type:
         qdata['source_question_type'] = source_type

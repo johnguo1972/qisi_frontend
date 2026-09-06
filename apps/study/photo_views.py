@@ -22,7 +22,7 @@ from apps.common.ai.failure_safety import (
 )
 from apps.common.ai.image_codec import encode_image_source
 from apps.common.oss_service import upload_crop_image_safe
-from apps.common.question_types import normalize_question_type
+from apps.common.question_types import CANONICAL_QUESTION_TYPES, normalize_question_type
 from apps.study.ingestion import finish_ingestion_batch, start_ingestion_batch
 from apps.study.models import QuestionIngestionBatch
 
@@ -177,6 +177,8 @@ def photo_create_question(request):
             options=options,
             answer=parsed.get('answer', ''),
         )
+        if qtype not in CANONICAL_QUESTION_TYPES:
+            raise ValueError('unsupported_question_type')
 
         question = ExamQuestion.objects.create(
             paper=paper,

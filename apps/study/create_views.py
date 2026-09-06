@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from apps.parser.models import ExamQuestion, QuestionOption
 from apps.papers.models import ExamPaper
 from apps.common.codegen import generate_question_system_id
-from apps.common.question_types import normalize_question_type
+from apps.common.question_types import CANONICAL_QUESTION_TYPES, normalize_question_type
 from apps.study.ingestion import finish_ingestion_batch, start_ingestion_batch
 from apps.study.models import QuestionIngestionBatch
 
@@ -63,6 +63,17 @@ def create_question(request):
             options=options,
             answer=data.get('answer', ''),
         )
+        if qtype not in CANONICAL_QUESTION_TYPES:
+            finish_ingestion_batch(
+                batch, total_read=1, created_count=0, skipped_existing_count=0,
+                skipped_in_package_count=0, failed_count=1,
+            )
+            return Response({
+                'code': 400,
+                'message': 'unsupported_question_type',
+                'data': None,
+                'trace_id': make_trace_id(),
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         question = ExamQuestion.objects.create(
             paper=paper,

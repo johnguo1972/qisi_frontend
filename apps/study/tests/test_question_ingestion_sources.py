@@ -80,6 +80,32 @@ def test_manual_question_creation_records_successful_batch_and_normalizes_type(a
 
 
 @pytest.mark.django_db
+def test_manual_question_creation_rejects_unsupported_type_before_persisting(
+    api_client, teacher, paper,
+):
+    response = api_client.post(
+        '/api/v1/questions/create/',
+        {
+            'paper_id': str(paper.id),
+            'question_no': 'manual-unsupported',
+            'question_type': 'not_a_supported_type',
+            'stem': 'Unsupported type with no structural evidence.',
+        },
+        format='json',
+    )
+
+    assert response.status_code == 400
+    assert response.data['code'] == 400
+    assert response.data['message'] == 'unsupported_question_type'
+    assert not ExamQuestion.objects.exists()
+    batch = QuestionIngestionBatch.objects.get(
+        actor=teacher, source_type=QuestionIngestionBatch.SourceType.MANUAL_CREATE,
+    )
+    assert batch.status == QuestionIngestionBatch.Status.FAILED
+    assert batch.failed_count == 1
+
+
+@pytest.mark.django_db
 def test_manual_creation_error_after_batch_starts_finishes_failed_batch(api_client, teacher, paper):
     with patch(
         'apps.study.create_views.QuestionOption.objects.create',

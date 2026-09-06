@@ -17,7 +17,7 @@ from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
 from apps.accounts.roles import has_user_role
 from apps.common.subject_codes import normalize_subject_codes
-from apps.common.question_types import normalize_question_type
+from apps.common.question_types import CANONICAL_QUESTION_TYPES, normalize_question_type
 from apps.common.p2_api import success as p2_success
 from apps.institutions.models import Institution, InstitutionMember
 from apps.knowledge.models import KnowledgePoint
@@ -1807,6 +1807,12 @@ def import_question(request, course_id):
         options=options,
         answer=question_data.get('answer', ''),
     )
+    if qtype not in CANONICAL_QUESTION_TYPES:
+        finish_ingestion_batch(
+            batch, total_read=1, created_count=0, skipped_existing_count=0,
+            skipped_in_package_count=0, failed_count=1,
+        )
+        raise ValidationError('unsupported_question_type')
     try:
         question = ExamQuestion.objects.create(
             paper=paper,
