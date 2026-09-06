@@ -1,7 +1,7 @@
 """Study app URLs: question search, JSON import, and dict endpoints."""
 from django.urls import path
 from . import question_views, dict_views, create_views, photo_views
-from . import json_import_views, basket_views, batch_views
+from . import json_import_views, basket_views, batch_views, ingestion_views
 # 新增导入（barcode_views 依赖 python-barcode，设为可选）
 from . import tag_views
 from . import qr_views
@@ -39,6 +39,7 @@ urlpatterns = [
     path('import-json-package', json_import_views.import_json_package, name='import-json-package'),
     path('import-json-task/<str:task_id>/status/', json_import_views.import_json_task_status, name='import-json-task-status'),
     path('json-import-history/', json_import_views.json_import_history, name='json-import-history'),
+    path('ingestion-history/', ingestion_views.ingestion_history, name='ingestion-history'),
 
     # 题目篮子
     path('basket/', basket_views.basket_list, name='basket-list'),

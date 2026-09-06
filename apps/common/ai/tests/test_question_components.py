@@ -330,6 +330,112 @@ def test_question_component_retries_schema_invalid_response_contract_once():
     assert len(client.calls) == 2
 
 
+def test_probe_invalid_question_type_retries_once_under_default_configuration():
+    """The probe contract must not inherit the provider's three-retry budget."""
+    components = _components()
+    client = SequencedAIClient(
+        [
+            json.dumps(_valid_probe_payload(question_type="阅读理解")),
+            json.dumps(_valid_probe_payload(question_type="未知")),
+        ]
+    )
+
+    with pytest.raises(AIResponseError, match="invalid_question_type"):
+        components.QuestionProbeComponent(client).run(
+            components.QuestionInput(stem="识别题型")
+        )
+
+    assert len(client.calls) == 2
+
+
+def test_probe_normalizes_multiple_choice_from_original_options_and_answer():
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "question_probe": json.dumps(
+                _valid_probe_payload(question_type="", normalized_text="请选择"),
+                ensure_ascii=False,
+            )
+        }
+    )
+
+    result = components.QuestionProbeComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(
+            stem="请选择正确答案",
+            options=["A", "B", "C", "D"],
+            answer="AB",
+        )
+    )
+
+    assert result["question_type"] == "multiple_choice"
+
+
+def test_controlled_scope_normalizes_multiple_choice_from_original_options_and_answer():
+    components = _components()
+    client = RecordingAIClient(
+        {
+            "controlled_taxonomy_scope": json.dumps(
+                {
+                    "subject": "math",
+                    "stage": "junior",
+                    "topic_id": "topic-1",
+                    "question_type": "",
+                    "difficulty_level": "L2",
+                    "normalized_text": "请选择",
+                    "confidence": 0.9,
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+
+    result = components.TaxonomyScopeComponent(
+        client, prompt_registry=StaticPromptRegistry()
+    ).run(
+        components.QuestionInput(
+            stem="请选择正确答案",
+            options=["A", "B", "C", "D"],
+            answer="AB",
+            metadata={"topic_candidates": [{"id": "topic-1"}]},
+        )
+    )
+
+    assert result["question_type"] == "multiple_choice"
+
+
+@pytest.mark.parametrize("retry_count", [0, 3])
+def test_controlled_scope_invalid_question_type_retries_once_regardless_of_budget(
+    retry_count,
+):
+    components = _components()
+    invalid_scope = {
+        "subject": "math",
+        "stage": "junior",
+        "topic_id": "topic-1",
+        "question_type": "阅读理解",
+        "difficulty_level": "L2",
+        "normalized_text": "识别题型",
+        "confidence": 0.9,
+    }
+    client = SequencedAIClient(
+        [json.dumps(invalid_scope, ensure_ascii=False)] * 2
+    )
+
+    with pytest.raises(AIResponseError, match="invalid_question_type"):
+        components.TaxonomyScopeComponent(
+            client, prompt_registry=RetryPromptRegistry(retry_count)
+        ).run(
+            components.QuestionInput(
+                stem="识别题型",
+                metadata={"topic_candidates": [{"id": "topic-1"}]},
+            )
+        )
+
+    assert len(client.calls) == 2
+
+
 def test_mode_answer_retries_a_control_character_corrupted_response():
     invalid = _mode_answer_response("mode_a_answer")
     invalid["summary"] = "bad\times"
@@ -769,7 +875,7 @@ def test_probe_response_omits_taxonomy_owned_by_local_knowledge_tree():
     assert {"grade", "semester", "chapter"}.isdisjoint(result)
 
 
-def test_probe_preserves_legacy_aliases_when_provider_returns_canonical_fields():
+def test_probe_normalizes_legacy_question_type_aliases_to_the_contract():
     components = _components()
     client = RecordingAIClient(
         {
@@ -798,7 +904,8 @@ def test_probe_preserves_legacy_aliases_when_provider_returns_canonical_fields()
         components.QuestionInput(stem="计算物体所受合力")
     )
 
-    assert result["question_style"] == "calculation"
+    assert result["question_type"] == "computation"
+    assert result["question_style"] == "computation"
     assert result["difficulty_est"] == "L3"
     assert result["topic_tags_top3"] == ["力与运动"]
 
@@ -806,10 +913,10 @@ def test_probe_preserves_legacy_aliases_when_provider_returns_canonical_fields()
 @pytest.mark.parametrize(
     ("canonical", "legacy", "expected"),
     [
-        ("canonical", "legacy", "canonical"),
-        ("", "legacy", "legacy"),
-        ("   ", "calculation", "calculation"),
-        (None, "legacy", "legacy"),
+        ("computation", "legacy-conflict", "computation"),
+        ("", "calculation", "computation"),
+        ("   ", "calculation", "computation"),
+        (None, "calculation", "computation"),
     ],
 )
 def test_probe_scalar_aliases_prefer_nonempty_canonical_then_legacy(
@@ -864,12 +971,12 @@ def test_probe_scalar_aliases_prefer_nonempty_canonical_then_legacy(
         (
             " \t\r\n\u00a0\u2003\u3000calculation\u3000\u2003\u00a0\r\n\t ",
             "legacy-conflict",
-            "calculation",
+            "computation",
         ),
         (
             " \t\r\n\u00a0\u2003\u3000 ",
             "\u3000\u2003\u00a0calculation\u00a0\u2003\u3000",
-            "calculation",
+            "computation",
         ),
     ],
 )
@@ -979,7 +1086,7 @@ def test_probe_rejects_scalar_aliases_containing_only_format_characters(
         )
 
 
-def test_probe_strips_boundary_format_characters_but_preserves_internal_ones():
+def test_probe_rejects_noncanonical_question_type_after_boundary_cleanup():
     components = _components()
     payload = {
         "subject": "math",
@@ -998,20 +1105,16 @@ def test_probe_strips_boundary_format_characters_but_preserves_internal_ones():
         {"question_probe": json.dumps(payload, ensure_ascii=False)}
     )
 
-    result = components.QuestionProbeComponent(client).run(
-        components.QuestionInput(stem="solve x+1=2")
-    )
-
-    assert result["question_type"] == "calcu\u200blation"
-    assert result["question_style"] == "calcu\u200blation"
-    assert result["difficulty"] == "L2"
-    assert result["difficulty_est"] == "L2"
+    with pytest.raises(AIResponseError, match="invalid_question_type"):
+        components.QuestionProbeComponent(client).run(
+            components.QuestionInput(stem="solve x+1=2")
+        )
 
 
 @pytest.mark.parametrize(
     ("canonical_key", "legacy_key", "token", "conflict"),
     [
-        ("question_type", "question_style", "calculation", "legacy-conflict"),
+        ("question_type", "question_style", "computation", "legacy-conflict"),
         ("difficulty", "difficulty_est", "L2", "L4"),
     ],
 )
@@ -1069,7 +1172,7 @@ def test_probe_normalizes_repaired_and_actual_escaped_whitespace_boundaries(
 @pytest.mark.parametrize(
     ("canonical_key", "legacy_key", "token", "conflict"),
     [
-        ("question_type", "question_style", "calculation", "legacy-conflict"),
+        ("question_type", "question_style", "computation", "legacy-conflict"),
         ("difficulty", "difficulty_est", "L2", "L4"),
     ],
 )
@@ -1128,7 +1231,7 @@ def test_probe_strips_mixed_backslash_real_whitespace_pairs_at_token_edges(
 @pytest.mark.parametrize(
     ("canonical_key", "legacy_key", "token"),
     [
-        ("question_type", "question_style", "calculation"),
+        ("question_type", "question_style", "computation"),
         ("difficulty", "difficulty_est", "L2"),
     ],
 )
@@ -1183,7 +1286,7 @@ def test_probe_strips_repeated_interleaved_mixed_taxonomy_boundaries(
 @pytest.mark.parametrize(
     ("canonical_key", "legacy_key", "valid_value"),
     [
-        ("question_type", "question_style", "calculation"),
+        ("question_type", "question_style", "computation"),
         ("difficulty", "difficulty_est", "L2"),
     ],
 )
@@ -1256,7 +1359,7 @@ def test_probe_rejects_two_mixed_boundary_only_scalar_aliases(
         )
 
 
-def test_probe_preserves_internal_mixed_pair_and_latex_content():
+def test_probe_rejects_internal_mixed_pair_and_latex_question_type_content():
     from apps.common.ai.response_parser import ResponseParser
 
     components = _components()
@@ -1272,37 +1375,32 @@ def test_probe_preserves_internal_mixed_pair_and_latex_content():
     parsed_value = ResponseParser.parse_json(content)["question_type"]
     client = RecordingAIClient({"question_probe": content})
 
-    result = components.QuestionProbeComponent(client).run(
-        components.QuestionInput(stem="solve x+1=2")
-    )
-
     assert r"\tlation" in parsed_value
     assert r"\frac{1}{2}" in parsed_value
-    assert result["question_type"] == parsed_value
-    assert result["question_style"] == parsed_value
+    with pytest.raises(AIResponseError, match="invalid_question_type"):
+        components.QuestionProbeComponent(client).run(
+            components.QuestionInput(stem="solve x+1=2")
+        )
 
 
-def test_probe_preserves_literal_escape_sequences_inside_question_type():
+def test_probe_rejects_literal_escape_sequences_inside_question_type():
     components = _components()
     provider_value = "calcu\nla\ttion"
-    repaired_literal_escapes = r"calcu\nla\ttion"
     payload = _valid_probe_payload(question_type=provider_value)
     client = RecordingAIClient(
         {"question_probe": json.dumps(payload, ensure_ascii=False)}
     )
 
-    result = components.QuestionProbeComponent(client).run(
-        components.QuestionInput(stem="solve x+1=2")
-    )
-
-    assert result["question_type"] == repaired_literal_escapes
-    assert result["question_style"] == repaired_literal_escapes
+    with pytest.raises(AIResponseError, match="invalid_question_type"):
+        components.QuestionProbeComponent(client).run(
+            components.QuestionInput(stem="solve x+1=2")
+        )
 
 
 @pytest.mark.parametrize(
     ("canonical_key", "legacy_key", "valid_value"),
     [
-        ("question_type", "question_style", "calculation"),
+        ("question_type", "question_style", "computation"),
         ("difficulty", "difficulty_est", "L2"),
     ],
 )
@@ -1385,7 +1483,7 @@ def test_probe_list_alias_uses_nonempty_legacy_when_canonical_is_empty():
     assert result["topic_tags_top3"] == ["力与运动"]
 
 
-def test_probe_rejects_question_type_when_both_aliases_are_blank():
+def test_probe_infers_question_type_from_stem_when_aliases_are_blank():
     components = _components()
     client = RecordingAIClient(
         {
@@ -1409,10 +1507,11 @@ def test_probe_rejects_question_type_when_both_aliases_are_blank():
         }
     )
 
-    with pytest.raises(AIResponseError):
-        components.QuestionProbeComponent(client).run(
-            components.QuestionInput(stem="解方程 x+1=2")
-        )
+    result = components.QuestionProbeComponent(client).run(
+        components.QuestionInput(stem="解方程 x+1=2")
+    )
+
+    assert result['question_type'] == 'computation'
 
 
 @pytest.mark.parametrize(

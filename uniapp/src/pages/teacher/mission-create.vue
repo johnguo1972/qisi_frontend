@@ -540,6 +540,8 @@ import { classApi } from '@/api/institutions.ts'
 import { useUserStore } from '@/store/index.ts'
 import { formatDateOnly } from '@/utils/display-format'
 import { buildMissionQuestionFilterParams } from './mission-question-filters'
+import { QUESTION_TYPE_OPTIONS } from '@/constants/question-types'
+import { getQuestionTypeLabel } from '@/utils/question-type'
 
 const userStore = useUserStore()
 
@@ -567,17 +569,7 @@ const subjectOptions = [
   { value: 'physics', label: '物理' },
   { value: 'math', label: '数学' },
 ]
-const questionTypeOptions = [
-  { value: '', label: '全部题型' },
-  { value: 'single_choice', label: '单选' },
-  { value: 'multiple_choice', label: '多选' },
-  { value: 'true_false', label: '判断' },
-  { value: 'fill_blank', label: '填空' },
-  { value: 'short_answer', label: '简答' },
-  { value: 'essay', label: '作文' },
-  { value: 'computation', label: '计算' },
-  { value: 'proof', label: '证明' },
-]
+const questionTypeOptions = [{ value: '', label: '全部题型' }, ...QUESTION_TYPE_OPTIONS]
 const selectedSubject = ref(String(userStore.userInfo?.subject || 'physics'))
 const selectedQuestionType = ref('')
 const questionTypeRange = questionTypeOptions.map(item => item.label)
@@ -1066,19 +1058,7 @@ function onQuestionTypeChange(event: any) {
 }
 
 function questionTypeText(q: any): string {
-  const type = String(q?.question_type || '').trim().toLowerCase()
-  const labels: Record<string, string> = {
-    single_choice: '单选',
-    multiple_choice: '多选',
-    true_false: '判断',
-    fill_blank: '填空',
-    short_answer: '简答',
-    essay: '作文',
-    computation: '计算',
-    proof: '证明',
-    unknown: '未知',
-  }
-  return q?.question_type_label || labels[type] || (type || '未知')
+  return getQuestionTypeLabel(q?.question_type, q?.stem, q?.options, q?.answer)
 }
 
 // 题目详情

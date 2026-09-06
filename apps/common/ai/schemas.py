@@ -48,6 +48,11 @@ def _require_non_blank(value: str) -> str:
 
 
 NonBlankStr = Annotated[str, AfterValidator(_require_non_blank)]
+CanonicalQuestionType = Literal[
+    'single_choice', 'multiple_choice', 'fill_blank', 'true_false',
+    'short_answer', 'question_answer', 'proof', 'experiment',
+    'computation', 'drawing', 'essay',
+]
 
 
 class AIMessage(BaseModel):
@@ -74,7 +79,7 @@ class _StrictResponseModel(BaseModel):
 
 class QuestionProbeResponse(_StrictResponseModel):
     subject: Literal["math", "physics"]
-    question_type: NonBlankStr
+    question_type: CanonicalQuestionType
     difficulty: Literal["L1", "L2", "L3", "L4", "L5"]
     knowledge_points: list[NonBlankStr] = Field(min_length=1, max_length=5)
     multi_part: bool
@@ -92,7 +97,7 @@ class TaxonomyScopeResponse(_StrictResponseModel):
     subject: Literal["math", "physics"]
     stage: Literal["primary", "junior", "senior"]
     topic_id: NonBlankStr
-    question_type: NonBlankStr
+    question_type: CanonicalQuestionType
     difficulty_level: Literal["L1", "L2", "L3", "L4", "L5"]
     normalized_text: NonBlankStr
     confidence: float = Field(ge=0, le=1)
@@ -583,9 +588,7 @@ class CourseMaterialRecognitionImage(BaseModel):
 class CourseMaterialRecognitionSuccess(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    question_type: Literal[
-        "single_choice", "multiple_choice", "fill_blank", "solution"
-    ]
+    question_type: CanonicalQuestionType
     stem: NonBlankStr
     options: dict[NonBlankStr, NonBlankStr]
     answer: str

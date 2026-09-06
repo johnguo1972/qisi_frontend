@@ -10,6 +10,9 @@ from rest_framework.response import Response
 from apps.parser.models import ExamQuestion, QuestionOption
 from apps.papers.models import ExamPaper
 from apps.common.codegen import generate_question_system_id
+from apps.common.question_types import CANONICAL_QUESTION_TYPES, normalize_question_type
+from apps.study.ingestion import finish_ingestion_batch, start_ingestion_batch
+from apps.study.models import QuestionIngestionBatch
 
 logger = logging.getLogger(__name__)
 
@@ -38,51 +41,85 @@ def create_question(request):
             'code': 404, 'message': '试卷不存在', 'data': None, 'trace_id': make_trace_id()
         }, status=status.HTTP_404_NOT_FOUND)
 
-    # Generate system_id using paper's subject
-    subject = paper.subject or ''
-    system_id = generate_question_system_id(subject)
-
-    # Generate paper_question_no
-    section_no = str(data.get('section_no', '1'))
-    question_no = str(data.get('question_no', '1'))
-    paper_question_no = f"{paper.paper_code}-{section_no}-{question_no}"
-
-    question = ExamQuestion.objects.create(
+    batch = start_ingestion_batch(
+        actor=request.user,
+        source_type=QuestionIngestionBatch.SourceType.MANUAL_CREATE,
+        source_name=paper.title,
         paper=paper,
-        system_id=system_id,
-        paper_question_no=paper_question_no,
-        question_no=question_no,
-        question_type=data.get('question_type', 'short_answer'),
-        section_title=data.get('section_title', ''),
-        stem=data.get('stem', ''),
-        answer=data.get('answer', ''),
-        analysis=data.get('analysis', ''),
-        solution=data.get('solution', ''),
-        knowledge_points=data.get('knowledge_points', []),
-        difficulty=data.get('difficulty', 3),
-        page_start=0,
-        page_end=0,
-        confidence=1.0,
-        need_review=False,
-        review_status='confirmed',
-        parse_status='manual_created',
     )
+    try:
+        # Generate system_id using paper's subject
+        subject = paper.subject or ''
+        system_id = generate_question_system_id(subject)
 
-    # Create options for choice-type questions
-    qtype = data.get('question_type', '')
-    if qtype in ('single_choice', 'multiple_choice'):
+        # Generate paper_question_no
+        section_no = str(data.get('section_no', '1'))
+        question_no = str(data.get('question_no', '1'))
+        paper_question_no = f"{paper.paper_code}-{section_no}-{question_no}"
         options = data.get('options', [])
-        for i, opt in enumerate(options):
-            QuestionOption.objects.create(
-                question=question,
-                option_label=opt.get('label', chr(65 + i)),
-                content=opt.get('content', ''),
-                sort_order=i,
+        qtype = normalize_question_type(
+            data.get('question_type', 'short_answer'),
+            stem=data.get('stem', ''),
+            options=options,
+            answer=data.get('answer', ''),
+        )
+        if qtype not in CANONICAL_QUESTION_TYPES:
+            finish_ingestion_batch(
+                batch, total_read=1, created_count=0, skipped_existing_count=0,
+                skipped_in_package_count=0, failed_count=1,
             )
+            return Response({
+                'code': 400,
+                'message': 'unsupported_question_type',
+                'data': None,
+                'trace_id': make_trace_id(),
+            }, status=status.HTTP_400_BAD_REQUEST)
 
-    # Update paper total
-    paper.total_questions = paper.questions.count()
-    paper.save(update_fields=['total_questions'])
+        question = ExamQuestion.objects.create(
+            paper=paper,
+            system_id=system_id,
+            paper_question_no=paper_question_no,
+            question_no=question_no,
+            question_type=qtype,
+            section_title=data.get('section_title', ''),
+            stem=data.get('stem', ''),
+            answer=data.get('answer', ''),
+            analysis=data.get('analysis', ''),
+            solution=data.get('solution', ''),
+            knowledge_points=data.get('knowledge_points', []),
+            difficulty=data.get('difficulty', 3),
+            page_start=0,
+            page_end=0,
+            confidence=1.0,
+            need_review=False,
+            review_status='confirmed',
+            parse_status='manual_created',
+        )
+
+        # Create options for choice-type questions
+        if qtype in ('single_choice', 'multiple_choice'):
+            for i, opt in enumerate(options):
+                QuestionOption.objects.create(
+                    question=question,
+                    option_label=opt.get('label', chr(65 + i)),
+                    content=opt.get('content', ''),
+                    sort_order=i,
+                )
+
+        # Update paper total
+        paper.total_questions = paper.questions.count()
+        paper.save(update_fields=['total_questions'])
+    except Exception:
+        finish_ingestion_batch(
+            batch, total_read=1, created_count=0, skipped_existing_count=0,
+            skipped_in_package_count=0, failed_count=1,
+        )
+        raise
+
+    finish_ingestion_batch(
+        batch, total_read=1, created_count=1, skipped_existing_count=0,
+        skipped_in_package_count=0, failed_count=0,
+    )
 
     return Response({
         'code': 0,

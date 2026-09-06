@@ -1,6 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
+from django.utils import timezone
 import uuid_utils.compat as uuid_compat
 from apps.accounts.models import UserAccount
 from apps.missions.models import LearningMission, MissionLevel
@@ -212,3 +213,46 @@ class QuestionRelation(models.Model):
     @classmethod
     def for_question(cls, question):
         return cls.objects.filter(Q(question_left=question) | Q(question_right=question))
+
+
+class QuestionIngestionBatch(models.Model):
+    """An auditable batch for one question creation or import operation."""
+
+    class SourceType(models.TextChoices):
+        JSON_IMPORT = 'json_import', 'JSON import'
+        MANUAL_CREATE = 'manual_create', 'Manual create'
+        PHOTO_CREATE = 'photo_create', 'Photo create'
+        COURSE_MATERIAL_IMPORT = 'course_material_import', 'Course material import'
+        COURSE_LINK_IMPORT = 'course_link_import', 'Course link import'
+
+    class Status(models.TextChoices):
+        RUNNING = 'running', 'Running'
+        SUCCESS = 'success', 'Success'
+        PARTIAL_SUCCESS = 'partial_success', 'Partial success'
+        FAILED = 'failed', 'Failed'
+
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    actor = models.ForeignKey(UserAccount, on_delete=models.CASCADE, related_name='question_ingestion_batches')
+    source_type = models.CharField(max_length=32, choices=SourceType.choices)
+    course = models.ForeignKey(
+        'courses.Course', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='question_ingestion_batches',
+    )
+    paper = models.ForeignKey(
+        'papers.ExamPaper', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='question_ingestion_batches',
+    )
+    source_name = models.CharField(max_length=255, blank=True, default='')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.RUNNING)
+    total_read = models.PositiveIntegerField(default=0)
+    created_count = models.PositiveIntegerField(default=0)
+    skipped_existing_count = models.PositiveIntegerField(default=0)
+    skipped_in_package_count = models.PositiveIntegerField(default=0)
+    failed_count = models.PositiveIntegerField(default=0)
+    started_at = models.DateTimeField(default=timezone.now)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'question_ingestion_batch'
+        ordering = ['-finished_at', '-created_at']

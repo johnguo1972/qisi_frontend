@@ -278,11 +278,6 @@ const canSubmitAnswer = computed(() => {
 
 // 计算属性
 const questionTypeLabel = computed(() => {
-  const typeMap: Record<string, string> = {
-    single_choice: '单选题', multiple_choice: '多选题', fill_blank: '填空题',
-    solution: '解答题', short_answer: '简答题', essay: '论述题',
-    true_false: '判断题', computation: '计算题', proof: '证明题',
-  }
   return getQuestionTypeLabel(
     currentQuestion.value.question_type,
     currentQuestion.value.stem,

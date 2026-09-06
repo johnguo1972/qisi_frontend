@@ -1301,6 +1301,9 @@ class AIReviewService:
         except AIRequestError as error:
             errors['probe'] = str(error)
             results['probe'] = {'error': str(error)}
+            if str(error) == 'invalid_question_type':
+                question.review_status = 'need_review'
+                question.save(update_fields=['review_status'])
             normalized_text = question.stem or ''
         try:
             results['knowledge'] = self.analyze_knowledge_points(
@@ -1348,6 +1351,9 @@ class AIReviewService:
         except AIRequestError as error:
             errors['taxonomy_scope'] = str(error)
             results['controlled_taxonomy']['scope'] = {'error': str(error)}
+            if str(error) == 'invalid_question_type':
+                question.review_status = 'need_review'
+                question.save(update_fields=['review_status'])
             results['errors'] = errors
             return results
 
@@ -1636,9 +1642,23 @@ class AIReviewService:
                 value = scope.get(key)
                 if isinstance(value, str) and value.strip():
                     probe[key] = value
-            question_type = probe.get('question_type')
-            if isinstance(question_type, str) and question_type.strip():
-                question.question_type = question_type
+            from apps.common.question_types import (
+                normalize_question_type,
+                require_ai_question_type,
+            )
+
+            question_type = normalize_question_type(
+                probe.get('question_type'),
+                stem=question.stem,
+                options=getattr(question, 'options', None),
+                answer=question.answer,
+            )
+            try:
+                question.question_type = require_ai_question_type(question_type)
+            except ValueError:
+                question.review_status = 'need_review'
+                raise AIRequestError('invalid_question_type') from None
+            probe['question_type'] = question.question_type
             subject = probe.get('subject')
             if subject in {'math', 'physics'}:
                 question.subject = subject
@@ -1855,9 +1875,27 @@ class AIReviewService:
         # Keep the probe's core classification, but make all taxonomy values
         # authoritative only after the local knowledge point match is known.
         if isinstance(results.get('probe'), dict) and not results['probe'].get('error'):
-            question_type = str(results['probe'].get('question_type') or '').strip()
-            if question_type:
+            from apps.common.question_types import normalize_question_type
+
+            raw_question_type = results['probe'].get('question_type')
+            question_type = normalize_question_type(
+                raw_question_type,
+                stem=question.stem,
+                options=getattr(question, 'options', None),
+                answer=question.answer,
+            )
+            try:
+                from apps.common.question_types import require_ai_question_type
+
+                question_type = require_ai_question_type(question_type)
+            except ValueError:
+                question.review_status = 'need_review'
+                results['probe'] = {'error': 'invalid_question_type'}
+                probe_data = results['probe']
+            else:
                 question.question_type = question_type
+                if probe_data is not None:
+                    probe_data['question_type'] = question_type
         if probe_data is not None:
             probe_data.pop('stage', None)
             probe_data.pop('grade', None)

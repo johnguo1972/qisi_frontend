@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from apps.knowledge.models import KnowledgePoint
 from apps.parser.models import ExamQuestion
+from apps.common.question_types import CANONICAL_QUESTION_TYPES, QUESTION_TYPE_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -176,14 +177,8 @@ def question_types(request):
     return Response({
         'code': 0, 'message': 'success',
         'data': [
-            {'code': 'single_choice', 'name': '单选题'},
-            {'code': 'multiple_choice', 'name': '多选题'},
-            {'code': 'fill_blank', 'name': '填空题'},
-            {'code': 'short_answer', 'name': '简答题'},
-            {'code': 'essay', 'name': '作文题'},
-            {'code': 'proof', 'name': '证明题'},
-            {'code': 'computation', 'name': '计算题'},
-            {'code': 'subjective', 'name': '主观题'},
+            {'code': question_type, 'name': QUESTION_TYPE_LABELS[question_type]}
+            for question_type in CANONICAL_QUESTION_TYPES
         ],
         'trace_id': make_trace_id(),
     })

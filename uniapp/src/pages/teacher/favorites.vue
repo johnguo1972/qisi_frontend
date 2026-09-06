@@ -138,6 +138,7 @@ import { knowledgeApi } from '@/api/knowledge'
 import { useUserStore } from '@/store/index.ts'
 import { missionApi } from '@/api/missions'
 import { getQuestionTags, addQuestionTag, removeQuestionTag } from '@/api/questions'
+import { QUESTION_TYPE_OPTIONS } from '@/constants/question-types'
 
 const userStore = useUserStore()
 
@@ -179,17 +180,7 @@ const newTag = ref('')
 // Filter state
 const searchQuery = ref('')
 const currentType = ref('')
-const typeOptions = [
-  { label: '全部', value: '' },
-  { label: '单选题', value: 'single_choice' },
-  { label: '多选题', value: 'multiple_choice' },
-  { label: '填空题', value: 'fill_blank' },
-  { label: '简答题', value: 'short_answer' },
-  { label: '论述题', value: 'essay' },
-  { label: '判断题', value: 'true_false' },
-  { label: '计算题', value: 'computation' },
-  { label: '证明题', value: 'proof' },
-]
+const typeOptions = [{ label: '全部', value: '' }, ...QUESTION_TYPE_OPTIONS]
 
 function selectKP(id: string | number) { selectedKP.value = id; loadFavorites() }
 function clearKPFilter() { selectedKP.value = null; loadFavorites() }

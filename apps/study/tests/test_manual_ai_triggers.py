@@ -5,6 +5,7 @@ import pytest
 
 from apps.papers.models import ExamPaper
 from apps.parser.models import ExamQuestion
+from apps.accounts.models import UserAccount
 from apps.study import photo_views
 
 
@@ -41,6 +42,9 @@ def test_auto_parsed_question_creation_does_not_dispatch_ai_task():
 @pytest.mark.django_db
 def test_successful_photo_create_keeps_ai_processing_manual(tmp_path, monkeypatch):
     paper = _create_paper()
+    teacher = UserAccount.objects.create(
+        mobile='13900008202', display_name='Photo trigger teacher', role_type='teacher',
+    )
     crop_dir = tmp_path / "crops"
     crop_dir.mkdir()
     crop_file = crop_dir / "question.png"
@@ -66,7 +70,7 @@ def test_successful_photo_create_keeps_ai_processing_manual(tmp_path, monkeypatc
             "crop_file_path": "crops/question.png",
             "page_no": "1",
         },
-        user=SimpleNamespace(id=1),
+        user=teacher,
     )
 
     with (

@@ -3,6 +3,8 @@ from django.db import models
 import uuid_utils.compat as uuid_compat
 from apps.papers.models import ExamPaper
 from apps.common import status as const
+from apps.common.question_types import QUESTION_TYPE_LABELS
+from apps.parser.question_identity import validate_content_fingerprint
 
 
 _PAGE_STATUS_LABELS = {
@@ -233,17 +235,7 @@ class ExamQuestion(models.Model):
         no = self.paper_question_no or f'Q{self.question_no}'
         return f'{no}: {self.stem[:50]}'
 
-    QUESTION_TYPE_LABELS = {
-        const.QT_SINGLE_CHOICE: '单选题',
-        const.QT_MULTIPLE_CHOICE: '多选题',
-        const.QT_FILL_BLANK: '填空题',
-        const.QT_SHORT_ANSWER: '简答题',
-        const.QT_ESSAY: '作文题',
-        const.QT_TRUE_FALSE: '判断题',
-        const.QT_COMPUTATION: '计算题',
-        const.QT_PROOF: '证明题',
-        const.QT_UNKNOWN: '未知',
-    }
+    QUESTION_TYPE_LABELS = QUESTION_TYPE_LABELS
 
     REVIEW_STATUS_LABELS = {
         'unreviewed': '未审核',
@@ -260,6 +252,48 @@ class ExamQuestion(models.Model):
     def get_review_status_display_label(self):
         """Return human-readable review status label."""
         return self.REVIEW_STATUS_LABELS.get(self.review_status, self.review_status)
+
+
+class QuestionContentFingerprint(models.Model):
+    """Unique content reservation and canonical-question link for imported items."""
+
+    class State(models.TextChoices):
+        RESERVING = 'reserving', 'Reserving'
+        ACTIVE = 'active', 'Active'
+
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    fingerprint = models.CharField(
+        max_length=64,
+        unique=True,
+        validators=[validate_content_fingerprint],
+    )
+    algorithm_version = models.CharField(max_length=32, default='content-v1')
+    canonical_question = models.OneToOneField(
+        ExamQuestion,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='content_fingerprint',
+        db_column='canonical_question_id',
+    )
+    state = models.CharField(
+        max_length=16,
+        choices=State.choices,
+        default=State.RESERVING,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'tiku_question_content_fingerprint'
+        verbose_name = 'Question content fingerprint'
+        verbose_name_plural = 'Question content fingerprints'
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(fingerprint__regex=r'^[0-9a-f]{64}$'),
+                name='qcf_fingerprint_lower_sha256',
+            ),
+        ]
 
 
 class QuestionOption(models.Model):

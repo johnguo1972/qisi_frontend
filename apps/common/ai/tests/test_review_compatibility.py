@@ -44,6 +44,7 @@ from apps.common.ai.answer_arbitration import (
 from apps.common.ai.exceptions import AIResponseError
 from apps.common.exceptions import AIRequestError
 from apps.common.ai.question_context import QuestionContextBuilder, question_context_hash
+from apps.common.ai.types import AIResult
 from apps.parser.models import ExamPaper, ExamQuestion, QuestionOption
 from apps.knowledge.models import KnowledgePoint, KnowledgeTopic, KnowledgeTopicModule
 
@@ -189,6 +190,28 @@ def test_controlled_probe_persists_scope_when_module_selection_fails(
     assert question.ai_probe_result['taxonomy']['scope']['topic_id'] == (
         controlled_module_topic['root'].id
     )
+
+
+@pytest.mark.django_db
+def test_controlled_probe_invalid_type_marks_question_for_review(
+    controlled_module_topic,
+):
+    question = _make_question(stem='A controlled motion question.')
+
+    def component_factory(component_type):
+        component = MagicMock()
+        if component_type is TaxonomyScopeComponent:
+            component.run.side_effect = AIRequestError('invalid_question_type')
+        return component
+
+    service = common_ai_service.AIReviewService(component_factory=component_factory)
+    service._get_question_image_urls = MagicMock(return_value=[])
+
+    result = service.process_question_probe(str(question.id))
+
+    question.refresh_from_db()
+    assert result['errors'] == {'taxonomy_scope': 'invalid_question_type'}
+    assert question.review_status == 'need_review'
 
 
 @pytest.mark.django_db
@@ -601,6 +624,48 @@ def test_probe_pipeline_runs_only_probe_and_knowledge_then_persists_attributes()
     assert question.ai_answer_a is None
     assert question.ai_answer_b is None
     assert question.ai_answer_c is None
+
+
+@pytest.mark.django_db
+def test_probe_invalid_type_retries_once_then_marks_review():
+    """Invalid AI type values must not be persisted as successful classifications."""
+    question = _make_question()
+    probe_values = iter(['阅读理解', '未知'])
+
+    def complete(task_key, **_kwargs):
+        if task_key == 'question_probe':
+            payload = {'question_type': next(probe_values)}
+        else:
+            payload = {
+                'subject': 'math',
+                'difficulty': 'L2',
+                'knowledge_points': [],
+            }
+        return AIResult(
+            content=json.dumps(payload, ensure_ascii=False),
+            provider='qwen',
+            model='configured-model',
+            latency_ms=1,
+            raw_response={},
+        )
+
+    client = MagicMock()
+    client.complete.side_effect = complete
+    client.complete_once = None
+    prompt_registry = MagicMock()
+    prompt_registry.render.return_value = ('system', 'user')
+    prompt_registry.get_retry_count.return_value = 1
+    result = common_ai_service.AIReviewService(
+        ai_client=client,
+        prompt_registry=prompt_registry,
+    ).process_question_probe(str(question.id))
+
+    question.refresh_from_db()
+    assert result['probe']['error'] == 'invalid_question_type'
+    assert question.review_status == 'need_review'
+    assert [call.args[0] for call in client.complete.call_args_list].count(
+        'question_probe'
+    ) == 2
 
 
 @pytest.mark.django_db

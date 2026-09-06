@@ -122,6 +122,7 @@ class QuestionAIComponent(ABC):
                         "AI question component response must be an object"
                     )
                 normalized = self.normalize(dict(parsed))
+                normalized = self.normalize_with_question(normalized, question)
                 response_schema = self.response_schema_for(question)
                 if response_schema is None:
                     validated_result = normalized
@@ -137,7 +138,9 @@ class QuestionAIComponent(ABC):
                     )
                 return self.validate_result(validated_result, question)
             except AIResponseError as error:
-                if attempt == retry_count:
+                if attempt == self.response_retry_count_for_error(
+                    error, retry_count
+                ):
                     raise
                 system, user = self.response_correction_messages(
                     question,
@@ -159,6 +162,12 @@ class QuestionAIComponent(ABC):
             return 0
         return get_retry_count(self.task_key)
 
+    def response_retry_count_for_error(
+        self, _error: AIResponseError, retry_count: int
+    ) -> int:
+        """Allow a component to cap retries for a specific response error."""
+        return retry_count
+
     def response_schema_for(self, _question: QuestionInput) -> type[BaseModel] | None:
         """Return a question-aware response schema; fixed components use the class schema."""
         return self.response_schema
@@ -168,6 +177,12 @@ class QuestionAIComponent(ABC):
         """Return exactly the configured variables for this task."""
 
     def normalize(self, result: dict) -> dict:
+        return result
+
+    def normalize_with_question(
+        self, result: dict, _question: QuestionInput
+    ) -> dict:
+        """Apply normalization that needs the original question context."""
         return result
 
     def response_correction_messages(

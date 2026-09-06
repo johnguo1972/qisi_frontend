@@ -1,6 +1,13 @@
 import { post, get, put, patch, del } from '@/utils/request'
 import type { UUID } from '@/types/uuid'
 
+export type QuestionIngestionHistoryScope = 'bank' | 'course'
+
+export type QuestionIngestionHistoryParams = {
+  scope: QuestionIngestionHistoryScope
+  courseId?: string
+}
+
 export type QuestionRelationItem = {
   id: UUID
   question_no: string
@@ -272,6 +279,12 @@ export function getImportTaskStatus(taskId: string) {
 
 export function getJsonImportHistory() {
   return get<any>('/questions/json-import-history/')
+}
+
+export function getQuestionIngestionHistory(params: QuestionIngestionHistoryParams) {
+  return get<any>('/questions/ingestion-history/', params.scope === 'course'
+    ? { scope: 'course', course_id: params.courseId }
+    : { scope: 'bank' })
 }
 
 // === 题目篮子 ===

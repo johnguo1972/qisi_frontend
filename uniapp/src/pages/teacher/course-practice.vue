@@ -38,6 +38,7 @@
           </view>
           <view class="header-actions">
             <button class="btn-action" size="mini" @click="showAddPanel">+ 新增习题</button>
+            <button class="btn-action history-link" size="mini" @click="historyVisible = true">导入习题历史</button>
             <view class="pagination-new">
               <button size="mini" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
               <button size="mini" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
@@ -317,6 +318,7 @@
     </view>
 
     <AiAnswerModal :visible="answerVisible" :question="answerQuestion" :mode="answerMode" @close="answerVisible = false" @saved="refreshAnswerQuestion" @reprocessed="refreshAnswerQuestion" />
+    <QuestionIngestionHistoryModal :visible="historyVisible" scope="course" :course-id="courseId" @close="historyVisible = false" />
   </view>
 </template>
 
@@ -341,7 +343,9 @@ import QuestionDetailCard from '@/components/QuestionDetailCard.vue'
 import RelationQuestionPreview from '@/components/RelationQuestionPreview.vue'
 import RightActionPanel from '@/components/RightActionPanel.vue'
 import AiAnswerModal from '@/components/AiAnswerModal.vue'
+import QuestionIngestionHistoryModal from '@/components/QuestionIngestionHistoryModal.vue'
 import { navigateRoleSection } from '@/utils/role-navigation'
+import { QUESTION_TYPE_OPTIONS } from '@/constants/question-types'
 
 const TEACHER_ROUTES: Record<string, string> = {
   workbench: '/pages/teacher/layout',
@@ -697,12 +701,9 @@ const allTags = ref<Array<{ id: string; name: string }>>([])
 const tagLoading = ref(false)
 const showAnswerMap = ref<Record<string, boolean>>({})
 const viewMode = ref<'compact' | 'detail'>('detail')
+const historyVisible = ref(false)
 
-const questionTypes = [
-  { label: '选择题', value: 'single_choice' },
-  { label: '填空题', value: 'fill_blank' },
-  { label: '解答题', value: 'solution' },
-]
+const questionTypes = QUESTION_TYPE_OPTIONS
 const difficultyLevels = [
   { label: '简单', value: '1' }, { label: '较易', value: '2' }, { label: '中等', value: '3' }, { label: '较难', value: '4' }, { label: '困难', value: '5' },
 ]

@@ -234,3 +234,91 @@ flowchart LR
 4. 为 Qwen、DeepSeek 独立解题、最终复核分别加入 mock 回归用例。
 5. 验证单题、批量、重复点击、任务取消/重试、题目处理中被编辑等边界。
 6. 不记录或输出 API Key、原始模型响应和包含个人信息的题面日志。
+
+## 8. 习题导入查重、题型与审计
+
+### 8.1 `content-v1` 内容指纹
+
+导入题目先计算小写 64 位 SHA-256 内容指纹，再通过唯一登记表预留并绑定规范题目。指纹输入采用 NFKC 规范化并合并空白，以下有序内容共同决定题目身份：
+
+- 题干；
+- 按原顺序排列的选项文本；
+- 按原顺序解析出的公式身份文本（优先 `recognized_text`，其次 `alt_text`，缺失时使用公式资源 SHA-256）；
+- 按原顺序排列的题目图片及公式资源文件 SHA-256。
+
+题型、答案、解析、知识点、难度、标签、来源题号、来源试卷和创建者等元数据不参与指纹。修改这些元数据不会把同一道题识别为新题；题干、选项、公式或图片内容/顺序变化则会形成不同指纹。
+
+### 8.2 标准题型
+
+导入和 AI 探查的成功结果只允许下列 11 个值；展示层统一使用对应中文名称：
+
+| 值 | 中文名称 |
+|---|---|
+| `single_choice` | 单选题 |
+| `multiple_choice` | 多选题 |
+| `fill_blank` | 填空题 |
+| `true_false` | 判断题 |
+| `short_answer` | 简答题 |
+| `question_answer` | 问答题 |
+| `proof` | 证明题 |
+| `experiment` | 实验题 |
+| `computation` | 计算题 |
+| `drawing` | 作图题 |
+| `essay` | 作文题 |
+
+`unknown` 仅供历史兼容和待人工复核使用，不属于成功导入、AI 成功输出或前端可选题型。
+
+### 8.3 JSON 导入结果与无副作用规则
+
+JSON 数据包响应和审计记录使用以下计数：
+
+| 响应字段 | 审计字段 | 含义 |
+|---|---|---|
+| `total_read` | `total_read` | 数据包读取到的题目总数 |
+| `imported` | `created_count` | 实际新增题数 |
+| `skipped_existing` | `skipped_existing_count` | 与数据库已有规范题重复的题数 |
+| `skipped_in_package` | `skipped_in_package_count` | 同一数据包内部重复的题数 |
+| `failed` | `failed_count` | 预检或写入失败的题数 |
+
+同一数据包内只保留首道相同内容；数据库已有相同指纹时直接跳过。若一个包中的题目全部与数据库重复，则仍生成可查询的成功审计记录，但 `paper_id=null`，并且不创建 `ExamPaper`、`ParseTask`，也不复制媒体文件。
+
+### 8.4 导入来源与最近一个月历史
+
+审计来源值为：`json_import`（JSON 数据包导入）、`manual_create`（手动新增）、`photo_create`（拍照导入）、`course_material_import`（课件导入）、`course_link_import`（课程关联导入）。每次操作记录操作者、可选课程/试卷、来源名称、状态、计数及开始/结束时间。
+
+历史接口为 `GET /api/v1/questions/ingestion-history/`：
+
+- `scope=bank`：只返回当前登录教师最近 30 天的题库新增/导入记录；
+- `scope=course&course_id=<UUID>`：校验当前教师拥有该课程后，只返回该课程最近 30 天的记录；
+- 两种范围都不会返回其他教师的记录，最多返回最近 30 条。
+
+题库管理和课程练习页面的“导入习题历史”入口分别使用上述两个范围。
+
+### 8.5 历史题目指纹回填
+
+先只读预演并检查 `errors`、`reserved` 和 `stale_candidates`：
+
+```bash
+python manage.py backfill_question_fingerprints --dry-run
+```
+
+确认媒体文件完整且报告可接受后，才在已备份的生产数据库执行：
+
+```bash
+python manage.py backfill_question_fingerprints --apply
+```
+
+历史公式资源无法无损还原导入时使用的公式身份，因此命令会安全跳过含公式资源的题目并计入 `errors`，不会猜测指纹。陈旧预留清理不是常规回填步骤；只有运维确认没有仍在执行的导入任务时，才可配合 `--apply --cleanup-stale-reservations-hours=<小时数>` 使用。该参数只删除早于阈值、状态为 `reserving` 且未绑定规范题目的登记；与 `--dry-run` 一起使用时仅报告候选，不删除数据。
+
+### 8.6 发布与上线核验
+
+生产发布必须由明确授权的部署步骤执行，推荐顺序如下：
+
+1. 备份数据库，确认没有进行中的大批量导入任务；
+2. 发布与数据库迁移文件同一版本的代码；
+3. 在生产虚拟环境执行 `python manage.py migrate` 和 `python manage.py check`；
+4. 执行指纹回填 `--dry-run`，检查错误与预留统计后再决定是否执行 `--apply`；
+5. 用教师账号导入一个只含标准题型别名的小型 JSON 包，确认响应计数正确且入库题型已归一化；
+6. 重复导入同一包，确认 `imported=0`、`skipped_existing` 增加、`paper_id=null`，且未新增试卷、任务和媒体；
+7. 请求题库范围历史接口，并在题库管理“导入习题历史”弹窗核对时间、来源、成功/跳过/失败数量；
+8. 在课程练习新增或关联一道题，确认课程范围历史只显示当前教师、当前课程最近 30 天的记录。

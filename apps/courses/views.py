@@ -17,11 +17,14 @@ from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
 from apps.accounts.roles import has_user_role
 from apps.common.subject_codes import normalize_subject_codes
+from apps.common.question_types import CANONICAL_QUESTION_TYPES, normalize_question_type
 from apps.common.p2_api import success as p2_success
 from apps.institutions.models import Institution, InstitutionMember
 from apps.knowledge.models import KnowledgePoint
 from apps.parser.models import ExamQuestion
 from apps.study.models import QuestionTagRelation
+from apps.study.ingestion import finish_ingestion_batch, start_ingestion_batch
+from apps.study.models import QuestionIngestionBatch
 from apps.study.question_views import _keyword_tokens
 from apps.study.serializers import QuestionListSerializer
 
@@ -1094,9 +1097,9 @@ def question_import(request, course_id):
     # 验证题目存在
     from apps.parser.models import ExamQuestion
     existing_questions = ExamQuestion.objects.filter(id__in=question_ids)
-    existing_ids = set(existing_questions.values_list('id', flat=True))
+    existing_ids = {str(question_id) for question_id in existing_questions.values_list('id', flat=True)}
 
-    missing_ids = set(question_ids) - existing_ids
+    missing_ids = {str(question_id) for question_id in question_ids} - existing_ids
     if missing_ids:
         raise ValidationError(f'以下题目不存在: {", ".join(map(str, missing_ids))}')
 
@@ -1109,18 +1112,41 @@ def question_import(request, course_id):
             raise NotFound(f'树节点 {tree_node_id} 不存在或不属于此课程')
 
     # 批量创建关联（已通过上方验证，所有 question_ids 均存在）
+    batch = start_ingestion_batch(
+        actor=request.user,
+        source_type=QuestionIngestionBatch.SourceType.COURSE_LINK_IMPORT,
+        source_name=course.name,
+        course=course,
+    )
     imported_count = 0
-    for qid in question_ids:
-        _, created = CourseQuestionLink.objects.get_or_create(
-            course=course,
-            question_id=qid,
-            defaults={
-                'tree_node': tree_node,
-                'source': 'import',
-            }
+    skipped_existing_count = 0
+    try:
+        for qid in question_ids:
+            _, created = CourseQuestionLink.objects.get_or_create(
+                course=course,
+                question_id=qid,
+                defaults={
+                    'tree_node': tree_node,
+                    'source': 'import',
+                }
+            )
+            if created:
+                imported_count += 1
+            else:
+                skipped_existing_count += 1
+    except Exception:
+        finish_ingestion_batch(
+            batch, total_read=len(question_ids), created_count=imported_count,
+            skipped_existing_count=skipped_existing_count,
+            skipped_in_package_count=0, failed_count=1,
         )
-        if created:
-            imported_count += 1
+        raise
+
+    finish_ingestion_batch(
+        batch, total_read=len(question_ids), created_count=imported_count,
+        skipped_existing_count=skipped_existing_count,
+        skipped_in_package_count=0, failed_count=0,
+    )
 
     return Response({
         'success': True,
@@ -1761,48 +1787,78 @@ def import_question(request, course_id):
         title=f'课程导入 - {course.name}',
         defaults={
             'subject': course.subject,
-            'grade_level': course.grade_level or '',
+            'grade': course.grade_level or '',
             'status': 'published',
         }
     )
 
     # 创建题目
-    question = ExamQuestion.objects.create(
+    batch = start_ingestion_batch(
+        actor=request.user,
+        source_type=QuestionIngestionBatch.SourceType.COURSE_MATERIAL_IMPORT,
+        source_name=course.name,
+        course=course,
         paper=paper,
-        question_no=request.data.get('question_no', 'imported'),
-        question_type=question_data.get('question_type', 'single_choice'),
-        subject=course.subject,
-        stem=question_data.get('stem', ''),
-        stem_html=question_data.get('stem_html', ''),
-        answer=question_data.get('answer', ''),
-        analysis=question_data.get('analysis', ''),
-        solution=question_data.get('solution', ''),
-        difficulty=question_data.get('difficulty', 3),
-        knowledge_points=question_data.get('knowledge_points', []),
-        review_status='unreviewed',
-        parse_status='auto_parsed',
     )
+    options = question_data.get('options', {})
+    qtype = normalize_question_type(
+        question_data.get('question_type', 'single_choice'),
+        stem=question_data.get('stem', ''),
+        options=options,
+        answer=question_data.get('answer', ''),
+    )
+    if qtype not in CANONICAL_QUESTION_TYPES:
+        finish_ingestion_batch(
+            batch, total_read=1, created_count=0, skipped_existing_count=0,
+            skipped_in_package_count=0, failed_count=1,
+        )
+        raise ValidationError('unsupported_question_type')
+    try:
+        question = ExamQuestion.objects.create(
+            paper=paper,
+            question_no=request.data.get('question_no', 'imported'),
+            question_type=qtype,
+            subject=course.subject,
+            stem=question_data.get('stem', ''),
+            stem_html=question_data.get('stem_html', ''),
+            answer=question_data.get('answer', ''),
+            analysis=question_data.get('analysis', ''),
+            solution=question_data.get('solution', ''),
+            difficulty=question_data.get('difficulty', 3),
+            knowledge_points=question_data.get('knowledge_points', []),
+            review_status='unreviewed',
+            parse_status='auto_parsed',
+        )
 
     # 创建选项
-    options = question_data.get('options', {})
-    for label, content in options.items():
-        if content:
-            from apps.parser.models import QuestionOption
-            QuestionOption.objects.create(
-                question=question,
-                option_label=label,
-                content=content,
-            )
+        for label, content in options.items():
+            if content:
+                QuestionOption.objects.create(
+                    question=question,
+                    option_label=label,
+                    content=content,
+                )
 
     # 关联到课程目录节点
-    if tree_node_id:
-        CourseQuestionLink.objects.create(
-            course=course,
-            tree_node_id=tree_node_id,
-            question=question,
-            source='import',
-            source_course_name=course.name,
+        if tree_node_id:
+            CourseQuestionLink.objects.create(
+                course=course,
+                tree_node_id=tree_node_id,
+                question=question,
+                source='import',
+                source_course_name=course.name,
+            )
+    except Exception:
+        finish_ingestion_batch(
+            batch, total_read=1, created_count=0, skipped_existing_count=0,
+            skipped_in_package_count=0, failed_count=1,
         )
+        raise
+
+    finish_ingestion_batch(
+        batch, total_read=1, created_count=1, skipped_existing_count=0,
+        skipped_in_package_count=0, failed_count=0,
+    )
 
     return Response({
         'success': True,

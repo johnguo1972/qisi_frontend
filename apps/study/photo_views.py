@@ -22,6 +22,9 @@ from apps.common.ai.failure_safety import (
 )
 from apps.common.ai.image_codec import encode_image_source
 from apps.common.oss_service import upload_crop_image_safe
+from apps.common.question_types import CANONICAL_QUESTION_TYPES, normalize_question_type
+from apps.study.ingestion import finish_ingestion_batch, start_ingestion_batch
+from apps.study.models import QuestionIngestionBatch
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +106,7 @@ def photo_create_question(request):
         page_no,
     )
 
+    batch = None
     try:
         # === 确定图片来源 ===
         if crop_file_path:
@@ -157,16 +161,31 @@ def photo_create_question(request):
                 uploaded_by=request.user,
             )
 
+        batch = start_ingestion_batch(
+            actor=request.user,
+            source_type=QuestionIngestionBatch.SourceType.PHOTO_CREATE,
+            source_name=paper.title,
+            paper=paper,
+        )
         system_id = generate_question_system_id(paper.subject or 'M')
         question_no = str(parsed.get('question_no', '1'))
         paper_question_no = f"PHOTO-{system_id}"
+        options = parsed.get('options', [])
+        qtype = normalize_question_type(
+            parsed.get('question_type', 'short_answer'),
+            stem=parsed.get('stem', ''),
+            options=options,
+            answer=parsed.get('answer', ''),
+        )
+        if qtype not in CANONICAL_QUESTION_TYPES:
+            raise ValueError('unsupported_question_type')
 
         question = ExamQuestion.objects.create(
             paper=paper,
             system_id=system_id,
             paper_question_no=paper_question_no,
             question_no=question_no,
-            question_type=parsed.get('question_type', 'short_answer'),
+            question_type=qtype,
             section_title=parsed.get('section_title', ''),
             stem=parsed.get('stem', ''),
             answer=parsed.get('answer', ''),
@@ -182,9 +201,8 @@ def photo_create_question(request):
             parse_status='photo_created',
         )
 
-        qtype = parsed.get('question_type', '')
         if qtype in ('single_choice', 'multiple_choice'):
-            for opt in parsed.get('options', []):
+            for opt in options:
                 QuestionOption.objects.create(
                     question=question,
                     option_label=opt.get('label', 'A'),
@@ -236,6 +254,11 @@ def photo_create_question(request):
             model_name='qwen3-vl-plus-photo',
         )
 
+        finish_ingestion_batch(
+            batch, total_read=1, created_count=1, skipped_existing_count=0,
+            skipped_in_package_count=0, failed_count=0,
+        )
+
         # AI 答案不会自动生成，需由用户在界面手动触发
 
         return Response({
@@ -251,6 +274,11 @@ def photo_create_question(request):
         })
 
     except Exception:
+        if batch is not None:
+            finish_ingestion_batch(
+                batch, total_read=1, created_count=0, skipped_existing_count=0,
+                skipped_in_package_count=0, failed_count=1,
+            )
         logger.error('Photo question creation failed')
         return Response({
             'code': 500, 'message': '识别失败，请稍后重试', 'data': None,
