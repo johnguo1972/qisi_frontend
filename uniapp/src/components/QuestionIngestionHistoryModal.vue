@@ -53,9 +53,9 @@ const loading = ref(false)
 const error = ref('')
 
 const SOURCE_LABELS: Record<string, string> = {
-  json_package: 'JSON 数据包',
+  json_import: 'JSON 数据包',
   manual_create: '手动新增',
-  photo_import: '拍照导入',
+  photo_create: '拍照导入',
   course_material_import: '课件导入',
   course_link_import: '课程关联导入',
 }

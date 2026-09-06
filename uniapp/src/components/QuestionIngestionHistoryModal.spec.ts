@@ -25,7 +25,7 @@ describe('QuestionIngestionHistoryModal', () => {
         items: [{
           id: 'batch-1',
           created_at: '2026-09-06T09:30:00+08:00',
-          source_type: 'json_package',
+          source_type: 'json_import',
           source_name: '九年级物理.json',
           created_count: 8,
           skipped_existing_count: 2,
@@ -40,6 +40,7 @@ describe('QuestionIngestionHistoryModal', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('新增/导入习题历史')
+    expect(wrapper.text()).toContain('JSON 数据包')
     expect(wrapper.text()).toContain('九年级物理.json')
     expect(wrapper.text()).toContain('新增 8')
     expect(wrapper.text()).toContain('已跳过 2')
