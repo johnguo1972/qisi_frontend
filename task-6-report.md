@@ -33,6 +33,24 @@ implementation. This task changes no frontend files.
 - `git diff --check`
   - clean.
 
+## Review fix round 2
+
+- Replaced the unsaved reservation mock with a deterministic database-backed
+  regression: an existing active registry makes the shared reservation helper
+  attempt a real duplicate insert, receive `IntegrityError`, fetch the row,
+  and let the command continue to repair the earliest canonical question.
+- The test observes two real recovery attempts for two duplicate historical
+  questions and verifies the registry finishes with the earliest canonical.
+
+Verification after the second review fix:
+
+- `...python.exe -m pytest apps/study/tests/test_backfill_question_fingerprints.py apps/parser/tests/test_question_identity.py apps/study/tests/test_json_import_dedup.py -q --basetemp .pt6r2final`
+  - 35 passed.
+- `...python.exe manage.py check`
+  - no issues.
+- `git diff --check`
+  - clean.
+
 ## Risks
 
 - Historical records with a missing image file are skipped rather than given
@@ -52,8 +70,8 @@ implementation. This task changes no frontend files.
   helpers. A concurrent reservation result is treated as owned by the other
   writer instead of making a direct `create()` fail the command.
 - Added coverage for formula ambiguity, existing-registry canonical correction,
-  conflict-owned reservations, dry-run cleanup immutability, and parser mode
-  exclusivity.
+  dry-run cleanup immutability, and parser mode exclusivity. Round 2 replaces
+  the initial conflict mock with database-backed reservation recovery coverage.
 
 Verification after the review fix:
 

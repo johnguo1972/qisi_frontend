@@ -144,7 +144,7 @@ def test_dry_run_cleanup_does_not_delete_stale_reservations():
 
 
 @pytest.mark.django_db
-def test_apply_corrects_an_existing_registry_to_the_earliest_question():
+def test_apply_recovers_reservation_integrity_error_and_corrects_earliest_canonical(monkeypatch):
     earliest = create_question(question_no='early', stem='已有登记题')
     later = create_question(question_no='late', stem='已有登记题')
     now = timezone.now()
@@ -158,33 +158,26 @@ def test_apply_corrects_an_existing_registry_to_the_earliest_question():
         canonical_question=later,
         state=QuestionContentFingerprint.State.ACTIVE,
     )
+    original_create = QuestionContentFingerprint.objects.create
+    attempted_fingerprints = []
 
-    call_command('backfill_question_fingerprints', '--apply')
-
-    registry.refresh_from_db()
-    assert registry.canonical_question_id == earliest.id
-
-
-@pytest.mark.django_db
-def test_apply_leaves_a_concurrent_reservation_to_its_owner(monkeypatch):
-    create_question(question_no='conflict', stem='并发登记题')
-    from apps.study.management.commands import backfill_question_fingerprints
-
-    def concurrent_reservation(_fingerprint):
-        return QuestionContentFingerprint(
-            fingerprint='d' * 64,
-            state=QuestionContentFingerprint.State.RESERVING,
-        ), False
+    def create_and_record_conflict(**kwargs):
+        attempted_fingerprints.append(kwargs['fingerprint'])
+        return original_create(**kwargs)
 
     monkeypatch.setattr(
-        backfill_question_fingerprints,
-        'reserve_content_fingerprint',
-        concurrent_reservation,
+        QuestionContentFingerprint.objects,
+        'create',
+        create_and_record_conflict,
     )
 
     call_command('backfill_question_fingerprints', '--apply')
 
-    assert not QuestionContentFingerprint.objects.exists()
+    registry.refresh_from_db()
+    # The delegated helper calls create, receives the real database unique
+    # conflict, then retrieves this existing row and lets backfill repair it.
+    assert attempted_fingerprints == [fingerprint, fingerprint]
+    assert registry.canonical_question_id == earliest.id
 
 
 def test_command_rejects_dry_run_and_apply_together():
