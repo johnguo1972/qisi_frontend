@@ -540,7 +540,8 @@ import { classApi } from '@/api/institutions.ts'
 import { useUserStore } from '@/store/index.ts'
 import { formatDateOnly } from '@/utils/display-format'
 import { buildMissionQuestionFilterParams } from './mission-question-filters'
-import { QUESTION_TYPE_OPTIONS, getQuestionTypeLabel } from '@/constants/question-types'
+import { QUESTION_TYPE_OPTIONS } from '@/constants/question-types'
+import { getQuestionTypeLabel } from '@/utils/question-type'
 
 const userStore = useUserStore()
 
@@ -1057,7 +1058,7 @@ function onQuestionTypeChange(event: any) {
 }
 
 function questionTypeText(q: any): string {
-  return q?.question_type_label || getQuestionTypeLabel(q?.question_type)
+  return getQuestionTypeLabel(q?.question_type, q?.stem, q?.options, q?.answer)
 }
 
 // 题目详情

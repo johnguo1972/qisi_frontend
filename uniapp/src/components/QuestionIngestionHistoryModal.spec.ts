@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import QuestionIngestionHistoryModal from './QuestionIngestionHistoryModal.vue'
 import { QUESTION_TYPE_OPTIONS, getQuestionTypeLabel } from '@/constants/question-types'
 
@@ -12,6 +12,10 @@ vi.mock('@/api/questions', () => ({ getQuestionIngestionHistory }))
 describe('QuestionIngestionHistoryModal', () => {
   beforeEach(() => {
     getQuestionIngestionHistory.mockReset()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('shows ingestion details and emits close from its close control', async () => {
@@ -57,6 +61,23 @@ describe('QuestionIngestionHistoryModal', () => {
       courseId: 'course-019ff9fc',
     })
     expect(wrapper.text()).toContain('最近一个月暂无新增或导入习题记录')
+  })
+
+  it('shows an explicit error instead of an empty history for an error envelope', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    getQuestionIngestionHistory.mockResolvedValue({
+      code: 403,
+      message: '无权查看该课程',
+      data: { items: [] },
+    })
+
+    const wrapper = mount(QuestionIngestionHistoryModal, {
+      props: { visible: true, scope: 'course', courseId: 'forbidden-course' },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('加载历史记录失败')
+    expect(wrapper.text()).not.toContain('最近一个月暂无新增或导入习题记录')
   })
 })
 

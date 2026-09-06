@@ -83,6 +83,9 @@ async function loadHistory() {
       scope: props.scope,
       ...(props.scope === 'course' && props.courseId ? { courseId: props.courseId } : {}),
     })
+    if (response && Object.prototype.hasOwnProperty.call(response, 'code') && Number(response.code) !== 0) {
+      throw new Error(response.message || '加载历史记录失败')
+    }
     const data = response?.data?.data || response?.data || response || {}
     items.value = Array.isArray(data) ? data : (Array.isArray(data.items) ? data.items : [])
   } catch (reason) {
