@@ -1,12 +1,17 @@
 from datetime import timedelta
+import json
+from io import BytesIO
 import uuid
+import zipfile
 
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import UserAccount
 from apps.courses.models import Course
+from apps.parser.models import ExamQuestion
 from apps.study.ingestion import finish_ingestion_batch, start_ingestion_batch
 from apps.study.models import QuestionIngestionBatch
 
@@ -199,3 +204,72 @@ def test_batch_with_only_failures_is_failed(teacher):
     assert batch.total_read == 2
     assert batch.failed_count == 2
     assert batch.finished_at is not None
+
+
+@pytest.mark.django_db
+def test_successful_json_import_is_visible_in_actor_history_with_canonical_type(
+    api_client, teacher, tmp_path, settings
+):
+    """Catch regressions that disconnect JSON import, type normalization, and audit history."""
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    package = {
+        'paper': {
+            'title': 'Integrated ingestion history',
+            'subject': 'math',
+            'grade': 'Grade 8',
+        },
+        'questions': [{
+            'question_no': '1',
+            'question_type': 'calculation',
+            'stem': 'Calculate 6 * 7.',
+            'answer': {'raw': '42'},
+        }],
+    }
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, 'w') as package_zip:
+        package_zip.writestr(
+            'all_questions.json',
+            json.dumps(package, ensure_ascii=False),
+        )
+
+    import_response = api_client.post(
+        '/api/v1/questions/import-json-package',
+        {
+            'file': SimpleUploadedFile(
+                'integrated-history.zip',
+                archive.getvalue(),
+                'application/zip',
+            ),
+        },
+        format='multipart',
+    )
+
+    assert import_response.status_code == 200
+    assert import_response.data['data']['total_read'] == 1
+    assert import_response.data['data']['imported'] == 1
+    question = ExamQuestion.objects.get()
+    assert question.question_type == 'computation'
+
+    history_response = api_client.get(
+        '/api/v1/questions/ingestion-history/?scope=bank',
+    )
+    batch = QuestionIngestionBatch.objects.get(actor=teacher)
+
+    assert history_response.status_code == 200
+    assert history_response.data['code'] == 0
+    assert history_response.data['data']['items'] == [{
+        'id': str(batch.id),
+        'source_type': 'json_import',
+        'source_name': 'integrated-history.zip',
+        'status': 'success',
+        'course_id': None,
+        'paper_id': import_response.data['data']['paper_id'],
+        'total_read': 1,
+        'created_count': 1,
+        'skipped_existing_count': 0,
+        'skipped_in_package_count': 0,
+        'failed_count': 0,
+        'started_at': batch.started_at,
+        'finished_at': batch.finished_at,
+        'created_at': batch.created_at,
+    }]
