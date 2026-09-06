@@ -147,21 +147,6 @@ const isChoiceType = computed(() =>
   ['single_choice', 'multiple_choice'].includes(props.question.question_type)
 )
 
-const QUESTION_TYPE_LABELS: Record<string, string> = {
-  single_choice: '单选题',
-  multiple_choice: '多选题',
-  fill_blank: '填空题',
-  short_answer: '简答题',
-  essay: '作文题',
-  true_false: '判断题',
-  computation: '计算题',
-  proof: '证明题',
-  solution: '解答题',
-  experiment: '实验题',
-  reading_comprehension: '阅读理解',
-  unknown: '未知',
-}
-
 const questionTypeLabel = computed(() => getQuestionTypeLabel(
   props.question.question_type,
   props.question.stem,

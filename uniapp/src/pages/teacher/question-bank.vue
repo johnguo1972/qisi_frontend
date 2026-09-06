@@ -90,6 +90,7 @@
             </view>
             <button v-if="selectedQuestionIds.length" class="btn-add" @click="goCreateHandout">生成讲义 ({{ selectedQuestionIds.length }})</button>
             <button class="btn-add" @click="showAddMenu">+ 新增</button>
+            <button size="mini" class="history-link" @click="historyVisible = true">导入习题历史</button>
           </view>
         </view>
 
@@ -231,6 +232,7 @@
       @saved="refreshAnswerQuestion"
       @reprocessed="refreshAnswerQuestion"
     />
+    <QuestionIngestionHistoryModal :visible="historyVisible" scope="bank" @close="historyVisible = false" />
   </view>
 </template>
 
@@ -249,6 +251,8 @@ import RelationQuestionPreview from '@/components/RelationQuestionPreview.vue'
 import AddMenuModal from '@/components/AddMenuModal.vue'
 import RightActionPanel from '@/components/RightActionPanel.vue'
 import AiAnswerModal from '@/components/AiAnswerModal.vue'
+import QuestionIngestionHistoryModal from '@/components/QuestionIngestionHistoryModal.vue'
+import { QUESTION_TYPE_OPTIONS } from '@/constants/question-types'
 
 // === 状态 ===
 const selectedSubject = ref('')
@@ -323,12 +327,9 @@ const newTag = ref('')
 const answerVisible = ref(false)
 const answerQuestion = ref<any | null>(null)
 const answerMode = ref<'ALL' | 'A' | 'B' | 'C'>('ALL')
+const historyVisible = ref(false)
 
-const questionTypes = [
-  { label: '选择题', value: 'single_choice' },
-  { label: '填空题', value: 'fill_blank' },
-  { label: '解答题', value: 'solution' },
-]
+const questionTypes = QUESTION_TYPE_OPTIONS
 
 const difficultyLevels = [
   { label: '简单', value: '1', stars: '★★★★★' },

@@ -1,17 +1,4 @@
-const QUESTION_TYPE_LABELS: Record<string, string> = {
-  single_choice: '单选题',
-  multiple_choice: '多选题',
-  fill_blank: '填空题',
-  short_answer: '简答题',
-  solution: '解答题',
-  essay: '论述题',
-  true_false: '判断题',
-  computation: '计算题',
-  calculation: '计算题',
-  proof: '证明题',
-  experiment: '实验题',
-  reading_comprehension: '阅读理解题',
-}
+import { getQuestionTypeLabel as getCanonicalQuestionTypeLabel } from '@/constants/question-types'
 
 export function resolveQuestionType(
   type: unknown,
@@ -43,5 +30,5 @@ export function getQuestionTypeLabel(
   answer = '',
 ): string {
   const resolved = resolveQuestionType(type, stem, options, answer)
-  return QUESTION_TYPE_LABELS[resolved] || '未识别题型'
+  return getCanonicalQuestionTypeLabel(resolved)
 }

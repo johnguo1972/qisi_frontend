@@ -141,6 +141,7 @@ import { renderWithKatex } from '@/utils/katex-renderer'
 import { getMediaUrl } from '@/utils/media-url'
 import { chooseImage } from '@/utils/image-upload'
 import QuestionAIControls from '@/components/QuestionAIControls.vue'
+import { QUESTION_TYPE_OPTIONS, getQuestionTypeLabel } from '@/constants/question-types'
 
 type ImageItem = { id: string | number; file_path: string; description?: string; display_width?: number; can_restore_original?: boolean }
 type KpLeaf = { id: string | number; name: string }
@@ -149,14 +150,6 @@ type KpSemester = { id: string; name: string; chapters: KpChapter[] }
 type KpGrade = { id: string; name: string; semesters: KpSemester[] }
 
 const IMAGE_DEFAULT_WIDTH = 420
-const QUESTION_TYPE_LABELS: Record<string, string> = { single_choice: '单选题', multiple_choice: '多选题', fill_blank: '填空题', short_answer: '简答题', solution: '解答题', essay: '论述题', true_false: '判断题', computation: '计算题', proof: '证明题', experiment: '实验题', unknown: '未识别题型' }
-const QUESTION_TYPE_OPTIONS = [
-  { value: 'single_choice', label: '单选题' },
-  { value: 'multiple_choice', label: '多选题' },
-  { value: 'fill_blank', label: '填空题' },
-  { value: 'short_answer', label: '简答题' },
-  { value: 'solution', label: '解答题' },
-]
 const questionTypeRange = QUESTION_TYPE_OPTIONS.map((item) => item.label)
 const difficultyRange = ['基础巩固', '较易', '中等', '较难', '困难']
 const question = ref<any>(null)
@@ -178,7 +171,7 @@ const editableTables = ref<EditableTable[]>([])
 let renderTimer: ReturnType<typeof setTimeout> | null = null
 let lastWheelAt = 0
 
-const questionTypeLabel = computed(() => QUESTION_TYPE_LABELS[form.value.question_type] || form.value.question_type || '未知题型')
+const questionTypeLabel = computed(() => getQuestionTypeLabel(form.value.question_type))
 const questionTypeIndex = computed(() => Math.max(0, QUESTION_TYPE_OPTIONS.findIndex((item) => item.value === form.value.question_type)))
 const difficultyIndex = computed(() => Math.max(0, Math.min(4, Number(form.value.difficulty || 1) - 1)))
 const difficultyLabel = computed(() => form.value.difficulty ? difficultyRange[Math.max(0, Math.min(4, Number(form.value.difficulty) - 1))] : '未评定')
