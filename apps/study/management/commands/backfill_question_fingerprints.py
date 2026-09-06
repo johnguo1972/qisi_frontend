@@ -12,8 +12,11 @@ from django.db.models import Prefetch
 from django.utils import timezone
 
 from apps.parser.models import ExamQuestion, QuestionContentFingerprint, QuestionImage, QuestionOption
-from apps.parser.question_identity import build_content_fingerprint
-from apps.study.formula_assets import FORMULA_PLACEHOLDER_RE, formula_key_from_path
+from apps.parser.question_identity import (
+    activate_content_fingerprint,
+    build_content_fingerprint,
+    reserve_content_fingerprint,
+)
 
 
 def _non_negative_int(value: str) -> int:
@@ -49,30 +52,14 @@ def _content_v1_fingerprint(question: ExamQuestion) -> str:
     illustrations = [image for image in images if image.image_type != 'formula']
     formulas = [image for image in images if image.image_type == 'formula']
 
-    image_hashes = [_asset_sha256(image) for image in [*illustrations, *formulas]]
-    formula_identities: dict[str, str] = {}
-    formula_texts: list[str] = []
-    for image, image_hash in zip(formulas, image_hashes[len(illustrations):]):
-        source_path = image.original_file_path or image.file_path
-        formula_key = formula_key_from_path(source_path, question.pk)
-        description = str(image.description or '').strip()
-        identity = image_hash if not description or description == formula_key else description
-        formula_texts.append(identity)
-        formula_identities[formula_key] = identity
-        if description:
-            formula_identities.setdefault(description, identity)
-
-    def normalize_formulas(value: object) -> str:
-        return FORMULA_PLACEHOLDER_RE.sub(
-            lambda match: f'[[formula:{formula_identities.get(match.group(1), match.group(1))}]]',
-            str(value or ''),
-        )
+    if formulas:
+        raise ValueError('formula asset identity cannot be reconstructed losslessly')
 
     return build_content_fingerprint(
-        stem=normalize_formulas(question.stem),
-        options=[normalize_formulas(option.content) for option in options],
-        formula_texts=formula_texts,
-        image_hashes=image_hashes,
+        stem=question.stem,
+        options=[option.content for option in options],
+        formula_texts=[],
+        image_hashes=[_asset_sha256(image) for image in illustrations],
     )
 
 
@@ -132,15 +119,9 @@ class Command(BaseCommand):
             if not should_apply:
                 continue
 
-            registry = QuestionContentFingerprint.objects.select_related(
-                'canonical_question'
-            ).filter(fingerprint=fingerprint).first()
-            if registry is None:
-                QuestionContentFingerprint.objects.create(
-                    fingerprint=fingerprint,
-                    canonical_question=question,
-                    state=QuestionContentFingerprint.State.ACTIVE,
-                )
+            registry, created = reserve_content_fingerprint(fingerprint)
+            if created:
+                activate_content_fingerprint(registry, question)
                 stats['created'] += 1
                 continue
 

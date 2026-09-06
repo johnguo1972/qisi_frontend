@@ -38,6 +38,28 @@ implementation. This task changes no frontend files.
 - Historical records with a missing image file are skipped rather than given
   a partial fingerprint; the command reports them as errors for a later,
   source-aware repair.
-- The management command is safe for normal single-process execution. It does
-  not add a concurrent writer retry around registry creation, so concurrent
-  backfill processes should not be run together.
+- Registry creation uses the shared unique-reservation recovery path; the
+  conflict behavior is covered with a simulated concurrent reservation, not a
+  multi-process database contention test.
+
+## Review fix round 1
+
+- Historical formula images are now skipped with an error instead of producing
+  a guessed fingerprint. The importer selects `recognized_text` before
+  `alt_text`, while historical persistence retains only one description value
+  and may lose a custom formula key; this cannot be reconstructed losslessly.
+- Registry creation now goes through the shared reservation and activation
+  helpers. A concurrent reservation result is treated as owned by the other
+  writer instead of making a direct `create()` fail the command.
+- Added coverage for formula ambiguity, existing-registry canonical correction,
+  conflict-owned reservations, dry-run cleanup immutability, and parser mode
+  exclusivity.
+
+Verification after the review fix:
+
+- `...python.exe -m pytest apps/study/tests/test_backfill_question_fingerprints.py apps/parser/tests/test_question_identity.py apps/study/tests/test_json_import_dedup.py -q --basetemp .pt6r1final`
+  - 36 passed.
+- `...python.exe manage.py check`
+  - no issues.
+- `git diff --check`
+  - clean.
