@@ -2,24 +2,26 @@
   <view v-if="visible" class="history-overlay" @click.self="close">
     <view class="history-modal" @click.stop>
       <view class="history-header">
-        <text class="history-title">新增/导入习题历史</text>
-        <button size="mini" class="history-close" data-test="ingestion-history-close" @click="close">关闭</button>
+        <text class="history-title">{{ UI_TEXT.title }}</text>
+        <button size="mini" class="history-close" data-test="ingestion-history-close" @click="close">
+          {{ UI_TEXT.close }}
+        </button>
       </view>
 
-      <view v-if="loading" class="history-state">加载中...</view>
+      <view v-if="loading" class="history-state">{{ UI_TEXT.loading }}</view>
       <view v-else-if="error" class="history-state history-error">{{ error }}</view>
-      <view v-else-if="!items.length" class="history-state">最近一个月暂无新增或导入习题记录</view>
+      <view v-else-if="!items.length" class="history-state">{{ UI_TEXT.empty }}</view>
       <scroll-view v-else scroll-y class="history-list">
         <view v-for="item in items" :key="item.id" class="history-item">
           <view class="history-item-main">
             <text class="history-source">{{ sourceLabel(item.source_type) }}</text>
-            <text class="history-name">{{ item.source_name || '未命名来源' }}</text>
+            <text class="history-name">{{ item.source_name || UI_TEXT.unnamedSource }}</text>
           </view>
           <text class="history-time">{{ formatTime(item.created_at) }}</text>
           <view class="history-counts">
-            <text>新增 {{ item.created_count || 0 }}</text>
-            <text>已跳过 {{ item.skipped_existing_count || 0 }}</text>
-            <text>失败 {{ item.failed_count || 0 }}</text>
+            <text>{{ UI_TEXT.created }} {{ item.created_count || 0 }}</text>
+            <text>{{ UI_TEXT.skipped }} {{ item.skipped_existing_count || 0 }}</text>
+            <text>{{ UI_TEXT.failed }} {{ item.failed_count || 0 }}</text>
           </view>
         </view>
       </scroll-view>
@@ -52,20 +54,35 @@ const items = ref<IngestionHistoryItem[]>([])
 const loading = ref(false)
 const error = ref('')
 
+const UI_TEXT = {
+  title: '\u65b0\u589e/\u5bfc\u5165\u4e60\u9898\u5386\u53f2',
+  close: '\u5173\u95ed',
+  loading: '\u52a0\u8f7d\u4e2d...',
+  empty: '\u6700\u8fd1\u4e00\u4e2a\u6708\u6682\u65e0\u65b0\u589e\u6216\u5bfc\u5165\u4e60\u9898\u8bb0\u5f55',
+  unnamedSource: '\u672a\u547d\u540d\u6765\u6e90',
+  unknownTime: '\u65f6\u95f4\u672a\u77e5',
+  created: '\u65b0\u589e',
+  skipped: '\u5df2\u8df3\u8fc7',
+  failed: '\u5931\u8d25',
+  loadErrorShort: '\u52a0\u8f7d\u5386\u53f2\u8bb0\u5f55\u5931\u8d25',
+  loadError: '\u52a0\u8f7d\u5386\u53f2\u8bb0\u5f55\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5',
+  loadErrorLog: '\u52a0\u8f7d\u4e60\u9898\u5bfc\u5165\u5386\u53f2\u5931\u8d25:',
+} as const
+
 const SOURCE_LABELS: Record<string, string> = {
-  json_import: 'JSON 数据包',
-  manual_create: '手动新增',
-  photo_create: '拍照导入',
-  course_material_import: '课件导入',
-  course_link_import: '课程关联导入',
+  json_import: 'JSON \u6570\u636e\u5305\u5bfc\u5165',
+  manual_create: '\u624b\u52a8\u65b0\u589e',
+  photo_create: '\u62cd\u7167\u5bfc\u5165',
+  course_material_import: '\u8bfe\u4ef6\u5bfc\u5165',
+  course_link_import: '\u8bfe\u7a0b\u5173\u8054\u5bfc\u5165',
 }
 
 function sourceLabel(sourceType?: string): string {
-  return SOURCE_LABELS[String(sourceType || '').trim()] || '习题导入'
+  return SOURCE_LABELS[String(sourceType || '').trim()] || '\u4e60\u9898\u5bfc\u5165'
 }
 
 function formatTime(value?: string): string {
-  if (!value) return '时间未知'
+  if (!value) return UI_TEXT.unknownTime
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
 }
@@ -84,14 +101,14 @@ async function loadHistory() {
       ...(props.scope === 'course' && props.courseId ? { courseId: props.courseId } : {}),
     })
     if (response && Object.prototype.hasOwnProperty.call(response, 'code') && Number(response.code) !== 0) {
-      throw new Error(response.message || '加载历史记录失败')
+      throw new Error(response.message || UI_TEXT.loadErrorShort)
     }
     const data = response?.data?.data || response?.data || response || {}
     items.value = Array.isArray(data) ? data : (Array.isArray(data.items) ? data.items : [])
   } catch (reason) {
-    console.error('加载习题导入历史失败:', reason)
+    console.error(UI_TEXT.loadErrorLog, reason)
     items.value = []
-    error.value = '加载历史记录失败，请稍后重试'
+    error.value = UI_TEXT.loadError
   } finally {
     loading.value = false
   }
