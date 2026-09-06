@@ -49,6 +49,34 @@ describe('QuestionIngestionHistoryModal', () => {
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
+  it('renders the backend json_import source, file name, and all counters', async () => {
+    getQuestionIngestionHistory.mockResolvedValue({
+      code: 0,
+      data: {
+        items: [{
+          id: 'json-import-batch',
+          created_at: '2026-09-06T10:00:00+08:00',
+          source_type: 'json_import',
+          source_name: '压轴题数据包.json',
+          created_count: 12,
+          skipped_existing_count: 7,
+          failed_count: 2,
+        }],
+      },
+    })
+
+    const wrapper = mount(QuestionIngestionHistoryModal, {
+      props: { visible: true, scope: 'bank' },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('JSON 数据包')
+    expect(wrapper.text()).toContain('压轴题数据包.json')
+    expect(wrapper.text()).toContain('新增 12')
+    expect(wrapper.text()).toContain('已跳过 7')
+    expect(wrapper.text()).toContain('失败 2')
+  })
+
   it('requests the exact current course id and renders a clear empty state', async () => {
     getQuestionIngestionHistory.mockResolvedValue({ code: 0, data: { items: [] } })
 
