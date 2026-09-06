@@ -76,12 +76,13 @@ const legacySubjectColors: Record<string, [string, string]> = {
 const subjectLabels: Record<string, string> = {
   chinese: '\u8bed\u6587', math: '\u6570\u5b66', english: '\u82f1\u8bed', physics: '\u7269\u7406',
   chemistry: '\u5316\u5b66', biology: '\u751f\u7269', geography: '\u5730\u7406', history: '\u5386\u53f2',
+  politics: '\u653f\u6cbb',
 }
 
 const subjectColors: Record<string, [string, string]> = {
   chinese: ['#f093fb', '#f5576c'], math: ['#667eea', '#764ba2'], english: ['#4facfe', '#00f2fe'],
   physics: ['#43e97b', '#38f9d7'], chemistry: ['#fa709a', '#fee140'], biology: ['#a8edea', '#fed6e3'],
-  geography: ['#89f7fe', '#66a6ff'], history: ['#d299c2', '#fef9d7'],
+  geography: ['#89f7fe', '#66a6ff'], history: ['#d299c2', '#fef9d7'], politics: ['#ffecd2', '#fcb69f'],
 }
 
 const subjectLabel = computed(() => subjectLabels[props.course.subject] || props.course.subject)
@@ -105,7 +106,7 @@ const subjectIcon = computed(() => {
   }
   const canonicalIcons: Record<string, string> = {
     math: '\ud83d\udcbb', chinese: '\ud83d\udcd6', english: '\ud83d\udd0a', physics: '\u26a1',
-    chemistry: '\ud83e\uddea', biology: '\ud83e\uddec', history: '\ud83d\udcdc', geography: '\ud83c\udf0d',
+    chemistry: '\ud83e\uddea', biology: '\ud83e\uddec', history: '\ud83d\udcdc', geography: '\ud83c\udf0d', politics: '\u2696\ufe0f',
   }
   return canonicalIcons[props.course.subject] || icons[props.course.subject] || '📚'
 })
