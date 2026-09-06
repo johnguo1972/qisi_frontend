@@ -1119,6 +1119,7 @@ def question_import(request, course_id):
         course=course,
     )
     imported_count = 0
+    skipped_existing_count = 0
     try:
         for qid in question_ids:
             _, created = CourseQuestionLink.objects.get_or_create(
@@ -1131,16 +1132,20 @@ def question_import(request, course_id):
             )
             if created:
                 imported_count += 1
+            else:
+                skipped_existing_count += 1
     except Exception:
         finish_ingestion_batch(
             batch, total_read=len(question_ids), created_count=imported_count,
-            skipped_existing_count=0, skipped_in_package_count=0, failed_count=1,
+            skipped_existing_count=skipped_existing_count,
+            skipped_in_package_count=0, failed_count=1,
         )
         raise
 
     finish_ingestion_batch(
         batch, total_read=len(question_ids), created_count=imported_count,
-        skipped_existing_count=0, skipped_in_package_count=0, failed_count=0,
+        skipped_existing_count=skipped_existing_count,
+        skipped_in_package_count=0, failed_count=0,
     )
 
     return Response({

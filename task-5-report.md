@@ -38,3 +38,13 @@ normalization.
   partial source rows, preserving endpoint behavior instead of introducing an
   unrelated rollback policy.
 - No frontend work or historical backfill was performed.
+
+## Review fix round 1
+
+- Course-link batches now increment `skipped_existing_count` for every
+  `CourseQuestionLink.get_or_create(..., created=False)` result, including
+  repeated IDs within one request.
+- Both normal and exception finalization preserve the accumulated skipped
+  count, so the source counters account for every item read.
+- Added cross-request and same-request duplicate assertions to the focused
+  ingestion-source test suite.

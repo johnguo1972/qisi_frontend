@@ -192,7 +192,30 @@ def test_repeated_course_question_link_import_records_zero_created_batch(api_cli
         source_type=QuestionIngestionBatch.SourceType.COURSE_LINK_IMPORT,
     ).order_by('created_at')
     assert list(batches.values_list('created_count', flat=True)) == [1, 0]
+    assert list(batches.values_list('skipped_existing_count', flat=True)) == [0, 1]
     assert batches.last().status == QuestionIngestionBatch.Status.SUCCESS
+
+
+@pytest.mark.django_db
+def test_repeated_question_ids_in_one_course_link_import_count_as_skipped_existing(
+    api_client, teacher, course, paper,
+):
+    question = _create_bank_question(paper, 'course-link-same-request')
+
+    response = api_client.post(
+        f'/api/v1/courses/{course.id}/questions/import/',
+        {'question_ids': [str(question.id), str(question.id)]},
+        format='json',
+    )
+
+    assert response.status_code == 200
+    batch = QuestionIngestionBatch.objects.get(
+        actor=teacher, source_type=QuestionIngestionBatch.SourceType.COURSE_LINK_IMPORT,
+    )
+    assert batch.total_read == 2
+    assert batch.created_count == 1
+    assert batch.skipped_existing_count == 1
+    assert batch.failed_count == 0
 
 
 @pytest.mark.django_db
