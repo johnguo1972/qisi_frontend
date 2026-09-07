@@ -43,7 +43,14 @@
             <view class="wechat-login-row"><text class="wechat-login-link" @click="switchLoginMode('wechat')">微信扫码登录</text></view>
             <!-- #endif -->
             <!-- #ifdef MP-WEIXIN -->
-            <button class="wechat-mini-login" :disabled="loading" @click="handleWechatLogin">微信一键登录</button>
+            <button
+              class="wechat-mini-login"
+              :disabled="loading"
+              open-type="getPhoneNumber"
+              @getphonenumber="handleWechatPhoneLogin"
+            >
+              微信手机号登录
+            </button>
             <!-- #endif -->
           </template>
 
@@ -73,9 +80,8 @@
 
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
-import { authApi } from '@/api/index.ts'
+import { authApi, wechatApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
-import { wxLogin } from '@/utils/wechat-auth'
 import { persistSession, routeForRole, type AppRole } from '@/utils/roles'
 // #ifdef H5
 import { wechatDeviceApi, type WechatDeviceSession } from '@/api/wechat-device'
@@ -253,17 +259,29 @@ async function handleLogin() {
   }
 }
 
-async function handleWechatLogin() {
+async function handleWechatPhoneLogin(event: any) {
   if (loading.value) return
+  const phoneCode = event?.detail?.code
+  if (!phoneCode) {
+    uni.showToast({ title: '请授权微信手机号后登录', icon: 'none' })
+    return
+  }
   loading.value = true
   try {
-    const result = await wxLogin(activeTab.value)
-    if (result.needBindPhone) {
-      uni.navigateTo({ url: `/pages/student/parent-bind?bindToken=${encodeURIComponent(result.bindToken || '')}` })
-      return
-    }
-    userStore.setUserInfo(result.userInfo)
-    uni.reLaunch({ url: routeForRole(result.userInfo.active_role as AppRole) })
+    // #ifdef MP-WEIXIN
+    const loginCode = await new Promise<string>((resolve, reject) => {
+      uni.login({
+        provider: 'weixin',
+        success: (result) => result.code ? resolve(result.code) : reject(new Error('微信登录凭证获取失败')),
+        fail: () => reject(new Error('微信登录凭证获取失败')),
+      })
+    })
+    const response = await wechatApi.phoneLogin(loginCode, phoneCode, activeTab.value)
+    if (response.code !== 0 || !response.data) throw new Error((response as any).message || '微信登录失败')
+    persistSession(response.data)
+    userStore.setUserInfo(response.data.user)
+    uni.reLaunch({ url: routeForRole(response.data.user.active_role as AppRole) })
+    // #endif
   } catch (error: any) {
     uni.showToast({ title: error?.message || '微信登录失败', icon: 'none' })
   } finally {

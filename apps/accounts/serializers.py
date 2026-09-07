@@ -23,6 +23,12 @@ class LoginSerializer(serializers.Serializer):
     verify_code = serializers.CharField(max_length=6)
 
 
+class WechatPhoneLoginSerializer(serializers.Serializer):
+    login_code = serializers.CharField(max_length=256)
+    phone_code = serializers.CharField(max_length=256)
+    role_type = serializers.ChoiceField(choices=VALID_ROLES)
+
+
 class ProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserAccount

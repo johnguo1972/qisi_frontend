@@ -71,7 +71,9 @@ def test_wechat_login_and_bind_preserve_the_selected_role_route():
     bind = read("pages/student/parent-bind.vue")
 
     assert "role_type: roleType" in wechat_api
-    assert "wxLogin(activeTab.value)" in login
+    assert 'open-type="getPhoneNumber"' in login
+    assert '@getphonenumber="handleWechatPhoneLogin"' in login
+    assert "wechatApi.phoneLogin(loginCode, phoneCode, activeTab.value)" in login
     assert "wechatApi.login(code, roleType)" in wechat_auth
     assert "routeForRole" in bind
     assert "response.data.user.active_role" in bind

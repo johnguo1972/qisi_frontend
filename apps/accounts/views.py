@@ -21,6 +21,7 @@ from .serializers import (
     LoginSerializer,
     ProfileUpdateSerializer,
     RefreshTokenSerializer,
+    WechatPhoneLoginSerializer,
     WechatWebSessionSerializer,
     WebBindingCompleteSerializer,
     WebBindingPhoneSerializer,
@@ -61,6 +62,7 @@ from .wechat_web import (
     get_web_binding_status,
     prepare_web_login_session,
 )
+from .wechat_miniprogram import MiniProgramLoginError, login_with_miniprogram_phone
 from django.conf import settings
 from apps.qrcode.services import wxacode_image
 
@@ -176,6 +178,48 @@ def login(request):
 
     tokens = generate_tokens(user, active_role)
 
+    return Response({
+        'code': 0,
+        'message': '登录成功',
+        'data': {
+            **tokens,
+            'user': serialize_user_session(user, active_role),
+        },
+        'trace_id': make_trace_id(),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def wechat_phone_login(request):
+    """Log in or create a phone-backed account from MP one-time credentials."""
+    serializer = WechatPhoneLoginSerializer(data=request.data)
+    if not serializer.is_valid():
+        return role_error(
+            'WECHAT_LOGIN_INVALID',
+            'Invalid WeChat login credentials',
+            status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        user, tokens = login_with_miniprogram_phone(
+            serializer.validated_data['login_code'],
+            serializer.validated_data['phone_code'],
+            serializer.validated_data['role_type'],
+        )
+    except MiniProgramLoginError as error:
+        if error.code == 'ROLE_NOT_GRANTED':
+            http_status = status.HTTP_403_FORBIDDEN
+        elif error.code == 'WECHAT_IDENTITY_CONFLICT':
+            http_status = status.HTTP_409_CONFLICT
+        elif error.code in {
+            'DEVICE_LOGIN_AUTHORIZATION_FAILED',
+            'DEVICE_PHONE_AUTHORIZATION_FAILED',
+        }:
+            http_status = status.HTTP_503_SERVICE_UNAVAILABLE
+        else:
+            http_status = status.HTTP_400_BAD_REQUEST
+        return role_error(error.code, 'WeChat login failed', http_status)
+    active_role = serializer.validated_data['role_type']
     return Response({
         'code': 0,
         'message': '登录成功',
