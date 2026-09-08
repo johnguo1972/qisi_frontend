@@ -32,6 +32,7 @@ REQUIRED_TASKS = {
     "vision_position_detect",
     "guidance_generate",
     "guidance_evaluate",
+    "guidance_fixed_evaluate",
     "teacher_guidance_evaluate",
     "variant_generate",
     "variant_verify_deepseek",
@@ -58,7 +59,8 @@ EXPECTED_ROUTE_MATRIX = {
     "vision_question_parse": ("qwen", "qwen3-vl-plus", 300.0),
     "vision_position_detect": ("qwen", "qwen3.7-plus", 300.0),
     "guidance_generate": ("qwen", "qwen3.7-flash", 300.0),
-    "guidance_evaluate": ("qwen", "qwen3.7-flash", 300.0),
+    "guidance_evaluate": ("qwen", "qwen3.7-flash", 10.0),
+    "guidance_fixed_evaluate": ("qwen", "qwen3.7-flash", 10.0),
     "teacher_guidance_evaluate": ("qwen", "qwen3.7-flash", 300.0),
     "variant_generate": ("qwen", "qwen3.7-plus", 300.0),
     "variant_verify_deepseek": ("deepseek", "deepseek-v4-pro", 300.0),
@@ -381,13 +383,20 @@ def test_exposes_immutable_prompt_configuration(tmp_path, provider_env):
         prompt.user = "changed"
 
 
-def test_default_config_declares_every_task_with_300_second_timeout(provider_env):
+def test_default_config_declares_realtime_guidance_timeout(provider_env):
     loaded = AIConfig.load()
 
     assert set(loaded.task_keys) == REQUIRED_TASKS
-    assert {loaded.get_task_config(key).timeout_seconds for key in REQUIRED_TASKS} == {
-        300.0
-    }
+    assert loaded.get_task_config("guidance_evaluate").timeout_seconds == 10.0
+    assert loaded.get_task_config("guidance_evaluate").max_tokens == 1024
+    assert loaded.get_task_config("guidance_fixed_evaluate").max_tokens == 1200
+    assert loaded.get_task_config("guidance_evaluate").retry_count == 0
+    assert loaded.get_task_config("guidance_evaluate").provider_lease_wait_seconds == 3.0
+    assert {
+        loaded.get_task_config(key).timeout_seconds
+        for key in REQUIRED_TASKS
+        if key not in {"guidance_evaluate", "guidance_fixed_evaluate"}
+    } == {300.0}
     assert {
         key: loaded.get_task_config(key).provider for key in REQUIRED_TASKS
     } == {

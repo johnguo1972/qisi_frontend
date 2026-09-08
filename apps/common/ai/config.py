@@ -39,6 +39,7 @@ TASK_PROVIDER_SCHEMA = {
     "vision_position_detect": "qwen",
     "guidance_generate": "qwen",
     "guidance_evaluate": "qwen",
+    "guidance_fixed_evaluate": "qwen",
     "teacher_guidance_evaluate": "qwen",
     "variant_generate": "qwen",
     "variant_verify_deepseek": "deepseek",
@@ -85,6 +86,7 @@ class AITaskConfig:
     response_format: str | None
     enable_thinking: bool | None = None
     reasoning_effort: str | None = None
+    provider_lease_wait_seconds: float | None = None
 
 
 class AIConfig:
@@ -430,7 +432,12 @@ def _load_task(
             "retry_count",
             "retry_backoff_seconds",
         },
-        {"response_format", "enable_thinking", "reasoning_effort"},
+        {
+            "response_format",
+            "enable_thinking",
+            "reasoning_effort",
+            "provider_lease_wait_seconds",
+        },
     )
     provider = parser.get(section, "provider").strip()
     if provider not in SUPPORTED_PROVIDERS:
@@ -457,7 +464,12 @@ def _load_task(
     if max_tokens <= 0:
         raise AIConfigError("Option max_tokens must be greater than zero")
     timeout_seconds = _parse_float(parser, section, "timeout_seconds")
-    if timeout_seconds != 300:
+    if key in ("guidance_evaluate", "guidance_fixed_evaluate"):
+        if not 1 <= timeout_seconds <= 30:
+            raise AIConfigError(
+                "Option timeout_seconds for guidance evaluation must be between 1 and 30"
+            )
+    elif timeout_seconds != 300:
         raise AIConfigError("Option timeout_seconds must be exactly 300")
     retry_count = _parse_int(parser, section, "retry_count")
     if retry_count < 0:
@@ -484,6 +496,13 @@ def _load_task(
         raise AIConfigError(
             "Option reasoning_effort must be low, medium, or high"
         )
+    provider_lease_wait_seconds = (
+        _parse_float(parser, section, "provider_lease_wait_seconds")
+        if parser.has_option(section, "provider_lease_wait_seconds")
+        else None
+    )
+    if provider_lease_wait_seconds is not None and provider_lease_wait_seconds < 0:
+        raise AIConfigError("Option provider_lease_wait_seconds cannot be negative")
 
     return AITaskConfig(
         key=key,
@@ -499,6 +518,7 @@ def _load_task(
         response_format=response_format,
         enable_thinking=enable_thinking,
         reasoning_effort=reasoning_effort,
+        provider_lease_wait_seconds=provider_lease_wait_seconds,
     )
 
 

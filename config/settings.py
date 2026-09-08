@@ -84,7 +84,9 @@ DATABASES = {
 
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
-CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', 'True').lower() == 'true'
+# Student guidance preparation must be dispatched to a worker in normal
+# environments. Tests that need synchronous task execution opt in explicitly.
+CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', 'False').lower() == 'true'
 
 # Durable AI queue limits.  These values are deliberately independent from
 # Celery worker concurrency: three batch jobs may be active while at most
@@ -100,6 +102,18 @@ AI_DEEPSEEK_CONCURRENCY = int(os.environ.get('AI_DEEPSEEK_CONCURRENCY', '6'))
 AI_PROVIDER_LEASE_WAIT_SECONDS = int(os.environ.get('AI_PROVIDER_LEASE_WAIT_SECONDS', '300'))
 AI_PROVIDER_LEASE_POLL_SECONDS = float(os.environ.get('AI_PROVIDER_LEASE_POLL_SECONDS', '2'))
 
+# Student guidance is a realtime path.  It can be disabled immediately during
+# a gray rollout without changing application code; an empty allowlist means
+# the feature is enabled for all authenticated students.
+GUIDANCE_REALTIME_AI_ENABLED = os.environ.get(
+    'GUIDANCE_REALTIME_AI_ENABLED', 'true'
+).lower() in ('1', 'true', 'yes')
+GUIDANCE_GRAY_MOBILES = tuple(
+    value.strip()
+    for value in os.environ.get('GUIDANCE_GRAY_MOBILES', '').split(',')
+    if value.strip()
+)
+
 # AI calls are long-running and must not be prefetched ahead of available
 # workers.  Late acknowledgement allows a lost worker to return its item to
 # the broker instead of silently dropping it.
@@ -109,6 +123,7 @@ CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_ROUTES = {
     'apps.review.tasks.execute_ai_job_item': {'queue': 'ai.batch'},
     'apps.review.tasks.dispatch_queued_ai_items_task': {'queue': 'ai.batch'},
+    'apps.study.tasks.prepare_guidance_content': {'queue': 'ai.guidance'},
 }
 
 CELERY_BEAT_SCHEDULE = {

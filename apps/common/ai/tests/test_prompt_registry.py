@@ -485,11 +485,11 @@ def _legacy_guidance_generate_prompt(answer: str) -> tuple[str, str]:
 
 def _legacy_student_evaluation_prompt(answer: str) -> tuple[str, str]:
     return (
-        "你是一位耐心的老师，对学生回答给出 1-2 句简明评价与鼓励。",
-        "题目：题目\n"
-        f"参考答案：{answer or '见解析'}\n"
-        "学生回答：学生作答\n"
-        "请评价。",
+        "你是一位耐心、严谨的老师。请根据完整题目上下文、当前引导步骤和学生本轮回答进行一次分析。只能输出有效 JSON，不要输出 Markdown、代码块或思维过程。result 只能是 correct、partial、incorrect、unclear；error_type 只能是 none、concept_error、diagram_error、calculation_error、missing_condition、incomplete_expression、off_topic、unclear。若证据不足，必须使用 unclear，不得猜测学生未表达的思路。B 模式的程序判定优先于模型判断，不能修改程序给出的对错结论。evaluation 面向学生简明说明；correction_direction 只给出针对本轮回答的纠正方向；没有下一问题或提示时使用 null；confidence 为 0 到 1 的数字。",
+        "题目与引导上下文：题目\n"
+        f"当前步骤参考答案：{answer or '见解析'}\n"
+        "学生本轮回答：学生作答\n"
+        "请严格返回包含 result、error_type、evaluation、correction_direction、next_question、next_hint、confidence 的 JSON 对象。",
     )
 
 

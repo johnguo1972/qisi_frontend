@@ -27,8 +27,11 @@ export const studentApi = {
     post(`/student/attempts/${attemptId}/retry`, data),
   startGuidance: (data: { question_id: UUID; mode_type: string }) =>
     post('/student/guidance/sessions', data),
-  guidanceReply: (sessionId: UUID, reply: string) =>
-    post(`/student/guidance/sessions/${sessionId}/reply`, { reply }),
+  guidanceReply: (sessionId: UUID, reply: string, replyId?: string) =>
+    post(`/student/guidance/sessions/${sessionId}/reply`, {
+      reply,
+      ...(replyId ? { reply_id: replyId } : {}),
+    }),
   getModeA: (questionId: UUID) => get(`/student/questions/${questionId}/mode-a`),
   growth: () => get('/student/growth'),
   knowledgeMastery: (params?: { subject?: string }) => get('/student/knowledge-mastery', params),
