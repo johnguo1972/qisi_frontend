@@ -903,7 +903,12 @@ function importJsonPackage() {
     success: async (res: any) => {
       try {
         const file = res.tempFiles?.[0]?.file || res.tempFiles?.[0]
-        await importJsonPackageApi(file)
+        await importJsonPackageApi(file, {
+          courseId: courseId.value,
+          treeNodeId: selectedNode.value ? String(selectedNode.value.id) : undefined,
+        })
+        await loadTree()
+        await loadQuestions()
         uni.showToast({ title: '导入任务已提交', icon: 'success' })
         closeAddPanel()
       } catch (e) {

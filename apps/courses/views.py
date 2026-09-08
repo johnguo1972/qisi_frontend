@@ -1157,6 +1157,26 @@ def question_import(request, course_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def question_import_json_package(request, course_id):
+    """Import a JSON package and link its resolved questions to this course."""
+    course = _get_course_or_404(course_id)
+    _check_course_owner(course, request.user)
+
+    tree_node = None
+    tree_node_id = request.data.get('tree_node_id')
+    if tree_node_id:
+        try:
+            tree_node = CourseTree.objects.get(id=tree_node_id, course=course)
+        except (CourseTree.DoesNotExist, ValueError, TypeError):
+            raise ValidationError('tree_node_id does not belong to this course')
+
+    from apps.study.json_import_views import import_json_package_for_course
+
+    return import_json_package_for_course(request, course=course, tree_node=tree_node)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def question_batch_delete(request, course_id):
     """批量从课程移除习题（软删除 CourseQuestionLink）"""
     course = _get_course_or_404(course_id)
