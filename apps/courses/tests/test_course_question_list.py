@@ -1,4 +1,9 @@
+import json
+import zipfile
+from io import BytesIO
+
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from rest_framework.test import APIClient
 
@@ -139,6 +144,44 @@ def test_course_question_list_rejects_malformed_tree_node_id(api_client, course)
     )
 
     assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_course_json_import_creates_default_node_and_links_imported_questions(
+    api_client, course, settings, tmp_path,
+):
+    """A JSON package uploaded from a course must be visible in that course."""
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    package = {
+        'paper': {'title': 'Course JSON package', 'subject': 'physics', 'grade': 'Grade 8'},
+        'questions': [{
+            'question_no': '1',
+            'question_type': 'single_choice',
+            'stem': 'Which quantity is speed?',
+            'options': [{'label': 'A', 'content': 'Distance per time'}],
+            'answer': {'raw': 'A'},
+        }],
+    }
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, 'w') as package_zip:
+        package_zip.writestr('all_questions.json', json.dumps(package))
+
+    response = api_client.post(
+        f'/api/v1/courses/{course.id}/questions/import-json-package/',
+        {'file': SimpleUploadedFile('course-package.zip', archive.getvalue(), 'application/zip')},
+        format='multipart',
+    )
+
+    assert response.status_code == 200
+    assert response.data['data']['imported'] == 1
+    node = CourseTree.objects.get(course=course, name='未分类导入习题')
+    link = CourseQuestionLink.objects.get(course=course, is_deleted=False)
+    assert link.tree_node_id == node.id
+
+    listed = api_client.get(f'/api/v1/courses/{course.id}/questions/')
+    assert listed.status_code == 200
+    assert listed.data['data']['total'] == 1
+    assert listed.data['data']['items'][0]['id'] == str(link.question_id)
 
 
 @pytest.mark.django_db

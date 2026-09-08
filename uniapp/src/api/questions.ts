@@ -249,14 +249,18 @@ export function getKnowledgeTree() {
 
 // === JSON 数据包导入 ===
 
-export function importJsonPackage(file: File) {
+export function importJsonPackage(file: File, options?: { courseId?: string; treeNodeId?: string }) {
   return new Promise<any>((resolve, reject) => {
     const token = uni.getStorageSync('accessToken')
     const formData = new FormData()
     formData.append('file', file)
+    if (options?.treeNodeId) formData.append('tree_node_id', options.treeNodeId)
+    const importUrl = options?.courseId
+      ? `${UPLOAD_BASE}/courses/${options.courseId}/questions/import-json-package/`
+      : `${UPLOAD_BASE}/questions/import-json-package`
 
     // #ifdef H5
-    fetch(`${UPLOAD_BASE}/questions/import-json-package`, {
+    fetch(importUrl, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` },
       body: formData,

@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -38,6 +39,7 @@ from apps.study.formula_assets import (
     render_formula_placeholders,
 )
 from apps.study.ingestion import finish_ingestion_batch, start_ingestion_batch
+from apps.courses.models import CourseQuestionLink, CourseTree
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,15 @@ SUBJECT_LETTER_MAP = {
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def import_json_package(request):
+    return _import_json_package(request)
+
+
+def import_json_package_for_course(request, *, course, tree_node=None):
+    """Import a package and ensure every resolved question belongs to ``course``."""
+    return _import_json_package(request, course=course, tree_node=tree_node)
+
+
+def _import_json_package(request, *, course=None, tree_node=None):
     """
     上传ZIP压缩包，解析JSON和图片，批量导入题目。
 
@@ -97,6 +108,7 @@ def import_json_package(request):
         actor=request.user,
         source_type='json_import',
         source_name=uploaded_file.name,
+        course=course,
     )
 
     if not uploaded_file.name.lower().endswith('.zip'):
@@ -149,6 +161,8 @@ def import_json_package(request):
             user=request.user,
             batch=batch,
             source_file_path=str(zip_path.relative_to(settings.MEDIA_ROOT)),
+            course=course,
+            tree_node=tree_node,
         )
 
         return Response({
@@ -216,7 +230,7 @@ def _read_paper_info(temp_dir):
     return {}
 
 
-def _process_json_import(*, temp_dir, user, batch, source_file_path):
+def _process_json_import(*, temp_dir, user, batch, source_file_path, course=None, tree_node=None):
     """Preflight a package, then lazily create import records for new content only."""
     paper_info, questions_data, assets_dir = _load_json_package(temp_dir)
     counters = {
@@ -230,6 +244,7 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
     duplicate_details = []
     prepared = []
     fingerprints_in_package = set()
+    course_question_ids = set()
 
     for index, raw_question in enumerate(questions_data):
         try:
@@ -256,6 +271,8 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
             continue
         if registry:
             counters['skipped_existing'] += 1
+            if course and registry.canonical_question_id:
+                course_question_ids.add(registry.canonical_question_id)
             _append_duplicate_detail(
                 duplicate_details,
                 source_index=index,
@@ -278,6 +295,8 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
                     registry = _active_fingerprint_or_raise(fingerprint)
                     if registry:
                         counters['skipped_existing'] += 1
+                        if course and registry.canonical_question_id:
+                            course_question_ids.add(registry.canonical_question_id)
                         _append_duplicate_detail(
                             duplicate_details,
                             source_index=index,
@@ -310,6 +329,8 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
                 )
                 activate_content_fingerprint(registry, question)
                 counters['imported'] += 1
+                if course:
+                    course_question_ids.add(question.id)
         except Exception as exc:
             _cleanup_media_paths(created_media_paths)
             if created_paper:
@@ -329,6 +350,23 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
 
     _complete_duplicate_details(duplicate_details)
 
+    # In-package duplicates are resolved only after their representative is
+    # activated, so collect their canonical ids after the import loop.
+    if course:
+        course_question_ids.update(
+            detail['existing_canonical_question_id']
+            for detail in duplicate_details
+            if detail.get('existing_canonical_question_id')
+        )
+        linked_tree_node, linked_count = _link_questions_to_course(
+            course=course,
+            tree_node=tree_node,
+            question_ids=course_question_ids,
+        )
+    else:
+        linked_tree_node = None
+        linked_count = 0
+
     finish_ingestion_batch(
         batch,
         total_read=counters['total_read'],
@@ -345,7 +383,72 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path):
         'errors': counters['failed'],
         'error_details': errors[:20],
         'details': duplicate_details,
+        'course_id': str(course.id) if course else None,
+        'tree_node_id': str(linked_tree_node.id) if linked_tree_node else None,
+        'linked_count': linked_count,
     }
+
+
+def _link_questions_to_course(*, course, tree_node, question_ids):
+    """Upsert course links, creating a safe default node when none was chosen."""
+    if not question_ids:
+        return None, 0
+
+    question_ids = {str(question_id) for question_id in question_ids}
+    existing_links = {
+        str(link.question_id): link
+        for link in CourseQuestionLink.objects.filter(
+            course=course,
+            question_id__in=question_ids,
+        )
+    }
+    # Do not silently move a question that is already categorized in this
+    # course. Only new or previously removed links need a target node.
+    question_ids_to_link = {
+        question_id
+        for question_id in question_ids
+        if question_id not in existing_links or existing_links[question_id].is_deleted
+    }
+    if not question_ids_to_link:
+        return None, 0
+
+    target_node = tree_node
+    if target_node is None:
+        target_node = CourseTree.objects.filter(
+            course=course,
+            parent__isnull=True,
+            name='未分类导入习题',
+        ).order_by('sort_order', 'created_at').first()
+        if target_node is None:
+            max_sort_order = CourseTree.objects.filter(course=course).aggregate(
+                max_sort_order=Max('sort_order'),
+            )['max_sort_order']
+            target_node = CourseTree.objects.create(
+                course=course,
+                name='未分类导入习题',
+                sort_order=(max_sort_order or 0) + 1,
+            )
+
+    for question_id in question_ids_to_link:
+        link = existing_links.get(question_id)
+        if link is None:
+            CourseQuestionLink.objects.create(
+                course=course,
+                question_id=question_id,
+                tree_node=target_node,
+                source='import',
+                source_course_name=course.name,
+                is_deleted=False,
+            )
+        else:
+            link.tree_node = target_node
+            link.source = 'import'
+            link.source_course_name = course.name
+            link.is_deleted = False
+            link.save(update_fields=[
+                'tree_node', 'source', 'source_course_name', 'is_deleted',
+            ])
+    return target_node, len(question_ids_to_link)
 
 
 def _load_json_package(temp_dir):
