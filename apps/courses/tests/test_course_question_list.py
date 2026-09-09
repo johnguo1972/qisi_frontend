@@ -6,12 +6,14 @@ import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from rest_framework.test import APIClient
+from rest_framework.test import APIRequestFactory
 
 from apps.accounts.models import UserAccount
 from apps.courses.models import Course, CourseQuestionLink, CourseTree
 from apps.papers.models import ExamPaper
 from apps.parser.models import ExamQuestion, QuestionOption
 from apps.study.models import QuestionTag, QuestionTagRelation
+from apps.study.json_import_views import import_json_package_for_course
 
 
 @pytest.fixture
@@ -174,7 +176,10 @@ def test_course_json_import_creates_default_node_and_links_imported_questions(
 
     assert response.status_code == 200
     assert response.data['data']['imported'] == 1
+    assert response.data['data']['course_id'] == str(course.id)
+    assert response.data['data']['linked_count'] == 1
     node = CourseTree.objects.get(course=course, name='未分类导入习题')
+    assert response.data['data']['tree_node_id'] == str(node.id)
     link = CourseQuestionLink.objects.get(course=course, is_deleted=False)
     assert link.tree_node_id == node.id
 
@@ -182,6 +187,58 @@ def test_course_json_import_creates_default_node_and_links_imported_questions(
     assert listed.status_code == 200
     assert listed.data['data']['total'] == 1
     assert listed.data['data']['items'][0]['id'] == str(link.question_id)
+
+
+@pytest.mark.django_db
+def test_course_json_import_rejects_missing_course_context(teacher):
+    request = APIRequestFactory().post('/api/v1/courses/missing/questions/import-json-package/')
+    request.user = teacher
+
+    response = import_json_package_for_course(request, course=None)
+
+    assert response.status_code == 400
+    assert response.data['code'] == 400
+    assert response.data['message'] == 'course context is required'
+
+
+@pytest.mark.django_db
+def test_course_json_import_returns_existing_link_node_for_a_deduplicated_question(
+    api_client, course, settings, tmp_path,
+):
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    package = {
+        'paper': {'title': 'Duplicate course package', 'subject': 'physics', 'grade': 'Grade 8'},
+        'questions': [{
+            'question_no': '1',
+            'question_type': 'single_choice',
+            'stem': 'Which quantity is speed?',
+            'options': [{'label': 'A', 'content': 'Distance per time'}],
+            'answer': {'raw': 'A'},
+        }],
+    }
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, 'w') as package_zip:
+        package_zip.writestr('all_questions.json', json.dumps(package))
+    payload = archive.getvalue()
+
+    first = api_client.post(
+        f'/api/v1/courses/{course.id}/questions/import-json-package/',
+        {'file': SimpleUploadedFile('first.zip', payload, 'application/zip')},
+        format='multipart',
+    )
+    node_id = first.data['data']['tree_node_id']
+
+    second = api_client.post(
+        f'/api/v1/courses/{course.id}/questions/import-json-package/',
+        {'file': SimpleUploadedFile('second.zip', payload, 'application/zip')},
+        format='multipart',
+    )
+
+    assert second.status_code == 200
+    assert second.data['data']['course_id'] == str(course.id)
+    assert second.data['data']['tree_node_id'] == node_id
+    assert second.data['data']['linked_count'] == 0
+    assert second.data['data']['skipped_existing'] == 1
 
 
 @pytest.mark.django_db

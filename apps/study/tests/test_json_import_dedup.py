@@ -14,6 +14,19 @@ from apps.study import json_import_views
 from apps.study.models import QuestionIngestionBatch
 
 
+def test_json_import_error_detail_redacts_local_file_paths():
+    detail = json_import_views._question_error(
+        {'question_no': '9'},
+        8,
+        ValueError('cannot open /srv/qisi/media/temp_imports/secret.png'),
+    )
+
+    assert detail == {
+        'question_no': '9',
+        'error': 'cannot open [path hidden]',
+    }
+
+
 def _upload_json_package(client, filename, package, assets):
     archive = BytesIO()
     with zipfile.ZipFile(archive, 'w') as zf:

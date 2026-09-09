@@ -336,7 +336,7 @@ import {
   submitCourseAiTasks,
   submitCourseBatchAi,
 } from './course-practice-list'
-import { questionApi, aiProcessProbe, getQuestionTags, addQuestionTag, getTagList, removeQuestionTag, importJsonPackage as importJsonPackageApi } from '@/api/questions'
+import { questionApi, aiProcessProbe, getQuestionTags, addQuestionTag, getTagList, removeQuestionTag, importCourseJsonPackage } from '@/api/questions'
 import { favoriteApi } from '@/api/favorites'
 import { createQuestionRelationsController } from './question-relations'
 import QuestionDetailCard from '@/components/QuestionDetailCard.vue'
@@ -895,6 +895,10 @@ function goAssignMission() {
 }
 
 function importJsonPackage() {
+  if (!courseId.value) {
+    uni.showToast({ title: '课程信息未加载，不能导入', icon: 'none' })
+    return
+  }
   // Keep the course entry point limited to the supported JSON package flow.
   // @ts-ignore
   uni.chooseFile({
@@ -903,12 +907,13 @@ function importJsonPackage() {
     success: async (res: any) => {
       try {
         const file = res.tempFiles?.[0]?.file || res.tempFiles?.[0]
-        await importJsonPackageApi(file, {
+        const importResponse = await importCourseJsonPackage(file, {
           courseId: courseId.value,
           treeNodeId: selectedNode.value ? String(selectedNode.value.id) : undefined,
         })
         await loadTree()
         await loadQuestions()
+        showJsonImportSummary(importResponse?.data)
         uni.showToast({ title: '导入任务已提交', icon: 'success' })
         closeAddPanel()
       } catch (e) {
@@ -1018,6 +1023,25 @@ type CourseAiJobPoll = {
   jobId: string
   timer: ReturnType<typeof setInterval>
   isBatch: boolean
+}
+
+function showJsonImportSummary(result: any) {
+  const details = Array.isArray(result?.error_details) ? result.error_details.slice(0, 3) : []
+  const lines = [
+    `读取：${result?.total_read || 0} 道`,
+    `新增：${result?.imported || 0} 道`,
+    `去重：${(result?.skipped_existing || 0) + (result?.skipped_in_package || 0)} 道`,
+    `失败：${result?.failed || 0} 道`,
+    `已关联：${result?.linked_count || 0} 道`,
+  ]
+  for (const detail of details) {
+    lines.push(`题号 ${detail?.question_no || '未知'}：${String(detail?.error || '导入失败').slice(0, 80)}`)
+  }
+  uni.showModal({
+    title: result?.failed ? '导入部分完成' : '导入完成',
+    content: lines.join('\n'),
+    showCancel: false,
+  })
 }
 
 const courseAiJobPollTimers: CourseAiJobPoll[] = []

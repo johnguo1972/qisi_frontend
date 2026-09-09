@@ -10,7 +10,7 @@ vi.mock('@/utils/request', () => ({
   del: vi.fn(),
 }))
 
-import { getQuestionIngestionHistory } from './questions'
+import { getQuestionIngestionHistory, importCourseJsonPackage } from './questions'
 
 describe('getQuestionIngestionHistory', () => {
   beforeEach(() => get.mockReset())
@@ -28,5 +28,35 @@ describe('getQuestionIngestionHistory', () => {
     getQuestionIngestionHistory({ scope: 'bank' })
 
     expect(get).toHaveBeenCalledWith('/questions/ingestion-history/', { scope: 'bank' })
+  })
+})
+
+describe('importCourseJsonPackage', () => {
+  beforeEach(() => {
+    vi.stubGlobal('uni', { getStorageSync: vi.fn().mockReturnValue('token') })
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  it('rejects a missing course id before it can fall back to the bank import endpoint', async () => {
+    await expect(importCourseJsonPackage(new File(['{}'], 'package.zip'), { courseId: '' }))
+      .rejects.toThrow('course_id is required')
+
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('posts only to the explicit course import endpoint', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      json: async () => ({ code: 0, data: { course_id: 'course-1' } }),
+    } as Response)
+
+    await importCourseJsonPackage(new File(['{}'], 'package.zip'), {
+      courseId: 'course-1',
+      treeNodeId: 'node-1',
+    })
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/courses/course-1/questions/import-json-package/'),
+      expect.objectContaining({ method: 'POST' }),
+    )
   })
 })
