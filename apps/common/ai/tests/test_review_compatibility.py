@@ -70,6 +70,30 @@ def _make_question(*, stem="1 + 1 = ?"):
     )
 
 
+def test_ai_image_upload_returns_a_short_lived_signed_url(monkeypatch):
+    """AI providers must receive a readable signed URL for private OSS objects."""
+    from apps.common import oss_service
+
+    bucket = MagicMock()
+    bucket.sign_url.return_value = (
+        "https://tikuimg26.oss-cn-shenzhen.aliyuncs.com/exams/paper/q.png"
+        "?OSSAccessKeyId=temporary&Signature=signed"
+    )
+    monkeypatch.setattr(
+        oss_service,
+        "upload_crop_image_safe",
+        lambda *_args, **_kwargs: "https://tikuimg26.oss-cn-shenzhen.aliyuncs.com/exams/paper/q.png",
+    )
+    monkeypatch.setattr(oss_service, "get_oss_client", lambda: bucket)
+
+    url = common_ai_service.AIReviewService()._upload_to_oss(
+        "/tmp/q.png", "exams/paper/q.png"
+    )
+
+    assert url.endswith("Signature=signed")
+    bucket.sign_url.assert_called_once_with("GET", "exams/paper/q.png", 600)
+
+
 @pytest.mark.django_db
 def test_probe_source_text_keeps_child_statements_when_parent_stem_is_present():
     """Catch multipart content being discarded by the generic parent stem."""

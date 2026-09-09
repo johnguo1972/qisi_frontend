@@ -409,13 +409,20 @@ class AIReviewService:
         return urls
 
     def _upload_to_oss(self, local_path: str, oss_key: str) -> str | None:
-        """Delegate uploads to the existing OSS service."""
+        """Upload an AI image and return a short-lived readable URL."""
         from pathlib import PurePosixPath
-        from apps.common.oss_service import upload_crop_image_safe
+        from apps.common.oss_service import get_oss_client, upload_crop_image_safe
 
         parent = str(PurePosixPath(oss_key).parent)
         prefix = parent if parent != "." else "question_crops"
-        return upload_crop_image_safe(local_path, prefix=prefix)
+        uploaded_url = upload_crop_image_safe(local_path, prefix=prefix)
+        if not uploaded_url:
+            return None
+        try:
+            return get_oss_client().sign_url("GET", oss_key, 600)
+        except Exception:
+            logger.warning("Could not generate signed OSS URL for AI image")
+            return None
 
     def _component(self, component_type):
         return self._component_factory(component_type)
