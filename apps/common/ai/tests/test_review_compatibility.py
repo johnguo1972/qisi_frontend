@@ -2195,15 +2195,17 @@ def test_guidance_command_rejects_invalid_id_during_argument_parsing():
 
 
 @pytest.mark.django_db
-def test_deepseek_route_and_all_ai_timeouts_remain_fixed():
-    """Review migration must not alter provider routing or timeout policy."""
+def test_deepseek_route_and_batch_ai_timeouts_remain_fixed():
+    """Review migration must not alter non-realtime provider/timeout policy."""
     config = common_ai_service.load_ai_config()
 
     assert config.get_task_config("variant_verify_deepseek").provider == "deepseek"
     assert all(
         config.get_task_config(task_key).timeout_seconds == 300
         for task_key in config.task_keys
+        if task_key not in {"guidance_evaluate", "guidance_fixed_evaluate"}
     )
+    assert config.get_task_config("guidance_evaluate").timeout_seconds == 10
 
 
 class _CapturingComponent:

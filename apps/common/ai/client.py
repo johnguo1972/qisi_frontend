@@ -229,7 +229,13 @@ class AIClient:
                         ).as_dict()
                     },
                 )
-                with provider_request_lease(task.provider):
+                if task.provider_lease_wait_seconds is None:
+                    lease = provider_request_lease(task.provider)
+                else:
+                    lease = provider_request_lease(
+                        task.provider, task.provider_lease_wait_seconds
+                    )
+                with lease:
                     response = self._client.send(
                         request,
                         auth=None,

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "build": "uni build",
     "dev:h5": "uni -p h5",
     "build:h5": "uni build",
     "build:mp-weixin": "uni build -p mp-weixin",

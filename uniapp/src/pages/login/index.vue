@@ -49,7 +49,7 @@
               open-type="getPhoneNumber"
               @getphonenumber="handleWechatPhoneLogin"
             >
-              微信手机号登录
+              一键授权登录
             </button>
             <!-- #endif -->
           </template>
@@ -263,7 +263,7 @@ async function handleWechatPhoneLogin(event: any) {
   if (loading.value) return
   const phoneCode = event?.detail?.code
   if (!phoneCode) {
-    uni.showToast({ title: '请授权微信手机号后登录', icon: 'none' })
+    uni.showToast({ title: '请授权手机号后登录', icon: 'none' })
     return
   }
   loading.value = true
@@ -283,7 +283,7 @@ async function handleWechatPhoneLogin(event: any) {
     uni.reLaunch({ url: routeForRole(response.data.user.active_role as AppRole) })
     // #endif
   } catch (error: any) {
-    uni.showToast({ title: error?.message || '微信登录失败', icon: 'none' })
+    uni.showToast({ title: error?.message || '手机号快捷登录失败', icon: 'none' })
   } finally {
     loading.value = false
   }
@@ -338,5 +338,10 @@ input { width: 100%; height: 56px; box-sizing: border-box; padding: 14px 16px; b
 .wechat-consent { margin-top: 18rpx; }
 .wechat-status { display: block; min-height: 42rpx; margin-top: 18rpx; line-height: 1.5; }
 .phone-login-back { border: 2rpx solid #409eff; background: #fff; color: #409eff; }
+/* #ifdef MP-WEIXIN */
+/* 微信小程序原生 input 聚焦时会重新计算占位文字位置，固定行高避免文字向上偏移。 */
+input { height: 56px; padding-top: 0; padding-bottom: 0; line-height: 56px; }
+.code-row input { height: 56px; line-height: 56px; }
+/* #endif */
 @media (max-width: 900px) { .login-container { flex-direction: column; max-width: 520px; } .brand-side { min-height: 180px; padding: 40rpx; } .feature-list { flex-direction: row; gap: 24rpx; } .feature-item { font-size: 22rpx; } }
 </style>

@@ -88,7 +88,15 @@
         <view v-if="mode === 'C' && !isCompleted" class="input-section">
           <text class="section-title">输入你的想法</text>
           <view class="input-row">
-            <input v-model="inputText" :placeholder="inputPlaceholder" class="text-input" />
+            <input
+              ref="guidanceInputRef"
+              v-model="inputText"
+              :placeholder="inputPlaceholder"
+              :focus="inputFocused"
+              confirm-type="send"
+              class="text-input"
+              @confirm="sendReply"
+            />
             <button @click="sendReply" :disabled="submitting || !inputText.trim()" class="send-btn">
               <text v-if="submitting">发送中...</text>
               <text v-else>发送</text>
@@ -129,10 +137,13 @@
           <view v-if="showAnswerSelect && !submitResult" class="answer-select-section">
             <text class="select-title">请选择本题的答案</text>
             <!-- 原题选项（可交互） -->
-            <view v-if="currentQuestion.options && currentQuestion.options.length > 0" class="select-options">
+            <view v-if="originalIsChoiceQuestion" class="select-options">
               <button v-for="opt in currentQuestion.options" :key="opt.label"
-                      @click="selectedOriginalOption = opt.label"
-                      :class="['select-option-btn', { selected: selectedOriginalOption === opt.label }]">
+                      @click="selectOriginalOption(opt.label)"
+                      :class="['select-option-btn', {
+                        selected: selectedOriginalOptions.includes(opt.label),
+                        'multiple-choice': originalIsMultipleChoice,
+                      }]">
                 <text class="select-opt-label">{{ opt.label }}.</text>
                 <view class="select-opt-content" v-html="renderedOptions[opt.label] || opt.content"></view>
               </button>
@@ -187,7 +198,7 @@ import { onLoad } from '@dcloudio/uni-app'
 import { studentApi } from '@/api/student.ts'
 import { renderWithKatex } from '@/utils/katex-renderer'
 import { getMediaUrl } from '@/utils/media-url'
-import { getQuestionTypeLabel } from '@/utils/question-type'
+import { getQuestionTypeLabel, resolveQuestionType } from '@/utils/question-type'
 
 // 页面核心状态
 const questionId = ref<string>('')
@@ -219,6 +230,8 @@ const analysis = ref('')
 
 // C 模式输入
 const inputText = ref('')
+const guidanceInputRef = ref<any>(null)
+const inputFocused = ref(false)
 const inputPlaceholder = ref('输入你的想法...')
 
 // AI 总结
@@ -259,7 +272,7 @@ const submittingAnswer = ref(false)
 const originalAnswer = ref('')      // 原题正确答案（从 question_info 获取）
 const originalAnalysis = ref('')    // 原题解析（从 question_info 获取）
 const showAnswerSelect = ref(false) // 是否显示选择答案界面
-const selectedOriginalOption = ref('')  // 用户从原题选项中选择的答案
+const selectedOriginalOptions = ref<string[]>([])  // 用户从原题选项中选择的答案（单选或多选）
 const originalTextAnswer = ref('')  // 主观题用户输入的答案
 
 // 组件挂载状态（防止卸载后异步回调仍触发 scroll-view scrollTop 导致空引用报错）
@@ -270,11 +283,40 @@ onUnmounted(() => {
 
 // 计算属性
 const canSubmitAnswer = computed(() => {
-  if (currentQuestion.value.options && currentQuestion.value.options.length > 0) {
-    return selectedOriginalOption.value !== ''
+  if (originalIsChoiceQuestion.value) {
+    return selectedOriginalOptions.value.length > 0
   }
   return originalTextAnswer.value.trim() !== ''
 })
+
+// 原题答案选择与答题页保持一致：单选只能选一个，多选可以选择多个；
+// 填空、解答和判断题按答题页使用文本输入。
+const originalQuestionType = computed(() => resolveQuestionType(
+  currentQuestion.value.question_type,
+  currentQuestion.value.stem,
+  currentQuestion.value.options || [],
+  currentQuestion.value.answer || '',
+))
+const originalIsChoiceQuestion = computed(() => (
+  ['single_choice', 'multiple_choice'].includes(originalQuestionType.value)
+  && Array.isArray(currentQuestion.value.options)
+  && currentQuestion.value.options.length > 0
+))
+const originalIsMultipleChoice = computed(() => originalQuestionType.value === 'multiple_choice')
+
+function selectOriginalOption(label: string) {
+  if (!originalIsChoiceQuestion.value) return
+  if (!originalIsMultipleChoice.value) {
+    selectedOriginalOptions.value = [label]
+    return
+  }
+  const index = selectedOriginalOptions.value.indexOf(label)
+  if (index >= 0) {
+    selectedOriginalOptions.value.splice(index, 1)
+  } else {
+    selectedOriginalOptions.value.push(label)
+  }
+}
 
 // 计算属性
 const questionTypeLabel = computed(() => {
@@ -400,11 +442,12 @@ async function startGuidance() {
 async function selectOption(opt: string) {
   if (submitting.value || !sessionId.value) return
   submitting.value = true
+  showThinking.value = true
   selectedOption.value = opt
   messages.value.push({ role: 'user', content: opt })
 
   try {
-    const res = await studentApi.guidanceReply(sessionId.value, opt)
+    const res = await studentApi.guidanceReply(sessionId.value, opt, makeGuidanceReplyId())
     if (res.code !== 0) {
       uni.showToast({ title: res.message || '提交失败', icon: 'none' })
       return
@@ -415,6 +458,7 @@ async function selectOption(opt: string) {
     uni.showToast({ title: '提交失败', icon: 'none' })
   } finally {
     submitting.value = false
+    showThinking.value = false
     await nextTick()
     scrollToBottom()
   }
@@ -433,7 +477,7 @@ async function sendReply() {
   scrollToBottom()
 
   try {
-    const res = await studentApi.guidanceReply(sessionId.value, text)
+    const res = await studentApi.guidanceReply(sessionId.value, text, makeGuidanceReplyId())
     if (res.code !== 0) {
       uni.showToast({ title: res.message || '发送失败', icon: 'none' })
       return
@@ -447,11 +491,36 @@ async function sendReply() {
     showThinking.value = false
     await nextTick()
     scrollToBottom()
+    await refocusGuidanceInput()
   }
+}
+
+async function refocusGuidanceInput() {
+  // C-mode input should remain ready for the student's next reply after
+  // pressing Enter. Do not focus anything after the final guidance step.
+  if (mode.value !== 'C' || isCompleted.value) return
+  inputFocused.value = false
+  await nextTick()
+  inputFocused.value = true
+  await nextTick()
+  const input = guidanceInputRef.value
+  if (input && typeof input.focus === 'function') input.focus()
+}
+
+function makeGuidanceReplyId() {
+  return `guidance-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 // 处理回复响应
 async function handleReplyResponse(data: any) {
+  if (data.processing) {
+    messages.value.push({
+      role: 'system',
+      content: '本次回答正在处理中，请稍候。',
+      type: 'warning',
+    })
+    return
+  }
   // 处理降级响应
   if (data.downgraded) {
     mode.value = data.mode || 'B'
@@ -471,27 +540,49 @@ async function handleReplyResponse(data: any) {
     return
   }
 
-  // B 模式反馈
-  if (data.mode === 'B') {
-    if (data.is_correct === true) {
-      messages.value.push({ role: 'system', content: '✅ 回答正确！', type: 'feedback' })
-    } else if (data.is_correct === false) {
-      messages.value.push({
-        role: 'system',
-        content: `❌ 回答错误，正确答案是 ${data.correct_answer}`,
-        type: 'feedback',
-      })
-    }
-    if (data.analysis) {
-      const rendered = await renderWithKatex(data.analysis)
-      messages.value.push({ role: 'system', content: `解析：${rendered}`, type: 'analysis' })
-    }
+  // AI 评价不可用时保留当前步骤，不展示内部异常，也不追加下一步问题
+  if (data.ai_unavailable || data.ai_status === 'unavailable') {
+    messages.value.push({
+      role: 'system',
+      content: data.evaluation || 'AI 评价暂时不可用，请稍后重试',
+      type: 'warning',
+    })
+    return
   }
 
-  // C 模式评价
-  if (data.evaluation) {
+  // B 模式只读取固定式专属字段：AI 动作反馈、已知信息、思考引导和分支后的下一步。
+  // 不读取 C 模式的 evaluation/error_type/correction_direction 等字段。
+  if (data.mode === 'B') {
+    const fixed = data.fixed_guidance || {}
+    if (fixed.feedback) {
+      const rendered = await renderWithKatex(fixed.feedback)
+      messages.value.push({ role: 'system', content: `AI 引导反馈：${rendered}`, type: 'evaluation' })
+    }
+    if (fixed.known_information) {
+      const rendered = await renderWithKatex(fixed.known_information)
+      messages.value.push({ role: 'system', content: `题目已知信息：${rendered}`, type: 'analysis' })
+    }
+    if (fixed.guidance) {
+      const rendered = await renderWithKatex(fixed.guidance)
+      messages.value.push({ role: 'system', content: `思考引导：${rendered}`, type: 'analysis' })
+    }
+    if (!data.is_completed && fixed.next_step) {
+      stepIndex.value = fixed.next_step.index ?? data.step_index
+      options.value = fixed.next_step.options || []
+      const nextQuestion = fixed.next_step.question || fixed.next_step.hint
+      if (nextQuestion) {
+        const rendered = await renderWithKatex(nextQuestion)
+        messages.value.push({ role: 'system', content: rendered })
+      }
+    }
+  } else if (data.evaluation) {
+    // C 模式保留自由回答的 AI 评价。
     const rendered = await renderWithKatex(data.evaluation)
     messages.value.push({ role: 'system', content: `💬 老师评价：${rendered}`, type: 'evaluation' })
+    if (data.correction_direction) {
+      const correction = await renderWithKatex(data.correction_direction)
+      messages.value.push({ role: 'system', content: `✅ 纠正方向：${correction}`, type: 'analysis' })
+    }
   }
 
   // 完成状态
@@ -508,7 +599,9 @@ async function handleReplyResponse(data: any) {
       messages.value.push({ role: 'system', content: `🎯 最终答案：${renderedFinalAnswer.value}`, type: 'final_answer' })
     }
   } else {
-    // 更新下一步
+    // 更新下一步。B 模式已经使用 fixed_guidance.next_step 更新，避免
+    // 再把 C 模式字段或不匹配的旧 options 混入固定式展示。
+    if (data.mode === 'B') return
     stepIndex.value = data.step_index
     if (data.next_hint) {
       const rendered = await renderWithKatex(data.next_hint)
@@ -561,7 +654,7 @@ function resetState() {
   inputText.value = ''
   submitResult.value = null
   showAnswerSelect.value = false
-  selectedOriginalOption.value = ''
+  selectedOriginalOptions.value = []
   originalTextAnswer.value = ''
   showThinking.value = false
 }
@@ -574,9 +667,9 @@ async function submitAnswer() {
 
   // 构建答案内容：提交用户从原题选项中选择的答案，而非引导选项
   let answerContent: Record<string, any> = {}
-  if (currentQuestion.value.options && currentQuestion.value.options.length > 0) {
-    // 客观题：提交用户选择的原题选项标签
-    answerContent = { selected_options: [selectedOriginalOption.value] }
+  if (originalIsChoiceQuestion.value) {
+    // 单选提交一个标签，多选提交全部已选标签。
+    answerContent = { selected_options: [...selectedOriginalOptions.value] }
   } else {
     // 主观题：提交用户输入的文本
     answerContent = { text: originalTextAnswer.value.trim() }
@@ -614,7 +707,7 @@ async function submitAnswer() {
 function resetSubmitResult() {
   submitResult.value = null
   showAnswerSelect.value = false
-  selectedOriginalOption.value = ''
+  selectedOriginalOptions.value = []
   originalTextAnswer.value = ''
 }
 

@@ -139,6 +139,103 @@ def test_student_evaluation_accepts_legacy_text_and_json(content, expected):
     assert client.calls[0]["trace_id"] == "student-trace"
 
 
+def test_student_evaluation_renders_runtime_context_without_changing_task_contract():
+    from apps.common.ai.components.guidance import GuidanceContext
+
+    component, _, registry = _component(
+        {
+            "guidance_evaluate": (
+                '{"result":"unclear","error_type":"unclear",'
+                '"evaluation":"ok","correction_direction":"add evidence",'
+                '"next_question":null,"next_hint":null,"confidence":0.2}'
+            )
+        }
+    )
+
+    component.evaluate_student_reply(
+        GuidanceContext(
+            question_text="stem",
+            reference_answer="final answer",
+            student_answer="student reply",
+            trace_id="trace-runtime",
+            mode="C",
+            current_question="current step",
+            current_reference_answer="current direction",
+            key_points=("key point",),
+            question_options=({"label": "A", "content": "option"},),
+            question_analysis="analysis",
+            knowledge_points=("concept",),
+            visual_facts=("line is horizontal",),
+            history=({"step": 0, "user_answer": "previous"},),
+        )
+    )
+
+    variables = registry.calls[0][1]
+    assert variables["reference_answer"] == "current direction"
+    assert variables["student_answer"] == "student reply"
+    assert "stem" in variables["question_text"]
+    assert "current step" in variables["question_text"]
+    assert "key point" in variables["question_text"]
+    assert "analysis" in variables["question_text"]
+    assert "line is horizontal" in variables["question_text"]
+    assert "previous" in variables["question_text"]
+
+
+def test_student_guidance_context_separates_original_options_from_fixed_step():
+    from apps.common.ai.components.guidance import GuidanceContext
+
+    component, _, registry = _component(
+        {
+            "guidance_evaluate": (
+                '{"result":"unclear","error_type":"unclear",'
+                '"evaluation":"请继续说明。",'
+                '"correction_direction":"补充依据。",'
+                '"next_question":null,"next_hint":null,"confidence":0.2}'
+            )
+        }
+    )
+
+    component.evaluate_student_reply(
+        GuidanceContext(
+            question_text="某物体的运动情况如图，错误的是（ ）",
+            reference_answer="BD",
+            student_answer="B. 思考适用的公式或定理",
+            mode="B",
+            current_reference_answer="",
+            question_options=(
+                "A. 分析已知条件，找出关键信息",
+                "B. 思考适用的公式或定理",
+            ),
+            original_question_text="某物体的运动情况如图，错误的是（ ）",
+            original_question_options=(
+                {"label": "A", "content": "路程为18m"},
+                {"label": "B", "content": "前后速度相等"},
+            ),
+            fixed_guidance_step={
+                "question": "请先分析题目条件",
+                "options": [
+                    "A. 分析已知条件，找出关键信息",
+                    "B. 思考适用的公式或定理",
+                ],
+            },
+            student_selected_guidance_step="B. 思考适用的公式或定理",
+            guidance_step_is_correct=None,
+        )
+    )
+
+    variables = registry.calls[0][1]
+    context_text = variables["question_text"]
+    assert "【原题内容】" in context_text
+    assert "【原题答案选项】" in context_text
+    assert "路程为18m" in context_text
+    assert "【固定引导步骤】" in context_text
+    assert "思考适用的公式或定理" in context_text
+    assert "【学生选择的引导步骤】" in context_text
+    assert "【引导步骤是否正确】" not in context_text
+    assert variables["reference_answer"] == "当前引导步骤暂无预设参考答案"
+    assert variables["student_answer"] == "B. 思考适用的公式或定理"
+
+
 @pytest.mark.parametrize(
     "content",
     [
@@ -497,15 +594,141 @@ def test_generation_preserves_nonempty_fields_with_internal_format_character():
     assert first == {"question": "第一\u200b问", "hint": "提示\u2060一"}
 
 
-def test_all_guidance_tasks_are_qwen_flash_with_300_second_timeout():
+def test_guidance_tasks_use_flash_and_realtime_evaluation_is_bounded():
     config = AIConfig.load()
 
     for task_key in (
         "guidance_generate",
         "guidance_evaluate",
+        "guidance_fixed_evaluate",
         "teacher_guidance_evaluate",
     ):
         task = config.get_task_config(task_key)
         assert task.provider == "qwen"
         assert task.model == "qwen3.7-flash"
-        assert task.timeout_seconds == 300
+        if task_key in ("guidance_evaluate", "guidance_fixed_evaluate"):
+            assert task.timeout_seconds == 10
+            assert task.max_tokens in (1024, 1200)
+            assert task.retry_count == 0
+            assert task.provider_lease_wait_seconds == 3
+        else:
+            assert task.timeout_seconds == 300
+
+
+def test_fixed_guidance_evaluation_uses_dedicated_schema_and_images():
+    content = (
+        '{"feedback":"先读取图像数据。",'
+        '"known_information":"图线经过(3s,12m)。",'
+        '"guidance":"请按时间段记录路程变化。",'
+        '"next_question":"再观察下一段图线。",'
+        '"next_hint":"关注横坐标时间变化。",'
+        '"confidence":0.92}'
+    )
+    component, client, registry = _component(
+        {"guidance_fixed_evaluate": content}
+    )
+
+    from apps.common.ai.components.guidance import GuidanceContext
+
+    result = component.evaluate_fixed_guidance_reply(
+        GuidanceContext(
+            question_text="原题",
+            student_answer="A. 分析已知条件",
+            mode="B",
+            student_selected_guidance_step="A. 分析已知条件",
+            image_urls=("https://example.test/graph.png",),
+        )
+    )
+
+    assert result["known_information"] == "图线经过(3s,12m)。"
+    assert result["guidance"] == "请按时间段记录路程变化。"
+    assert registry.calls[0][0] == "guidance_fixed_evaluate"
+    assert client.calls[0]["task_key"] == "guidance_fixed_evaluate"
+    assert client.calls[0]["images"] == ("https://example.test/graph.png",)
+
+
+def test_fixed_guidance_evaluation_allows_omitted_optional_followups():
+    component, client, _ = _component({
+        "guidance_fixed_evaluate": (
+            '{"feedback":"先读取图像信息",'
+            '"known_information":["图线经过(3s,12m)。","3-6s保持不变。"],'
+            '"guidance":"先记录各时间段的路程变化。",'
+            '"confidence":0.8}'
+        )
+    })
+
+    from apps.common.ai.components.guidance import GuidanceContext
+
+    result = component.evaluate_fixed_guidance_reply(
+        GuidanceContext(
+            question_text="题目",
+            mode="B",
+            student_selected_guidance_step="A. 分析已知条件",
+        )
+    )
+
+    assert result["known_information"] == "图线经过(3s,12m)。；3-6s保持不变。"
+    assert result["next_question"] is None
+    assert result["next_hint"] is None
+    assert len(client.calls) == 1
+
+
+def test_student_evaluation_parses_structured_runtime_analysis():
+    from apps.common.ai.components.guidance import GuidanceComponent, GuidanceContext
+
+    content = (
+        '{"result":"partial","error_type":"concept_error",'
+        '"evaluation":"方向基本正确，但把斜率和路程混淆了。",'
+        '"correction_direction":"先明确纵坐标与横坐标的物理意义，再判断斜率。",'
+        '"next_question":"图线斜率等于哪个物理量？",'
+        '"next_hint":"关注单位和坐标轴。","confidence":0.86}'
+    )
+    component, client, _ = _component({"guidance_evaluate": content})
+
+    result = component.evaluate_student_reply(
+        GuidanceContext(
+            question_text="stem",
+            reference_answer="current answer",
+            student_answer="student reply",
+            mode="C",
+        )
+    )
+
+    assert result == {
+        "result": "partial",
+        "error_type": "concept_error",
+        "evaluation": "方向基本正确，但把斜率和路程混淆了。",
+        "correction_direction": "先明确纵坐标与横坐标的物理意义，再判断斜率。",
+        "next_question": "图线斜率等于哪个物理量？",
+        "next_hint": "关注单位和坐标轴。",
+        "confidence": 0.86,
+    }
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"result":"incorrect","error_type":"concept_error",'
+        '"evaluation":"bad"}',
+        '{"result":"wrong","error_type":"unclear",'
+        '"evaluation":"bad","correction_direction":"fix",'
+        '"next_question":null,"next_hint":null,"confidence":0.5}',
+        '{"result":"incorrect","error_type":"concept_error",'
+        '"evaluation":"bad","correction_direction":"fix",'
+        '"next_question":null,"next_hint":null,"confidence":0.5,'
+        '"unexpected":"poison"}',
+    ],
+)
+def test_student_evaluation_rejects_invalid_structured_runtime_analysis(content):
+    from apps.common.ai.components.guidance import GuidanceComponent, GuidanceContext
+
+    component = GuidanceComponent(
+        RecordingAIClient({"guidance_evaluate": content}),
+        RecordingPromptRegistry(),
+    )
+
+    with pytest.raises(AIResponseError):
+        component.evaluate_student_reply(
+            GuidanceContext("stem", "answer", "reply", mode="C")
+        )

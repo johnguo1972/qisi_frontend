@@ -226,7 +226,18 @@ function missionStatusClass(status?: string) {
   return 'mission-status-' + (status || 'unknown')
 }
 function studentStatusClass(status?: string) {
-  return 'student-status-' + (status || '未开始')
+  const statusClassMap: Record<string, string> = {
+    已批改: 'student-status-reviewed',
+    已提交: 'student-status-submitted',
+    进行中: 'student-status-in-progress',
+    未开始: 'student-status-not-started',
+    graded: 'student-status-reviewed',
+    submitted: 'student-status-submitted',
+    in_progress: 'student-status-in-progress',
+    running: 'student-status-in-progress',
+    not_started: 'student-status-not-started',
+  }
+  return statusClassMap[status || ''] || 'student-status-not-started'
 }
 </script>
 
@@ -239,7 +250,7 @@ function studentStatusClass(status?: string) {
 .mission-card { margin-bottom: 20px; }.mission-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.mission-title-area { min-width: 0; }.mission-title { display: block; overflow: hidden; color: #303133; font-size: 17px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }.mission-no { display: block; margin-top: 6px; color: #909399; font-size: 12px; }.mission-header-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }.mission-status { padding: 4px 8px; border-radius: 4px; font-size: 12px; }.mission-status-published { color: #409eff; background: #ecf5ff; }.mission-status-running { color: #67c23a; background: #f0f9eb; }.mission-status-closed { color: #909399; background: #f4f4f5; }.mission-status-draft,.mission-status-unknown { color: #e6a23c; background: #fdf6ec; }
 .detail-button, .expand-button { margin: 0; color: #409eff; background: #ecf5ff; border: 1px solid #b3d8ff; }.detail-button { min-width: 110px; }.expand-button { min-width: 56px; }.mission-meta { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 14px; color: #909399; font-size: 13px; }
 .mission-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 20px; padding: 16px 0; border-top: 1px solid #ebeef5; border-bottom: 1px solid #ebeef5; }.mission-metric { padding: 0 14px; border-right: 1px solid #ebeef5; }.mission-metric:last-child { border-right: 0; }.metric-label,.metric-extra { display: block; color: #909399; font-size: 13px; }.metric-value { display: inline-block; margin-top: 7px; margin-right: 8px; color: #303133; font-size: 20px; font-weight: 600; }.metric-rate { font-size: 14px; }.metric-extra { margin-top: 5px; font-size: 12px; }
-.student-section-header { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; color: #303133; font-size: 15px; font-weight: 600; }.student-section-actions { display: flex; align-items: center; gap: 10px; }.student-count { color: #909399; font-size: 12px; font-weight: 400; }.student-table-scroll { width: 100%; margin-top: 10px; }.student-table { min-width: 760px; }.student-table-row { display: grid; grid-template-columns: 1.5fr 1.5fr 1fr 1fr 1fr 1fr; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f2f6fc; color: #606266; font-size: 13px; }.student-table-header { color: #909399; border-bottom-color: #ebeef5; }.student-col { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }.student-col.name { color: #303133; }.student-status-已批改 { color: #67c23a; }.student-status-已提交 { color: #e6a23c; }.student-status-进行中 { color: #409eff; }.student-status-未开始 { color: #909399; }.empty-hint { padding: 24px 0; text-align: center; color: #909399; }
+.student-section-header { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; color: #303133; font-size: 15px; font-weight: 600; }.student-section-actions { display: flex; align-items: center; gap: 10px; }.student-count { color: #909399; font-size: 12px; font-weight: 400; }.student-table-scroll { width: 100%; margin-top: 10px; }.student-table { min-width: 760px; }.student-table-row { display: grid; grid-template-columns: 1.5fr 1.5fr 1fr 1fr 1fr 1fr; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f2f6fc; color: #606266; font-size: 13px; }.student-table-header { color: #909399; border-bottom-color: #ebeef5; }.student-col { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }.student-col.name { color: #303133; }.student-status-reviewed { color: #67c23a; }.student-status-submitted { color: #e6a23c; }.student-status-in-progress { color: #409eff; }.student-status-not-started { color: #909399; }.empty-hint { padding: 24px 0; text-align: center; color: #909399; }
 @media (max-width: 900px) { .summary-grid { grid-template-columns: repeat(3, 1fr); }.mission-header { align-items: flex-start; flex-direction: column; }.mission-header-right { width: 100%; justify-content: space-between; } }
 @media (max-width: 600px) { .stats-page { padding: 16px 16px 30px; }.page-header { align-items: flex-start; flex-direction: column; gap: 12px; }.class-filter { width: 100%; }.class-filter picker { flex: 1; }.picker-control { min-width: 0; }.summary-grid { grid-template-columns: repeat(2, 1fr); }.overview-title { align-items: flex-start; flex-direction: column; gap: 8px; }.mission-metrics { grid-template-columns: repeat(2, 1fr); }.mission-metric:nth-child(2) { border-right: 0; }.mission-metric:nth-child(-n+2) { padding-bottom: 14px; border-bottom: 1px solid #ebeef5; } }
 </style>
