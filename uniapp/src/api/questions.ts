@@ -249,7 +249,12 @@ export function getKnowledgeTree() {
 
 // === JSON 数据包导入 ===
 
-export function importJsonPackage(file: File, options?: { courseId?: string; treeNodeId?: string }) {
+type JsonPackageImportOptions = {
+  courseId?: string
+  treeNodeId?: string
+}
+
+export function importJsonPackage(file: File, options?: JsonPackageImportOptions) {
   return new Promise<any>((resolve, reject) => {
     const token = uni.getStorageSync('accessToken')
     const formData = new FormData()
@@ -275,6 +280,22 @@ export function importJsonPackage(file: File, options?: { courseId?: string; tre
     reject(new Error('APP端暂不支持JSON导入，请在H5端使用'))
     // #endif
   })
+}
+
+/**
+ * Course practice must never degrade into a question-bank-only import.
+ * Keep this entry point separate so a missing route parameter is rejected
+ * before a request can be sent.
+ */
+export function importCourseJsonPackage(
+  file: File,
+  options: Required<Pick<JsonPackageImportOptions, 'courseId'>> & Pick<JsonPackageImportOptions, 'treeNodeId'>,
+) {
+  const courseId = String(options.courseId || '').trim()
+  if (!courseId) {
+    return Promise.reject(new Error('course_id is required'))
+  }
+  return importJsonPackage(file, { ...options, courseId })
 }
 
 export function getImportTaskStatus(taskId: string) {

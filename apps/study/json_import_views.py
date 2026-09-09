@@ -44,6 +44,7 @@ from apps.courses.models import CourseQuestionLink, CourseTree
 logger = logging.getLogger(__name__)
 
 FORMULA_PLACEHOLDER_RE = re.compile(r'\[\[formula:([^\]]+)\]\]')
+LOCAL_PATH_IN_ERROR_RE = re.compile(r'(?:(?:[A-Za-z]:)?[\\/][^\s,;:]+)+')
 FINGERPRINT_RECHECK_ATTEMPTS = 3
 FINGERPRINT_RECHECK_DELAY_SECONDS = 0.01
 
@@ -87,6 +88,16 @@ def import_json_package(request):
 
 def import_json_package_for_course(request, *, course, tree_node=None):
     """Import a package and ensure every resolved question belongs to ``course``."""
+    if course is None:
+        return Response(
+            {
+                'code': 400,
+                'message': 'course context is required',
+                'data': None,
+                'trace_id': make_trace_id(),
+            },
+            status=400,
+        )
     return _import_json_package(request, course=course, tree_node=tree_node)
 
 
@@ -410,7 +421,14 @@ def _link_questions_to_course(*, course, tree_node, question_ids):
         if question_id not in existing_links or existing_links[question_id].is_deleted
     }
     if not question_ids_to_link:
-        return None, 0
+        # A fully deduplicated course import still needs to identify the node
+        # that already exposes those questions, so the client can refresh the
+        # correct directory rather than receiving an ambiguous null node.
+        existing_node = tree_node or next(
+            (link.tree_node for link in existing_links.values() if not link.is_deleted),
+            None,
+        )
+        return existing_node, 0
 
     target_node = tree_node
     if target_node is None:
@@ -651,9 +669,10 @@ def _create_json_import_paper(paper_info, user, source_file_path):
 
 
 def _question_error(qdata, index, exc):
+    message = LOCAL_PATH_IN_ERROR_RE.sub('[path hidden]', str(exc))[:200]
     return {
         'question_no': qdata.get('question_no', f'未知(索引{index})'),
-        'error': str(exc)[:200],
+        'error': message or 'import processing failed',
     }
 
 

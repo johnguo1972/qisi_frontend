@@ -1,6 +1,6 @@
 """Paper and question code generation utilities."""
 import re
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 
 # Subject first letter mapping
@@ -94,6 +94,75 @@ def _resolve_subject_letter(subject: str) -> str:
     return SUBJECT_FIRST_LETTER.get(subject, 'X')
 
 
+def _max_existing_question_sequence(letter: str, question_model) -> int:
+    """Return the largest valid five-hex-digit sequence for one ID prefix."""
+    # All valid values are fixed-width uppercase hexadecimal strings, so
+    # reverse lexical order is also reverse numeric order.  This avoids
+    # scanning every existing question for every row in a large import.
+    for system_id in question_model.objects.filter(
+        system_id__gte=f'{letter}00000',
+        system_id__lte=f'{letter}FFFFF',
+    ).order_by('-system_id').values_list('system_id', flat=True).iterator():
+        if not system_id or len(system_id) != 6 or system_id[0] != letter:
+            continue
+        try:
+            return int(system_id[1:], 16)
+        except ValueError:
+            continue
+    return 0
+
+
+def _get_locked_question_counter(subject: str, counter_model, *, create: bool = True):
+    """Fetch the per-subject counter while retaining a row lock for this transaction."""
+    try:
+        return counter_model.objects.select_for_update().get(subject=subject)
+    except counter_model.DoesNotExist:
+        if not create:
+            return None
+        # The savepoint keeps a concurrent unique-key race from poisoning the
+        # surrounding allocation transaction.
+        try:
+            with transaction.atomic():
+                counter_model.objects.create(subject=subject, next_seq=1)
+        except IntegrityError:
+            pass
+        return counter_model.objects.select_for_update().get(subject=subject)
+
+
+def reconcile_question_id_counter(subject: str, *, apply: bool = False) -> dict:
+    """Report or persist the minimum safe next sequence for one subject.
+
+    Callers that mutate must use this helper inside a transaction so the
+    counter row stays locked until the next ID is reserved.
+    """
+    from apps.parser.models import ExamQuestion
+    from apps.papers.models import QuestionIDCounter
+
+    normalized_subject = subject or ''
+    letter = _resolve_subject_letter(normalized_subject)
+    counter = _get_locked_question_counter(
+        normalized_subject,
+        QuestionIDCounter,
+        create=apply,
+    )
+    highest_existing = _max_existing_question_sequence(letter, ExamQuestion)
+    previous_next_seq = counter.next_seq if counter else 1
+    safe_next_seq = max(previous_next_seq, highest_existing + 1)
+    if apply and safe_next_seq != previous_next_seq:
+        if counter is None:
+            counter = _get_locked_question_counter(normalized_subject, QuestionIDCounter)
+        counter.next_seq = safe_next_seq
+        counter.save(update_fields=['next_seq'])
+    return {
+        'subject': normalized_subject,
+        'letter': letter,
+        'previous_next_seq': previous_next_seq,
+        'highest_existing': highest_existing,
+        'next_seq': safe_next_seq,
+        'changed': safe_next_seq != previous_next_seq,
+    }
+
+
 def generate_question_system_id(subject: str) -> str:
     """Generate a globally unique question system ID.
 
@@ -102,36 +171,29 @@ def generate_question_system_id(subject: str) -> str:
 
     Uses a DB-level counter table with select_for_update for atomicity.
 
-    If a generated ID already exists in the DB (e.g., after counter reset),
-    automatically retries with the next sequence number up to 100 times.
+    Before reserving an ID, reconciles a stale counter with the highest valid
+    existing ID for the same prefix.  Counter locking serializes allocation,
+    including after a rolled-back import transaction.
     """
-    from apps.parser.models import ExamQuestion
-    from apps.papers.models import QuestionIDCounter
-
     letter = _resolve_subject_letter(subject or '')
+    from apps.parser.models import ExamQuestion
 
-    for attempt in range(100):
-        with transaction.atomic():
-            counter, _ = QuestionIDCounter.objects.select_for_update().get_or_create(
-                subject=subject or '',
-                defaults={'next_seq': 1},
-            )
-            seq = counter.next_seq
+    with transaction.atomic():
+        reconciliation = reconcile_question_id_counter(subject or '', apply=True)
+        seq = reconciliation['next_seq']
+        while seq <= 0xFFFFF:
             system_id = f'{letter}{seq:05X}'
-
-            # Check if this ID already exists
-            if ExamQuestion.objects.filter(system_id=system_id).exists():
-                # Skip this sequence number and try next
-                counter.next_seq += 1
+            if not ExamQuestion.objects.filter(system_id=system_id).exists():
+                # The reconciliation helper saved the safe value.  Advance it
+                # only after this exact value is selected for this transaction.
+                from apps.papers.models import QuestionIDCounter
+                counter = QuestionIDCounter.objects.select_for_update().get(subject=subject or '')
+                counter.next_seq = seq + 1
                 counter.save(update_fields=['next_seq'])
-                continue
+                return system_id
+            seq += 1
 
-            counter.next_seq += 1
-            counter.save(update_fields=['next_seq'])
-
-        return system_id
-
-    raise RuntimeError(f'Failed to generate unique system_id after 100 attempts for subject={subject}')
+    raise RuntimeError(f'Question system ID sequence exhausted for subject={subject}')
 
 
 def extract_major_section_no(section_title: str | None) -> int:
