@@ -14,6 +14,40 @@ from .models import MissionShortCode, StudentClassShortCode
 
 SHORT_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 STUDENT_ALPHABET = SHORT_ALPHABET
+WECHAT_ACCESS_TOKEN_CACHE_SECONDS = 7100
+
+
+def _wechat_access_token(appid, secret):
+    """Reuse the Mini Program access token instead of requesting one per QR."""
+    cache_key = f'wechat:mp:access-token:{appid}'
+    try:
+        cached_token = cache.get(cache_key)
+    except Exception:
+        cached_token = None
+    if isinstance(cached_token, str) and cached_token:
+        return cached_token
+
+    token_result = requests.get(
+        'https://api.weixin.qq.com/cgi-bin/token',
+        params={'grant_type': 'client_credential', 'appid': appid, 'secret': secret},
+        timeout=8,
+    ).json()
+    access_token = token_result.get('access_token')
+    if not access_token:
+        raise RuntimeError(token_result.get('errmsg', 'wechat access_token request failed'))
+    try:
+        cache.set(
+            cache_key,
+            access_token,
+            timeout=min(
+                WECHAT_ACCESS_TOKEN_CACHE_SECONDS,
+                max(60, int(token_result.get('expires_in', 7200)) - 60),
+            ),
+        )
+    except Exception:
+        # QR generation must remain available if the optional cache is down.
+        pass
+    return access_token
 
 
 def _unique_code(length, alphabet):
@@ -126,14 +160,7 @@ def wxacode_image(
     secret = getattr(settings, 'WECHAT_MP_APPSECRET', '')
     if not appid or not secret:
         raise RuntimeError('微信小程序 AppID/AppSecret 未配置')
-    token_result = requests.get(
-        'https://api.weixin.qq.com/cgi-bin/token',
-        params={'grant_type': 'client_credential', 'appid': appid, 'secret': secret},
-        timeout=8,
-    ).json()
-    access_token = token_result.get('access_token')
-    if not access_token:
-        raise RuntimeError(token_result.get('errmsg', '获取微信 access_token 失败'))
+    access_token = _wechat_access_token(appid, secret)
     response = requests.post(
         'https://api.weixin.qq.com/wxa/getwxacodeunlimit',
         params={'access_token': access_token},

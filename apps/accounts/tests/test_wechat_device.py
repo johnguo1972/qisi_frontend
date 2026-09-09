@@ -1113,11 +1113,13 @@ def test_device_api_known_identity_completes_in_original_browser(
     )
 
     captured_qr = {}
+    qr_calls = []
     monkeypatch.setattr(
         views,
         "wxacode_image",
         lambda **kwargs: (
             captured_qr.update(kwargs)
+            or qr_calls.append(kwargs)
             or SimpleNamespace(content=b"jpeg", content_type="image/jpeg")
         ),
         raising=False,
@@ -1129,6 +1131,14 @@ def test_device_api_known_identity_completes_in_original_browser(
     assert qrcode_response["Content-Type"] == "image/jpeg"
     assert qrcode_response.content == b"jpeg"
     assert captured_qr["page"] == "pages/auth/web-binding"
+
+    second_qrcode_response = browser.get(
+        "/api/v1/auth/wechat-device/qrcode", {"web_session_id": web_session_id}
+    )
+    assert second_qrcode_response.status_code == 200
+    assert second_qrcode_response.content == b"jpeg"
+    assert second_qrcode_response["Cache-Control"] == "private, max-age=300"
+    assert len(qr_calls) == 1
 
     monkeypatch.setattr(
         views,

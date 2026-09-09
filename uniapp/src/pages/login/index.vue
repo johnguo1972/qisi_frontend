@@ -59,16 +59,25 @@
             <view class="form-title">{{ currentTabLabel }}微信扫码登录</view>
             <view class="device-qr-panel">
               <view v-if="wechatDeviceSession" class="device-qr-image-wrap">
-                <image class="device-qr-image" :src="wechatDeviceSession.qrcode_url" mode="aspectFit" show-menu-by-longpress />
+                <view v-if="wechatQrLoading" class="device-qr-loading">
+                  <view class="device-qr-spinner" />
+                  <text>二维码加载中，请稍候...</text>
+                </view>
+                <view v-if="wechatQrError" class="device-qr-error">二维码加载失败，请点击下方按钮重试</view>
+                <image
+                  class="device-qr-image"
+                  :class="{ 'device-qr-image-hidden': wechatQrLoading || wechatQrError }"
+                  :src="wechatDeviceSession.qrcode_url"
+                  mode="aspectFit"
+                  show-menu-by-longpress
+                  @load="handleWechatQrLoad"
+                  @error="handleWechatQrError"
+                />
               </view>
-              <view v-else class="device-qr-placeholder">请确认授权后开始微信扫码</view>
+              <view v-else class="device-qr-placeholder">正在准备微信登录二维码</view>
             </view>
-            <view class="wechat-consent" @click="phoneAuthorizationConfirmed = !phoneAuthorizationConfirmed">
-              <view class="checkbox" :class="{ checked: phoneAuthorizationConfirmed }"><view class="checkmark" /></view>
-              <text class="remember-text">手机号绑定授权确认</text>
-            </view>
-            <button class="wechat-start-btn" :disabled="wechatDeviceLoading" @click="startWechatDeviceLogin">{{ wechatDeviceLoading ? '正在生成二维码...' : '开始微信扫码' }}</button>
             <text class="wechat-status">{{ wechatDeviceStatusText }}</text>
+            <button class="wechat-refresh-btn" :disabled="wechatDeviceLoading" @click="createWechatDeviceSession">{{ wechatDeviceLoading ? '正在生成二维码...' : '重新生成二维码' }}</button>
             <button class="phone-login-back" @click="switchLoginMode('phone')">手机号验证码登录</button>
           </template>
           <!-- #endif -->
@@ -79,7 +88,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { authApi, wechatApi } from '@/api/index.ts'
 import { useUserStore } from '@/store/index.ts'
 import { persistSession, routeForRole, type AppRole } from '@/utils/roles'
@@ -95,6 +104,9 @@ const tabs = [
 ]
 const activeTab = ref('student')
 const loginMode = ref<'phone' | 'wechat'>('phone')
+// #ifdef H5
+loginMode.value = 'wechat'
+// #endif
 const mobile = ref('')
 const code = ref('')
 const countdown = ref(0)
@@ -107,8 +119,9 @@ const currentTabLabel = computed(() => tabs.find((tab) => tab.role === activeTab
 const wechatDeviceSession = ref<WechatDeviceSession | null>(null)
 const wechatDeviceLoading = ref(false)
 const wechatDeviceCompleting = ref(false)
-const phoneAuthorizationConfirmed = ref(false)
-const wechatDeviceStatusText = ref('请确认授权后，生成二维码并使用微信扫码。')
+const wechatQrLoading = ref(false)
+const wechatQrError = ref(false)
+const wechatDeviceStatusText = ref('正在准备微信登录二维码。')
 let wechatDevicePollTimer: ReturnType<typeof setInterval> | undefined
 
 function stopWechatDevicePolling() {
@@ -122,7 +135,35 @@ function resetWechatDeviceSession() {
   stopWechatDevicePolling()
   wechatDeviceSession.value = null
   wechatDeviceCompleting.value = false
-  wechatDeviceStatusText.value = '请确认授权后，生成二维码并使用微信扫码。'
+  wechatQrLoading.value = false
+  wechatQrError.value = false
+  wechatDeviceStatusText.value = '正在准备微信登录二维码。'
+}
+
+function handleWechatQrLoad() {
+  wechatQrLoading.value = false
+  wechatQrError.value = false
+}
+
+function handleWechatQrError() {
+  wechatQrLoading.value = false
+  wechatQrError.value = true
+  wechatDeviceStatusText.value = '二维码加载失败，请点击下方按钮重新生成。'
+}
+
+function wechatDeviceErrorMessage(code: unknown, fallback = '微信扫码登录暂时未完成，请重新生成二维码。') {
+  switch (code) {
+    case 'DEVICE_SESSION_EXPIRED':
+      return '二维码已过期，正在生成新的二维码。'
+    case 'DEVICE_BROWSER_MISMATCH':
+      return '网页登录会话已失效，请重新生成二维码。'
+    case 'DEVICE_TICKET_INVALID':
+      return '登录凭证已失效，请重新生成二维码。'
+    case 'DEVICE_ROLE_CONFLICT':
+      return '当前微信账号没有开通所选角色，请切换角色后重试。'
+    default:
+      return fallback
+  }
 }
 
 async function completeWechatDeviceLogin(ticket: string) {
@@ -132,7 +173,9 @@ async function completeWechatDeviceLogin(ticket: string) {
   wechatDeviceStatusText.value = '正在完成登录...'
   try {
     const response = await wechatDeviceApi.complete(ticket, activeTab.value)
-    if (response.code !== 0 || !response.data) throw new Error(response.message || '微信扫码登录失败')
+    if (response.code !== 0 || !response.data) {
+      throw new Error(wechatDeviceErrorMessage(response?.code, response?.message || '微信扫码登录失败'))
+    }
     persistSession(response.data)
     userStore.setUserInfo(response.data.user)
     uni.reLaunch({ url: routeForRole(response.data.user.active_role as AppRole) })
@@ -147,7 +190,18 @@ async function pollWechatDeviceStatus(): Promise<boolean> {
   if (!session || wechatDeviceCompleting.value) return false
   try {
     const response = await wechatDeviceApi.status(session.web_session_id)
-    if (response.code !== 0 || !response.data) return false
+    const errorCode: unknown = response?.code
+    if (response.code !== 0 || !response.data) {
+      const message = wechatDeviceErrorMessage(errorCode, response?.message)
+      if (errorCode === 'DEVICE_SESSION_EXPIRED') {
+        wechatDeviceStatusText.value = message
+        await createWechatDeviceSession()
+      } else {
+        stopWechatDevicePolling()
+        wechatDeviceStatusText.value = message
+      }
+      return true
+    }
     if (response.data.ticket) {
       await completeWechatDeviceLogin(response.data.ticket)
       return true
@@ -156,6 +210,8 @@ async function pollWechatDeviceStatus(): Promise<boolean> {
       wechatDeviceStatusText.value = '请使用微信扫描二维码并在小程序中确认。'
     } else if (response.data.status === 'phone_authorization_required') {
       wechatDeviceStatusText.value = '请在小程序中点击授权手机号，网页会自动完成登录。'
+    } else if (response.data.status === 'login_confirmed') {
+      wechatDeviceStatusText.value = '微信已确认，正在完成网页登录。'
     } else {
       wechatDeviceStatusText.value = '正在等待小程序确认。'
     }
@@ -176,7 +232,9 @@ async function createWechatDeviceSession() {
       throw new Error(response.message || '二维码创建失败')
     }
     wechatDeviceSession.value = response.data
-    wechatDeviceStatusText.value = '请使用微信扫描上方二维码。'
+    wechatQrLoading.value = true
+    wechatQrError.value = false
+    wechatDeviceStatusText.value = '请使用微信扫描上方二维码；扫码成功后请勿重复扫码。'
     const completed = await pollWechatDeviceStatus()
     if (!completed) wechatDevicePollTimer = setInterval(() => { void pollWechatDeviceStatus() }, 3000)
   } catch (error: any) {
@@ -186,14 +244,6 @@ async function createWechatDeviceSession() {
     wechatDeviceLoading.value = false
   }
 }
-
-async function startWechatDeviceLogin() {
-  if (!phoneAuthorizationConfirmed.value) {
-    uni.showToast({ title: '请先确认手机号绑定授权', icon: 'none' })
-    return
-  }
-  await createWechatDeviceSession()
-}
 // #endif
 
 function switchLoginMode(mode: 'phone' | 'wechat') {
@@ -201,7 +251,6 @@ function switchLoginMode(mode: 'phone' | 'wechat') {
   loginMode.value = mode
   // #ifdef H5
   resetWechatDeviceSession()
-  phoneAuthorizationConfirmed.value = false
   if (mode === 'wechat') void createWechatDeviceSession()
   // #endif
 }
@@ -210,9 +259,15 @@ function switchRole(role: string) {
   if (activeTab.value === role) return
   activeTab.value = role
   // #ifdef H5
-  if (loginMode.value === 'wechat') resetWechatDeviceSession()
+  if (loginMode.value === 'wechat') void createWechatDeviceSession()
   // #endif
 }
+
+onMounted(() => {
+  // #ifdef H5
+  if (loginMode.value === 'wechat') void createWechatDeviceSession()
+  // #endif
+})
 
 async function sendCode() {
   if (!/^1\d{10}$/.test(mobile.value)) {
@@ -326,17 +381,21 @@ input { width: 100%; height: 56px; box-sizing: border-box; padding: 14px 16px; b
 .checkmark { width: 10rpx; height: 16rpx; border-bottom: 3rpx solid #fff; border-left: 3rpx solid #fff; opacity: 0; transform: rotate(-45deg); }
 .checkbox.checked .checkmark { opacity: 1; }
 .remember-text { color: #666; font-size: 22rpx; }
-.login-btn, .wechat-mini-login, .wechat-start-btn, .phone-login-back { width: 100%; margin-top: 28rpx; border-radius: 8rpx; font-size: 28rpx; }
+.login-btn, .wechat-mini-login, .wechat-refresh-btn, .phone-login-back { width: 100%; margin-top: 28rpx; border-radius: 8rpx; font-size: 28rpx; }
 .login-btn { padding: 22rpx 0; background: #409eff; color: #fff; }
-.wechat-mini-login, .wechat-start-btn { background: #07c160; color: #fff; }
+.wechat-mini-login, .wechat-refresh-btn { background: #07c160; color: #fff; }
 .wechat-login-row { display: flex; justify-content: flex-end; margin-top: 16rpx; }
 .wechat-login-link { color: #07c160; font-size: 24rpx; text-decoration: underline; cursor: pointer; }
 .device-qr-panel { display: flex; min-height: 320px; align-items: center; justify-content: center; border: 1rpx solid #e5e7eb; border-radius: 12rpx; background: #fff; }
-.device-qr-image-wrap { width: 320px; height: 320px; max-width: 100%; }
+.device-qr-image-wrap { position: relative; width: 320px; height: 320px; max-width: 100%; display: flex; align-items: center; justify-content: center; }
 .device-qr-image { width: 100%; height: 100%; }
+.device-qr-image-hidden { opacity: 0; }
+.device-qr-loading, .device-qr-error { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16rpx; color: #7a7a7a; font-size: 24rpx; text-align: center; }
+.device-qr-spinner { width: 42rpx; height: 42rpx; border: 5rpx solid #e5e7eb; border-top-color: #409eff; border-radius: 50%; animation: device-qr-spin 0.9s linear infinite; }
+@keyframes device-qr-spin { to { transform: rotate(360deg); } }
 .device-qr-placeholder, .wechat-status { color: #7a7a7a; font-size: 24rpx; text-align: center; }
-.wechat-consent { margin-top: 18rpx; }
 .wechat-status { display: block; min-height: 42rpx; margin-top: 18rpx; line-height: 1.5; }
+.wechat-refresh-btn { width: 100%; margin-top: 18rpx; border-radius: 8rpx; font-size: 26rpx; }
 .phone-login-back { border: 2rpx solid #409eff; background: #fff; color: #409eff; }
 /* #ifdef MP-WEIXIN */
 /* 微信小程序原生 input 聚焦时会重新计算占位文字位置，固定行高避免文字向上偏移。 */

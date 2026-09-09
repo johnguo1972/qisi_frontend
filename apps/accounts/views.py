@@ -64,7 +64,11 @@ from .wechat_web import (
 )
 from .wechat_miniprogram import MiniProgramLoginError, login_with_miniprogram_phone
 from django.conf import settings
+from django.core.cache import cache
 from apps.qrcode.services import wxacode_image
+
+
+DEVICE_QRCODE_CACHE_SECONDS = 300
 
 
 def make_trace_id() -> str:
@@ -449,6 +453,22 @@ def wechat_device_qrcode(request):
         bridge_code = get_or_create_device_bridge(
             web_session_id, browser_session_id(request)
         )
+        cache_key = f'wechat:device:qrcode:{web_session_id}'
+        try:
+            cached_image = cache.get(cache_key)
+        except Exception:
+            cached_image = None
+        if (
+            isinstance(cached_image, dict)
+            and isinstance(cached_image.get('content'), bytes)
+            and isinstance(cached_image.get('content_type'), str)
+        ):
+            response = HttpResponse(
+                cached_image['content'], content_type=cached_image['content_type']
+            )
+            response['Cache-Control'] = 'private, max-age=300'
+            return response
+
         env_version = getattr(settings, 'WECHAT_MP_ENV_VERSION', 'release')
         image = wxacode_image(
             scene=bridge_code,
@@ -457,6 +477,15 @@ def wechat_device_qrcode(request):
             check_path=env_version == 'release',
             env_version=env_version,
         )
+        try:
+            cache.set(
+                cache_key,
+                {'content': image.content, 'content_type': image.content_type},
+                timeout=DEVICE_QRCODE_CACHE_SECONDS,
+            )
+        except Exception:
+            # The QR cache is an optimization; it must not affect login.
+            pass
     except RuntimeError:
         return device_error(
             'WECHAT_MINIPROGRAM_BINDING_PAGE_UNAVAILABLE',
@@ -464,7 +493,9 @@ def wechat_device_qrcode(request):
         )
     except DeviceLoginError as error:
         return device_error(error.code)
-    return HttpResponse(image.content, content_type=image.content_type)
+    response = HttpResponse(image.content, content_type=image.content_type)
+    response['Cache-Control'] = 'private, max-age=300'
+    return response
 
 
 @api_view(['POST'])

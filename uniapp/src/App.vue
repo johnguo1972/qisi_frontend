@@ -2,7 +2,7 @@
 import { onLaunch } from '@dcloudio/uni-app'
 import { routeForRole, type AppRole } from '@/utils/roles'
 
-onLaunch(() => {
+onLaunch((launchOptions: any = {}) => {
   console.log('App launched')
 
   // #ifdef MP-WEIXIN
@@ -14,8 +14,15 @@ onLaunch(() => {
   // 例如二维码/短码链接会落到 pages/student/scan-entry。
   const pages = getCurrentPages()
   const currentRoute = pages[pages.length - 1]?.route || ''
+  const launchPath = String(launchOptions?.path || '')
   const browserRoute = typeof window !== 'undefined' ? window.location.hash : ''
-  if (currentRoute.includes('student/scan-entry') || browserRoute.includes('/pages/student/scan-entry')) return
+  const isPublicEntry =
+    currentRoute.includes('student/scan-entry') ||
+    currentRoute.includes('auth/web-binding') ||
+    launchPath.includes('student/scan-entry') ||
+    launchPath.includes('auth/web-binding') ||
+    browserRoute.includes('/pages/student/scan-entry')
+  if (isPublicEntry) return
 
   // #ifndef MP-WEIXIN
   const isLoginEntry =

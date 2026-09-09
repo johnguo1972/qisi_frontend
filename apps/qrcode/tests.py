@@ -51,6 +51,39 @@ def test_wxacode_image_returns_wechat_content_type(monkeypatch, settings):
     assert image.content_type == "image/jpeg"
 
 
+def test_wxacode_image_reuses_the_cached_access_token(monkeypatch, settings):
+    settings.WECHAT_MP_APPID = "wx-qrcode-cache-test"
+    settings.WECHAT_MP_APPSECRET = "secret-test"
+    cache.delete("wechat:mp:access-token:wx-qrcode-cache-test")
+    token_calls = []
+    image_calls = []
+
+    class TokenResponse:
+        def json(self):
+            return {"access_token": "cached-token", "expires_in": 7200}
+
+    class ImageResponse:
+        headers = {"Content-Type": "image/png"}
+        content = b"png-bytes"
+
+    def fake_get(*args, **kwargs):
+        token_calls.append((args, kwargs))
+        return TokenResponse()
+
+    def fake_post(*args, **kwargs):
+        image_calls.append((args, kwargs))
+        return ImageResponse()
+
+    monkeypatch.setattr("requests.get", fake_get)
+    monkeypatch.setattr("requests.post", fake_post)
+
+    qrcode_services.wxacode_image("bridge-one")
+    qrcode_services.wxacode_image("bridge-two")
+
+    assert len(token_calls) == 1
+    assert len(image_calls) == 2
+
+
 def _client_for(user, active_role):
     token = generate_tokens(user, active_role)['access_token']
     client = APIClient()
