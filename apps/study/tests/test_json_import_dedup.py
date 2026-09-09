@@ -246,35 +246,48 @@ def test_json_import_normalizes_common_question_type_and_preserves_source_type(t
 
 
 @pytest.mark.django_db
-def test_json_import_rejects_unsupported_question_type_without_persisting_side_effects(
+def test_json_import_accepts_unknown_type_and_normalizes_duplicate_option_labels(
     tmp_path, settings
 ):
     settings.MEDIA_ROOT = tmp_path / 'media'
     teacher = UserAccount.objects.create(
-        mobile='13900009211', display_name='Unsupported type teacher', role_type='teacher'
+        mobile='13900009211', display_name='Unknown type teacher', role_type='teacher'
     )
     client = APIClient()
     client.force_authenticate(user=teacher)
 
-    response = _upload_json_package(client, 'unsupported-type.zip', {
-        'paper': {'title': 'Unsupported type', 'subject': 'math', 'grade': 'Grade 8'},
-        'questions': [{
-            'question_no': '1',
-            'question_type': 'not_a_supported_type',
-            'stem': 'Unsupported type with no structural evidence.',
-        }],
+    response = _upload_json_package(client, 'unknown-type.zip', {
+        'paper': {'title': 'Unknown type', 'subject': 'math', 'grade': 'Grade 8'},
+        'questions': [
+            {
+                'question_no': '1',
+                'question_type': 'unknown',
+                'stem': 'Unknown type with no structural evidence.',
+            },
+            {
+                'question_no': '2',
+                'question_type': 'single_choice',
+                'stem': 'Question with repeated source option labels.',
+                'options': [
+                    {'label': 'A', 'content': 'First'},
+                    {'label': 'A', 'content': 'Second'},
+                    {'label': '', 'content': 'Third'},
+                ],
+            },
+        ],
     }, {})
 
     assert response.status_code == 200
     assert response.data['code'] == 0
-    assert response.data['data']['imported'] == 0
-    assert response.data['data']['failed'] == 1
-    assert response.data['data']['paper_id'] is None
-    assert not ExamQuestion.objects.exists()
-    assert not QuestionContentFingerprint.objects.filter(
-        state=QuestionContentFingerprint.State.ACTIVE
-    ).exists()
-    assert response.data['data']['error_details'][0]['error'] == 'unsupported_question_type'
+    assert response.data['data']['imported'] == 2
+    assert response.data['data']['failed'] == 0
+    question = ExamQuestion.objects.get(question_no=1)
+    assert question.question_type == 'unknown'
+    assert question.source_question_type == 'unknown'
+    choice_question = ExamQuestion.objects.get(question_no=2)
+    assert list(choice_question.options.values_list('option_label', 'content')) == [
+        ('A', 'First'), ('A-2', 'Second'), ('C', 'Third'),
+    ]
 
 
 @pytest.mark.django_db

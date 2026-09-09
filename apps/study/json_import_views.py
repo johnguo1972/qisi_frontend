@@ -31,7 +31,7 @@ from apps.parser.question_identity import (
 from apps.papers.models import ExamPaper, ParseTask
 from apps.common.codegen import generate_question_system_id
 from apps.common.media import media_url
-from apps.common.question_types import CANONICAL_QUESTION_TYPES, normalize_question_type
+from apps.common.question_types import normalize_question_type
 from apps.study.formula_assets import (
     FormulaAssetConversionError,
     convert_formula_asset,
@@ -526,10 +526,8 @@ def _preflight_question(raw_question, assets_dir):
         options=qdata.get('options') or [],
         answer=answer,
     )
-    if canonical_type not in CANONICAL_QUESTION_TYPES:
-        raise ValueError('unsupported_question_type')
     qdata['question_type'] = canonical_type
-    if source_type and source_type != canonical_type:
+    if source_type:
         qdata['source_question_type'] = source_type
     else:
         qdata.pop('source_question_type', None)
@@ -676,6 +674,18 @@ def _question_error(qdata, index, exc):
     }
 
 
+def _unique_option_label(raw_label, index, used_labels):
+    """Preserve the source label where possible while satisfying the DB uniqueness rule."""
+    base_label = str(raw_label or '').strip() or chr(65 + index)
+    label = base_label
+    duplicate_number = 2
+    while label in used_labels:
+        label = f'{base_label}-{duplicate_number}'
+        duplicate_number += 1
+    used_labels.add(label)
+    return label
+
+
 @transaction.atomic
 def _import_single_question(qdata, paper, assets_dir, base_dir, created_media_paths=None):
     """导入单道题目及其关联图片。"""
@@ -733,11 +743,12 @@ def _import_single_question(qdata, paper, assets_dir, base_dir, created_media_pa
     # 创建选项
     created_options = []
     options = qdata.get('options', [])
-    if options and qtype in ('single_choice', 'multiple_choice'):
+    if options:
+        used_option_labels = set()
         for i, opt in enumerate(options):
             created_options.append(QuestionOption.objects.create(
                 question=question,
-                option_label=opt.get('label', chr(65 + i)),
+                option_label=_unique_option_label(opt.get('label'), i, used_option_labels),
                 content=opt.get('content', ''),
                 sort_order=i,
             ))
