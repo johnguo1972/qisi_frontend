@@ -2,8 +2,9 @@
 
 import uuid
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
+from django.db.models import Prefetch
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -26,6 +27,14 @@ from apps.institutions.serializers import (
     CreateClassSerializer,
     UpdateClassSerializer,
     ClassStudentSerializer,
+    AddClassStudentSerializer,
+    UpdateClassStudentSerializer,
+)
+from apps.accounts.models import StudentParentBind
+from apps.institutions.student_management import (
+    StudentManagementError,
+    add_student,
+    update_student,
 )
 
 
@@ -42,9 +51,12 @@ def _is_teacher_request(request):
 
 def _check_teacher_of_class(request, class_id):
     """Return True if user is a teacher of the given class."""
-    return _is_teacher_request(request) and ClassTeacher.objects.filter(
-        class_obj_id=class_id, teacher=request.user,
-    ).exists()
+    return _is_teacher_request(request) and (
+        ClassTeacher.objects.filter(
+            class_obj_id=class_id, teacher=request.user,
+        ).exists()
+        or Class.objects.filter(id=class_id, creator_teacher=request.user).exists()
+    )
 
 
 def _create_class_impl(request):
@@ -160,9 +172,11 @@ def class_simple_list(request):
         return Response({'code': 4003, 'message': '无权限访问'}, status=403)
 
     qs = Class.objects.filter(
-        class_teachers__teacher=request.user,
+        Q(class_teachers__teacher=request.user) | Q(creator_teacher=request.user),
         status='active',
-    ).order_by('-created_at').values('id', 'class_name', 'class_no', 'grade_level')
+    ).distinct().order_by('-created_at').values(
+        'id', 'class_name', 'class_no', 'grade_level',
+    )
 
     return Response({
         'code': 0,
@@ -310,10 +324,10 @@ def regenerate_invite_code(request, class_id):
     })
 
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def class_students(request, class_id):
-    """GET /api/v1/classes/<id>/students - List students in a class."""
+    """List students or manually add one to a teacher-managed class."""
     try:
         cls = Class.objects.get(id=class_id)
     except Class.DoesNotExist:
@@ -326,7 +340,46 @@ def class_students(request, class_id):
             'code': 4003, 'message': '无权限访问', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_403_FORBIDDEN)
 
-    qs = cls.class_students.select_related('student').order_by('-joined_at')
+    if request.method == 'POST':
+        serializer = AddClassStudentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            relation = add_student(
+                user=request.user,
+                current_class=cls,
+                data=serializer.validated_data,
+            )
+        except StudentManagementError as exc:
+            return Response({
+                'code': exc.code,
+                'message': exc.message,
+                'data': None,
+                'trace_id': _trace(),
+            }, status=exc.http_status)
+        except IntegrityError:
+            return Response({
+                'code': 'DATA_CONFLICT',
+                'message': '学生或家长手机号、绑定关系存在冲突，请刷新后重试',
+                'data': None,
+                'trace_id': _trace(),
+            }, status=status.HTTP_409_CONFLICT)
+        return Response({
+            'code': 0,
+            'message': '学生添加成功',
+            'data': ClassStudentSerializer(relation).data,
+            'trace_id': _trace(),
+        }, status=status.HTTP_201_CREATED)
+
+    parent_queryset = StudentParentBind.objects.filter(
+        bind_status='active',
+    ).select_related('parent_user_id').order_by('-is_primary', 'bound_at', 'id')
+    qs = cls.class_students.select_related('student', 'class_obj').prefetch_related(
+        Prefetch(
+            'student__parent_binds_as_student',
+            queryset=parent_queryset,
+            to_attr='active_parent_binds',
+        ),
+    ).order_by('-joined_at')
     status_filter = request.GET.get('status', '').strip()
     if status_filter:
         qs = qs.filter(status=status_filter)
@@ -398,7 +451,41 @@ def remove_student(request, class_id, student_id):
             'code': 4004, 'message': '学生不在该班级', 'data': None, 'trace_id': _trace(),
         }, status=status.HTTP_404_NOT_FOUND)
 
-    if request.method == 'PATCH' or 'display_name' in request.data:
+    if request.method == 'PATCH':
+        serializer = UpdateClassStudentSerializer(
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        try:
+            updated_relation = update_student(
+                user=request.user,
+                current_class=cls,
+                student_id=student_id,
+                data=serializer.validated_data,
+            )
+        except StudentManagementError as exc:
+            return Response({
+                'code': exc.code,
+                'message': exc.message,
+                'data': None,
+                'trace_id': _trace(),
+            }, status=exc.http_status)
+        except IntegrityError:
+            return Response({
+                'code': 'DATA_CONFLICT',
+                'message': '学生或家长手机号、绑定关系存在冲突，请刷新后重试',
+                'data': None,
+                'trace_id': _trace(),
+            }, status=status.HTTP_409_CONFLICT)
+        return Response({
+            'code': 0,
+            'message': '学生信息更新成功',
+            'data': ClassStudentSerializer(updated_relation).data,
+            'trace_id': _trace(),
+        })
+
+    if 'display_name' in request.data:
         display_name = str(request.data.get('display_name') or '').strip()
         if not display_name:
             return Response({

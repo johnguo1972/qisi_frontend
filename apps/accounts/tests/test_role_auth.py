@@ -647,3 +647,32 @@ def test_wechat_binding_existing_student_can_open_parent_role(api_client, studen
     assert has_user_role(student_user, "student")
     assert has_user_role(student_user, "parent")
     assert response.data["data"]["user"]["active_role"] == "parent"
+
+
+@pytest.mark.django_db
+@override_settings(
+    TEST_LOGIN_ENABLED=True,
+    TEST_LOGIN_ACCOUNTS={
+        "15883633570": "123123",
+        "19513916986": "123321",
+    },
+    TEST_LOGIN_PHONE="",
+    TEST_LOGIN_CODE="",
+)
+def test_multiple_fixed_test_accounts_accept_their_own_codes(api_client):
+    for mobile, code in (
+        ("15883633570", "123123"),
+        ("19513916986", "123321"),
+    ):
+        response = api_client.post(
+            "/api/v1/auth/login",
+            {"mobile": mobile, "verify_code": code, "role_type": "teacher"},
+        )
+        assert response.status_code == 200
+        assert UserAccount.objects.filter(mobile=mobile).exists()
+
+    response = api_client.post(
+        "/api/v1/auth/login",
+        {"mobile": "15883633570", "verify_code": "123321", "role_type": "student"},
+    )
+    assert response.status_code == 400

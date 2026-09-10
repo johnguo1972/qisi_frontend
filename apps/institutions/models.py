@@ -117,6 +117,8 @@ class ClassStudent(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, db_column='class_id', related_name='class_students')
     student = models.ForeignKey(UserAccount, on_delete=models.CASCADE, related_name='student_classes')
+    grade_level = models.CharField(max_length=20, blank=True, null=True)
+    class_type = models.CharField(max_length=20, blank=True, null=True)
     join_type = models.CharField(max_length=20)  # invite/manual/import
     status = models.CharField(max_length=20, default='active')
     joined_at = models.DateTimeField(auto_now_add=True)
@@ -162,6 +164,10 @@ class StudentImportRow(models.Model):
     STATUS_CHOICES = [('matched', 'matched'), ('unmatched', 'unmatched'), ('failed', 'failed'), ('created', 'created')]
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     task = models.ForeignKey(StudentImportTask, on_delete=models.CASCADE, related_name='rows')
+    target_class = models.ForeignKey(
+        Class, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='student_import_rows',
+    )
     row_no = models.PositiveIntegerField()
     student = models.ForeignKey(UserAccount, on_delete=models.SET_NULL, null=True, blank=True, related_name='student_import_rows')
     raw_data = models.JSONField(default=dict, blank=True)

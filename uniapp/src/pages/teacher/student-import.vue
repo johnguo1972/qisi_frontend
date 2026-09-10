@@ -2,7 +2,8 @@
   <view class="page">
     <view class="card">
       <text class="title">批量导入学生</text>
-      <text class="hint">模板列：姓名（必填）、手机号、学号、班级标识、年级。支持 CSV / XLSX，单次最多 5000 行。</text>
+      <text class="hint">模板列：学生姓名（必填）、学校（必填）、年级、班级、班型、学生手机号、家长姓名、家长手机号。支持 CSV / XLSX，单次最多 5000 行。</text>
+      <text v-if="availableClassesText" class="hint">可填写的年级/班级：{{ availableClassesText }}</text>
       <button size="mini" @click="downloadTemplate">下载导入模板</button>
       <!-- #ifdef H5 -->
       <input type="file" accept=".csv,.xlsx" @change="selectFile" />
@@ -27,9 +28,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import { classApi } from '@/api/institutions'
+import { classApi, type ClassSimpleItem } from '@/api/institutions'
 import { apiBaseUrl } from '@/utils/api-config'
 
 const classId = ref('')
@@ -38,8 +39,24 @@ const fileName = ref('')
 const loading = ref(false)
 const result = ref<any>(null)
 const errors = ref<any[]>([])
+const teacherClasses = ref<ClassSimpleItem[]>([])
+const availableClassesText = computed(() => teacherClasses.value
+  .map(item => `${item.grade_level || '未设置年级'}/${item.class_name}`)
+  .join('、'))
 
-onLoad((options: any) => { classId.value = String(options?.classId || '') })
+onLoad(async (options: any) => {
+  classId.value = String(options?.classId || '')
+  await loadTeacherClasses()
+})
+
+async function loadTeacherClasses() {
+  try {
+    const response: any = await classApi.simpleList()
+    teacherClasses.value = response?.data || []
+  } catch (error) {
+    console.error('加载教师班级失败', error)
+  }
+}
 
 function selectFile(event: any) {
   file.value = event?.target?.files?.[0] || null
@@ -60,6 +77,7 @@ async function submit() {
       result.value = await waitForImport(result.value.id)
     }
     if (result.value?.failed_count) await showErrors()
+    uni.$emit('teacher-students-imported', { classId: classId.value })
     uni.showToast({ title: '导入完成', icon: 'success' })
   } catch (error: any) {
     uni.showToast({ title: error?.message || '导入失败', icon: 'none' })

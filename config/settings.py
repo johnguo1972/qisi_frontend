@@ -1,4 +1,5 @@
 """Django settings for front (study room) project."""
+import json
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -151,6 +152,18 @@ SMS_DEV_MODE = os.environ.get('SMS_DEV_MODE', '0').lower() in ('1', 'true', 'yes
 TEST_LOGIN_ENABLED = os.environ.get('TEST_LOGIN_ENABLED', '0').lower() in ('1', 'true', 'yes')
 TEST_LOGIN_PHONE = os.environ.get('TEST_LOGIN_PHONE', '')
 TEST_LOGIN_CODE = os.environ.get('TEST_LOGIN_CODE', '')
+_test_login_accounts_raw = os.environ.get('TEST_LOGIN_ACCOUNTS_JSON', '')
+try:
+    TEST_LOGIN_ACCOUNTS = json.loads(_test_login_accounts_raw) if _test_login_accounts_raw else {}
+except (TypeError, ValueError):
+    TEST_LOGIN_ACCOUNTS = {}
+if not isinstance(TEST_LOGIN_ACCOUNTS, dict):
+    TEST_LOGIN_ACCOUNTS = {}
+TEST_LOGIN_ACCOUNTS = {
+    str(mobile).strip(): str(code).strip()
+    for mobile, code in TEST_LOGIN_ACCOUNTS.items()
+    if str(mobile).strip() and str(code).strip()
+}
 TENCENT_SMS_SECRET_ID = os.environ.get('TENCENT_SMS_SECRET_ID', '')
 TENCENT_SMS_SECRET_KEY = os.environ.get('TENCENT_SMS_SECRET_KEY', '')
 TENCENT_SMS_SDK_APP_ID = os.environ.get('TENCENT_SMS_SDK_APP_ID', '1400878428')

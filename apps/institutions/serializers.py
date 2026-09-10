@@ -1,7 +1,9 @@
+import re
+
 from rest_framework import serializers
 from django.db import transaction
 
-from apps.accounts.models import UserAccount
+from apps.accounts.models import StudentParentBind, UserAccount
 from apps.common.subject_codes import normalize_subject_codes
 from apps.accounts.roles import grant_user_role
 from apps.institutions.models import (
@@ -199,6 +201,7 @@ class ClassDetailSerializer(serializers.ModelSerializer):
     institution_name = serializers.SerializerMethodField()
     creator_name = serializers.SerializerMethodField()
     student_count = serializers.SerializerMethodField()
+    pending_request_count = serializers.SerializerMethodField()
     teachers = serializers.SerializerMethodField()
 
     class Meta:
@@ -206,7 +209,7 @@ class ClassDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'class_no', 'class_name', 'grade_level', 'description', 'max_students',
             'invite_code', 'allow_invite_join', 'status', 'institution_name',
-            'creator_name', 'student_count', 'teachers', 'created_at',
+            'creator_name', 'student_count', 'pending_request_count', 'teachers', 'created_at',
             'updated_at',
         ]
 
@@ -220,6 +223,9 @@ class ClassDetailSerializer(serializers.ModelSerializer):
 
     def get_student_count(self, obj):
         return obj.class_students.filter(status='active').count()
+
+    def get_pending_request_count(self, obj):
+        return obj.join_requests.filter(status='pending').count()
 
     def get_teachers(self, obj):
         rels = obj.class_teachers.select_related('teacher').all()
@@ -259,17 +265,101 @@ class UpdateClassSerializer(serializers.ModelSerializer):
 class ClassStudentSerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField()
     student_mobile = serializers.SerializerMethodField()
+    school = serializers.SerializerMethodField()
+    grade_level = serializers.CharField(read_only=True)
+    class_name = serializers.SerializerMethodField()
+    class_type = serializers.CharField(read_only=True)
+    parent_id = serializers.SerializerMethodField()
+    parent_name = serializers.SerializerMethodField()
+    parent_mobile = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassStudent
         fields = ['id', 'class_obj', 'student', 'join_type', 'status',
-                  'joined_at', 'student_name', 'student_mobile']
+                  'joined_at', 'student_name', 'student_mobile', 'school',
+                  'grade_level', 'class_name', 'class_type', 'parent_id',
+                  'parent_name', 'parent_mobile']
 
     def get_student_name(self, obj):
         return obj.student.display_name if obj.student else None
 
     def get_student_mobile(self, obj):
         return obj.student.mobile if obj.student else None
+
+    def get_school(self, obj):
+        return obj.student.school if obj.student else None
+
+    def get_class_name(self, obj):
+        return obj.class_obj.class_name if obj.class_obj else None
+
+    def _primary_parent(self, obj):
+        student = obj.student
+        if not student:
+            return None
+        prefetched = getattr(student, 'active_parent_binds', None)
+        if prefetched is None:
+            prefetched = list(
+                StudentParentBind.objects.filter(
+                    student_user_id=student,
+                    bind_status='active',
+                ).select_related('parent_user_id').order_by('-is_primary', 'bound_at', 'id')
+            )
+        return prefetched[0] if prefetched else None
+
+    def get_parent_id(self, obj):
+        relation = self._primary_parent(obj)
+        return relation.parent_user_id_id if relation else None
+
+    def get_parent_name(self, obj):
+        relation = self._primary_parent(obj)
+        return relation.parent_user_id.display_name if relation else None
+
+    def get_parent_mobile(self, obj):
+        relation = self._primary_parent(obj)
+        return relation.parent_user_id.mobile if relation else None
+
+
+class AddClassStudentSerializer(serializers.Serializer):
+    student_name = serializers.CharField(max_length=64)
+    school = serializers.CharField(max_length=100)
+    grade_level = serializers.CharField(max_length=20)
+    target_class_id = serializers.UUIDField(required=False)
+    class_type = serializers.ChoiceField(
+        choices=[('S', 'S班'), ('A_PLUS', 'A+班'), ('A', 'A班')],
+        required=False,
+        allow_blank=True,
+    )
+    student_mobile = serializers.RegexField(r'^1[3-9]\d{9}$', max_length=20)
+    parent_name = serializers.CharField(max_length=64, required=False, allow_blank=True)
+    parent_mobile = serializers.CharField(max_length=20, required=False, allow_blank=True)
+
+    def validate(self, data):
+        for field in ('student_name', 'school', 'grade_level'):
+            if field in data:
+                value = str(data[field] or '').strip()
+                if not value:
+                    raise serializers.ValidationError({field: '该字段不能为空'})
+                data[field] = value
+        parent_name = str(data.get('parent_name') or '').strip()
+        parent_mobile = str(data.get('parent_mobile') or '').strip()
+        if bool(parent_name) != bool(parent_mobile):
+            raise serializers.ValidationError('家长姓名和家长手机号必须同时填写或同时为空')
+        if parent_mobile and not re.fullmatch(r'1[3-9]\d{9}', parent_mobile):
+            raise serializers.ValidationError({'parent_mobile': '家长手机号格式不正确'})
+        if parent_mobile and parent_mobile == data['student_mobile']:
+            raise serializers.ValidationError('学生手机号和家长手机号不能相同')
+        data['parent_name'] = parent_name
+        data['parent_mobile'] = parent_mobile
+        return data
+
+
+class UpdateClassStudentSerializer(AddClassStudentSerializer):
+    student_name = serializers.CharField(max_length=64, required=False)
+    school = serializers.CharField(max_length=100, required=False)
+    grade_level = serializers.CharField(max_length=20, required=False)
+    student_mobile = serializers.RegexField(
+        r'^1[3-9]\d{9}$', max_length=20, required=False,
+    )
 
 
 # ──────────────────────────────────────────────

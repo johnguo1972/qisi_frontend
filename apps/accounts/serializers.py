@@ -32,7 +32,7 @@ class WechatPhoneLoginSerializer(serializers.Serializer):
 class ProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserAccount
-        fields = ['id', 'role_type', 'login_name', 'mobile', 'display_name', 'avatar_url', 'status', 'subject', 'subjects', 'stages', 'grade_level']
+        fields = ['id', 'role_type', 'login_name', 'mobile', 'display_name', 'school', 'avatar_url', 'status', 'subject', 'subjects', 'stages', 'grade_level']
 
 
 class ProfileUpdateSerializer(serializers.Serializer):

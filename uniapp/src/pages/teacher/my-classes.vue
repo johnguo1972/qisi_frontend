@@ -25,12 +25,13 @@
             </view>
             <view class="card-footer">
               <text class="student-count">👥 {{ cls.student_count || 0 }} 名学生</text>
-              <text v-if="cls.pending_requests && cls.pending_requests > 0" class="pending-badge">
+              <text v-if="cls.pending_request_count && cls.pending_request_count > 0" class="pending-badge">
                 {{ cls.pending_requests }} 个待审批
               </text>
             </view>
           </view>
           <view class="card-actions">
+            <button class="action-btn btn-add-student" @click.stop="goAddStudent(cls.id)">添加学生</button>
             <button class="action-btn btn-students" @click.stop="goStudents(cls.id)">学生管理</button>
             <button class="action-btn btn-missions" @click.stop="goMissions(cls.id)">作业列表</button>
             <button class="action-btn btn-stats" @click.stop="goStats(cls.id)">学情统计</button>
@@ -54,7 +55,7 @@ interface ClassItem {
   class_no: string
   description?: string
   student_count?: number
-  pending_requests?: number
+  pending_request_count?: number
   invite_code?: string
   max_students?: number
   status?: string
@@ -89,6 +90,7 @@ function goCreate() { uni.navigateTo({ url: '/pages/teacher/class-create' }) }
 function classQuery(id: UUID): string { return encodeURIComponent(String(id)) }
 function goDetail(id: UUID) { uni.navigateTo({ url: `/pages/teacher/class-detail?classId=${classQuery(id)}` }) }
 function goStudents(id: UUID) { uni.navigateTo({ url: `/pages/teacher/class-detail?classId=${classQuery(id)}&view=students` }) }
+function goAddStudent(id: UUID) { uni.navigateTo({ url: `/pages/teacher/class-detail?classId=${classQuery(id)}&view=students&openAdd=1` }) }
 function goMissions(id: UUID) { uni.navigateTo({ url: `/pages/teacher/mission-list?classId=${classQuery(id)}` }) }
 function goStats(id: UUID) { uni.navigateTo({ url: `/pages/teacher/learning-stats?classId=${classQuery(id)}` }) }
 function goEdit(id: UUID) { uni.navigateTo({ url: `/pages/teacher/class-edit?id=${classQuery(id)}` }) }
@@ -188,6 +190,7 @@ async function confirmDelete(cls: ClassItem) {
   color: #409eff;
 }
 .btn-students { background: #f0f9eb; color: #67c23a; }
+.btn-add-student { background: #e8f7ff; color: #1989fa; }
 .btn-missions { background: #ecf5ff; color: #409eff; }
 .btn-stats { background: #f4f0ff; color: #9254de; }
 .btn-delete {
@@ -258,6 +261,29 @@ async function confirmDelete(cls: ClassItem) {
     flex-direction: column;
     align-items: flex-start;
     gap: 16rpx;
+  }
+}
+</style>
+
+<style scoped>
+/* Ensure all card actions remain readable on one line. */
+.class-grid {
+  grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+}
+.card-actions {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+.action-btn {
+  min-width: 82px;
+  white-space: nowrap;
+  padding-left: 12rpx;
+  padding-right: 12rpx;
+}
+
+@media (max-width: 768px) {
+  .class-grid {
+    grid-template-columns: minmax(480px, 1fr);
   }
 }
 </style>

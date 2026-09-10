@@ -36,6 +36,35 @@ export interface AddInstitutionMemberRolesPayload {
   stages?: string[]
 }
 
+export interface ClassSimpleItem {
+  id: UUID
+  class_name: string
+  class_no: string
+  grade_level?: string | null
+}
+
+export interface AddStudentPayload {
+  student_name: string
+  school: string
+  grade_level: string
+  target_class_id?: UUID
+  class_type?: 'S' | 'A_PLUS' | 'A' | ''
+  student_mobile: string
+  parent_name?: string
+  parent_mobile?: string
+}
+
+export interface UpdateStudentPayload {
+  student_name?: string
+  school?: string
+  grade_level?: string
+  target_class_id?: UUID
+  class_type?: 'S' | 'A_PLUS' | 'A' | ''
+  student_mobile?: string
+  parent_name?: string
+  parent_mobile?: string
+}
+
 // === Institution (Admin) ===
 export const institutionApi = {
   list: (params?: { name?: string; page?: number; page_size?: number }, options?: RequestOptions) => {
@@ -100,7 +129,7 @@ export const classApi = {
     post('/classes', data),
   list: (institutionId?: UUID) =>
     get(`/classes${institutionId ? `?institution_id=${institutionId}` : ''}`),
-  simpleList: () => get<any[]>('/classes/simple'),
+  simpleList: () => get<ClassSimpleItem[]>('/classes/simple'),
   detail: (id: UUID) => get(`/classes/${id}`),
   update: (id: UUID, data: any) => put(`/classes/${id}`, data),
   remove: (id: UUID) => del(`/classes/${id}`),
@@ -121,7 +150,9 @@ export const classApi = {
   learningStats: (id: UUID) => get(`/classes/${id}/learning-stats`),
   removeStudent: (classId: UUID, studentId: UUID) =>
     put(`/classes/${classId}/students/${studentId}`),
-  updateStudent: (classId: UUID, studentId: UUID, data: { display_name: string }) =>
+  addStudent: (classId: UUID, data: AddStudentPayload) =>
+    post(`/classes/${classId}/students`, data),
+  updateStudent: (classId: UUID, studentId: UUID, data: UpdateStudentPayload) =>
     patch(`/classes/${classId}/students/${studentId}`, data),
   joinRequests: (classId: UUID) => get(`/classes/${classId}/join-requests`),
   approveRequest: (requestId: UUID) => post(`/classes/join-requests/${requestId}/approve`),

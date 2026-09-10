@@ -17,6 +17,7 @@ class UserAccount(AbstractBaseUser):
     subjects = models.JSONField(blank=True, null=True)  # teacher subjects, e.g. ['physics', 'math']
     stages = models.JSONField(blank=True, null=True)  # teacher stages: ['小学', '初中', '高中']
     avatar_url = models.CharField(max_length=255, blank=True, null=True)
+    school = models.CharField(max_length=100, blank=True, null=True)
     grade_level = models.CharField(max_length=20, blank=True, null=True)  # student current grade: 一年级/二年级/.../九年级/高一/高二/高三
     status = models.CharField(max_length=20, default='active')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -80,10 +81,18 @@ class StudentParentBind(models.Model):
     )
     relation_type = models.CharField(max_length=20)  # father/mother/guardian
     bind_status = models.CharField(max_length=20, default='pending')
+    is_primary = models.BooleanField(default=False)
     bound_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'student_parent_bind'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['student_user_id'],
+                condition=models.Q(bind_status='active', is_primary=True),
+                name='uq_active_primary_parent_per_student',
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         with transaction.atomic():

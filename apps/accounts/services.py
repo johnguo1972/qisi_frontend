@@ -65,9 +65,16 @@ def verify_code(mobile: str, code: str) -> bool:
 
 def is_fixed_test_account_code(mobile: str, code: str) -> bool:
     """Return whether an explicitly enabled fixed test credential was used."""
+    if not settings.TEST_LOGIN_ENABLED:
+        return False
+
+    configured_accounts = getattr(settings, 'TEST_LOGIN_ACCOUNTS', {})
+    if mobile in configured_accounts:
+        return configured_accounts[mobile] == code
+
+    # Keep the original single-account settings backward compatible.
     return bool(
-        settings.TEST_LOGIN_ENABLED
-        and settings.TEST_LOGIN_PHONE
+        settings.TEST_LOGIN_PHONE
         and settings.TEST_LOGIN_CODE
         and mobile == settings.TEST_LOGIN_PHONE
         and code == settings.TEST_LOGIN_CODE
