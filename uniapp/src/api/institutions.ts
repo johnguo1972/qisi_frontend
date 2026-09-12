@@ -148,6 +148,8 @@ export const classApi = {
     })
   },
   learningStats: (id: UUID) => get(`/classes/${id}/learning-stats`),
+  studentLearningStats: (classId: UUID, studentId: UUID, params?: { mission_id?: UUID; page?: number; page_size?: number }) =>
+    get<any>(`/classes/${classId}/students/${studentId}/learning-stats`, params),
   removeStudent: (classId: UUID, studentId: UUID) =>
     put(`/classes/${classId}/students/${studentId}`),
   addStudent: (classId: UUID, data: AddStudentPayload) =>

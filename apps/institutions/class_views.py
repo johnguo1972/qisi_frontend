@@ -423,6 +423,70 @@ def class_learning_stats(request, class_id):
     })
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_learning_stats(request, class_id, student_id):
+    """Return one student's scoped history and knowledge graph for a class."""
+    try:
+        cls = Class.objects.get(id=class_id)
+    except Class.DoesNotExist:
+        return Response({
+            'code': 404, 'message': '班级不存在', 'data': None, 'trace_id': _trace(),
+        }, status=status.HTTP_404_NOT_FOUND)
+    if not _check_teacher_of_class(request, class_id):
+        return Response({
+            'code': 403, 'message': '无权访问', 'data': None, 'trace_id': _trace(),
+        }, status=status.HTTP_403_FORBIDDEN)
+
+    membership = ClassStudent.objects.filter(
+        class_obj=cls, student_id=student_id, status='active',
+    ).select_related('student').first()
+    if membership is None:
+        return Response({
+            'code': 404, 'message': '学生不在该班级', 'data': None, 'trace_id': _trace(),
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    def parse_positive_int(name, default, maximum=None):
+        raw = request.query_params.get(name)
+        if raw in (None, ''):
+            return default
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f'{name} 必须是正整数')
+        if value < 1 or (maximum is not None and value > maximum):
+            raise ValueError(f'{name} 超出有效范围')
+        return value
+
+    try:
+        page = parse_positive_int('page', 1)
+        page_size = parse_positive_int('page_size', 20, maximum=50)
+    except ValueError as exc:
+        return Response({
+            'code': 400, 'message': str(exc), 'data': None, 'trace_id': _trace(),
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    mission_id = str(request.query_params.get('mission_id') or '').strip()
+    from apps.institutions.learning_stats_service import build_student_learning_stats
+    try:
+        data, total = build_student_learning_stats(
+            cls, membership.student, mission_id=mission_id,
+            page=page, page_size=page_size,
+        )
+    except ValueError as exc:
+        return Response({
+            'code': 404, 'message': str(exc), 'data': None, 'trace_id': _trace(),
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    return Response({
+        'code': 0,
+        'message': 'success',
+        'data': data,
+        'meta': {'page': page, 'page_size': page_size, 'total': total},
+        'trace_id': _trace(),
+    })
+
+
 @api_view(['PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def remove_student(request, class_id, student_id):

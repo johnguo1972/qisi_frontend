@@ -34,7 +34,7 @@
               </view>
             </view>
             <view v-for="student in students" :key="student.student_id" class="matrix-row">
-              <view class="student-column student-name">{{ student.student_name || student.mobile || '-' }}</view>
+              <view class="student-column student-name" :class="{ clickable: !!classId }" @click.stop="goStudent(student.student_id)">{{ student.student_name || student.mobile || '-' }}</view>
               <view
                 v-for="cell in student.cells"
                 :key="cell.question_id"
@@ -204,6 +204,15 @@ function selectQuestion(question: Question) {
   if (!selectedStudentId.value && students.value.length) selectedStudentId.value = students.value[0].student_id
 }
 
+function goStudent(studentId: string) {
+  if (!classId.value || !studentId) return
+  uni.navigateTo({
+    url: '/pages/teacher/student-learning-stats?classId=' + encodeURIComponent(classId.value)
+      + '&studentId=' + encodeURIComponent(studentId)
+      + '&missionId=' + encodeURIComponent(missionId.value),
+  })
+}
+
 function isSelected(studentId: string, questionId: string) {
   return selectedStudentId.value === studentId && selectedQuestionId.value === questionId
 }
@@ -259,7 +268,7 @@ function goBack() {
 .matrix-scroll { width: 100%; }.matrix { border: 1px solid #ebeef5; }.matrix-row { display: flex; min-height: 84rpx; border-bottom: 1px solid #ebeef5; }.matrix-row:last-child { border-bottom: 0; }
 .student-column { flex: 0 0 180rpx; display: flex; align-items: center; padding: 12rpx 16rpx; box-sizing: border-box; border-right: 1px solid #ebeef5; font-size: 26rpx; }
 .matrix-header { background: #f5f7fa; }.question-column { flex: 0 0 116rpx; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 8rpx; box-sizing: border-box; border-right: 1px solid #ebeef5; }.question-column:last-child { border-right: 0; }
-.question-number { color: #303133; font-size: 24rpx; }.source-number { color: #909399; font-size: 20rpx; margin-top: 4rpx; }.student-name { color: #303133; font-weight: 600; }
+.question-number { color: #303133; font-size: 24rpx; }.source-number { color: #909399; font-size: 20rpx; margin-top: 4rpx; }.student-name { color: #303133; font-weight: 600; }.student-name.clickable { color: #409eff; cursor: pointer; }
 .answer-cell { cursor: pointer; }.answer-cell.selected { background: #ecf5ff; outline: 2px solid #409eff; outline-offset: -2px; }.status-icon { font-size: 27rpx; line-height: 1.2; }
 .cell-answer { max-width: 105rpx; overflow: hidden; color: #606266; font-size: 20rpx; white-space: nowrap; text-overflow: ellipsis; }.status-correct .cell-answer { color: #67c23a; }.status-wrong .cell-answer { color: #f56c6c; }.status-pending .cell-answer { color: #e6a23c; }.status-not_assigned { color: #c0c4cc; background: #fafafa; }
 .empty { padding: 50rpx; text-align: center; color: #909399; }.stats-layout { display: flex; gap: 24rpx; align-items: flex-start; }.matrix-card { flex: 1.8; min-width: 0; }.side-panel { flex: 1; min-width: 360rpx; }.question-list-card,.answer-detail-card { width: 100%; box-sizing: border-box; }

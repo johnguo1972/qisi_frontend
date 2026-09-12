@@ -85,10 +85,14 @@
         <scroll-view v-if="isExpanded(mission.mission_id)" scroll-x class="student-table-scroll">
           <view class="student-table">
             <view class="student-table-row student-table-header">
+              <view class="student-table-header-action">
               <text class="student-col name">学生</text><text class="student-col">完成情况</text><text class="student-col">答题数</text><text class="student-col">正确/错误</text><text class="student-col">正确率</text><text class="student-col">状态</text>
             </view>
+              <text class="student-col action-header">鎿嶄綔</text>
+            </view>
             <view v-for="student in mission.students || []" :key="student.student_id" class="student-table-row">
-              <text class="student-col name">{{ student.student_name || student.mobile || '-' }}</text>
+              <text class="student-col name student-link" @click.stop="goStudent(student.student_id)">{{ student.student_name || student.mobile || '-' }}</text>
+              <text class="student-col student-action" @click.stop="goStudent(student.student_id)">&#x5386;&#x53f2;&#x8bb0;&#x5f55;</text>
               <text class="student-col">{{ student.answered_count || 0 }}/{{ student.question_count || 0 }}（{{ numberValue(student.completion_rate) }}%）</text>
               <text class="student-col">{{ student.answered_count || 0 }}</text>
               <text class="student-col">{{ student.correct_count || 0 }}/{{ student.wrong_count || 0 }}</text>
@@ -207,6 +211,13 @@ function goMission(missionId: string) {
     url: '/pages/teacher/mission-learning-stats?missionId=' + encodeURIComponent(String(missionId)) + query,
   })
 }
+function goStudent(studentId: string) {
+  if (!classId.value || !studentId) return
+  uni.navigateTo({
+    url: '/pages/teacher/student-learning-stats?classId=' + encodeURIComponent(String(classId.value))
+      + '&studentId=' + encodeURIComponent(String(studentId)),
+  })
+}
 function numberValue(value: any) {
   const number = Number(value || 0)
   return Number.isInteger(number) ? String(number) : number.toFixed(2)
@@ -251,6 +262,8 @@ function studentStatusClass(status?: string) {
 .detail-button, .expand-button { margin: 0; color: #409eff; background: #ecf5ff; border: 1px solid #b3d8ff; }.detail-button { min-width: 110px; }.expand-button { min-width: 56px; }.mission-meta { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 14px; color: #909399; font-size: 13px; }
 .mission-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 20px; padding: 16px 0; border-top: 1px solid #ebeef5; border-bottom: 1px solid #ebeef5; }.mission-metric { padding: 0 14px; border-right: 1px solid #ebeef5; }.mission-metric:last-child { border-right: 0; }.metric-label,.metric-extra { display: block; color: #909399; font-size: 13px; }.metric-value { display: inline-block; margin-top: 7px; margin-right: 8px; color: #303133; font-size: 20px; font-weight: 600; }.metric-rate { font-size: 14px; }.metric-extra { margin-top: 5px; font-size: 12px; }
 .student-section-header { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; color: #303133; font-size: 15px; font-weight: 600; }.student-section-actions { display: flex; align-items: center; gap: 10px; }.student-count { color: #909399; font-size: 12px; font-weight: 400; }.student-table-scroll { width: 100%; margin-top: 10px; }.student-table { min-width: 760px; }.student-table-row { display: grid; grid-template-columns: 1.5fr 1.5fr 1fr 1fr 1fr 1fr; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f2f6fc; color: #606266; font-size: 13px; }.student-table-header { color: #909399; border-bottom-color: #ebeef5; }.student-col { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }.student-col.name { color: #303133; }.student-status-reviewed { color: #67c23a; }.student-status-submitted { color: #e6a23c; }.student-status-in-progress { color: #409eff; }.student-status-not-started { color: #909399; }.empty-hint { padding: 24px 0; text-align: center; color: #909399; }
+.student-link { color: #409eff !important; cursor: pointer; }
+.student-table-header-action { display: contents; }.student-table { min-width: 860px; }.student-table-row { grid-template-columns: 1.5fr 1.5fr 1fr 1fr 1fr 1fr .9fr; }.action-header { grid-column: 7; grid-row: 1; text-align: center; font-size: 0; }.action-header::after { content: '\64cd\4f5c'; font-size: 13px; }.student-action { grid-column: 7; grid-row: 1; color: #409eff; cursor: pointer; text-align: center; }
 @media (max-width: 900px) { .summary-grid { grid-template-columns: repeat(3, 1fr); }.mission-header { align-items: flex-start; flex-direction: column; }.mission-header-right { width: 100%; justify-content: space-between; } }
 @media (max-width: 600px) { .stats-page { padding: 16px 16px 30px; }.page-header { align-items: flex-start; flex-direction: column; gap: 12px; }.class-filter { width: 100%; }.class-filter picker { flex: 1; }.picker-control { min-width: 0; }.summary-grid { grid-template-columns: repeat(2, 1fr); }.overview-title { align-items: flex-start; flex-direction: column; gap: 8px; }.mission-metrics { grid-template-columns: repeat(2, 1fr); }.mission-metric:nth-child(2) { border-right: 0; }.mission-metric:nth-child(-n+2) { padding-bottom: 14px; border-bottom: 1px solid #ebeef5; } }
 </style>
