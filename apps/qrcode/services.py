@@ -15,23 +15,28 @@ from .models import MissionShortCode, StudentClassShortCode
 SHORT_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 STUDENT_ALPHABET = SHORT_ALPHABET
 WECHAT_ACCESS_TOKEN_CACHE_SECONDS = 7100
+WECHAT_INVALID_TOKEN_ERROR_CODES = {40001, 40014, 42001}
 
 
-def _wechat_access_token(appid, secret):
+def _wechat_access_token(appid, secret, *, force_refresh=False):
     """Reuse the Mini Program access token instead of requesting one per QR."""
     cache_key = f'wechat:mp:access-token:{appid}'
-    try:
-        cached_token = cache.get(cache_key)
-    except Exception:
-        cached_token = None
-    if isinstance(cached_token, str) and cached_token:
-        return cached_token
+    if not force_refresh:
+        try:
+            cached_token = cache.get(cache_key)
+        except Exception:
+            cached_token = None
+        if isinstance(cached_token, str) and cached_token:
+            return cached_token
 
-    token_result = requests.get(
-        'https://api.weixin.qq.com/cgi-bin/token',
-        params={'grant_type': 'client_credential', 'appid': appid, 'secret': secret},
-        timeout=8,
-    ).json()
+    try:
+        token_result = requests.get(
+            'https://api.weixin.qq.com/cgi-bin/token',
+            params={'grant_type': 'client_credential', 'appid': appid, 'secret': secret},
+            timeout=8,
+        ).json()
+    except (requests.RequestException, ValueError) as error:
+        raise RuntimeError('wechat access_token request failed') from error
     access_token = token_result.get('access_token')
     if not access_token:
         raise RuntimeError(token_result.get('errmsg', 'wechat access_token request failed'))
@@ -160,27 +165,38 @@ def wxacode_image(
     secret = getattr(settings, 'WECHAT_MP_APPSECRET', '')
     if not appid or not secret:
         raise RuntimeError('微信小程序 AppID/AppSecret 未配置')
-    access_token = _wechat_access_token(appid, secret)
-    response = requests.post(
-        'https://api.weixin.qq.com/wxa/getwxacodeunlimit',
-        params={'access_token': access_token},
-        json={
-            'scene': str(scene)[:32],
-            'page': page,
-            'check_path': bool(check_path),
-            'env_version': env_version,
-            'width': width,
-        },
-        timeout=15,
-    )
-    content_type = response.headers.get('Content-Type', '').split(';', 1)[0].lower()
-    if content_type not in {'image/jpeg', 'image/png'}:
+    request_body = {
+        'scene': str(scene)[:32],
+        'page': page,
+        'check_path': bool(check_path),
+        'env_version': env_version,
+        'width': width,
+    }
+    for attempt in range(2):
+        access_token = _wechat_access_token(
+            appid, secret, force_refresh=attempt == 1
+        )
+        response = requests.post(
+            'https://api.weixin.qq.com/wxa/getwxacodeunlimit',
+            params={'access_token': access_token},
+            json=request_body,
+            timeout=15,
+        )
+        content_type = response.headers.get('Content-Type', '').split(';', 1)[0].lower()
+        if content_type in {'image/jpeg', 'image/png'}:
+            return WechatCodeImage(content=response.content, content_type=content_type)
+
         try:
-            message = response.json().get('errmsg', '生成微信小程序码失败')
+            error_payload = response.json()
         except ValueError:
-            message = '生成微信小程序码失败'
+            error_payload = {}
+        error_code = error_payload.get('errcode')
+        if attempt == 0 and error_code in WECHAT_INVALID_TOKEN_ERROR_CODES:
+            # A deployment may retain a token issued before an AppSecret change,
+            # or WeChat may revoke a token early. Fetch a fresh one once.
+            continue
+        message = error_payload.get('errmsg', '生成微信小程序码失败')
         raise RuntimeError(message)
-    return WechatCodeImage(content=response.content, content_type=content_type)
 
 
 def wxacode_png(
