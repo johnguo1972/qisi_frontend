@@ -125,6 +125,7 @@ CELERY_TASK_ROUTES = {
     'apps.review.tasks.execute_ai_job_item': {'queue': 'ai.batch'},
     'apps.review.tasks.dispatch_queued_ai_items_task': {'queue': 'ai.batch'},
     'apps.study.tasks.prepare_guidance_content': {'queue': 'ai.guidance'},
+    'apps.study.document_import_tasks.process_document_import_task': {'queue': 'document.import'},
 }
 
 CELERY_BEAT_SCHEDULE = {
