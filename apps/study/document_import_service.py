@@ -297,20 +297,46 @@ def _extract_docx(path: Path) -> ExtractedDocument:
 
 
 def _docx_non_whitespace_characters(document) -> int:
-    parts = [paragraph.text for paragraph in document.paragraphs]
-    for table in document.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                parts.append(cell.text)
-    return len(re.sub(r'\s+', '', ''.join(parts)))
+    character_count, _table_count = _docx_body_content_metrics(document)
+    return character_count
 
 
 def _docx_equivalent_page_count(document) -> int:
+    character_count, table_count = _docx_body_content_metrics(document)
     return (
-        ceil(_docx_non_whitespace_characters(document) / 1600)
-        + ceil(len(document.tables) / 2)
+        ceil(character_count / 1600)
+        + ceil(table_count / 2)
         + _docx_image_occurrence_count(document)
     )
+
+
+def _docx_body_content_metrics(document) -> tuple[int, int]:
+    """Recursively count body text and tables without double-counting merged cells."""
+    text_parts = [paragraph.text for paragraph in document.paragraphs]
+    seen_cell_elements = set()
+    seen_table_elements = set()
+    table_count = 0
+
+    def visit_table(table) -> None:
+        nonlocal table_count
+        table_element_id = id(table._tbl)
+        if table_element_id in seen_table_elements:
+            return
+        seen_table_elements.add(table_element_id)
+        table_count += 1
+        for row in table.rows:
+            for cell in row.cells:
+                cell_element_id = id(cell._tc)
+                if cell_element_id in seen_cell_elements:
+                    continue
+                seen_cell_elements.add(cell_element_id)
+                text_parts.extend(paragraph.text for paragraph in cell.paragraphs)
+                for nested_table in cell.tables:
+                    visit_table(nested_table)
+
+    for table in document.tables:
+        visit_table(table)
+    return len(re.sub(r'\s+', '', ''.join(text_parts))), table_count
 
 
 def _docx_image_occurrence_count(document) -> int:

@@ -81,6 +81,17 @@ def _compressed_docx_bomb(tmp_path):
     return bomb_path
 
 
+def _nested_table_over_limit_docx(tmp_path):
+    document_path = tmp_path / 'nested-table-over-limit.docx'
+    document = Document()
+    document.add_paragraph('1. Nested table question')
+    outer_table = document.add_table(rows=1, cols=1)
+    nested_table = outer_table.cell(0, 0).add_table(rows=1, cols=1)
+    nested_table.cell(0, 0).text = _over_limit_text()
+    document.save(document_path)
+    return document_path
+
+
 def test_validate_document_rejects_docx_named_pdf():
     """Changing a PDF filename to .docx must not bypass type validation."""
     upload = make_upload('fake.docx', b'%PDF-1.7', 'application/pdf')
@@ -171,6 +182,23 @@ def test_extract_document_rejects_docx_compression_bomb(tmp_path):
     """Path-based DOCX extraction rejects a dangerous ZIP before python-docx opens it."""
     with pytest.raises(DocumentValidationError, match='压缩比'):
         extract_document(_compressed_docx_bomb(tmp_path))
+
+
+def test_validate_document_counts_nested_table_text_and_table_count(tmp_path):
+    """Nested table content contributes to the upload-time DOCX equivalent page limit."""
+    document_path = _nested_table_over_limit_docx(tmp_path)
+
+    with pytest.raises(DocumentValidationError, match='100 页'):
+        validate_document_upload(make_upload(
+            'nested-table-over-limit.docx', document_path.read_bytes(),
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ))
+
+
+def test_extract_document_counts_nested_table_text_and_table_count(tmp_path):
+    """Nested table content contributes to the path-based DOCX equivalent page limit."""
+    with pytest.raises(DocumentValidationError, match='100 页'):
+        extract_document(_nested_table_over_limit_docx(tmp_path))
 
 
 @pytest.fixture
