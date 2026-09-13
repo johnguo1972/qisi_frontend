@@ -24,7 +24,7 @@ def _error_response(message, status):
 
 
 def _batch_item(batch):
-    return {
+    item = {
         'id': str(batch.id),
         'source_type': batch.source_type,
         'source_name': batch.source_name,
@@ -40,6 +40,12 @@ def _batch_item(batch):
         'finished_at': batch.finished_at,
         'created_at': batch.created_at,
     }
+    task = getattr(batch, 'document_import_task', None)
+    if task is not None:
+        item['document_stage'] = task.stage
+        item['document_progress'] = task.progress
+        item['document_errors'] = [part for part in task.error_summary.split('; ') if part][:20]
+    return item
 
 
 @api_view(['GET'])
@@ -72,7 +78,7 @@ def ingestion_history(request):
     elif scope != 'bank':
         return _error_response('scope must be bank or course', 400)
 
-    items = [_batch_item(batch) for batch in batches.order_by('-finished_at', '-created_at')[:30]]
+    items = [_batch_item(batch) for batch in batches.select_related('document_import_task').order_by('-finished_at', '-created_at')[:30]]
     return Response({
         'code': 0,
         'message': 'success',

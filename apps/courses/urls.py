@@ -34,6 +34,8 @@ urlpatterns = [
     path('courses/<uuid:course_id>/questions/', views.question_list, name='question-list'),
     path('courses/<uuid:course_id>/questions/import/', views.question_import, name='question-import'),
     path('courses/<uuid:course_id>/questions/import-json-package/', views.question_import_json_package, name='question-import-json-package'),
+    path('courses/<uuid:course_id>/questions/import-document/', views.question_import_document, name='question-import-document'),
+    path('courses/<uuid:course_id>/questions/import-document/<uuid:task_id>/status/', views.question_document_import_status, name='question-document-import-status'),
     path('courses/<uuid:course_id>/questions/batch-delete/', views.question_batch_delete, name='question-batch-delete'),
     path('courses/<uuid:course_id>/questions/batch-move/', views.question_batch_move, name='question-batch-move'),
 

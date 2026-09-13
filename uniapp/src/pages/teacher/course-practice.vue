@@ -135,6 +135,7 @@
         <view class="tab-bar">
           <view :class="['tab', { active: activeTab === 'upload' }]" @click="activeTab = 'upload'">拍照/上传</view>
           <view class="tab" @click="importJsonPackage">JSON数据包导入</view>
+          <view :class="['tab', { active: activeTab === 'document' }]" @click="activeTab = 'document'">PDF-Word文档导入</view>
         </view>
 
         <!-- Tab: Upload -->
@@ -146,6 +147,20 @@
               <button class="btn-upload" @click="chooseImage">📁 上传图片</button>
             </view>
             <text class="upload-note">将跳转至新增试题页面完成编辑</text>
+          </view>
+        </scroll-view>
+
+        <scroll-view v-show="activeTab === 'document'" class="tab-content" scroll-y>
+          <view class="upload-area">
+            <text class="upload-hint">上传 PDF 或 DOCX 试卷，系统将异步解析、结构化并关联到当前课程</text>
+            <text class="upload-note">仅支持 .pdf / .docx，单个文件不超过 100 MB、最多 100 页</text>
+            <button class="btn-upload" :disabled="documentImportUploading" @click="chooseCourseDocument">
+              {{ documentImportUploading ? '正在提交…' : '选择 PDF/Word 文档' }}
+            </button>
+            <view v-if="documentImportTask" class="document-import-status">
+              <text>状态：{{ documentImportTask.stage }}（{{ documentImportTask.progress || 0 }}%）</text>
+              <text v-for="message in documentImportTask.errors || []" :key="message">{{ message }}</text>
+            </view>
           </view>
         </scroll-view>
 
@@ -336,7 +351,7 @@ import {
   submitCourseAiTasks,
   submitCourseBatchAi,
 } from './course-practice-list'
-import { questionApi, aiProcessProbe, getQuestionTags, addQuestionTag, getTagList, removeQuestionTag, importCourseJsonPackage } from '@/api/questions'
+import { questionApi, aiProcessProbe, getQuestionTags, addQuestionTag, getTagList, removeQuestionTag, importCourseJsonPackage, importCourseDocument, getCourseDocumentImportStatus } from '@/api/questions'
 import { favoriteApi } from '@/api/favorites'
 import { createQuestionRelationsController } from './question-relations'
 import QuestionDetailCard from '@/components/QuestionDetailCard.vue'
@@ -1474,6 +1489,70 @@ async function addSelectedToFavorites() {
   await Promise.all(selectedIds.value.map(addFavorite))
 }
 
+const documentImportUploading = ref(false)
+const documentImportTask = ref<any>(null)
+let documentImportPollTimer: ReturnType<typeof setTimeout> | null = null
+
+function stopDocumentImportPolling() {
+  if (documentImportPollTimer) clearTimeout(documentImportPollTimer)
+  documentImportPollTimer = null
+}
+
+async function pollCourseDocumentImport() {
+  const taskId = documentImportTask.value?.task_id
+  if (!taskId || !courseId.value) return
+  try {
+    const response: any = await getCourseDocumentImportStatus(courseId.value, taskId)
+    documentImportTask.value = response?.data || response
+    const stage = documentImportTask.value?.stage
+    if (stage === 'success' || stage === 'partial_success') {
+      stopDocumentImportPolling()
+      await Promise.all([loadTree(), loadQuestions()])
+      uni.showToast({ title: stage === 'success' ? '文档导入完成' : '文档部分导入完成', icon: 'none' })
+      return
+    }
+    if (stage === 'failed') {
+      stopDocumentImportPolling()
+      uni.showToast({ title: '文档导入失败，请查看导入历史', icon: 'none' })
+      return
+    }
+  } catch (_) {
+    // Leave the durable task card visible; the next polling cycle retries it.
+  }
+  documentImportPollTimer = setTimeout(pollCourseDocumentImport, 3000)
+}
+
+function chooseCourseDocument() {
+  if (!courseId.value) {
+    uni.showToast({ title: '课程信息未加载，不能导入', icon: 'none' })
+    return
+  }
+  // @ts-ignore
+  uni.chooseFile({
+    count: 1,
+    extension: ['pdf', 'docx'],
+    success: async (res: any) => {
+      const file = res.tempFiles?.[0]?.file || res.tempFiles?.[0]
+      if (!file) return
+      documentImportUploading.value = true
+      try {
+        const response: any = await importCourseDocument(file, {
+          courseId: courseId.value,
+          treeNodeId: selectedNode.value ? String(selectedNode.value.id) : undefined,
+        })
+        documentImportTask.value = response?.data || response
+        stopDocumentImportPolling()
+        documentImportPollTimer = setTimeout(pollCourseDocumentImport, 3000)
+        uni.showToast({ title: '文档导入任务已提交', icon: 'success' })
+      } catch (error: any) {
+        uni.showToast({ title: error?.message || '文档导入提交失败', icon: 'none' })
+      } finally {
+        documentImportUploading.value = false
+      }
+    },
+  })
+}
+
 // ============================================================
 // Remove questions
 // ============================================================
@@ -1704,6 +1783,7 @@ async function confirmGenerateMission() {
 // Cleanup
 // ============================================================
 onUnmounted(() => {
+  stopDocumentImportPolling()
   courseAiJobPollTimers.forEach(t => clearInterval(t.timer))
   courseAiJobPollTimers.length = 0
   variantPollTimers.forEach(t => clearTimeout(t.timer))
@@ -2193,6 +2273,18 @@ onUnmounted(() => {
   color: #909399;
   display: block;
   margin-top: 16px;
+}
+
+.document-import-status {
+  margin-top: 14px;
+  padding: 10px;
+  border-radius: 6px;
+  background: #f4f8ff;
+  color: #606266;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 /* Material list */

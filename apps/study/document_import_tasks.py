@@ -127,7 +127,7 @@ def process_document_import_task(self, task_id):
             batch=task.batch,
             source_root=asset_root,
             course=task.course,
-            tree_node=None,
+            tree_node=task.tree_node,
         )
         failed_count = result.failed + len(failures)
         finish_ingestion_batch(

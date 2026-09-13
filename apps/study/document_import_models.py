@@ -26,6 +26,10 @@ class QuestionDocumentImportTask(models.Model):
     course = models.ForeignKey(
         'courses.Course', on_delete=models.CASCADE, related_name='document_import_tasks',
     )
+    tree_node = models.ForeignKey(
+        'courses.CourseTree', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='document_import_tasks',
+    )
     source_file = models.CharField(max_length=500)
     detected_mime = models.CharField(max_length=127)
     document_type = models.CharField(max_length=4, choices=DocumentType.choices)
