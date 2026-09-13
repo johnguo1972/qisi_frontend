@@ -22,3 +22,27 @@ def test_structure_candidate_strips_fences_and_returns_required_structure(monkey
     assert result.question_type == 'single_choice'
     assert result.options == [{'label': 'A', 'content': 'One'}]
     assert result.confidence == 0.91
+
+
+def test_structure_candidate_retries_one_asset_read_failure(monkeypatch):
+    """A transient asset read error receives exactly one retry before the candidate is dropped."""
+    responses = iter([
+        OSError('asset is temporarily unavailable'),
+        '{"question_no":"8","question_type":"fill_blank","stem":"Fill it.",'
+        '"options":[],"answer":"one","analysis":"The blank is one.",'
+        '"tables":[],"illustrations":[],"confidence":0.8,"review_reason":""}',
+    ])
+
+    def complete(_candidate, _model):
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(module, '_complete_structure', complete)
+
+    result = module.structure_candidate(
+        ExtractedQuestionFragment(question_no='8', text='8. Fill it.'),
+    )
+
+    assert result.question_no == '8'

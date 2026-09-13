@@ -114,6 +114,6 @@ def structure_candidate(candidate, model='qwen3.7-plus') -> StructuredQuestion:
     for _attempt in range(2):
         try:
             return _validated_question(ResponseParser.parse_json(_complete_structure(candidate, model)), candidate)
-        except (AIResponseError, AIRequestError) as exc:
+        except (AIResponseError, AIRequestError, OSError) as exc:
             last_error = exc
     raise last_error or AIResponseError('document structure request failed')
