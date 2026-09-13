@@ -425,6 +425,7 @@ onMounted(async () => {
   if (id) {
     courseId.value = String(id)
     await loadCourseInfo()
+    restoreCourseDocumentImport()
   }
   await loadTree()
   void loadKnowledgeOptions()
@@ -1492,6 +1493,29 @@ async function addSelectedToFavorites() {
 const documentImportUploading = ref(false)
 const documentImportTask = ref<any>(null)
 let documentImportPollTimer: ReturnType<typeof setTimeout> | null = null
+let documentImportPageAlive = true
+
+function documentImportStorageKey() {
+  return `course-document-import:${courseId.value}`
+}
+
+function persistCourseDocumentImport() {
+  if (!courseId.value || !documentImportTask.value?.task_id) return
+  uni.setStorageSync(documentImportStorageKey(), { task_id: documentImportTask.value.task_id })
+}
+
+function clearPersistedCourseDocumentImport() {
+  if (courseId.value) uni.removeStorageSync(documentImportStorageKey())
+}
+
+function restoreCourseDocumentImport() {
+  const saved = courseId.value ? uni.getStorageSync(documentImportStorageKey()) : null
+  if (saved?.task_id) {
+    documentImportTask.value = { task_id: saved.task_id, stage: 'queued', progress: 0 }
+    stopDocumentImportPolling()
+    documentImportPollTimer = setTimeout(pollCourseDocumentImport, 0)
+  }
+}
 
 function stopDocumentImportPolling() {
   if (documentImportPollTimer) clearTimeout(documentImportPollTimer)
@@ -1500,26 +1524,30 @@ function stopDocumentImportPolling() {
 
 async function pollCourseDocumentImport() {
   const taskId = documentImportTask.value?.task_id
-  if (!taskId || !courseId.value) return
+  if (!documentImportPageAlive || !taskId || !courseId.value) return
   try {
     const response: any = await getCourseDocumentImportStatus(courseId.value, taskId)
+    if (!documentImportPageAlive) return
     documentImportTask.value = response?.data || response
+    persistCourseDocumentImport()
     const stage = documentImportTask.value?.stage
     if (stage === 'success' || stage === 'partial_success') {
       stopDocumentImportPolling()
+      clearPersistedCourseDocumentImport()
       await Promise.all([loadTree(), loadQuestions()])
       uni.showToast({ title: stage === 'success' ? '文档导入完成' : '文档部分导入完成', icon: 'none' })
       return
     }
     if (stage === 'failed') {
       stopDocumentImportPolling()
+      clearPersistedCourseDocumentImport()
       uni.showToast({ title: '文档导入失败，请查看导入历史', icon: 'none' })
       return
     }
   } catch (_) {
     // Leave the durable task card visible; the next polling cycle retries it.
   }
-  documentImportPollTimer = setTimeout(pollCourseDocumentImport, 3000)
+  if (documentImportPageAlive) documentImportPollTimer = setTimeout(pollCourseDocumentImport, 3000)
 }
 
 function chooseCourseDocument() {
@@ -1541,6 +1569,7 @@ function chooseCourseDocument() {
           treeNodeId: selectedNode.value ? String(selectedNode.value.id) : undefined,
         })
         documentImportTask.value = response?.data || response
+        persistCourseDocumentImport()
         stopDocumentImportPolling()
         documentImportPollTimer = setTimeout(pollCourseDocumentImport, 3000)
         uni.showToast({ title: '文档导入任务已提交', icon: 'success' })
@@ -1783,6 +1812,7 @@ async function confirmGenerateMission() {
 // Cleanup
 // ============================================================
 onUnmounted(() => {
+  documentImportPageAlive = false
   stopDocumentImportPolling()
   courseAiJobPollTimers.forEach(t => clearInterval(t.timer))
   courseAiJobPollTimers.length = 0

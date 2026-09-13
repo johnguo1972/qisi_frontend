@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError
 from rest_framework.test import APIClient
 
 from apps.accounts.models import UserAccount
@@ -97,6 +98,26 @@ def test_course_document_upload_persists_failed_dispatch_instead_of_returning_50
             )
 
     assert response.status_code == 202
+    assert response.data['data']['stage'] == QuestionDocumentImportTask.Stage.FAILED
     task = QuestionDocumentImportTask.objects.get(id=response.data['data']['task_id'])
     assert task.stage == QuestionDocumentImportTask.Stage.FAILED
     assert 'broker unavailable' not in task.error_summary
+
+
+@pytest.mark.django_db
+def test_course_document_upload_removes_source_file_when_task_creation_rolls_back(client, course, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path / 'media'
+    upload = SimpleUploadedFile('paper.pdf', b'%PDF-1.4\n% minimal', content_type='application/pdf')
+    validated = ValidatedDocument(
+        filename='paper.pdf', document_type='pdf', detected_mime='application/pdf',
+        size_bytes=len(upload.read()), page_count=1,
+    )
+    upload.seek(0)
+    with patch('apps.study.document_import_views.validate_document_upload', return_value=validated):
+        with patch('apps.study.document_import_views.QuestionDocumentImportTask.objects.create', side_effect=IntegrityError):
+            with pytest.raises(IntegrityError):
+                client.post(
+                    f'/api/v1/courses/{course.id}/questions/import-document/', {'file': upload}, format='multipart',
+                )
+
+    assert not list((settings.MEDIA_ROOT / 'course_document_imports').rglob('*'))

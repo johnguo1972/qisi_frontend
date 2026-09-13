@@ -58,50 +58,62 @@ def create_course_document_import(request, *, course, tree_node=None):
     except DocumentValidationError as exc:
         raise ValidationError(str(exc)) from exc
 
-    with transaction.atomic():
-        source_file = _save_upload(
-            upload, course_id=course.id, document_type=validated.document_type,
-        )
-        batch = start_ingestion_batch(
-            actor=request.user,
-            source_type='document_import',
-            source_name=validated.filename,
-            course=course,
-        )
-        task = QuestionDocumentImportTask.objects.create(
-            batch=batch,
-            course=course,
-            tree_node=tree_node,
-            source_file=source_file,
-            detected_mime=validated.detected_mime,
-            document_type=validated.document_type,
-            page_count=validated.page_count,
-        )
-
-        def dispatch():
-            try:
-                result = process_document_import_task.delay(str(task.id))
-            except Exception:
-                QuestionDocumentImportTask.objects.filter(pk=task.id).update(
-                    stage=QuestionDocumentImportTask.Stage.FAILED,
-                    progress=100,
-                    error_summary='document import dispatch failed',
-                )
-                finish_ingestion_batch(
-                    batch,
-                    total_read=0,
-                    created_count=0,
-                    skipped_existing_count=0,
-                    skipped_in_package_count=0,
-                    failed_count=1,
-                )
-                return
-            QuestionDocumentImportTask.objects.filter(pk=task.id).update(
-                celery_task_id=str(getattr(result, 'id', '') or ''),
+    source_file = None
+    try:
+        with transaction.atomic():
+            source_file = _save_upload(
+                upload, course_id=course.id, document_type=validated.document_type,
+            )
+            batch = start_ingestion_batch(
+                actor=request.user,
+                source_type='document_import',
+                source_name=validated.filename,
+                course=course,
+            )
+            task = QuestionDocumentImportTask.objects.create(
+                batch=batch,
+                course=course,
+                tree_node=tree_node,
+                source_file=source_file,
+                detected_mime=validated.detected_mime,
+                document_type=validated.document_type,
+                page_count=validated.page_count,
             )
 
-        transaction.on_commit(dispatch)
+            def dispatch():
+                try:
+                    result = process_document_import_task.delay(str(task.id))
+                except Exception:
+                    QuestionDocumentImportTask.objects.filter(pk=task.id).update(
+                        stage=QuestionDocumentImportTask.Stage.FAILED,
+                        progress=100,
+                        error_summary='document import dispatch failed',
+                    )
+                    finish_ingestion_batch(
+                        batch,
+                        total_read=0,
+                        created_count=0,
+                        skipped_existing_count=0,
+                        skipped_in_package_count=0,
+                        failed_count=1,
+                    )
+                    return
+                QuestionDocumentImportTask.objects.filter(pk=task.id).update(
+                    celery_task_id=str(getattr(result, 'id', '') or ''),
+                )
 
+            transaction.on_commit(dispatch)
+    except Exception:
+        if source_file:
+            source_path = Path(settings.MEDIA_ROOT) / source_file
+            source_path.unlink(missing_ok=True)
+            try:
+                source_path.parent.rmdir()
+            except OSError:
+                pass
+        raise
+
+    task.refresh_from_db()
     return Response({'code': 0, 'message': 'document import queued', 'data': _task_data(task)}, status=202)
 
 
