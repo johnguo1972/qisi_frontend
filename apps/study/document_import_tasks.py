@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import shutil
 from pathlib import Path
+from zipfile import ZipFile
+
+import fitz
 
 from celery import shared_task
 from django.conf import settings
@@ -37,17 +42,65 @@ def _set_stage(task, stage, progress, *, error_summary=None, linked_count=None):
     task.save(update_fields=fields)
 
 
+def _asset_filename(reference, suffix):
+    digest = hashlib.sha256(reference.encode('utf-8')).hexdigest()[:16]
+    normalized_suffix = suffix.lower() if suffix and suffix.startswith('.') else '.bin'
+    return f'document-{digest}{normalized_suffix}'
+
+
+def _materialize_candidate_assets(source_path, candidate, asset_root):
+    """Export only the candidate's declared PDF/DOCX internal images to source_root."""
+    asset_files = {}
+    references = {asset.reference for asset in candidate.asset_refs}
+    if not references:
+        return asset_files
+    asset_root.mkdir(parents=True, exist_ok=True)
+    if source_path.suffix.lower() == '.pdf':
+        with fitz.open(source_path) as document:
+            for reference in references:
+                if not reference.startswith('pdf:'):
+                    raise ValueError('invalid PDF asset reference')
+                try:
+                    xref = int(reference.split(':', 1)[1])
+                    extracted = document.extract_image(xref)
+                    content = extracted['image']
+                except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+                    raise OSError('unable to read PDF image asset') from exc
+                filename = _asset_filename(reference, f".{extracted.get('ext', 'bin')}")
+                (asset_root / filename).write_bytes(content)
+                asset_files[reference] = filename
+        return asset_files
+
+    if source_path.suffix.lower() == '.docx':
+        with ZipFile(source_path) as archive:
+            for reference in references:
+                member = reference.removeprefix('docx:').lstrip('/')
+                if not reference.startswith('docx:') or not member.startswith('word/media/') or '..' in Path(member).parts:
+                    raise ValueError('invalid DOCX asset reference')
+                try:
+                    content = archive.read(member)
+                except KeyError as exc:
+                    raise OSError('unable to read DOCX image asset') from exc
+                filename = _asset_filename(reference, Path(member).suffix)
+                (asset_root / filename).write_bytes(content)
+                asset_files[reference] = filename
+        return asset_files
+    raise ValueError('unsupported document asset source')
+
+
 @shared_task(bind=True, name='apps.study.document_import_tasks.process_document_import_task', max_retries=0)
 def process_document_import_task(self, task_id):
     """Extract, structure and ingest a document while preserving partial progress."""
     del self
     task = QuestionDocumentImportTask.objects.select_related('batch__actor', 'course').get(pk=task_id)
+    asset_root = None
     try:
         _set_stage(task, QuestionDocumentImportTask.Stage.EXTRACTING, 5)
         source_path = Path(task.source_file)
         if not source_path.is_absolute():
             source_path = Path(settings.MEDIA_ROOT) / source_path
         extracted = extract_document(source_path)
+        asset_root = Path(settings.MEDIA_ROOT) / 'temp_document_assets' / str(task.id)
         _set_stage(task, QuestionDocumentImportTask.Stage.STRUCTURING, 20)
 
         valid = []
@@ -55,8 +108,9 @@ def process_document_import_task(self, task_id):
         total = len(extracted.fragments)
         for index, candidate in enumerate(extracted.fragments):
             try:
-                valid.append(structure_candidate(candidate))
-            except (AIResponseError, AIRequestError, ValueError) as exc:
+                asset_files = _materialize_candidate_assets(source_path, candidate, asset_root)
+                valid.append(structure_candidate(candidate, asset_files=asset_files))
+            except (AIResponseError, AIRequestError, ValueError, OSError) as exc:
                 failures.append(_redacted_error(exc))
             _set_stage(task, QuestionDocumentImportTask.Stage.STRUCTURING, 20 + int(45 * (index + 1) / max(total, 1)))
 
@@ -71,7 +125,7 @@ def process_document_import_task(self, task_id):
             },
             actor=task.batch.actor,
             batch=task.batch,
-            source_root=source_path.parent,
+            source_root=asset_root,
             course=task.course,
             tree_node=None,
         )
@@ -102,3 +156,6 @@ def process_document_import_task(self, task_id):
         )
         _set_stage(task, QuestionDocumentImportTask.Stage.FAILED, 100, error_summary=_redacted_error(exc))
         raise
+    finally:
+        if asset_root is not None:
+            shutil.rmtree(asset_root, ignore_errors=True)

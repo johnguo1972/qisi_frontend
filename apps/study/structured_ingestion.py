@@ -51,6 +51,16 @@ def _question_data(question):
     return dict(question)
 
 
+def _preflight_with_asset_retry(legacy, raw_question, assets_dir):
+    """Retry one transient filesystem read before recording the candidate failure."""
+    for attempt in range(2):
+        try:
+            return legacy._preflight_question(raw_question, assets_dir)
+        except OSError:
+            if attempt:
+                raise
+
+
 def ingest_structured_questions(*, questions, paper_info, actor, batch, source_root, course, tree_node):
     """Create canonical questions once and always link resolved questions to a course.
 
@@ -71,7 +81,7 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
     for index, incoming in enumerate(questions):
         raw_question = _question_data(incoming)
         try:
-            qdata, fingerprint = legacy._preflight_question(raw_question, assets_dir)
+            qdata, fingerprint = _preflight_with_asset_retry(legacy, raw_question, assets_dir)
         except Exception as exc:
             result.failed += 1
             result.errors.append(legacy._question_error(raw_question, index, exc))

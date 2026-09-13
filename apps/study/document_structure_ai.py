@@ -49,7 +49,8 @@ class StructuredQuestion:
         }
 
 
-def _candidate_payload(candidate: ExtractedQuestionFragment) -> dict:
+def _candidate_payload(candidate: ExtractedQuestionFragment, asset_files=None) -> dict:
+    asset_files = asset_files or {}
     return {
         'question_no': candidate.question_no,
         'text': candidate.text,
@@ -57,23 +58,28 @@ def _candidate_payload(candidate: ExtractedQuestionFragment) -> dict:
         'page_start': candidate.page_range[0],
         'page_end': candidate.page_range[1],
         'assets': [
-            {'reference': item.reference, 'page_no': item.page_no, 'bbox': item.bbox}
+            {
+                'reference': item.reference,
+                'file': asset_files.get(item.reference),
+                'page_no': item.page_no,
+                'bbox': item.bbox,
+            }
             for item in candidate.asset_refs
         ],
     }
 
 
-def _complete_structure(candidate, model):
+def _complete_structure(candidate, model, asset_files=None):
     if model != 'qwen3.7-plus':
         raise ValueError('document structure model must be qwen3.7-plus')
-    payload = _candidate_payload(candidate)
+    payload = _candidate_payload(candidate, asset_files)
     registry = PromptRegistry()
     system, user = registry.render('document_structure', candidate_json=json.dumps(payload, ensure_ascii=False))
     with AIClient() as client:
         return client.complete('document_structure', system=system, user=user).content
 
 
-def _validated_question(parsed, candidate) -> StructuredQuestion:
+def _validated_question(parsed, candidate, asset_files=None) -> StructuredQuestion:
     if not isinstance(parsed, dict) or set(parsed) != REQUIRED_FIELDS:
         raise AIResponseError('document structure response does not match the required schema')
     if not isinstance(parsed['question_no'], (str, int)) or not str(parsed['question_no']).strip():
@@ -91,7 +97,13 @@ def _validated_question(parsed, candidate) -> StructuredQuestion:
         raise AIResponseError('document structure response has invalid text fields')
     if not isinstance(parsed['tables'], list) or not isinstance(parsed['illustrations'], list):
         raise AIResponseError('document structure response has invalid assets')
-    if any(not isinstance(asset, dict) for asset in parsed['illustrations']):
+    allowed_files = set((asset_files or {}).values())
+    if any(
+        not isinstance(asset, dict)
+        or not isinstance(asset.get('file'), str)
+        or asset['file'] not in allowed_files
+        for asset in parsed['illustrations']
+    ):
         raise AIResponseError('document structure response has invalid assets')
     try:
         confidence = float(parsed['confidence'])
@@ -108,12 +120,20 @@ def _validated_question(parsed, candidate) -> StructuredQuestion:
     )
 
 
-def structure_candidate(candidate, model='qwen3.7-plus') -> StructuredQuestion:
+def structure_candidate(candidate, model='qwen3.7-plus', *, asset_files=None) -> StructuredQuestion:
     """Request and validate structure, retrying a provider/schema failure once."""
     last_error = None
     for _attempt in range(2):
         try:
-            return _validated_question(ResponseParser.parse_json(_complete_structure(candidate, model)), candidate)
+            raw_response = (
+                _complete_structure(candidate, model, asset_files)
+                if asset_files else _complete_structure(candidate, model)
+            )
+            return _validated_question(
+                ResponseParser.parse_json(raw_response),
+                candidate,
+                asset_files,
+            )
         except (AIResponseError, AIRequestError, OSError) as exc:
             last_error = exc
     raise last_error or AIResponseError('document structure request failed')

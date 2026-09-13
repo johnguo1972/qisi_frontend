@@ -83,3 +83,34 @@ def test_existing_question_is_linked_without_recreation(
     assert result.imported == 0
     assert result.skipped_existing == 1
     assert CourseQuestionLink.objects.filter(course=course, question=existing_question).exists()
+
+
+@pytest.mark.django_db
+def test_asset_preflight_retries_one_transient_read_error(tmp_path, teacher, course, monkeypatch):
+    """A transient source-image read failure must not discard an otherwise valid question."""
+    asset_path = tmp_path / 'diagram.png'
+    asset_path.write_bytes(b'diagram-bytes')
+    question = {
+        'question_no': '2', 'question_type': 'single_choice', 'stem': 'Read the diagram.',
+        'options': [{'label': 'A', 'content': 'One'}], 'answer': 'A',
+        'illustrations': [{'file': 'diagram.png'}],
+    }
+    original_read_bytes = type(asset_path).read_bytes
+    attempts = {'count': 0}
+
+    def read_bytes(path):
+        if path == asset_path and attempts['count'] == 0:
+            attempts['count'] += 1
+            raise OSError('temporary asset read failure')
+        attempts['count'] += 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(type(asset_path), 'read_bytes', read_bytes)
+    result = ingest_structured_questions(
+        questions=[question], paper_info={'title': 'retry'}, actor=teacher,
+        batch=make_batch(teacher, course), source_root=tmp_path, course=course, tree_node=None,
+    )
+
+    assert result.imported == 1
+    assert result.failed == 0
+    assert attempts['count'] == 2
