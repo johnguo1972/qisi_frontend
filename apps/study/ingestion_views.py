@@ -42,6 +42,7 @@ def _batch_item(batch):
     }
     task = getattr(batch, 'document_import_task', None)
     if task is not None:
+        item['document_task_id'] = str(task.id)
         item['document_stage'] = task.stage
         item['document_progress'] = task.progress
         item['document_errors'] = [part for part in task.error_summary.split('; ') if part][:20]

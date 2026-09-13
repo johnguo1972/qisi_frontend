@@ -351,7 +351,7 @@ import {
   submitCourseAiTasks,
   submitCourseBatchAi,
 } from './course-practice-list'
-import { questionApi, aiProcessProbe, getQuestionTags, addQuestionTag, getTagList, removeQuestionTag, importCourseJsonPackage, importCourseDocument, getCourseDocumentImportStatus } from '@/api/questions'
+import { questionApi, aiProcessProbe, getQuestionTags, addQuestionTag, getTagList, removeQuestionTag, importCourseJsonPackage, importCourseDocument, getCourseDocumentImportStatus, getQuestionIngestionHistory } from '@/api/questions'
 import { favoriteApi } from '@/api/favorites'
 import { createQuestionRelationsController } from './question-relations'
 import QuestionDetailCard from '@/components/QuestionDetailCard.vue'
@@ -425,7 +425,7 @@ onMounted(async () => {
   if (id) {
     courseId.value = String(id)
     await loadCourseInfo()
-    restoreCourseDocumentImport()
+    void restoreCourseDocumentImport()
   }
   await loadTree()
   void loadKnowledgeOptions()
@@ -1508,10 +1508,18 @@ function clearPersistedCourseDocumentImport() {
   if (courseId.value) uni.removeStorageSync(documentImportStorageKey())
 }
 
-function restoreCourseDocumentImport() {
+async function restoreCourseDocumentImport() {
   const saved = courseId.value ? uni.getStorageSync(documentImportStorageKey()) : null
-  if (saved?.task_id) {
-    documentImportTask.value = { task_id: saved.task_id, stage: 'queued', progress: 0 }
+  let taskId = saved?.task_id
+  if (!taskId) {
+    try {
+      const response: any = await getQuestionIngestionHistory({ scope: 'course', courseId: courseId.value })
+      const items = response?.data?.items || response?.data?.data?.items || []
+      taskId = items.find((item: any) => item.source_type === 'document_import' && item.status === 'running')?.document_task_id
+    } catch (_) { return }
+  }
+  if (taskId && documentImportPageAlive) {
+    documentImportTask.value = { task_id: taskId, stage: 'queued', progress: 0 }
     stopDocumentImportPolling()
     documentImportPollTimer = setTimeout(pollCourseDocumentImport, 0)
   }
