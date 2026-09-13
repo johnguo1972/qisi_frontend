@@ -9,6 +9,7 @@ from apps.accounts.models import UserAccount
 from apps.courses.models import Course, CourseTree
 from apps.study.document_import_models import QuestionDocumentImportTask
 from apps.study.document_import_service import ValidatedDocument
+from apps.study.document_import_views import _save_upload
 
 
 @pytest.fixture
@@ -119,5 +120,19 @@ def test_course_document_upload_removes_source_file_when_task_creation_rolls_bac
                 client.post(
                     f'/api/v1/courses/{course.id}/questions/import-document/', {'file': upload}, format='multipart',
                 )
+
+    assert not list((settings.MEDIA_ROOT / 'course_document_imports').rglob('*'))
+
+
+def test_source_upload_removes_partial_file_when_stream_fails(settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path / 'media'
+
+    class BrokenUpload:
+        def chunks(self):
+            yield b'partial'
+            raise OSError('stream interrupted')
+
+    with pytest.raises(OSError):
+        _save_upload(BrokenUpload(), course_id='course-1', document_type='pdf')
 
     assert not list((settings.MEDIA_ROOT / 'course_document_imports').rglob('*'))

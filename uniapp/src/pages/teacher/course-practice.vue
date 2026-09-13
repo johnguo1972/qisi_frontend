@@ -1568,6 +1568,7 @@ function chooseCourseDocument() {
           courseId: courseId.value,
           treeNodeId: selectedNode.value ? String(selectedNode.value.id) : undefined,
         })
+        if (!documentImportPageAlive) return
         documentImportTask.value = response?.data || response
         persistCourseDocumentImport()
         stopDocumentImportPolling()

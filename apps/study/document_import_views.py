@@ -42,9 +42,17 @@ def _save_upload(upload, *, course_id, document_type):
     )
     destination = Path(settings.MEDIA_ROOT) / relative_path
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open('wb') as output:
-        for chunk in upload.chunks():
-            output.write(chunk)
+    try:
+        with destination.open('wb') as output:
+            for chunk in upload.chunks():
+                output.write(chunk)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        try:
+            destination.parent.rmdir()
+        except OSError:
+            pass
+        raise
     return relative_path.as_posix()
 
 
