@@ -69,6 +69,7 @@ describe('importCourseDocument', () => {
 
   it('posts a PDF/DOCX file to the explicit current-course document endpoint', async () => {
     vi.mocked(fetch).mockResolvedValue({
+      ok: true,
       json: async () => ({ code: 0, data: { task_id: 'task-1' } }),
     } as Response)
 

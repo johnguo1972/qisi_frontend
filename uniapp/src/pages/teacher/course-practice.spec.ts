@@ -198,10 +198,10 @@ describe('course-practice page integration', () => {
     wrapper.findComponent(DirTreeStub).vm.$emit('select', { id: 'node-1', name: 'Chapter one' })
     await settle()
 
-    await wrapper.findAll('button').find(button => button.text().includes('新增习题'))!.trigger('click')
+    await wrapper.findAll('.btn-action')[0].trigger('click')
     await wrapper.findAll('.tab').find(tab => tab.text().includes('PDF-Word'))!.trigger('click')
     expect(wrapper.text()).toContain('PDF 或 DOCX')
-    await wrapper.findAll('button').find(button => button.text().includes('选择 PDF/Word'))!.trigger('click')
+    await wrapper.findAll('.btn-upload').at(-1)!.trigger('click')
     await settle()
 
     expect(importCourseDocument).toHaveBeenCalledWith(expect.any(File), {
