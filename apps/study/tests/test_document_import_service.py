@@ -1,4 +1,5 @@
 from io import BytesIO
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -16,6 +17,68 @@ from apps.study.document_import_service import (
 
 def make_upload(name, content, content_type):
     return SimpleUploadedFile(name, content, content_type=content_type)
+
+
+def _over_limit_text():
+    return ''.join(f'{value:06x}' for value in range(26_667))
+
+
+class SizeLyingUpload:
+    """A stream whose metadata says 1 byte but that contains over 100 MiB."""
+
+    name = 'stream.pdf'
+    size = 1
+
+    def __init__(self):
+        self._position = 0
+        self._length = 100 * 1024 * 1024 + 1
+
+    def seek(self, position):
+        self._position = position
+
+    def read(self, size=-1):
+        if size < 0:
+            raise AssertionError('upload validation must use bounded reads')
+        if self._position >= self._length:
+            return b''
+        count = min(size, self._length - self._position)
+        start = self._position
+        self._position += count
+        if start == 0:
+            return b'%PDF-1.7' + b'x' * (count - len(b'%PDF-1.7'))
+        return b'x' * count
+
+
+def _repeated_image_docx(tmp_path):
+    image_path = tmp_path / 'reused.png'
+    Image.new('RGB', (10, 10), color='black').save(image_path)
+    document_path = tmp_path / 'repeated-image.docx'
+    document = Document()
+    document.add_paragraph('1. Repeated image question')
+    for _ in range(101):
+        document.add_picture(str(image_path))
+    document.save(document_path)
+    with ZipFile(document_path) as archive:
+        assert archive.read('word/document.xml').count(b'r:embed=') == 101
+    return document_path
+
+
+def _compressed_docx_bomb(tmp_path):
+    source_path = tmp_path / 'source.docx'
+    document = Document()
+    document.add_paragraph('1. Safe question shell')
+    document.save(source_path)
+    bomb_path = tmp_path / 'compressed-bomb.docx'
+    with ZipFile(source_path) as source, ZipFile(bomb_path, 'w', ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            payload = source.read(info.filename)
+            if info.filename == 'word/document.xml':
+                payload = payload.replace(
+                    b'</w:body>', b'<!--' + b'A' * (3 * 1024 * 1024) + b'--></w:body>',
+                )
+            target.writestr(info.filename, payload)
+    assert bomb_path.stat().st_size < 100 * 1024 * 1024
+    return bomb_path
 
 
 def test_validate_document_rejects_docx_named_pdf():
@@ -60,7 +123,7 @@ def test_validate_document_rejects_docx_over_equivalent_page_limit(tmp_path):
     """The DOCX complexity formula is also enforced before queueing work."""
     document_path = tmp_path / 'too-large.docx'
     document = Document()
-    document.add_paragraph('1. ' + '题' * 160_000)
+    document.add_paragraph('1. ' + _over_limit_text())
     document.save(document_path)
 
     with pytest.raises(DocumentValidationError, match='100 页'):
@@ -68,6 +131,46 @@ def test_validate_document_rejects_docx_over_equivalent_page_limit(tmp_path):
             'too-large.docx', document_path.read_bytes(),
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         ))
+
+
+def test_validate_document_rejects_size_lying_stream_over_100_mb():
+    """The upload byte stream, not caller-controlled metadata, enforces the size cap."""
+    with pytest.raises(DocumentValidationError, match='100MB'):
+        validate_document_upload(SizeLyingUpload())
+
+
+def test_validate_document_counts_each_reused_docx_image_reference(tmp_path):
+    """Every displayed image counts even when the DOCX reuses one relationship target."""
+    document_path = _repeated_image_docx(tmp_path)
+
+    with pytest.raises(DocumentValidationError, match='100 页'):
+        validate_document_upload(make_upload(
+            'repeated-image.docx', document_path.read_bytes(),
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ))
+
+
+def test_extract_document_counts_each_reused_docx_image_reference(tmp_path):
+    """Path-based extraction applies the same repeated-image quota as upload validation."""
+    with pytest.raises(DocumentValidationError, match='100 页'):
+        extract_document(_repeated_image_docx(tmp_path))
+
+
+def test_validate_document_rejects_docx_compression_bomb(tmp_path):
+    """A valid DOCX ZIP with a dangerous expansion ratio is rejected before parsing."""
+    bomb_path = _compressed_docx_bomb(tmp_path)
+
+    with pytest.raises(DocumentValidationError, match='压缩比'):
+        validate_document_upload(make_upload(
+            'compressed-bomb.docx', bomb_path.read_bytes(),
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ))
+
+
+def test_extract_document_rejects_docx_compression_bomb(tmp_path):
+    """Path-based DOCX extraction rejects a dangerous ZIP before python-docx opens it."""
+    with pytest.raises(DocumentValidationError, match='压缩比'):
+        extract_document(_compressed_docx_bomb(tmp_path))
 
 
 @pytest.fixture
@@ -124,7 +227,7 @@ def test_extract_docx_rejects_equivalent_page_count_above_limit(tmp_path):
     """DOCX complexity is limited by the specified text/table/image page estimate."""
     document_path = tmp_path / 'too-large.docx'
     document = Document()
-    document.add_paragraph('1. ' + '题' * 160_000)
+    document.add_paragraph('1. ' + _over_limit_text())
     document.save(document_path)
 
     with pytest.raises(DocumentValidationError, match='100 页'):

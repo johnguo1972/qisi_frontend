@@ -5,7 +5,7 @@ from io import BytesIO
 from math import ceil
 from pathlib import Path
 import re
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile, LargeZipFile, ZipFile
 
 import fitz
 from docx import Document
@@ -15,8 +15,14 @@ from docx.text.paragraph import Paragraph
 
 MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
 MAX_DOCUMENT_PAGES = 100
+READ_CHUNK_BYTES = 1024 * 1024
+MAX_DOCX_ARCHIVE_MEMBERS = 1000
+MAX_DOCX_MEMBER_BYTES = 25 * 1024 * 1024
+MAX_DOCX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
+MAX_DOCX_COMPRESSION_RATIO = 200
 QUESTION_START = re.compile(r'(?m)^\s*(\d+)\s*[.、．)]\s*')
 RELATION_IMAGE_SUFFIX = '/image'
+DOCX_IMAGE_REFERENCE = re.compile(r'r:embed="([^"]+)"')
 
 
 class DocumentValidationError(ValueError):
@@ -98,12 +104,28 @@ def _read_upload_bytes(uploaded_file) -> bytes:
         uploaded_file.seek(0)
     except (AttributeError, OSError):
         pass
-    content = uploaded_file.read()
+    content = _read_limited_bytes(uploaded_file)
     try:
         uploaded_file.seek(0)
     except (AttributeError, OSError):
         pass
     return content
+
+
+def _read_limited_bytes(stream) -> bytes:
+    """Read no more than the real upload limit, independent of metadata."""
+    chunks = []
+    bytes_read = 0
+    maximum_to_read = MAX_DOCUMENT_BYTES + 1
+    while bytes_read < maximum_to_read:
+        chunk = stream.read(min(READ_CHUNK_BYTES, maximum_to_read - bytes_read))
+        if not chunk:
+            break
+        bytes_read += len(chunk)
+        if bytes_read > MAX_DOCUMENT_BYTES:
+            raise DocumentValidationError('文件大小不能超过 100MB')
+        chunks.append(chunk)
+    return b''.join(chunks)
 
 
 def _detect_document_type(content: bytes) -> str | None:
@@ -112,10 +134,32 @@ def _detect_document_type(content: bytes) -> str | None:
     try:
         with ZipFile(BytesIO(content)) as archive:
             if 'word/document.xml' in archive.namelist():
+                _validate_docx_archive(archive)
                 return 'docx'
-    except BadZipFile:
+    except (BadZipFile, LargeZipFile):
         return None
     return None
+
+
+def _validate_docx_archive(archive: ZipFile) -> None:
+    infos = archive.infolist()
+    if len(infos) > MAX_DOCX_ARCHIVE_MEMBERS:
+        raise DocumentValidationError('DOCX 压缩包包含过多文件')
+
+    total_uncompressed_bytes = 0
+    for info in infos:
+        if info.is_dir():
+            continue
+        if info.file_size > MAX_DOCX_MEMBER_BYTES:
+            raise DocumentValidationError('DOCX 解压后单个文件过大')
+        total_uncompressed_bytes += info.file_size
+        if total_uncompressed_bytes > MAX_DOCX_UNCOMPRESSED_BYTES:
+            raise DocumentValidationError('DOCX 解压后总大小超过限制')
+        if info.file_size and (
+            info.compress_size == 0
+            or info.file_size / info.compress_size > MAX_DOCX_COMPRESSION_RATIO
+        ):
+            raise DocumentValidationError('DOCX 压缩比超过安全限制')
 
 
 def _validate_source_path(path: Path) -> None:
@@ -125,7 +169,9 @@ def _validate_source_path(path: Path) -> None:
     size_bytes = path.stat().st_size
     if size_bytes > MAX_DOCUMENT_BYTES:
         raise DocumentValidationError('文件大小不能超过 100MB')
-    document_type = _detect_document_type(path.read_bytes())
+    with path.open('rb') as source_file:
+        content = _read_limited_bytes(source_file)
+    document_type = _detect_document_type(content)
     if document_type is None:
         raise DocumentValidationError('文件内容无法识别为 PDF 或 DOCX')
     if document_type != extension.lstrip('.'):
@@ -240,7 +286,7 @@ def _extract_docx(path: Path) -> ExtractedDocument:
         raise DocumentValidationError('无法读取 DOCX 文件') from exc
 
     image_refs = _docx_image_references(document)
-    page_count = _docx_equivalent_page_count(document, image_refs)
+    page_count = _docx_equivalent_page_count(document)
     if page_count > MAX_DOCUMENT_PAGES:
         raise DocumentValidationError('DOCX 文档等价页数不能超过 100 页')
 
@@ -259,13 +305,26 @@ def _docx_non_whitespace_characters(document) -> int:
     return len(re.sub(r'\s+', '', ''.join(parts)))
 
 
-def _docx_equivalent_page_count(document, image_refs: dict[str, DocumentAssetRef] | None = None) -> int:
-    image_refs = image_refs if image_refs is not None else _docx_image_references(document)
+def _docx_equivalent_page_count(document) -> int:
     return (
         ceil(_docx_non_whitespace_characters(document) / 1600)
         + ceil(len(document.tables) / 2)
-        + len(image_refs)
+        + _docx_image_occurrence_count(document)
     )
+
+
+def _docx_image_occurrence_count(document) -> int:
+    """Count displayed image references, not unique relationship targets."""
+    count = 0
+    for part in document.part.package.parts:
+        relations = getattr(part, 'rels', {})
+        if not relations:
+            continue
+        for relation_id in DOCX_IMAGE_REFERENCE.findall(part.blob.decode('utf-8', errors='ignore')):
+            relation = relations.get(relation_id)
+            if relation and relation.reltype.endswith(RELATION_IMAGE_SUFFIX):
+                count += 1
+    return count
 
 
 def _docx_image_references(document) -> dict[str, DocumentAssetRef]:
@@ -304,6 +363,8 @@ def _docx_fragments(document, image_refs: dict[str, DocumentAssetRef], page_coun
 
 def _docx_body_items(document):
     for child in document.element.body.iterchildren():
+        if not isinstance(child.tag, str):
+            continue
         if child.tag.endswith('}p'):
             yield Paragraph(child, document)
         elif child.tag.endswith('}tbl'):
@@ -311,5 +372,5 @@ def _docx_body_items(document):
 
 
 def _paragraph_asset_refs(paragraph, image_refs: dict[str, DocumentAssetRef]):
-    relation_ids = re.findall(r'r:embed="([^"]+)"', paragraph._element.xml)
+    relation_ids = DOCX_IMAGE_REFERENCE.findall(paragraph._element.xml)
     return [image_refs[relation_id] for relation_id in relation_ids if relation_id in image_refs]
