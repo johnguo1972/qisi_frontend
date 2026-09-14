@@ -3,12 +3,14 @@ import { h, nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CoursePractice from './course-practice.vue'
 
-const { courseQuestionList, batchDelete, variantGenerate, variantBatchGenerate, questionBatchAi } = vi.hoisted(() => ({
+const { courseQuestionList, batchDelete, variantGenerate, variantBatchGenerate, questionBatchAi, importCourseDocument, getCourseDocumentImportStatus } = vi.hoisted(() => ({
   courseQuestionList: vi.fn(),
   batchDelete: vi.fn(),
   variantGenerate: vi.fn(),
   variantBatchGenerate: vi.fn(),
   questionBatchAi: vi.fn(),
+  importCourseDocument: vi.fn(),
+  getCourseDocumentImportStatus: vi.fn(),
 }))
 
 vi.mock('@/api/courses', () => ({
@@ -24,7 +26,7 @@ vi.mock('@/api/questions', () => ({
     dictKnowledgePoints: vi.fn().mockResolvedValue({ data: [] }),
     batchAi: questionBatchAi, aiProcessMode: vi.fn(), getTaskStatus: vi.fn(), getAiJobStatus: vi.fn(), list: vi.fn(),
   },
-  aiProcessProbe: vi.fn(), getQuestionTags: vi.fn(), addQuestionTag: vi.fn(), getTagList: vi.fn().mockResolvedValue({ data: [] }), removeQuestionTag: vi.fn(), importJsonPackage: vi.fn(),
+  aiProcessProbe: vi.fn(), getQuestionTags: vi.fn(), addQuestionTag: vi.fn(), getTagList: vi.fn().mockResolvedValue({ data: [] }), removeQuestionTag: vi.fn(), importJsonPackage: vi.fn(), importCourseDocument, getCourseDocumentImportStatus,
 }))
 
 vi.mock('@/api/favorites', () => ({ favoriteApi: { add: vi.fn() } }))
@@ -92,6 +94,8 @@ describe('course-practice page integration', () => {
     variantGenerate.mockReset()
     variantBatchGenerate.mockReset()
     questionBatchAi.mockReset()
+    importCourseDocument.mockReset()
+    getCourseDocumentImportStatus.mockReset()
     vi.stubGlobal('getCurrentPages', () => [{ options: { id: 'course-1' } }])
     vi.stubGlobal('__uniConfig', { locales: {} })
     vi.stubGlobal('uni', {
@@ -182,5 +186,26 @@ describe('course-practice page integration', () => {
 
     expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ title: '所选题目已有进行中的 AI 任务' }))
     expect(showToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: '请先选择题目' }))
+  })
+
+  it('shows the PDF-Word tab and submits its file to the selected course node', async () => {
+    const chooseFile = vi.fn(({ success }) => success({ tempFiles: [{ file: new File(['%PDF'], 'paper.pdf') }] }))
+    vi.stubGlobal('uni', { ...(globalThis as any).uni, chooseFile })
+    courseQuestionList.mockResolvedValue({ data: { items: [], total: 0, page_no: 1, page_size: 20 } })
+    importCourseDocument.mockResolvedValue({ data: { task_id: 'document-task', stage: 'queued' } })
+    const wrapper = mountPage()
+    await settle()
+    wrapper.findComponent(DirTreeStub).vm.$emit('select', { id: 'node-1', name: 'Chapter one' })
+    await settle()
+
+    await wrapper.findAll('.btn-action')[0].trigger('click')
+    await wrapper.findAll('.tab').find(tab => tab.text().includes('PDF-Word'))!.trigger('click')
+    expect(wrapper.text()).toContain('PDF 或 DOCX')
+    await wrapper.findAll('.btn-upload').at(-1)!.trigger('click')
+    await settle()
+
+    expect(importCourseDocument).toHaveBeenCalledWith(expect.any(File), {
+      courseId: 'course-1', treeNodeId: 'node-1',
+    })
   })
 })

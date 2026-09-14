@@ -23,6 +23,8 @@
             <text>{{ UI_TEXT.skipped }} {{ item.skipped_existing_count || 0 }}</text>
             <text>{{ UI_TEXT.failed }} {{ item.failed_count || 0 }}</text>
           </view>
+          <text v-if="item.document_stage" class="history-time">文档状态：{{ item.document_stage }}（{{ item.document_progress || 0 }}%）</text>
+          <text v-for="message in item.document_errors || []" :key="message" class="history-error">{{ message }}</text>
         </view>
       </scroll-view>
     </view>
@@ -41,6 +43,9 @@ type IngestionHistoryItem = {
   created_count?: number
   skipped_existing_count?: number
   failed_count?: number
+  document_stage?: string
+  document_progress?: number
+  document_errors?: string[]
 }
 
 const props = defineProps<{
@@ -75,6 +80,7 @@ const SOURCE_LABELS: Record<string, string> = {
   photo_create: '\u62cd\u7167\u5bfc\u5165',
   course_material_import: '\u8bfe\u4ef6\u5bfc\u5165',
   course_link_import: '\u8bfe\u7a0b\u5173\u8054\u5bfc\u5165',
+  document_import: 'PDF/Word \u6587\u6863\u5bfc\u5165',
 }
 
 function sourceLabel(sourceType?: string): string {

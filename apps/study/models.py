@@ -224,6 +224,7 @@ class QuestionIngestionBatch(models.Model):
         PHOTO_CREATE = 'photo_create', 'Photo create'
         COURSE_MATERIAL_IMPORT = 'course_material_import', 'Course material import'
         COURSE_LINK_IMPORT = 'course_link_import', 'Course link import'
+        DOCUMENT_IMPORT = 'document_import', 'Document import'
 
     class Status(models.TextChoices):
         RUNNING = 'running', 'Running'
@@ -256,3 +257,8 @@ class QuestionIngestionBatch(models.Model):
     class Meta:
         db_table = 'question_ingestion_batch'
         ordering = ['-finished_at', '-created_at']
+
+
+# Keep the document-import model registered with Django while keeping its
+# document-specific fields in a focused module.
+from .document_import_models import QuestionDocumentImportTask  # noqa: E402, F401

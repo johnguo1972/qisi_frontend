@@ -298,6 +298,33 @@ export function importCourseJsonPackage(
   return importJsonPackage(file, { ...options, courseId })
 }
 
+export type CourseDocumentImportOptions = {
+  courseId: string
+  treeNodeId?: string
+}
+
+/** Queue a PDF/DOCX import only in the currently selected course. */
+export function importCourseDocument(file: File, options: CourseDocumentImportOptions) {
+  const courseId = String(options.courseId || '').trim()
+  if (!courseId) return Promise.reject(new Error('course_id is required'))
+  const token = uni.getStorageSync('accessToken')
+  const formData = new FormData()
+  formData.append('file', file)
+  if (options.treeNodeId) formData.append('tree_node_id', options.treeNodeId)
+  return fetch(`${UPLOAD_BASE}/courses/${courseId}/questions/import-document/`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData,
+  }).then(async response => {
+    const data = await response.json()
+    if (!response.ok || data.code !== 0) throw new Error(data.message || '文档导入提交失败')
+    return data
+  })
+}
+
+/** Read durable import state instead of relying on a Celery result backend. */
+export function getCourseDocumentImportStatus(courseId: string, taskId: string) {
+  return get<any>(`/courses/${courseId}/questions/import-document/${taskId}/status/`)
+}
+
 export function getImportTaskStatus(taskId: string) {
   return get<any>(`/questions/import-json-task/${taskId}/status/`)
 }

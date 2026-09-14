@@ -241,7 +241,7 @@ def _read_paper_info(temp_dir):
     return {}
 
 
-def _process_json_import(*, temp_dir, user, batch, source_file_path, course=None, tree_node=None):
+def _process_json_import_legacy(*, temp_dir, user, batch, source_file_path, course=None, tree_node=None):
     """Preflight a package, then lazily create import records for new content only."""
     paper_info, questions_data, assets_dir = _load_json_package(temp_dir)
     counters = {
@@ -398,6 +398,32 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path, course=None
         'tree_node_id': str(linked_tree_node.id) if linked_tree_node else None,
         'linked_count': linked_count,
     }
+
+
+def _process_json_import(*, temp_dir, user, batch, source_file_path, course=None, tree_node=None):
+    """Keep the public JSON envelope while sharing document-safe ingestion semantics."""
+    from apps.study.structured_ingestion import ingest_structured_questions
+
+    paper_info, questions_data, assets_dir = _load_json_package(temp_dir)
+    paper_info = {**paper_info, 'source_file_path': source_file_path}
+    result = ingest_structured_questions(
+        questions=questions_data,
+        paper_info=paper_info,
+        actor=user,
+        batch=batch,
+        source_root=assets_dir,
+        course=course,
+        tree_node=tree_node,
+    )
+    if result.paper_id:
+        ParseTask.objects.create(
+            paper_id=result.paper_id,
+            task_type='json_import',
+            status='success',
+            progress=100,
+            current_step='导入完成',
+        )
+    return result.as_dict(batch=batch, course=course)
 
 
 def _link_questions_to_course(*, course, tree_node, question_ids):

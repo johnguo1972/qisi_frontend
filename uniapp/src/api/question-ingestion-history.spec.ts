@@ -10,7 +10,7 @@ vi.mock('@/utils/request', () => ({
   del: vi.fn(),
 }))
 
-import { getQuestionIngestionHistory, importCourseJsonPackage } from './questions'
+import { getQuestionIngestionHistory, importCourseJsonPackage, importCourseDocument, getCourseDocumentImportStatus } from './questions'
 
 describe('getQuestionIngestionHistory', () => {
   beforeEach(() => get.mockReset())
@@ -58,5 +58,31 @@ describe('importCourseJsonPackage', () => {
       expect.stringContaining('/courses/course-1/questions/import-json-package/'),
       expect.objectContaining({ method: 'POST' }),
     )
+  })
+})
+
+describe('importCourseDocument', () => {
+  beforeEach(() => {
+    vi.stubGlobal('uni', { getStorageSync: vi.fn().mockReturnValue('token') })
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  it('posts a PDF/DOCX file to the explicit current-course document endpoint', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 0, data: { task_id: 'task-1' } }),
+    } as Response)
+
+    await importCourseDocument(new File(['%PDF'], 'paper.pdf'), { courseId: 'course-1' })
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/courses/course-1/questions/import-document/'),
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
+  it('reads persisted document status from its current-course endpoint', () => {
+    getCourseDocumentImportStatus('course-1', 'task-1')
+    expect(get).toHaveBeenCalledWith('/courses/course-1/questions/import-document/task-1/status/')
   })
 })
