@@ -38,6 +38,8 @@ def subject_filter_values(value):
 
 class MissionListSerializer(serializers.ModelSerializer):
     creator_name = serializers.CharField(source='creator_teacher.display_name', read_only=True)
+    start_at = serializers.SerializerMethodField()
+    end_at = serializers.SerializerMethodField()
     level_count = serializers.SerializerMethodField()
     class_name = serializers.SerializerMethodField()
     question_count = serializers.SerializerMethodField()
@@ -47,12 +49,13 @@ class MissionListSerializer(serializers.ModelSerializer):
     class_names = serializers.SerializerMethodField()
     class_ids = serializers.SerializerMethodField()
     assignment_summary = serializers.SerializerMethodField()
+    source_context = serializers.SerializerMethodField()
 
     class Meta:
         model = LearningMission
         fields = ['id', 'mission_no', 'mission_name', 'goal_text',
                   'status', 'start_at', 'end_at', 'creator_name',
-                  'assignment_mode', 'mission_kind', 'source_type', 'level_count', 'class_name', 'class_names', 'class_ids', 'question_count', 'unfinished_count', 'completion_progress', 'subject',
+                  'assignment_mode', 'mission_kind', 'source_type', 'source_context', 'source_node_ids', 'level_count', 'class_name', 'class_names', 'class_ids', 'question_count', 'unfinished_count', 'completion_progress', 'subject',
                   'default_mode_policy', 'class_obj', 'target_student_ids', 'assignment_summary', 'course',
                   'source_matrix_id', 'source_generation_batch_id', 'parent_mission_id']
 
@@ -62,7 +65,23 @@ class MissionListSerializer(serializers.ModelSerializer):
     def get_class_name(self, obj):
         if obj.class_obj:
             return obj.class_obj.class_name
+        assignment = obj.class_assignments.filter(status='active').select_related('class_obj').first()
+        if assignment and assignment.class_obj:
+            return assignment.class_obj.class_name
         return None
+
+    def _effective_assignment_datetime(self, obj, field_name):
+        value = getattr(obj, field_name, None)
+        if value is not None:
+            return value
+        assignment = obj.class_assignments.filter(status='active').order_by('created_at', 'id').first()
+        return getattr(assignment, field_name, None) if assignment else None
+
+    def get_start_at(self, obj):
+        return self._effective_assignment_datetime(obj, 'start_at')
+
+    def get_end_at(self, obj):
+        return self._effective_assignment_datetime(obj, 'end_at')
 
     def _assignments(self, obj):
         items = list(obj.class_assignments.filter(status='active').select_related('class_obj'))
@@ -115,6 +134,17 @@ class MissionListSerializer(serializers.ModelSerializer):
             if labels:
                 parts.append(f"指定学生：{'、'.join(labels)}")
         return '；'.join(parts) or '未分配学生'
+
+    def get_source_context(self, obj):
+        if obj.source_context:
+            return obj.source_context
+        if obj.source_type == 'handout' and obj.course_id:
+            from .models import MissionQuestionRel
+            if MissionQuestionRel.objects.filter(
+                mission=obj, source_type__in=('course_selected', 'course_sync'),
+            ).exists():
+                return 'course_practice'
+        return ''
 
     def get_question_count(self, obj):
         return MissionQuestionRel.objects.filter(mission=obj).count()
@@ -175,6 +205,8 @@ class MissionListSerializer(serializers.ModelSerializer):
 
 
 class MissionDetailSerializer(serializers.ModelSerializer):
+    start_at = serializers.SerializerMethodField()
+    end_at = serializers.SerializerMethodField()
     levels = serializers.SerializerMethodField()
     creator_name = serializers.CharField(source='creator_teacher.display_name', read_only=True)
     creator_teacher = serializers.UUIDField(source='creator_teacher_id.id', read_only=True)
@@ -182,13 +214,14 @@ class MissionDetailSerializer(serializers.ModelSerializer):
     question_ids = serializers.SerializerMethodField()
     class_ids = serializers.SerializerMethodField()
     class_names = serializers.SerializerMethodField()
+    source_context = serializers.SerializerMethodField()
 
     class Meta:
         model = LearningMission
         fields = ['id', 'mission_no', 'mission_name', 'goal_text',
                   'creator_teacher', 'creator_name', 'start_at', 'end_at',
                   'status', 'assignment_mode', 'default_mode_policy', 'levels',
-                  'question_ids', 'class_obj', 'class_ids', 'class_names', 'target_student_ids', 'course', 'mission_kind', 'source_type',
+                  'question_ids', 'class_obj', 'class_ids', 'class_names', 'target_student_ids', 'course', 'mission_kind', 'source_type', 'source_context', 'source_node_ids',
                   'source_matrix_id', 'source_generation_batch_id', 'parent_mission_id']
 
     def get_levels(self, obj):
@@ -201,6 +234,30 @@ class MissionDetailSerializer(serializers.ModelSerializer):
             'mode_policy': lv.mode_policy, 'hint_strength': lv.hint_strength,
             'question_count': MissionQuestionRel.objects.filter(level_id=lv.id).count(),
         } for lv in levels]
+
+    def _effective_assignment_datetime(self, obj, field_name):
+        value = getattr(obj, field_name, None)
+        if value is not None:
+            return value
+        assignment = obj.class_assignments.filter(status='active').order_by('created_at', 'id').first()
+        return getattr(assignment, field_name, None) if assignment else None
+
+    def get_start_at(self, obj):
+        return self._effective_assignment_datetime(obj, 'start_at')
+
+    def get_end_at(self, obj):
+        return self._effective_assignment_datetime(obj, 'end_at')
+
+    def get_source_context(self, obj):
+        if obj.source_context:
+            return obj.source_context
+        if obj.source_type == 'handout' and obj.course_id:
+            from .models import MissionQuestionRel
+            if MissionQuestionRel.objects.filter(
+                mission=obj, source_type__in=('course_selected', 'course_sync'),
+            ).exists():
+                return 'course_practice'
+        return ''
 
     def get_question_ids(self, obj):
         return [rel.question_id for rel in ordered_mission_question_rels(obj)]

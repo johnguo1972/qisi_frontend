@@ -5,6 +5,7 @@ from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from apps.accounts.permissions import IsTeacherSession
@@ -390,6 +391,15 @@ def mission_grade_attempt(request, mission_id, attempt_id):
     from apps.study.answer_views import _update_mission_progress
 
     _update_mission_progress(attempt.mission, attempt.student_user_id, final=True)
+    try:
+        from apps.missions.classroom_wrongbook_service import sync_classroom_online_for_student
+        sync_classroom_online_for_student(attempt.mission_id, attempt.student_user_id_id)
+    except Exception as exc:
+        # The statistics endpoint performs a full reconciliation as well.
+        import logging
+        logging.getLogger(__name__).warning(
+            'classroom wrongbook sync failed after grading: %s', exc.__class__.__name__,
+        )
     return Response({'code': 0, 'data': {'id': str(attempt.id), 'score': score, 'is_correct': attempt.is_correct}})
 
 
@@ -587,6 +597,297 @@ def mission_detail(request, mission_id):
                 defaults={'progress_status': 'not_started', 'progress_percent': 0},
             )
     return Response({'code': 0, 'message': '更新成功', 'data': None, 'trace_id': make_trace_id()})
+
+
+def _is_course_practice_mission(mission):
+    """Return whether a handout mission came from classroom practice."""
+    if mission.source_type != 'handout' or not mission.course_id:
+        return False
+    if mission.source_context == 'course_practice':
+        return True
+    return MissionQuestionRel.objects.filter(
+        mission=mission,
+        source_type__in=('course_selected', 'course_sync'),
+    ).exists()
+
+
+def _course_practice_source_nodes(mission, course):
+    """Resolve persisted or legacy-inferred course-practice nodes."""
+    from apps.courses.models import CourseQuestionLink, CourseTree
+
+    persisted = []
+    for value in (mission.source_node_ids or []):
+        value = str(value or '').strip()
+        if value and value not in persisted:
+            persisted.append(value)
+    valid_ids = set(str(value) for value in CourseTree.objects.filter(
+        course=course,
+        id__in=persisted,
+    ).values_list('id', flat=True))
+    if persisted and valid_ids:
+        return [value for value in persisted if value in valid_ids]
+
+    question_ids = MissionQuestionRel.objects.filter(mission=mission).values_list('question_id', flat=True)
+    inferred = list(CourseQuestionLink.objects.filter(
+        course=course,
+        is_deleted=False,
+        question_id__in=question_ids,
+    ).exclude(tree_node_id__isnull=True).values_list('tree_node_id', flat=True).distinct())
+    return [str(value) for value in inferred]
+
+
+def _course_practice_editor_data(mission):
+    """Build the isolated editor payload for a classroom-practice mission."""
+    from django.db.models import Count
+    from apps.courses.models import CourseQuestionLink, CourseTree
+    from apps.study.serializers import QuestionListSerializer
+
+    course = mission.course
+    node_ids = _course_practice_source_nodes(mission, course)
+    node_map = {str(node.id): node for node in CourseTree.objects.filter(course=course)}
+    counts = {
+        str(row['tree_node_id']): row['question_count']
+        for row in CourseQuestionLink.objects.filter(
+            course=course, is_deleted=False,
+        ).exclude(tree_node_id__isnull=True).values('tree_node_id').annotate(
+            question_count=Count('question_id', distinct=True),
+        )
+    }
+    available_nodes = [
+        {
+            'id': str(node.id), 'name': node.name,
+            'parent_id': str(node.parent_id) if node.parent_id else None,
+            'sort_order': node.sort_order,
+            'question_count': counts.get(str(node.id), 0),
+        }
+        for node in sorted(node_map.values(), key=lambda item: (item.sort_order, str(item.id)))
+    ]
+    relations = ordered_mission_question_rels(mission)
+    question_ids = [rel.question_id for rel in relations]
+    questions_by_id = {
+        str(question.id): question
+        for question in ExamQuestion.objects.filter(id__in=question_ids).select_related('paper')
+    }
+    links_by_question = {}
+    for row in CourseQuestionLink.objects.filter(
+        course=course, is_deleted=False, question_id__in=question_ids,
+    ).values('question_id', 'tree_node_id'):
+        if row['tree_node_id'] is not None:
+            links_by_question.setdefault(str(row['question_id']), []).append(str(row['tree_node_id']))
+    question_data = []
+    for relation in relations:
+        question = questions_by_id.get(str(relation.question_id))
+        if question is None:
+            continue
+        item = QuestionListSerializer(question).data
+        item['tree_node_ids'] = list(dict.fromkeys(links_by_question.get(str(question.id), [])))
+        question_data.append(item)
+
+    levels = list(mission.levels.order_by('level_no', 'id'))
+    first_level = levels[0] if levels else None
+    assignments = list(mission.class_assignments.filter(status='active').select_related('class_obj'))
+    if not assignments and mission.class_obj_id:
+        assignments = [mission]
+    class_ids = [str(item.class_obj_id) for item in assignments if item.class_obj_id]
+    class_names = [item.class_obj.class_name for item in assignments if getattr(item, 'class_obj', None)]
+    selected_nodes = [node_map[node_id] for node_id in node_ids if node_id in node_map]
+    return {
+        'mission_id': str(mission.id),
+        'mission_name': mission.mission_name,
+        'goal_text': mission.goal_text,
+        'status': mission.status,
+        'source_type': mission.source_type,
+        'source_context': mission.source_context or 'course_practice',
+        'course_id': str(course.id),
+        'course_name': course.name,
+        'node_ids': node_ids,
+        'nodes': [
+            {
+                'id': str(node.id), 'name': node.name,
+                'parent_id': str(node.parent_id) if node.parent_id else None,
+                'sort_order': node.sort_order,
+                'question_count': counts.get(str(node.id), 0),
+            }
+            for node in selected_nodes
+        ],
+        'available_nodes': available_nodes,
+        'level_type': first_level.level_type if first_level else 'practice',
+        'pass_rule': first_level.pass_rule_json if first_level else {'correct_rate': 0.6},
+        'class_ids': class_ids,
+        'class_names': class_names,
+        'start_at': mission.start_at,
+        'end_at': mission.end_at,
+        'question_ids': [str(rel.question_id) for rel in relations],
+        'questions': question_data,
+    }
+
+
+def _parse_course_practice_datetime(value, *, end_of_day=False):
+    from datetime import datetime, time
+    from django.utils.dateparse import parse_date, parse_datetime
+
+    if value in (None, ''):
+        return None
+    parsed = parse_datetime(str(value))
+    if parsed is None:
+        parsed_date = parse_date(str(value))
+        if parsed_date is None:
+            raise ValidationError('日期格式无效，请使用 YYYY-MM-DD')
+        parsed = datetime.combine(parsed_date, time.max if end_of_day else time.min)
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated, IsTeacherSession])
+def mission_handout_edit(request, mission_id):
+    """Isolated editor API for classroom-practice handout missions."""
+    try:
+        mission = LearningMission.objects.select_related('course', 'class_obj').get(
+            pk=mission_id, creator_teacher_id=request.user,
+        )
+    except LearningMission.DoesNotExist:
+        return Response({'code': 404, 'message': '作业不存在或无权限', 'data': None, 'trace_id': make_trace_id()}, status=404)
+    if not _is_course_practice_mission(mission):
+        return Response({'code': 400, 'message': '当前作业不是课堂练习讲义作业', 'data': None, 'trace_id': make_trace_id()}, status=400)
+    if request.method == 'GET':
+        return Response({'code': 0, 'message': 'success', 'data': _course_practice_editor_data(mission), 'trace_id': make_trace_id()})
+
+    from apps.courses.models import CourseQuestionLink, CourseTree
+    course = mission.course
+    requested_node_ids = request.data.get('node_ids')
+    if requested_node_ids is None:
+        requested_node_ids = _course_practice_source_nodes(mission, course)
+    if not isinstance(requested_node_ids, list):
+        raise ValidationError('node_ids 必须是数组')
+    node_ids = list(dict.fromkeys(str(value) for value in requested_node_ids if value))
+    nodes = list(CourseTree.objects.filter(course=course, id__in=node_ids))
+    node_map = {str(node.id): node for node in nodes}
+    if len(node_map) != len(node_ids):
+        raise ValidationError('存在不属于当前课程的目录节点')
+    if not node_ids:
+        raise ValidationError('请至少选择一个目录节点')
+    ordered_nodes = [node_map[node_id] for node_id in node_ids]
+
+    requested_question_ids = request.data.get('question_ids')
+    if not isinstance(requested_question_ids, list):
+        raise ValidationError('question_ids 必须是数组')
+    question_ids = list(dict.fromkeys(str(value) for value in requested_question_ids if value))
+    if not question_ids:
+        raise ValidationError('请至少选择一道作业题目')
+    scoped_links = CourseQuestionLink.objects.filter(
+        course=course, is_deleted=False,
+        tree_node_id__in=node_ids, question_id__in=question_ids,
+    )
+    available_question_ids = {str(value) for value in scoped_links.values_list('question_id', flat=True)}
+    if any(value not in available_question_ids for value in question_ids):
+        raise ValidationError('存在不属于所选课程节点的题目')
+
+    class_ids = request.data.get('class_ids')
+    if class_ids is None:
+        class_ids = list(mission.class_assignments.filter(status='active').values_list('class_obj_id', flat=True))
+        if not class_ids and mission.class_obj_id:
+            class_ids = [mission.class_obj_id]
+    if not isinstance(class_ids, list):
+        raise ValidationError('class_ids 必须是数组')
+    classes, class_error = _validate_mission_classes(request.user, class_ids, course)
+    if class_error:
+        return Response({'code': 403, 'message': class_error, 'data': None, 'trace_id': make_trace_id()}, status=403)
+    if not classes:
+        raise ValidationError('请至少选择一个班级')
+
+    start_at = _parse_course_practice_datetime(request.data.get('start_at'), end_of_day=False) or mission.start_at
+    end_at = _parse_course_practice_datetime(request.data.get('end_at'), end_of_day=True) or mission.end_at
+    if not end_at:
+        raise ValidationError('请选择截止日期')
+    if start_at and end_at < start_at:
+        raise ValidationError('截止日期不能早于开始日期')
+    level_type = str(request.data.get('level_type') or '').strip() or 'practice'
+    if level_type not in ('practice', 'review', 'retry', 'variant', 'check'):
+        raise ValidationError('关卡类型无效')
+    pass_rule = request.data.get('pass_rule') if isinstance(request.data.get('pass_rule'), dict) else {}
+    try:
+        correct_rate = float(pass_rule.get('correct_rate', 0.6))
+    except (TypeError, ValueError):
+        raise ValidationError('通过条件必须是 0 到 1 之间的正确率')
+    if not 0 <= correct_rate <= 1:
+        raise ValidationError('通过条件必须是 0 到 1 之间的正确率')
+    pass_rule = {'correct_rate': correct_rate}
+    links = list(scoped_links.select_related('tree_node'))
+    link_by_question = {str(link.question_id): link for link in links}
+    selected_order = {question_id: index for index, question_id in enumerate(question_ids, 1)}
+
+    with transaction.atomic():
+        old_class_ids = {str(item.class_obj_id) for item in _mission_assignments(mission)}
+        old_end_at = mission.end_at
+        mission.mission_name = str(request.data.get('mission_name') or mission.mission_name).strip()[:120]
+        mission.goal_text = str(request.data.get('goal_text') or '')[:255]
+        mission.start_at = start_at
+        mission.end_at = end_at
+        mission.class_obj = classes[0]
+        mission.source_type = 'handout'
+        mission.source_context = 'course_practice'
+        mission.source_node_ids = node_ids
+        mission.assignment_mode = 'levels'
+        mission.pdf_file_path = ''
+        mission.save(update_fields=[
+            'mission_name', 'goal_text', 'start_at', 'end_at', 'class_obj',
+            'source_type', 'source_context', 'source_node_ids',
+            'assignment_mode', 'pdf_file_path', 'updated_at',
+        ])
+
+        current = {str(item.class_obj_id): item for item in mission.class_assignments.all()}
+        desired = {str(cls.id): cls for cls in classes}
+        for class_id, assignment in current.items():
+            if class_id not in desired and assignment.status != 'removed':
+                assignment.status = 'removed'
+                assignment.save(update_fields=['status', 'updated_at'])
+        for class_id, cls in desired.items():
+            assignment = current.get(class_id)
+            if assignment:
+                assignment.status = 'active'
+                assignment.start_at = start_at
+                assignment.end_at = end_at
+                assignment.target_student_ids = list(mission.target_student_ids or [])
+                assignment.save(update_fields=['status', 'start_at', 'end_at', 'target_student_ids', 'updated_at'])
+            else:
+                MissionClassAssignment.objects.create(
+                    mission=mission, class_obj=cls, start_at=start_at,
+                    end_at=end_at, target_student_ids=list(mission.target_student_ids or []),
+                )
+
+        MissionQuestionRel.objects.filter(mission=mission).delete()
+        MissionLevel.objects.filter(mission=mission).delete()
+        for level_no, node in enumerate(ordered_nodes, 1):
+            level = MissionLevel.objects.create(
+                mission=mission, level_no=level_no, level_name=node.name,
+                level_type=level_type, pass_rule_json=pass_rule,
+                source_node_id=node.id, node_name_snapshot=node.name,
+                node_sort_no_snapshot=level_no,
+            )
+            for question_id in question_ids:
+                link = link_by_question.get(question_id)
+                if link and str(link.tree_node_id) == str(node.id):
+                    MissionQuestionRel.objects.create(
+                        mission=mission, level=level, question_id=question_id,
+                        sort_no=selected_order[question_id], is_required=True,
+                        source_type='course_selected',
+                        source_node_id=node.id,
+                        source_node_name_snapshot=node.name,
+                        node_question_no=str(selected_order[question_id]),
+                    )
+
+        new_class_ids = {str(cls.id) for cls in classes}
+        if old_class_ids != new_class_ids or old_end_at != end_at:
+            from apps.study.models import StudentMissionProgress
+            for student_id in _mission_student_ids(mission):
+                StudentMissionProgress.objects.get_or_create(
+                    mission=mission, student_user_id_id=student_id,
+                    defaults={'progress_status': 'not_started', 'progress_percent': 0},
+                )
+
+    return Response({'code': 0, 'message': '讲义作业更新成功', 'data': {'mission_id': str(mission.id)}, 'trace_id': make_trace_id()})
 
 
 @api_view(['DELETE'])
@@ -901,9 +1202,10 @@ def mission_publish(request, mission_id):
     classes, error = _validate_mission_classes(request.user, [a.class_obj_id for a in assignments], course)
     if error:
         return Response({'code': 403, 'message': error, 'data': None, 'trace_id': make_trace_id()}, status=403)
-    # The simplified flow must have a completion date and at least one
-    # question. Legacy level assignments keep the old publish contract.
-    if mission.assignment_mode == FLAT_ASSIGNMENT_MODE:
+    # Course-generated assignments must have the same complete assignment
+    # information as the simplified flat flow. Without this guard, legacy
+    # level-mode course missions could be published without a class or date.
+    if mission.assignment_mode == FLAT_ASSIGNMENT_MODE or mission.course_id:
         if not mission.end_at:
             return Response({'code': 400, 'message': '请设置完成日期', 'data': None, 'trace_id': make_trace_id()}, status=400)
         if not MissionQuestionRel.objects.filter(mission=mission).exists():
@@ -977,6 +1279,8 @@ def mission_clone(request, mission_id):
         assignment_mode=original.assignment_mode,
         mission_kind=original.mission_kind,
         source_type=original.source_type,
+        source_context=original.source_context,
+        source_node_ids=list(original.source_node_ids or []),
         class_obj=original.class_obj,
         target_student_ids=list(original.target_student_ids or []),
         course=original.course,
@@ -1050,6 +1354,8 @@ def mission_clone_with_class(request, mission_id):
         assignment_mode=original.assignment_mode,
         mission_kind=original.mission_kind,
         source_type=original.source_type,
+        source_context=original.source_context,
+        source_node_ids=list(original.source_node_ids or []),
         target_student_ids=list(original.target_student_ids or []),
     )
     MissionClassAssignment.objects.create(

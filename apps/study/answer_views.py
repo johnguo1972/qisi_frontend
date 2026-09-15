@@ -1,4 +1,5 @@
 import uuid
+import logging
 from django.db import transaction
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -11,6 +12,8 @@ from apps.missions.services import mission_visible_to_student, ordered_mission_q
 from apps.missions.snapshots import apply_snapshot_to_question, mission_question_relation
 from apps.wrongbook.models import WrongBookItem
 from .feedback_engine import generate_feedback
+
+logger = logging.getLogger(__name__)
 
 
 def make_trace_id():
@@ -195,6 +198,14 @@ def _handle_submit_answer(request, question_id, answer_content, mission_id, leve
         LearningMission.objects.filter(pk=mission_id).first() if mission_id else None,
         request.user,
     )
+    if mission_id:
+        try:
+            from apps.missions.classroom_wrongbook_service import sync_classroom_online_for_student
+            sync_classroom_online_for_student(mission_id, request.user.id)
+        except Exception as exc:
+            # Statistics synchronization is reconciled on the teacher GET;
+            # never turn a successful student answer into a failed response.
+            logger.warning('classroom wrongbook sync failed after answer: %s', exc.__class__.__name__)
     return Response({
         'code': 0, 'message': 'success',
         'data': {
@@ -289,6 +300,12 @@ def submit_attempt(request, attempt_id):
         LearningMission.objects.filter(pk=attempt.mission_id).first() if attempt.mission_id else None,
         request.user,
     )
+    if attempt.mission_id:
+        try:
+            from apps.missions.classroom_wrongbook_service import sync_classroom_online_for_student
+            sync_classroom_online_for_student(attempt.mission_id, request.user.id)
+        except Exception as exc:
+            logger.warning('classroom wrongbook sync failed after draft finalization: %s', exc.__class__.__name__)
     return Response({'code': 0, 'message': 'success', 'data': {
         'is_correct': is_correct, 'is_pending': is_pending, 'score': float(attempt.score),
         'feedback': feedback, 'attempt_id': attempt.id,
@@ -525,6 +542,11 @@ def _submit_mission_batch(mission, student, progress, raw_answers):
         }, status=400)
 
     _update_mission_progress(mission, student, final=True)
+    try:
+        from apps.missions.classroom_wrongbook_service import sync_classroom_online_for_student
+        sync_classroom_online_for_student(mission.id, student.id)
+    except Exception as exc:
+        logger.warning('classroom wrongbook sync failed after batch submit: %s', exc.__class__.__name__)
     progress.refresh_from_db()
     return Response({
         'code': 0, 'message': '作业提交成功',

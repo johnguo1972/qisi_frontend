@@ -17,6 +17,7 @@
     { "path": "pages/teacher/question-edit", "style": { "navigationBarTitleText": "题目编辑" } },
     { "path": "pages/teacher/photo-upload", "style": { "navigationBarTitleText": "拍照新增试题" } },
     { "path": "pages/teacher/mission-create", "style": { "navigationBarTitleText": "创建作业" } },
+    { "path": "pages/teacher/mission-handout-edit", "style": { "navigationBarTitleText": "编辑课堂练习作业" } },
     { "path": "pages/teacher/mission-list", "style": { "navigationBarTitleText": "作业列表" } },
     { "path": "pages/teacher/mission-detail", "style": { "navigationBarTitleText": "作业详情" } },
     { "path": "pages/teacher/mission-progress", "style": { "navigationBarTitleText": "学生完成进度" } },
@@ -24,6 +25,8 @@
     { "path": "pages/teacher/student-learning-stats", "style": { "navigationBarTitleText": "学生学情详情" } },
     { "path": "pages/teacher/learning-stats", "style": { "navigationBarTitleText": "学情统计" } },
     { "path": "pages/teacher/wrongbook-matrix", "style": { "navigationBarTitleText": "学生错题统计" } },
+    { "path": "pages/teacher/classroom-practice-select", "style": { "navigationBarTitleText": "选择课堂练习" } },
+    { "path": "pages/teacher/classroom-wrongbook-statistics", "style": { "navigationBarTitleText": "课堂错题统计" } },
     { "path": "pages/teacher/level-practice", "style": { "navigationBarTitleText": "关卡练习" } },
     { "path": "pages/teacher/class-create", "style": { "navigationBarTitleText": "创建班级" } },
     { "path": "pages/teacher/class-edit", "style": { "navigationBarTitleText": "编辑班级" } },
@@ -63,8 +66,8 @@
     ,{ "path": "pages/parent/wrongbook", "style": { "navigationBarTitleText": "错题分析" } }
     ,{ "path": "pages/parent/growth", "style": { "navigationBarTitleText": "成长分析" } }
     ,{ "path": "pages/parent/knowledge", "style": { "navigationBarTitleText": "知识掌握" } }
-    ,{ "path": "pages/parent/practice", "style": { "navigationBarTitleText": "精练题" } }
-    { "path": "pages/teacher/handout-create", "style": { "navigationBarTitleText": "创建讲义" } }
+    ,{ "path": "pages/parent/practice", "style": { "navigationBarTitleText": "精练题" } },
+    { "path": "pages/teacher/handout-create", "style": { "navigationBarTitleText": "创建讲义" } },
     { "path": "pages/teacher/knowledge-matches", "style": { "navigationBarTitleText": "知识点匹配待确认" } },
     { "path": "pages/teacher/handout-list", "style": { "navigationBarTitleText": "讲义管理" } }
   ],

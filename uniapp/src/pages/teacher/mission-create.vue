@@ -533,6 +533,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { missionApi } from '@/api/index.ts'
 import { getTagList, questionApi } from '@/api/questions.ts'
 import { knowledgeApi } from '@/api/knowledge.ts'
@@ -562,8 +563,9 @@ const sourceTypeOptions: Array<{ value: SourceType; label: string }> = [
 ]
 const assignmentTitle = ref('作业')
 const targetMode = ref<'class' | 'students'>('class')
-const courseId = ref<number | null>(null)
+const courseId = ref<string | null>(null)
 const pendingFavoriteQuestionIds = ref<Array<string | number>>([])
+const routeOptions = ref<Record<string, any>>({})
 const levels = ref([{ name: '基础练习', type: 'practice', mode: 'block_a', questionIds: [] as string[] }])
 const subjectOptions = [
   { value: 'physics', label: '物理' },
@@ -1254,17 +1256,25 @@ async function saveMission(
   }
 }
 
+onLoad((options: any) => {
+  routeOptions.value = options || {}
+})
+
 onMounted(async () => {
   form.value.start_at = new Date().toISOString()
   // 先加载班级列表（编辑模式需要用到）
   await loadClasses()
 
+  // 统一从 onLoad 接收页面参数；保留页面对象作为 H5/旧运行时的兜底。
   const pages = getCurrentPages()
   const page = pages[pages.length - 1] as any
-  const id = String(page.options?.id || '')
-  courseId.value = page.options?.courseId ? String(page.options.courseId) : null
-  if (page.options?.favoriteQuestionIds) {
-    pendingFavoriteQuestionIds.value = String(page.options.favoriteQuestionIds).split(',').filter(Boolean)
+  const options = routeOptions.value && Object.keys(routeOptions.value).length
+    ? routeOptions.value
+    : (page?.options || page?.$page?.options || {})
+  const id = String(options.id || '')
+  courseId.value = options.courseId ? String(options.courseId) : null
+  if (options.favoriteQuestionIds) {
+    pendingFavoriteQuestionIds.value = String(options.favoriteQuestionIds).split(',').filter(Boolean)
   }
 
   if (id) {
@@ -1282,15 +1292,17 @@ onMounted(async () => {
 async function loadMissionData(id: string) {
   try {
     const res: any = await missionApi.detail(id)
-    const data = res.data
+    const data = res?.data?.data || res?.data
     if (!data) return
 
     form.value.mission_name = data.mission_name || ''
     form.value.goal_text = data.goal_text || ''
     form.value.start_at = data.start_at || ''
     form.value.end_at = data.end_at || ''
-    form.value.class_id = data.class_obj || null
-    form.value.class_ids = (data.class_ids || (data.class_obj ? [data.class_obj] : [])).map((value: any) => String(value))
+    const legacyClassId = typeof data.class_obj === 'object' ? data.class_obj?.id : data.class_obj
+    form.value.class_id = legacyClassId ? String(legacyClassId) : null
+    form.value.class_ids = (data.class_ids || (legacyClassId ? [legacyClassId] : []))
+      .map((value: any) => String(typeof value === 'object' ? value.id : value))
     missionKind.value = data.mission_kind === 'drill' ? 'drill' : 'regular'
     sourceType.value = (data.source_type || 'question_bank') as SourceType
     targetStudentIds.value = (data.target_student_ids || []).map((value: any) => String(value))
@@ -1302,6 +1314,9 @@ async function loadMissionData(id: string) {
     selectedClassName.value = classList.value
       .filter((c: any) => form.value.class_ids.includes(String(c.id)))
       .map((c: any) => c.class_name).join('、')
+    if (!selectedClassName.value && Array.isArray(data.class_names)) {
+      selectedClassName.value = data.class_names.filter(Boolean).join('、')
+    }
 
     // 平铺读取题目，兼容历史作业的关卡关联顺序。
     try {

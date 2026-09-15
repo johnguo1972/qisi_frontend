@@ -1,11 +1,12 @@
 import pytest
 from rest_framework.test import APIClient
 
-from apps.courses.models import Course, CourseClass, CourseHandout
+from apps.courses.models import Course, CourseClass, CourseHandout, CourseQuestionLink, CourseTree
 from apps.handouts.models import Handout, HandoutQuestion
 from apps.knowledge.models import KnowledgePoint, QuestionKnowledgeMatch
-from apps.missions.models import LearningMission, MissionLevel, MissionQuestionRel
+from apps.missions.models import LearningMission, MissionClassAssignment, MissionLevel, MissionQuestionRel
 from apps.missions.pdf_service import _mission_questions
+from apps.missions.services import ordered_mission_question_rels
 from apps.study.models import AnswerAttempt, StudentMissionProgress
 
 
@@ -85,6 +86,246 @@ def test_course_supports_multiple_classes_and_handouts(teacher_user, sample_inst
     response = client.get(f'/api/v1/courses/{course.id}/classes/')
     assert response.status_code == 200
     assert len(response.data['data']) == 2
+
+
+@pytest.mark.django_db
+def test_course_practice_generate_persists_source_dates_and_multiple_teacher_classes(
+    teacher_user, sample_institution, sample_class, sample_question, monkeypatch,
+):
+    course = Course.objects.create(
+        name='课堂练习生成课程', subject='math', grade_level='9',
+        teacher=teacher_user, institution=sample_institution,
+    )
+    from apps.institutions.models import Class, ClassTeacher
+    from apps.parser.models import ExamQuestion
+    second_class = Class.objects.create(
+        institution=sample_institution, class_name='教师第二班', creator_teacher=teacher_user,
+    )
+    ClassTeacher.objects.create(class_obj=second_class, teacher=teacher_user, role='owner')
+    node = CourseTree.objects.create(course=course, name='第一章', sort_order=1)
+    CourseQuestionLink.objects.create(course=course, tree_node=node, question=sample_question, source='manual')
+    second_question = ExamQuestion.objects.create(
+        paper=sample_question.paper, question_no='2', question_type=sample_question.question_type,
+        subject=sample_question.subject, stem='第二道题', answer='B',
+    )
+    third_question = ExamQuestion.objects.create(
+        paper=sample_question.paper, question_no='3', question_type=sample_question.question_type,
+        subject=sample_question.subject, stem='未选择的题', answer='C',
+    )
+    CourseQuestionLink.objects.create(course=course, tree_node=node, question=second_question, source='manual')
+    CourseQuestionLink.objects.create(course=course, tree_node=node, question=third_question, source='manual')
+
+    client = APIClient()
+    client.force_authenticate(user=teacher_user)
+    response = client.post(f'/api/v1/courses/{course.id}/generate-mission/', {
+        'node_ids': [str(node.id)],
+        'mission_name': '课堂练习作业',
+        'source_type': 'handout',
+        'source_context': 'course_practice',
+        'start_at': '2026-09-14T00:00:00+08:00',
+        'end_at': '2026-09-20T23:59:59+08:00',
+        'class_ids': [str(sample_class.id), str(second_class.id)],
+        'question_ids': [str(second_question.id), str(sample_question.id)],
+    }, format='json')
+
+    assert response.status_code == 201, response.json()
+    mission = LearningMission.objects.get(id=response.data['data']['mission_id'])
+    assert mission.status == 'draft'
+    assert mission.source_type == 'handout'
+    assert mission.start_at.isoformat().startswith('2026-09-13T16:00:00')
+    assert mission.end_at.isoformat().startswith('2026-09-20T15:59:59')
+    assert set(MissionClassAssignment.objects.filter(mission=mission).values_list('class_obj_id', flat=True)) == {
+        sample_class.id, second_class.id,
+    }
+    selected_relations = list(MissionQuestionRel.objects.filter(mission=mission).order_by('sort_no'))
+    assert [relation.question_id for relation in selected_relations] == [second_question.id, sample_question.id]
+    assert [relation.question_id for relation in ordered_mission_question_rels(mission)] == [second_question.id, sample_question.id]
+    assert all(relation.source_type == 'course_selected' for relation in selected_relations)
+    assert not MissionQuestionRel.objects.filter(mission=mission, question_id=third_question.id).exists()
+    assert mission.source_context == 'course_practice'
+    assert mission.source_node_ids == [str(node.id)]
+
+    editor_response = client.get(f'/api/v1/missions/{mission.id}/handout-edit/')
+    assert editor_response.status_code == 200, editor_response.json()
+    editor_data = editor_response.data['data']
+    assert editor_data['source_context'] == 'course_practice'
+    assert editor_data['node_ids'] == [str(node.id)]
+    assert editor_data['question_ids'] == [str(second_question.id), str(sample_question.id)]
+    assert {item['id'] for item in editor_data['questions']} == {str(second_question.id), str(sample_question.id)}
+    assert editor_data['nodes'][0]['question_count'] == 3
+
+    update_response = client.put(f'/api/v1/missions/{mission.id}/handout-edit/', {
+        'mission_name': '课堂练习作业（已编辑）',
+        'goal_text': '只更新课堂练习专用编辑器',
+        'level_type': 'review',
+        'pass_rule': {'correct_rate': 0.8},
+        'source_type': 'handout',
+        'source_context': 'course_practice',
+        'node_ids': [str(node.id)],
+        'question_ids': [str(sample_question.id), str(second_question.id)],
+        'class_ids': [str(sample_class.id), str(second_class.id)],
+        'start_at': '2026-09-14T00:00:00+08:00',
+        'end_at': '2026-09-22T23:59:59+08:00',
+    }, format='json')
+    assert update_response.status_code == 200, update_response.json()
+    mission.refresh_from_db()
+    assert mission.mission_name == '课堂练习作业（已编辑）'
+    assert mission.source_context == 'course_practice'
+    assert mission.source_node_ids == [str(node.id)]
+    assert mission.levels.get().level_type == 'review'
+    assert mission.levels.get().pass_rule_json == {'correct_rate': 0.8}
+    assert [relation.question_id for relation in MissionQuestionRel.objects.filter(mission=mission).order_by('sort_no')] == [sample_question.id, second_question.id]
+    assert mission.end_at.isoformat().startswith('2026-09-22T15:59:59')
+
+    question_list_response = client.get(f'/api/v1/courses/{course.id}/questions/?page=1&page_size=100')
+    assert question_list_response.status_code == 200
+    question_items = question_list_response.data['data']['items']
+    question_item = next(item for item in question_items if str(item['id']) == str(sample_question.id))
+    assert str(node.id) in question_item['tree_node_ids']
+    assert str(question_item['tree_node_id']) == str(node.id)
+
+    list_response = client.get('/api/v1/missions/')
+    assert list_response.status_code == 200
+    listed = next(item for item in list_response.data['data'] if str(item['id']) == str(mission.id))
+    assert listed['source_type'] == 'handout'
+    assert set(listed['class_ids']) == {str(sample_class.id), str(second_class.id)}
+    assert listed['class_names']
+    assert listed['start_at']
+    assert listed['end_at']
+
+    detail_response = client.get(f'/api/v1/missions/{mission.id}/')
+    assert detail_response.status_code == 200
+    detail = detail_response.data['data']
+    assert detail['source_type'] == 'handout'
+    assert set(detail['class_ids']) == {str(sample_class.id), str(second_class.id)}
+    assert detail['class_names']
+    assert detail['start_at']
+    assert detail['end_at']
+
+    publish_response = client.post(f'/api/v1/courses/{course.id}/generate-mission-and-publish/', {
+        'node_ids': [str(node.id)],
+        'mission_name': '课堂练习自动发布作业',
+        'source_type': 'handout',
+        'start_at': '2026-09-14T00:00:00+08:00',
+        'end_at': '2026-09-20T23:59:59+08:00',
+        'class_ids': [str(sample_class.id), str(second_class.id)],
+        'question_ids': [str(second_question.id), str(sample_question.id)],
+    }, format='json')
+
+    assert publish_response.status_code == 201, publish_response.json()
+    assert publish_response.data['message'] == '创建作业并发布成功'
+    published_mission = LearningMission.objects.get(id=publish_response.data['data']['mission_id'])
+    assert published_mission.status == 'published'
+    assert published_mission.source_type == 'handout'
+    assert published_mission.start_at
+    assert published_mission.end_at
+    assert set(MissionClassAssignment.objects.filter(mission=published_mission).values_list('class_obj_id', flat=True)) == {
+        sample_class.id, second_class.id,
+    }
+
+    # If publication fails after generation, the one-click endpoint must not
+    # leave a draft mission behind.
+    from rest_framework.response import Response
+
+    def fail_publish(request, mission_id):
+        return Response({'code': 400, 'message': '模拟发布失败', 'data': None}, status=400)
+
+    monkeypatch.setattr('apps.missions.views.mission_publish', fail_publish)
+    rollback_response = client.post(f'/api/v1/courses/{course.id}/generate-mission-and-publish/', {
+        'node_ids': [str(node.id)],
+        'mission_name': '课堂练习自动发布回滚作业',
+        'source_type': 'handout',
+        'start_at': '2026-09-14T00:00:00+08:00',
+        'end_at': '2026-09-20T23:59:59+08:00',
+        'class_ids': [str(sample_class.id)],
+        'question_ids': [str(sample_question.id)],
+    }, format='json')
+
+    assert rollback_response.status_code == 400
+    assert not LearningMission.objects.filter(mission_name='课堂练习自动发布回滚作业').exists()
+
+
+@pytest.mark.django_db
+def test_course_practice_generate_supports_multiple_handouts_in_selected_order(
+    teacher_user, sample_institution, sample_class, sample_question,
+):
+    from apps.parser.models import ExamQuestion
+
+    course = Course.objects.create(
+        name='multi-handout-course', subject='math', grade_level='9',
+        teacher=teacher_user, institution=sample_institution,
+    )
+    CourseClass.objects.create(course=course, class_obj=sample_class, status='active')
+    first_question = sample_question
+    second_question = ExamQuestion.objects.create(
+        paper=sample_question.paper, question_no='2', question_type=sample_question.question_type,
+        subject=sample_question.subject, stem='second handout question', answer='B',
+    )
+    first_handout = Handout.objects.create(
+        name='first handout', subject='math', creator_teacher=teacher_user,
+        course=course, status='published',
+    )
+    second_handout = Handout.objects.create(
+        name='second handout', subject='math', creator_teacher=teacher_user,
+        course=course, status='published',
+    )
+    HandoutQuestion.objects.create(
+        handout=first_handout, question=first_question, sort_no=1,
+        display_snapshot={'id': str(first_question.id), 'stem': first_question.stem},
+    )
+    HandoutQuestion.objects.create(
+        handout=second_handout, question=second_question, sort_no=1,
+        display_snapshot={'id': str(second_question.id), 'stem': second_question.stem},
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=teacher_user)
+    response = client.post(f'/api/v1/courses/{course.id}/generate-mission/', {
+        'handout_ids': [str(second_handout.id), str(first_handout.id)],
+        'class_id': str(sample_class.id),
+        'question_ids': [str(second_question.id), str(first_question.id)],
+    }, format='json')
+
+    assert response.status_code == 201, response.json()
+    mission = LearningMission.objects.get(id=response.data['data']['mission_id'])
+    relations = list(MissionQuestionRel.objects.filter(mission=mission).order_by('sort_no'))
+    assert [relation.question_id for relation in relations] == [second_question.id, first_question.id]
+    assert all(relation.source_type == 'handout_selected' for relation in relations)
+    assert mission.levels.get().level_name == 'second handout、first handout'
+
+
+@pytest.mark.django_db
+def test_handout_editor_does_not_accept_other_mission_sources(teacher_user):
+    mission = LearningMission.objects.create(
+        mission_name='普通题库作业',
+        creator_teacher_id=teacher_user,
+        source_type='question_bank',
+    )
+    client = APIClient()
+    client.force_authenticate(user=teacher_user)
+    response = client.get(f'/api/v1/missions/{mission.id}/handout-edit/')
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_course_level_mission_cannot_publish_without_deadline_or_class(
+    teacher_user, sample_institution,
+):
+    course = Course.objects.create(
+        name='课程作业发布校验', subject='math', grade_level='9',
+        teacher=teacher_user, institution=sample_institution,
+    )
+    mission = LearningMission.objects.create(
+        mission_name='未完成课程作业', creator_teacher_id=teacher_user,
+        course=course, status='draft', assignment_mode='levels',
+    )
+    response = APIClient()
+    response.force_authenticate(user=teacher_user)
+
+    publish_response = response.post(f'/api/v1/missions/{mission.id}/publish/', {}, format='json')
+
+    assert publish_response.status_code == 400
+    assert '完成日期' in publish_response.json()['message']
 
 
 @pytest.mark.django_db

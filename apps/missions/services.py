@@ -24,6 +24,8 @@ def ordered_mission_question_rels(mission):
     from apps.parser.models import ExamQuestion
 
     relations = list(MissionQuestionRel.objects.filter(mission=mission).order_by('sort_no', 'id'))
+    if any(relation.source_type in ('course_selected', 'handout_selected') for relation in relations):
+        return sorted(relations, key=lambda relation: (relation.sort_no, str(relation.id)))
     question_map = {
         str(row['id']): row['question_no']
         for row in ExamQuestion.objects.filter(id__in=[rel.question_id for rel in relations]).values('id', 'question_no')
