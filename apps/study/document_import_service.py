@@ -57,6 +57,10 @@ class ExtractedQuestionFragment:
     tables: list[list[list[str]]] = field(default_factory=list)
     page_range: tuple[int, int] = (1, 1)
     asset_refs: list[DocumentAssetRef] = field(default_factory=list)
+    # A document label (for example "1") is not unique when a paper resets
+    # numbering in a new section.  Keep its physical/structural origin too.
+    source_paragraph_index: int | None = None
+    section_path: str = ''
 
 
 @dataclass
@@ -266,6 +270,7 @@ def _pdf_fragments(page_details: list[dict]) -> list[ExtractedQuestionFragment]:
             text='\n'.join(part for part in text_parts if part),
             page_range=(candidate['page_no'], page_details[end_index]['page_no']),
             asset_refs=_pdf_assets_for_candidate(candidate, following, page_details),
+            section_path=f'pdf/page-{candidate["page_no"]}',
         ))
     return fragments
 
@@ -371,8 +376,12 @@ def _docx_fragments(document, image_refs: dict[str, DocumentAssetRef], page_coun
     current = None
     pending_assets = []
     automatic_number_counters = {}
-    for item in _docx_body_items(document):
+    heading_path = []
+    for body_index, item in enumerate(_docx_body_items(document), start=1):
         if isinstance(item, Paragraph):
+            heading_level = _heading_level(item)
+            if heading_level is not None and item.text.strip():
+                heading_path = heading_path[:heading_level - 1] + [item.text.strip()]
             match = QUESTION_START.match(item.text)
             paragraph_assets = _paragraph_asset_refs(item, image_refs)
             automatic_question_no = _word_automatic_question_no(item, automatic_number_counters)
@@ -384,6 +393,8 @@ def _docx_fragments(document, image_refs: dict[str, DocumentAssetRef], page_coun
                 current = ExtractedQuestionFragment(
                     question_no=question_no, text=question_text,
                     page_range=(1, page_count), asset_refs=pending_assets + paragraph_assets,
+                    source_paragraph_index=body_index,
+                    section_path='/'.join(heading_path),
                 )
                 fragments.append(current)
                 pending_assets = []
@@ -393,9 +404,21 @@ def _docx_fragments(document, image_refs: dict[str, DocumentAssetRef], page_coun
                 if item.text.strip():
                     current.text = f'{current.text}\n{item.text.strip()}'.strip()
                 current.asset_refs.extend(paragraph_assets)
-        elif current is not None:
-            current.tables.append([[cell.text for cell in row.cells] for row in item.rows])
+        else:
+            table_assets = _table_asset_refs(item, image_refs)
+            if current is None:
+                pending_assets.extend(table_assets)
+            else:
+                current.tables.append([[cell.text for cell in row.cells] for row in item.rows])
+                current.asset_refs.extend(table_assets)
     return fragments or _docx_unnumbered_fragments(document, image_refs, page_count)
+
+
+def _heading_level(paragraph) -> int | None:
+    """Return a Word heading level for English and Chinese style names."""
+    style = getattr(getattr(paragraph, 'style', None), 'name', '') or ''
+    match = re.search(r'(?:Heading|标题)\s*([1-9])', style, re.IGNORECASE)
+    return int(match.group(1)) if match else None
 
 
 def _word_automatic_question_no(paragraph, counters) -> str | None:
@@ -463,6 +486,12 @@ def _docx_body_items(document):
 
 def _paragraph_asset_refs(paragraph, image_refs: dict[str, DocumentAssetRef]):
     relation_ids = DOCX_IMAGE_REFERENCE.findall(paragraph._element.xml)
+    return [image_refs[relation_id] for relation_id in relation_ids if relation_id in image_refs]
+
+
+def _table_asset_refs(table, image_refs: dict[str, DocumentAssetRef]):
+    """Collect every drawing relationship below a table, including wrapped cells."""
+    relation_ids = DOCX_IMAGE_REFERENCE.findall(table._tbl.xml)
     return [image_refs[relation_id] for relation_id in relation_ids if relation_id in image_refs]
 def document_source_fingerprint(fragment: 'ExtractedQuestionFragment') -> str:
     """Stable document identity: original stem/options only, never AI output or assets."""

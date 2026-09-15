@@ -881,6 +881,19 @@ def _import_asset_image(
     if image_type == 'formula' and not description:
         description = formula_key_from_asset(asset_data)
 
+    placement = asset_data.get('placement')
+    if placement not in {'stem', 'options'}:
+        placement = 'stem'
+    display_width = asset_data.get('display_width', 100)
+    try:
+        display_width = int(display_width)
+    except (TypeError, ValueError):
+        display_width = 100
+    display_width = min(1200, max(80, display_width))
+    bbox = asset_data.get('bbox')
+    if not isinstance(bbox, (list, dict)):
+        bbox = None
+
     return QuestionImage.objects.create(
         paper=paper,
         question=question,
@@ -889,6 +902,9 @@ def _import_asset_image(
         original_file_path=rel_original,
         description=description or '',
         sort_order=sort_order,
+        bbox=bbox,
+        placement=placement,
+        display_width=display_width,
     )
 
 

@@ -18,7 +18,6 @@ from apps.common.exceptions import AIRequestError
 from apps.study.document_import_models import QuestionDocumentImportTask
 from apps.study.document_import_service import document_source_fingerprint, extract_document
 from apps.study.document_structure_ai import structure_candidate
-from apps.parser.models import QuestionDocumentSourceFingerprint
 from apps.study.ingestion import finish_ingestion_batch
 from apps.study.structured_ingestion import ingest_structured_questions
 
@@ -47,6 +46,25 @@ def _asset_filename(reference, suffix):
     digest = hashlib.sha256(reference.encode('utf-8')).hexdigest()[:16]
     normalized_suffix = suffix.lower() if suffix and suffix.startswith('.') else '.bin'
     return f'document-{digest}{normalized_suffix}'
+
+
+def _source_document_reference(candidate, position):
+    """Persist a collision-safe locator, not just the printed question label."""
+    page_start, page_end = candidate.page_range
+    paragraph_index = candidate.source_paragraph_index
+    section_path = (candidate.section_path or '').strip()[:500]
+    position_part = f'paragraph-{paragraph_index}' if paragraph_index else f'fragment-{position}'
+    path = section_path or ('pdf' if paragraph_index is None else 'document-body')
+    locator = f'{path}/{position_part}/pages-{page_start}-{page_end}/question-{candidate.question_no}'
+    return {
+        'fingerprint': document_source_fingerprint(candidate),
+        'position': position,
+        'question_no': str(candidate.question_no),
+        'page_start': page_start,
+        'page_end': page_end,
+        'section_path': section_path,
+        'locator': locator[:700],
+    }
 
 
 def _materialize_candidate_assets(source_path, candidate, asset_root):
@@ -109,23 +127,13 @@ def process_document_import_task(self, task_id):
         total = len(extracted.fragments)
         for index, candidate in enumerate(extracted.fragments):
             try:
-                source_fingerprint = document_source_fingerprint(candidate)
-                existing = QuestionDocumentSourceFingerprint.objects.filter(
-                    fingerprint=source_fingerprint,
-                ).values_list('canonical_question_id', flat=True).first()
-                if existing:
-                    valid.append({
-                        '_document_source_fingerprint': source_fingerprint,
-                        '_source_document_question_no': candidate.question_no,
-                        '_existing_canonical_question_id': str(existing),
-                    })
-                    _set_stage(task, QuestionDocumentImportTask.Stage.STRUCTURING, 20 + int(45 * (index + 1) / max(total, 1)))
-                    continue
+                source_reference = _source_document_reference(candidate, index + 1)
                 asset_files = _materialize_candidate_assets(source_path, candidate, asset_root)
                 structured = structure_candidate(candidate, asset_files=asset_files)
                 structured = structured.to_ingestion_data() if hasattr(structured, 'to_ingestion_data') else dict(structured)
-                structured['_document_source_fingerprint'] = source_fingerprint
+                structured['_document_source_fingerprint'] = source_reference['fingerprint']
                 structured['_source_document_question_no'] = candidate.question_no
+                structured['_source_document_reference'] = source_reference
                 valid.append(structured)
             except (AIResponseError, AIRequestError, ValueError, OSError) as exc:
                 failures.append(_redacted_error(exc))
@@ -145,6 +153,7 @@ def process_document_import_task(self, task_id):
             source_root=asset_root,
             course=task.course,
             tree_node=task.tree_node,
+            document_import_task=task,
         )
         failed_count = result.failed + len(failures)
         finish_ingestion_batch(

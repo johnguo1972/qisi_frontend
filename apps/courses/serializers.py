@@ -173,6 +173,9 @@ class CourseQuestionLinkSerializer(serializers.ModelSerializer):
                 'url': media_url(image.file_path),
                 'image_type': image.image_type,
                 'description': image.description or '',
+                'placement': image.placement,
+                'bbox': image.bbox,
+                'sort_order': image.sort_order,
                 'display_width': image.display_width,
             }
             for image in obj.question.images.order_by('image_type', 'sort_order', 'id')

@@ -62,6 +62,29 @@ def test_complete_once_releases_provider_lease_when_transport_times_out(monkeypa
     assert events == [('acquire', 'qwen'), ('release', 'qwen')]
 
 
+def test_client_uses_explicit_ai_http_proxy_from_environment(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class DummyClient:
+        is_closed = False
+
+        def close(self) -> None:
+            self.is_closed = True
+
+    def create_client(**kwargs):
+        captured.update(kwargs)
+        return DummyClient()
+
+    monkeypatch.setenv("AI_HTTP_PROXY", "socks5://127.0.0.1:1080")
+    monkeypatch.setattr(client_module.httpx, "Client", create_client)
+
+    client = AIClient()
+
+    assert captured["proxy"] == "socks5://127.0.0.1:1080"
+    assert captured["trust_env"] is False
+    client.close()
+
+
 class TrackingTransport(httpx.BaseTransport):
     def __init__(self) -> None:
         self.closed = False

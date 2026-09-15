@@ -234,6 +234,35 @@ class CourseQuestionLink(models.Model):
         return f'{self.course} -> {self.question}'
 
 
+class CourseQuestionDocumentReference(models.Model):
+    """One immutable source position for a document-imported course question."""
+
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    course_question_link = models.ForeignKey(
+        CourseQuestionLink, on_delete=models.CASCADE, related_name='document_references',
+    )
+    document_import_task = models.ForeignKey(
+        'study.QuestionDocumentImportTask', on_delete=models.CASCADE, related_name='source_references',
+    )
+    source_fingerprint = models.CharField(max_length=64, db_index=True)
+    source_position = models.PositiveIntegerField()
+    source_question_no = models.CharField(max_length=100, blank=True, default='')
+    source_page_start = models.PositiveIntegerField(null=True, blank=True)
+    source_page_end = models.PositiveIntegerField(null=True, blank=True)
+    source_section_path = models.CharField(max_length=500, blank=True, default='')
+    source_locator = models.CharField(max_length=700)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'course_question_document_reference'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['document_import_task', 'source_position'],
+                name='uq_course_doc_reference_task_position',
+            ),
+        ]
+
+
 class CourseClass(models.Model):
     """Active class scope for a course (one course can serve many classes)."""
 

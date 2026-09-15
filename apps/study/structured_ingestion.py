@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -61,7 +62,30 @@ def _preflight_with_asset_retry(legacy, raw_question, assets_dir):
                 raise
 
 
-def ingest_structured_questions(*, questions, paper_info, actor, batch, source_root, course, tree_node):
+def _backfill_existing_assets(legacy, question, qdata, assets_dir):
+    """Attach document assets absent from a deduplicated canonical question."""
+    if assets_dir is None or not question.paper_id:
+        return
+    for image_type, field_name in (("illustration", "illustrations"), ("formula", "formula_assets")):
+        for sort_order, asset in enumerate(qdata.get(field_name, []) or []):
+            filename = os.path.basename(str(asset.get("file", "")))
+            if not filename:
+                continue
+            if legacy.QuestionImage.objects.filter(
+                question=question,
+                image_type=image_type,
+                original_file_path__endswith=f"_{filename}",
+            ).exists():
+                continue
+            legacy._import_asset_image(
+                asset, question, question.paper, assets_dir, image_type, sort_order,
+            )
+
+
+def ingest_structured_questions(
+    *, questions, paper_info, actor, batch, source_root, course, tree_node,
+    document_import_task=None,
+):
     """Create canonical questions once and always link resolved questions to a course.
 
     The legacy JSON import helpers remain the source of truth for formula/media
@@ -78,16 +102,33 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
     fingerprints_in_package = set()
     course_question_ids = set()
     source_document_question_nos = {}
+    source_references_by_content_fingerprint = {}
+    resolved_source_references = []
+
+    def resolve_source_references(content_fingerprint, canonical_question_id):
+        """Bind every physical source position for one normalized question."""
+        for source_reference in source_references_by_content_fingerprint.pop(content_fingerprint, []):
+            if source_reference:
+                resolved_source_references.append({
+                    **source_reference,
+                    'canonical_question_id': str(canonical_question_id),
+                })
 
     for index, incoming in enumerate(questions):
         raw_question = _question_data(incoming)
         existing_canonical_question_id = raw_question.pop('_existing_canonical_question_id', None)
         document_fingerprint = raw_question.pop('_document_source_fingerprint', None)
         source_document_question_no = raw_question.pop('_source_document_question_no', None)
+        source_reference = raw_question.pop('_source_document_reference', None)
         if existing_canonical_question_id:
             result.skipped_existing += 1
             course_question_ids.add(existing_canonical_question_id)
-            source_document_question_nos[str(existing_canonical_question_id)] = source_document_question_no
+            source_document_question_nos.setdefault(str(existing_canonical_question_id), source_document_question_no)
+            if source_reference:
+                resolved_source_references.append({
+                    **source_reference,
+                    'canonical_question_id': str(existing_canonical_question_id),
+                })
             continue
         try:
             qdata, fingerprint = _preflight_with_asset_retry(legacy, raw_question, assets_dir)
@@ -95,6 +136,8 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
             result.failed += 1
             result.errors.append(legacy._question_error(raw_question, index, exc))
             continue
+        if source_reference:
+            source_references_by_content_fingerprint.setdefault(fingerprint, []).append(source_reference)
         if fingerprint in fingerprints_in_package:
             result.skipped_in_package += 1
             legacy._append_duplicate_detail(
@@ -108,16 +151,18 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
             result.failed += 1
             result.errors.append(legacy._question_error(raw_question, index, exc))
             continue
-        source_registry = QuestionDocumentSourceFingerprint.objects.filter(
-            fingerprint=document_fingerprint,
-        ).select_related('canonical_question').first() if document_fingerprint else None
-        if source_registry:
-            registry = source_registry
         if registry:
             result.skipped_existing += 1
             if course and registry.canonical_question_id:
+                _backfill_existing_assets(legacy, registry.canonical_question, qdata, assets_dir)
                 course_question_ids.add(registry.canonical_question_id)
-                source_document_question_nos[str(registry.canonical_question_id)] = source_document_question_no
+                source_document_question_nos.setdefault(str(registry.canonical_question_id), source_document_question_no)
+                resolve_source_references(fingerprint, registry.canonical_question_id)
+            if document_fingerprint and registry.canonical_question_id:
+                QuestionDocumentSourceFingerprint.objects.update_or_create(
+                    fingerprint=document_fingerprint,
+                    defaults={'canonical_question_id': registry.canonical_question_id},
+                )
             legacy._append_duplicate_detail(
                 result.details, source_index=index, category='existing', fingerprint=fingerprint,
                 registry=registry,
@@ -137,8 +182,15 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
                     if registry:
                         result.skipped_existing += 1
                         if course and registry.canonical_question_id:
+                            _backfill_existing_assets(legacy, registry.canonical_question, qdata, assets_dir)
                             course_question_ids.add(registry.canonical_question_id)
-                            source_document_question_nos[str(registry.canonical_question_id)] = source_document_question_no
+                            source_document_question_nos.setdefault(str(registry.canonical_question_id), source_document_question_no)
+                            resolve_source_references(fingerprint, registry.canonical_question_id)
+                        if document_fingerprint and registry.canonical_question_id:
+                            QuestionDocumentSourceFingerprint.objects.update_or_create(
+                                fingerprint=document_fingerprint,
+                                defaults={'canonical_question_id': registry.canonical_question_id},
+                            )
                         legacy._append_duplicate_detail(
                             result.details, source_index=index, category='existing', fingerprint=fingerprint,
                             registry=registry,
@@ -161,14 +213,15 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
                 # failure/cleanup regression while all callers share this flow.
                 legacy.activate_content_fingerprint(registry, question)
                 if document_fingerprint:
-                    QuestionDocumentSourceFingerprint.objects.get_or_create(
+                    QuestionDocumentSourceFingerprint.objects.update_or_create(
                         fingerprint=document_fingerprint,
                         defaults={'canonical_question': question},
                     )
                 result.imported += 1
                 if course:
                     course_question_ids.add(question.id)
-                    source_document_question_nos[str(question.id)] = source_document_question_no
+                    source_document_question_nos.setdefault(str(question.id), source_document_question_no)
+                    resolve_source_references(fingerprint, question.id)
         except Exception as exc:
             legacy._cleanup_media_paths(created_media_paths)
             if created_paper:
@@ -188,6 +241,33 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
             source_document_question_nos=source_document_question_nos,
         )
         result.tree_node_id = str(linked_tree_node.id) if linked_tree_node else None
+        if document_import_task and resolved_source_references:
+            from apps.courses.models import CourseQuestionDocumentReference, CourseQuestionLink
+
+            links_by_question_id = {
+                str(link.question_id): link
+                for link in CourseQuestionLink.objects.filter(
+                    course=course,
+                    question_id__in={item['canonical_question_id'] for item in resolved_source_references},
+                )
+            }
+            for item in resolved_source_references:
+                link = links_by_question_id.get(item['canonical_question_id'])
+                if not link:
+                    continue
+                CourseQuestionDocumentReference.objects.update_or_create(
+                    document_import_task=document_import_task,
+                    source_position=item['position'],
+                    defaults={
+                        'course_question_link': link,
+                        'source_fingerprint': item['fingerprint'],
+                        'source_question_no': item.get('question_no', ''),
+                        'source_page_start': item.get('page_start'),
+                        'source_page_end': item.get('page_end'),
+                        'source_section_path': item.get('section_path', ''),
+                        'source_locator': item['locator'],
+                    },
+                )
 
     if paper:
         paper.total_questions = result.imported

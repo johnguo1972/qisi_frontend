@@ -14,6 +14,108 @@ from apps.study.document_import_service import ExtractedDocument, ExtractedQuest
 from apps.study.models import QuestionIngestionBatch
 
 
+@pytest.mark.django_db
+def test_document_task_records_each_source_position_when_two_fragments_share_one_question(task, monkeypatch):
+    """Repeated document labels retain two source references after content deduplication."""
+    from apps.courses.models import CourseQuestionDocumentReference
+
+    monkeypatch.setattr(
+        module,
+        'extract_document',
+        lambda _path: ExtractedDocument(
+            document_type='pdf', page_count=1,
+            fragments=[
+                ExtractedQuestionFragment(question_no='1', text='1. First copy.', page_range=(1, 1)),
+                ExtractedQuestionFragment(question_no='1', text='1. Second copy.', page_range=(1, 1)),
+            ],
+        ),
+    )
+    monkeypatch.setattr(module, 'structure_candidate', Mock(return_value=valid_question()))
+
+    module.process_document_import_task.run(str(task.id))
+
+    references = CourseQuestionDocumentReference.objects.filter(document_import_task=task).order_by('source_position')
+    assert references.count() == 2
+    assert list(references.values_list('source_position', 'source_question_no')) == [(1, '1'), (2, '1')]
+
+
+@pytest.mark.django_db
+def test_document_task_keeps_duplicate_labels_bound_to_distinct_content_fingerprints(task, monkeypatch):
+    """A reset label must never collapse two different original questions."""
+    from apps.courses.models import CourseQuestionDocumentReference
+
+    monkeypatch.setattr(
+        module,
+        'extract_document',
+        lambda _path: ExtractedDocument(
+            document_type='docx', page_count=2,
+            fragments=[
+                ExtractedQuestionFragment(
+                    question_no='1', text='1. First original question.',
+                    page_range=(1, 1), source_paragraph_index=3, section_path='section-1',
+                ),
+                ExtractedQuestionFragment(
+                    question_no='1', text='1. Second original question.',
+                    page_range=(2, 2), source_paragraph_index=21, section_path='section-2',
+                ),
+            ],
+        ),
+    )
+    first, second = valid_question(), valid_question()
+    first['stem'], second['stem'] = 'First structured stem.', 'Second structured stem.'
+    monkeypatch.setattr(module, 'structure_candidate', Mock(side_effect=[first, second]))
+
+    module.process_document_import_task.run(str(task.id))
+
+    references = list(CourseQuestionDocumentReference.objects.filter(
+        document_import_task=task,
+    ).order_by('source_position'))
+    assert len(references) == 2
+    assert len({reference.course_question_link.question_id for reference in references}) == 2
+    assert [reference.source_locator for reference in references] == [
+        'section-1/paragraph-3/pages-1-1/question-1',
+        'section-2/paragraph-21/pages-2-2/question-1',
+    ]
+
+
+@pytest.mark.django_db
+def test_reprocessing_rebinds_a_stale_source_fingerprint_by_recomputed_content(task, monkeypatch):
+    """Historical raw-source bindings are corrected instead of trusted blindly."""
+    from apps.parser.models import QuestionDocumentSourceFingerprint
+
+    fragment = ExtractedQuestionFragment(question_no='1', text='1. Same original text.')
+    monkeypatch.setattr(
+        module, 'extract_document',
+        lambda _path: ExtractedDocument(document_type='pdf', page_count=1, fragments=[fragment]),
+    )
+    stale = valid_question()
+    stale['stem'] = 'Stale structured stem.'
+    monkeypatch.setattr(module, 'structure_candidate', Mock(return_value=stale))
+    module.process_document_import_task.run(str(task.id))
+    source_fingerprint = module.document_source_fingerprint(fragment)
+    stale_question_id = QuestionDocumentSourceFingerprint.objects.get(
+        fingerprint=source_fingerprint,
+    ).canonical_question_id
+
+    retry_batch = QuestionIngestionBatch.objects.create(
+        actor=task.batch.actor,
+        course=task.course,
+        source_type=QuestionIngestionBatch.SourceType.DOCUMENT_IMPORT,
+        source_name='questions-retry.pdf',
+    )
+    retry_task = QuestionDocumentImportTask.objects.create(
+        batch=retry_batch, course=task.course, source_file='imports/questions-retry.pdf',
+        detected_mime='application/pdf', document_type='pdf', page_count=1,
+    )
+    corrected = valid_question()
+    corrected['stem'] = 'Correct structured stem.'
+    monkeypatch.setattr(module, 'structure_candidate', Mock(return_value=corrected))
+    module.process_document_import_task.run(str(retry_task.id))
+
+    repaired = QuestionDocumentSourceFingerprint.objects.get(fingerprint=source_fingerprint)
+    assert repaired.canonical_question_id != stale_question_id
+
+
 def valid_question():
     return {
         'question_no': '1',
@@ -121,7 +223,14 @@ def test_document_asset_is_materialized_before_shared_ingestion(task, tmp_path, 
 
     def structure(candidate, *, asset_files=None):
         assert asset_files
-        return _asset_question(candidate.question_no, next(iter(asset_files.values())))
+        question = _asset_question(candidate.question_no, next(iter(asset_files.values())))
+        source_asset = candidate.asset_refs[0]
+        question['illustrations'][0].update({
+            'placement': 'options',
+            'bbox': list(source_asset.bbox) if source_asset.bbox else None,
+            'source_page': source_asset.page_no,
+        })
+        return question
 
     monkeypatch.setattr(module, 'structure_candidate', structure)
 
@@ -133,6 +242,9 @@ def test_document_asset_is_materialized_before_shared_ingestion(task, tmp_path, 
     assert task.stage == 'success'
     assert image.file_path
     assert image.original_file_path
+    assert image.placement == 'options'
+    if source_path.suffix.lower() == '.pdf':
+        assert image.bbox
 
 
 @pytest.mark.django_db

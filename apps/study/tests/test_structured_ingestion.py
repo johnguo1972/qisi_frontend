@@ -1,9 +1,11 @@
+import hashlib
+
 import pytest
 
 from apps.accounts.models import UserAccount
 from apps.courses.models import Course, CourseQuestionLink
 from apps.papers.models import ExamPaper
-from apps.parser.models import ExamQuestion, QuestionContentFingerprint
+from apps.parser.models import ExamQuestion, QuestionContentFingerprint, QuestionImage
 from apps.parser.question_identity import build_content_fingerprint
 from apps.study.models import QuestionIngestionBatch
 from apps.study.structured_ingestion import ingest_structured_questions
@@ -114,3 +116,35 @@ def test_asset_preflight_retries_one_transient_read_error(tmp_path, teacher, cou
     assert result.imported == 1
     assert result.failed == 0
     assert attempts['count'] == 2
+
+
+@pytest.mark.django_db
+def test_existing_question_backfills_document_illustration_once(
+    tmp_path, teacher, course, existing_question, structured_question,
+):
+    asset_path = tmp_path / 'diagram.png'
+    asset_path.write_bytes(b'diagram-bytes')
+    question = {
+        **structured_question,
+        'illustrations': [{'file': 'diagram.png', 'placement': 'stem'}],
+    }
+    fingerprint = build_content_fingerprint(
+        stem=structured_question['stem'], options=['One'], formula_texts=[],
+        image_hashes=[hashlib.sha256(asset_path.read_bytes()).hexdigest()],
+    )
+    QuestionContentFingerprint.objects.filter(
+        canonical_question=existing_question,
+    ).update(fingerprint=fingerprint)
+
+    first = ingest_structured_questions(
+        questions=[question], paper_info={'title': 'backfill'}, actor=teacher,
+        batch=make_batch(teacher, course), source_root=tmp_path, course=course, tree_node=None,
+    )
+    second = ingest_structured_questions(
+        questions=[question], paper_info={'title': 'backfill'}, actor=teacher,
+        batch=make_batch(teacher, course), source_root=tmp_path, course=course, tree_node=None,
+    )
+
+    assert first.skipped_existing == 1
+    assert second.skipped_existing == 1
+    assert QuestionImage.objects.filter(question=existing_question).count() == 1

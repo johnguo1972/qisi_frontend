@@ -310,6 +310,24 @@ def test_extract_docx_slices_questions_and_attaches_tables_and_images(tmp_path):
     assert extracted.fragments[0].asset_refs
 
 
+def test_extract_docx_attaches_images_embedded_inside_question_tables(tmp_path):
+    """Word table-cell diagrams belong to the active question just like inline diagrams."""
+    image_path = tmp_path / 'table-diagram.png'
+    Image.new('RGB', (10, 10), color='black').save(image_path)
+    document_path = tmp_path / 'table-images.docx'
+    document = Document()
+    document.add_paragraph('1. Question with table diagram')
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).paragraphs[0].add_run().add_picture(str(image_path))
+    document.add_paragraph('2. Next question')
+    document.save(document_path)
+
+    extracted = extract_document(document_path)
+
+    assert len(extracted.fragments[0].asset_refs) == 1
+    assert extracted.fragments[0].asset_refs[0].reference.startswith('docx:')
+
+
 def test_validate_document_accepts_safe_docx_with_3000_members(tmp_path):
     """A normal image-heavy Word paper must reach parsing while byte safety limits still apply."""
     document_path = _docx_with_safe_member_count(tmp_path, 3000)

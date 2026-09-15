@@ -1,5 +1,5 @@
 from apps.study import document_structure_ai as module
-from apps.study.document_import_service import ExtractedQuestionFragment
+from apps.study.document_import_service import DocumentAssetRef, ExtractedQuestionFragment
 
 
 def test_structure_candidate_strips_fences_and_returns_required_structure(monkeypatch):
@@ -67,7 +67,10 @@ def test_validated_question_normalizes_nullable_text_and_table_fields():
 
 def test_validated_question_resolves_reference_and_drops_unknown_illustrations():
     """Known source references are safe; hallucinated assets are omitted instead of dropping the question."""
-    candidate = ExtractedQuestionFragment(question_no='10', text='10. Diagram.')
+    candidate = ExtractedQuestionFragment(
+        question_no='10', text='10. Diagram.',
+        asset_refs=[DocumentAssetRef(reference='docx:word/media/image1.png')],
+    )
     parsed = {
         'question_no': '10', 'question_type': 'single_choice', 'stem': 'Diagram.',
         'options': [], 'answer': '', 'analysis': '', 'tables': [], 'confidence': 0.8,
@@ -82,4 +85,29 @@ def test_validated_question_resolves_reference_and_drops_unknown_illustrations()
         parsed, candidate, {'docx:word/media/image1.png': 'document-known.png'},
     )
 
-    assert result.illustrations == [{'file': 'document-known.png'}]
+    assert result.illustrations == [{
+        'file': 'document-known.png', 'reference': 'docx:word/media/image1.png',
+        'placement': 'stem',
+    }]
+
+
+def test_validated_question_preserves_every_extracted_asset_when_qwen_omits_it():
+    """Source images are authoritative even when Qwen returns no illustrations."""
+    candidate = ExtractedQuestionFragment(
+        question_no='11', text='11. Diagram.',
+        asset_refs=[DocumentAssetRef(
+            reference='pdf:42', page_no=3, bbox=(10.0, 20.0, 110.0, 220.0),
+        )],
+    )
+    parsed = {
+        'question_no': '11', 'question_type': 'single_choice', 'stem': 'Diagram.',
+        'options': [], 'answer': '', 'analysis': '', 'tables': [], 'confidence': 0.8,
+        'review_reason': '', 'illustrations': [],
+    }
+
+    result = module._validated_question(parsed, candidate, {'pdf:42': 'document-42.png'})
+
+    assert result.illustrations == [{
+        'file': 'document-42.png', 'reference': 'pdf:42', 'bbox': [10.0, 20.0, 110.0, 220.0],
+        'placement': 'stem', 'source_page': 3,
+    }]

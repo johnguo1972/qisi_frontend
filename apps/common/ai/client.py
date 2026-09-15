@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import os
 import secrets
 import time
 from collections.abc import Callable, Sequence
@@ -70,10 +71,13 @@ class AIClient:
             self._client = client
         else:
             borrowed = _BorrowedTransport(transport) if transport else None
-            self._client = httpx.Client(
-                transport=borrowed,
-                trust_env=False,
-            )
+            client_options = {
+                "transport": borrowed,
+                "trust_env": False,
+            }
+            if borrowed is None:
+                client_options["proxy"] = os.environ.get("AI_HTTP_PROXY", "").strip() or None
+            self._client = httpx.Client(**client_options)
 
     def __enter__(self) -> "AIClient":
         return self

@@ -28,9 +28,9 @@
     </view>
 
     <!-- 题目配图 -->
-    <view v-if="!compact && diagramImages.length > 0" class="q-images">
+    <view v-if="!compact && stemDiagramImages.length > 0" class="q-images">
       <view class="image-row">
-        <view v-for="(img, idx) in diagramImages" :key="idx" class="img-cell">
+        <view v-for="(img, idx) in stemDiagramImages" :key="idx" class="img-cell">
           <image :src="img.url" mode="widthFix" class="q-img" :style="imageStyle(img)" @click="previewImg(img.url)" />
           <text v-if="img.caption" class="img-label">{{ img.caption }}</text>
         </view>
@@ -42,6 +42,15 @@
       <view v-for="opt in options" :key="opt.label" class="opt-row">
         <text class="opt-label" :style="{ color: optColor }">{{ opt.label }}.</text>
         <view class="opt-content" v-html="opt.html"></view>
+      </view>
+    </view>
+
+    <view v-if="!compact && optionDiagramImages.length > 0" class="q-images">
+      <view class="image-row">
+        <view v-for="(img, idx) in optionDiagramImages" :key="idx" class="img-cell">
+          <image :src="img.url" mode="widthFix" class="q-img" :style="imageStyle(img)" @click="previewImg(img.url)" />
+          <text v-if="img.caption" class="img-label">{{ img.caption }}</text>
+        </view>
       </view>
     </view>
 
@@ -186,13 +195,18 @@ const questionImages = computed(() => {
     caption: img.description || '',
     type: img.image_type || 'other',
     displayWidth: Number(img.display_width || 0),
+    placement: img.placement || 'stem',
   }))
 })
 
 // 题目配图（非公式类型）
-const diagramImages = computed(() => {
-  return questionImages.value.filter(img => img.type === 'diagram')
-})
+const stemDiagramImages = computed(() => questionImages.value.filter(
+  img => img.type === 'diagram' && img.placement !== 'options',
+))
+
+const optionDiagramImages = computed(() => questionImages.value.filter(
+  img => img.type === 'diagram' && img.placement === 'options',
+))
 
 function imageStyle(image: { displayWidth?: number }) {
   const width = image.displayWidth && image.displayWidth > 200 ? Math.min(1200, image.displayWidth) : 420

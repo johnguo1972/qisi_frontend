@@ -6,6 +6,7 @@ from celery import shared_task
 
 from apps.common.ai.components import GuidanceComponent, QuestionInput
 from apps.parser.models import ExamQuestion
+from .document_import_tasks import process_document_import_task  # noqa: F401
 
 
 @shared_task(

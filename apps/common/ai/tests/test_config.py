@@ -41,6 +41,7 @@ REQUIRED_TASKS = {
     "deepseek_final_review",
     "photo_recognize",
     "course_material_recognize",
+    "document_structure",
 }
 
 EXPECTED_ROUTE_MATRIX = {
@@ -69,6 +70,7 @@ EXPECTED_ROUTE_MATRIX = {
     "deepseek_final_review": ("deepseek", "deepseek-v4-pro", 300.0),
     "photo_recognize": ("qwen", "qwen3-vl-plus", 300.0),
     "course_material_recognize": ("qwen", "qwen3-vl-plus", 300.0),
+    "document_structure": ("qwen", "qwen3.7-plus", 300.0),
 }
 
 

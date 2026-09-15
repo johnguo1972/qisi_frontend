@@ -116,7 +116,8 @@ def _validated_question(parsed, candidate, asset_files=None) -> StructuredQuesti
         raise AIResponseError('document structure response has invalid assets')
     known_assets = asset_files or {}
     allowed_files = set(known_assets.values())
-    normalized_illustrations = []
+    file_to_reference = {file_name: reference for reference, file_name in known_assets.items()}
+    qwen_assets_by_reference = {}
     for asset in illustrations:
         if not isinstance(asset, dict):
             continue
@@ -124,7 +125,35 @@ def _validated_question(parsed, candidate, asset_files=None) -> StructuredQuesti
         if file_name not in allowed_files:
             file_name = known_assets.get(asset.get('reference'))
         if file_name in allowed_files:
-            normalized_illustrations.append({'file': file_name})
+            reference = asset.get('reference') or file_to_reference.get(file_name)
+            if reference:
+                qwen_assets_by_reference[reference] = asset
+
+    # The extractor, rather than Qwen, is the authoritative inventory of
+    # document assets.  Qwen may omit a diagram while structuring text; that
+    # must not erase the image or its original page/bounding-box position.
+    normalized_illustrations = []
+    for source_asset in candidate.asset_refs:
+        file_name = known_assets.get(source_asset.reference)
+        if not file_name:
+            continue
+        qwen_asset = qwen_assets_by_reference.get(source_asset.reference, {})
+        placement = qwen_asset.get('placement')
+        if placement not in {'stem', 'options'}:
+            placement = 'stem'
+        item = {
+            'file': file_name,
+            'reference': source_asset.reference,
+            'placement': placement,
+        }
+        if source_asset.bbox is not None:
+            item['bbox'] = list(source_asset.bbox)
+        if source_asset.page_no is not None:
+            item['source_page'] = source_asset.page_no
+        for field in ('alt_text', 'recognized_text', 'display_width'):
+            if field in qwen_asset:
+                item[field] = qwen_asset[field]
+        normalized_illustrations.append(item)
     try:
         confidence = float(parsed['confidence'])
     except (TypeError, ValueError):
