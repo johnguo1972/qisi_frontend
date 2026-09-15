@@ -1074,9 +1074,10 @@ def question_list(request, course_id):
         if not CourseTree.objects.filter(id=tree_node_uuid, course=course).exists():
             raise ValidationError('tree_node_id does not belong to this course')
         links = links.filter(tree_node_id=tree_node_uuid)
+    from django.db.models import OuterRef, Subquery
     queryset = ExamQuestion.objects.select_related('paper').filter(
         id__in=links.values('question_id'),
-    )
+    ).annotate(source_document_question_no=Subquery(links.filter(question_id=OuterRef('pk')).values('source_document_question_no')[:1]))
     queryset = apply_course_question_filters(queryset, request.query_params)
     return Response({'success': True, 'data': paginate_question_queryset(queryset, request)})
 

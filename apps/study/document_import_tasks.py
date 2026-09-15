@@ -16,8 +16,9 @@ from django.conf import settings
 from apps.common.ai.exceptions import AIResponseError
 from apps.common.exceptions import AIRequestError
 from apps.study.document_import_models import QuestionDocumentImportTask
-from apps.study.document_import_service import extract_document
+from apps.study.document_import_service import document_source_fingerprint, extract_document
 from apps.study.document_structure_ai import structure_candidate
+from apps.parser.models import QuestionDocumentSourceFingerprint
 from apps.study.ingestion import finish_ingestion_batch
 from apps.study.structured_ingestion import ingest_structured_questions
 
@@ -108,8 +109,24 @@ def process_document_import_task(self, task_id):
         total = len(extracted.fragments)
         for index, candidate in enumerate(extracted.fragments):
             try:
+                source_fingerprint = document_source_fingerprint(candidate)
+                existing = QuestionDocumentSourceFingerprint.objects.filter(
+                    fingerprint=source_fingerprint,
+                ).values_list('canonical_question_id', flat=True).first()
+                if existing:
+                    valid.append({
+                        '_document_source_fingerprint': source_fingerprint,
+                        '_source_document_question_no': candidate.question_no,
+                        '_existing_canonical_question_id': str(existing),
+                    })
+                    _set_stage(task, QuestionDocumentImportTask.Stage.STRUCTURING, 20 + int(45 * (index + 1) / max(total, 1)))
+                    continue
                 asset_files = _materialize_candidate_assets(source_path, candidate, asset_root)
-                valid.append(structure_candidate(candidate, asset_files=asset_files))
+                structured = structure_candidate(candidate, asset_files=asset_files)
+                structured = structured.to_ingestion_data() if hasattr(structured, 'to_ingestion_data') else dict(structured)
+                structured['_document_source_fingerprint'] = source_fingerprint
+                structured['_source_document_question_no'] = candidate.question_no
+                valid.append(structured)
             except (AIResponseError, AIRequestError, ValueError, OSError) as exc:
                 failures.append(_redacted_error(exc))
             _set_stage(task, QuestionDocumentImportTask.Stage.STRUCTURING, 20 + int(45 * (index + 1) / max(total, 1)))

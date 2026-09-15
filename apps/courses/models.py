@@ -220,6 +220,7 @@ class CourseQuestionLink(models.Model):
     )
     source = models.CharField(max_length=30, choices=SOURCE_CHOICES, verbose_name='来源')
     source_course_name = models.CharField(max_length=200, null=True, blank=True, verbose_name='源课程名称')
+    source_document_question_no = models.CharField(max_length=100, null=True, blank=True, db_index=True)
     is_deleted = models.BooleanField(default=False, verbose_name='软删除标记')
     created_at = models.DateTimeField(auto_now_add=True)
 

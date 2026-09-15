@@ -296,6 +296,21 @@ class QuestionContentFingerprint(models.Model):
         ]
 
 
+class QuestionDocumentSourceFingerprint(models.Model):
+    """Stable original-text identity for Word/PDF document imports."""
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    fingerprint = models.CharField(max_length=64, unique=True, validators=[validate_content_fingerprint])
+    canonical_question = models.ForeignKey(
+        ExamQuestion, on_delete=models.CASCADE, related_name='document_source_fingerprints',
+        db_column='canonical_question_id',
+    )
+    algorithm_version = models.CharField(max_length=32, default='document-source-v1')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'tiku_question_document_source_fingerprint'
+
+
 class QuestionOption(models.Model):
     """Represents an option (A/B/C/D) of a multiple choice question."""
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)

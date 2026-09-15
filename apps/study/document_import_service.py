@@ -5,6 +5,9 @@ from io import BytesIO
 from math import ceil
 from pathlib import Path
 import re
+import hashlib
+import json
+import unicodedata
 from zipfile import BadZipFile, LargeZipFile, ZipFile
 
 import fitz
@@ -16,11 +19,13 @@ from docx.text.paragraph import Paragraph
 MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
 MAX_DOCUMENT_PAGES = 100
 READ_CHUNK_BYTES = 1024 * 1024
-MAX_DOCX_ARCHIVE_MEMBERS = 1000
+MAX_DOCX_ARCHIVE_MEMBERS = 3000
 MAX_DOCX_MEMBER_BYTES = 25 * 1024 * 1024
 MAX_DOCX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_DOCX_COMPRESSION_RATIO = 200
 QUESTION_START = re.compile(r'(?m)^\s*(\d+)\s*[.、．)]\s*')
+OPTION_START = re.compile(r'(?m)^\s*[A-HＡ-Ｈ]\s*[.．、]\s*')
+QUESTION_SIGNAL = re.compile(r'[？?（(＿_]|填空|简答|计算|证明|实验|作图')
 RELATION_IMAGE_SUFFIX = '/image'
 DOCX_IMAGE_REFERENCE = re.compile(r'r:embed="([^"]+)"')
 
@@ -365,13 +370,19 @@ def _docx_fragments(document, image_refs: dict[str, DocumentAssetRef], page_coun
     fragments = []
     current = None
     pending_assets = []
+    automatic_number_counters = {}
     for item in _docx_body_items(document):
         if isinstance(item, Paragraph):
             match = QUESTION_START.match(item.text)
             paragraph_assets = _paragraph_asset_refs(item, image_refs)
-            if match:
+            automatic_question_no = _word_automatic_question_no(item, automatic_number_counters)
+            if match or automatic_question_no:
+                question_no = match.group(1) if match else automatic_question_no
+                question_text = item.text[match.start():].strip() if match else (
+                    f'{question_no}. {item.text.strip()}'
+                )
                 current = ExtractedQuestionFragment(
-                    question_no=match.group(1), text=item.text[match.start():].strip(),
+                    question_no=question_no, text=question_text,
                     page_range=(1, page_count), asset_refs=pending_assets + paragraph_assets,
                 )
                 fragments.append(current)
@@ -384,7 +395,60 @@ def _docx_fragments(document, image_refs: dict[str, DocumentAssetRef], page_coun
                 current.asset_refs.extend(paragraph_assets)
         elif current is not None:
             current.tables.append([[cell.text for cell in row.cells] for row in item.rows])
+    return fragments or _docx_unnumbered_fragments(document, image_refs, page_count)
+
+
+def _word_automatic_question_no(paragraph, counters) -> str | None:
+    """Read visible Word list numbering omitted from ``paragraph.text`` by python-docx."""
+    properties = getattr(paragraph._p, 'pPr', None)
+    number_properties = getattr(properties, 'numPr', None)
+    if number_properties is None or not paragraph.text.strip():
+        return None
+    number_id = getattr(getattr(number_properties, 'numId', None), 'val', None)
+    level = getattr(getattr(number_properties, 'ilvl', None), 'val', '0')
+    if number_id in (None, '0', 0) or str(level) != '0':
+        return None
+    key = (str(number_id), str(level))
+    counters[key] = counters.get(key, 0) + 1
+    return str(counters[key])
+
+
+def _docx_unnumbered_fragments(document, image_refs, page_count: int):
+    """Split blank-separated practice groups only when all normal question markers are absent."""
+    fragments = []
+    text_parts = []
+    asset_refs = []
+    tables = []
+
+    def finish_group():
+        nonlocal text_parts, asset_refs, tables
+        text = '\n'.join(part for part in text_parts if part).strip()
+        if text and _looks_like_unnumbered_question(text):
+            fragments.append(ExtractedQuestionFragment(
+                question_no=str(len(fragments) + 1), text=text,
+                tables=tables, page_range=(1, page_count), asset_refs=asset_refs,
+            ))
+        text_parts, asset_refs, tables = [], [], []
+
+    for item in _docx_body_items(document):
+        if isinstance(item, Paragraph):
+            text = item.text.strip()
+            paragraph_assets = _paragraph_asset_refs(item, image_refs)
+            if not text and not paragraph_assets:
+                finish_group()
+                continue
+            if text:
+                text_parts.append(text)
+            asset_refs.extend(paragraph_assets)
+        else:
+            tables.append([[cell.text for cell in row.cells] for row in item.rows])
+    finish_group()
     return fragments
+
+
+def _looks_like_unnumbered_question(text: str) -> bool:
+    """Avoid sending plain titles and arbitrary prose to the per-question Qwen prompt."""
+    return bool(OPTION_START.search(text) or QUESTION_SIGNAL.search(text))
 
 
 def _docx_body_items(document):
@@ -400,3 +464,11 @@ def _docx_body_items(document):
 def _paragraph_asset_refs(paragraph, image_refs: dict[str, DocumentAssetRef]):
     relation_ids = DOCX_IMAGE_REFERENCE.findall(paragraph._element.xml)
     return [image_refs[relation_id] for relation_id in relation_ids if relation_id in image_refs]
+def document_source_fingerprint(fragment: 'ExtractedQuestionFragment') -> str:
+    """Stable document identity: original stem/options only, never AI output or assets."""
+    text = QUESTION_START.sub('', fragment.text, count=1)
+    parts = OPTION_START.split(text)
+    labels = OPTION_START.findall(text)
+    canonical = lambda value: ' '.join(unicodedata.normalize('NFKC', value).split())
+    payload = {'stem': canonical(parts[0]), 'options': [canonical(label + value) for label, value in zip(labels, parts[1:])]}
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()

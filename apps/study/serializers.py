@@ -7,6 +7,7 @@ from apps.common.question_display import difficulty_label, normalize_tables, pre
 
 
 class QuestionListSerializer(serializers.ModelSerializer):
+    source_document_question_no = serializers.CharField(read_only=True, allow_null=True)
     knowledge_points_count = serializers.SerializerMethodField()
     knowledge_points_display = serializers.SerializerMethodField()
     stem_preview = serializers.SerializerMethodField()
@@ -37,7 +38,7 @@ class QuestionListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ExamQuestion
-        fields = ['id', 'question_no', 'system_id', 'question_type', 'difficulty', 'difficulty_level',
+        fields = ['id', 'question_no', 'source_document_question_no', 'system_id', 'question_type', 'difficulty', 'difficulty_level',
                   'subject', 'review_status', 'stem', 'stem_html', 'stem_preview', 'answer', 'analysis', 'solution',
                   'knowledge_points_count', 'knowledge_points_display',
                   'ai_answer_a', 'ai_answer_b', 'ai_answer_c',

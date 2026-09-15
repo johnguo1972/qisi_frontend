@@ -7,6 +7,8 @@ from PIL import Image
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 from apps.study.document_import_service import (
     DocumentValidationError,
@@ -89,6 +91,32 @@ def _nested_table_over_limit_docx(tmp_path):
     nested_table = outer_table.cell(0, 0).add_table(rows=1, cols=1)
     nested_table.cell(0, 0).text = _over_limit_text()
     document.save(document_path)
+    return document_path
+
+
+def _set_word_auto_number(paragraph, number_id='1', level='0'):
+    """Add the numbering metadata Word uses for a visible automatic list marker."""
+    number_properties = OxmlElement('w:numPr')
+    indentation_level = OxmlElement('w:ilvl')
+    indentation_level.set(qn('w:val'), level)
+    number = OxmlElement('w:numId')
+    number.set(qn('w:val'), number_id)
+    number_properties.extend([indentation_level, number])
+    paragraph._p.get_or_add_pPr().append(number_properties)
+
+
+def _docx_with_safe_member_count(tmp_path, member_count):
+    source_path = tmp_path / 'source.docx'
+    document = Document()
+    document.add_paragraph('1. Safe question shell')
+    document.save(source_path)
+
+    document_path = tmp_path / 'many-members.docx'
+    with ZipFile(source_path) as source, ZipFile(document_path, 'w', ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            target.writestr(info, source.read(info.filename))
+        for index in range(member_count - len(source.infolist())):
+            target.writestr(f'word/media/safe-{index}.bin', b'safe')
     return document_path
 
 
@@ -280,3 +308,57 @@ def test_extract_docx_slices_questions_and_attaches_tables_and_images(tmp_path):
     assert [fragment.question_no for fragment in extracted.fragments] == ['1', '2']
     assert extracted.fragments[0].tables == [[['Given value']]]
     assert extracted.fragments[0].asset_refs
+
+
+def test_validate_document_accepts_safe_docx_with_3000_members(tmp_path):
+    """A normal image-heavy Word paper must reach parsing while byte safety limits still apply."""
+    document_path = _docx_with_safe_member_count(tmp_path, 3000)
+
+    validated = validate_document_upload(make_upload(
+        'many-members.docx', document_path.read_bytes(),
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ))
+
+    assert validated.document_type == 'docx'
+
+
+def test_extract_docx_slices_word_automatic_numbered_questions(tmp_path):
+    """Visible Word list numbers, although absent from paragraph.text, delimit question fragments."""
+    document_path = tmp_path / 'automatic-numbering.docx'
+    document = Document()
+    first = document.add_paragraph('First automatically numbered question')
+    _set_word_auto_number(first)
+    document.add_paragraph('A. First option')
+    document.add_paragraph('B. Second option')
+    second = document.add_paragraph('Second automatically numbered question')
+    _set_word_auto_number(second)
+    document.add_paragraph('A. Third option')
+    document.save(document_path)
+
+    extracted = extract_document(document_path)
+
+    assert [fragment.question_no for fragment in extracted.fragments] == ['1', '2']
+    assert extracted.fragments[0].text.startswith('1. First automatically numbered question')
+    assert 'B. Second option' in extracted.fragments[0].text
+
+
+def test_extract_docx_falls_back_to_blank_separated_option_groups(tmp_path):
+    """Unnumbered practice sheets still yield separate candidate questions for AI structuring."""
+    document_path = tmp_path / 'unnumbered-practice.docx'
+    document = Document()
+    document.add_paragraph('Lesson heading')
+    document.add_paragraph('')
+    document.add_paragraph('First unnumbered question')
+    document.add_paragraph('A. First option')
+    document.add_paragraph('B. Second option')
+    document.add_paragraph('')
+    document.add_paragraph('Second unnumbered question')
+    document.add_paragraph('A. Third option')
+    document.add_paragraph('B. Fourth option')
+    document.save(document_path)
+
+    extracted = extract_document(document_path)
+
+    assert [fragment.question_no for fragment in extracted.fragments] == ['1', '2']
+    assert extracted.fragments[0].text == 'First unnumbered question\nA. First option\nB. Second option'
+    assert extracted.fragments[1].text == 'Second unnumbered question\nA. Third option\nB. Fourth option'

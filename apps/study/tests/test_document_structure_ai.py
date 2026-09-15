@@ -46,3 +46,40 @@ def test_structure_candidate_retries_one_asset_read_failure(monkeypatch):
     )
 
     assert result.question_no == '8'
+
+
+def test_validated_question_normalizes_nullable_text_and_table_fields():
+    """Qwen's harmless null text/table noise must not discard an otherwise usable question."""
+    candidate = ExtractedQuestionFragment(question_no='9', text='9. Choose one.')
+    parsed = {
+        'question_no': 9, 'question_type': 'single_choice', 'stem': 'Choose one.',
+        'options': [{'label': 'A', 'content': 'One'}], 'answer': None, 'analysis': None,
+        'tables': None, 'illustrations': [], 'confidence': '0.7', 'review_reason': None,
+    }
+
+    result = module._validated_question(parsed, candidate)
+
+    assert result.answer == ''
+    assert result.analysis == ''
+    assert result.review_reason == ''
+    assert result.tables == []
+
+
+def test_validated_question_resolves_reference_and_drops_unknown_illustrations():
+    """Known source references are safe; hallucinated assets are omitted instead of dropping the question."""
+    candidate = ExtractedQuestionFragment(question_no='10', text='10. Diagram.')
+    parsed = {
+        'question_no': '10', 'question_type': 'single_choice', 'stem': 'Diagram.',
+        'options': [], 'answer': '', 'analysis': '', 'tables': [], 'confidence': 0.8,
+        'review_reason': '',
+        'illustrations': [
+            {'reference': 'docx:word/media/image1.png'},
+            {'file': 'hallucinated.png'},
+        ],
+    }
+
+    result = module._validated_question(
+        parsed, candidate, {'docx:word/media/image1.png': 'document-known.png'},
+    )
+
+    assert result.illustrations == [{'file': 'document-known.png'}]

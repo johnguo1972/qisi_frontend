@@ -76,9 +76,9 @@
         <scroll-view scroll-y class="question-scroll">
           <view v-if="loading" class="loading">加载中...</view>
           <view v-else-if="questions.length === 0" class="empty">暂无题目{{ !selectedNode ? '，请选择目录节点' : '' }}</view>
+          <view v-for="(question, index) in questions" :key="question.id" class="course-question-item">
+          <text v-if="question.source_document_question_no" class="document-source-no">文档题号：{{ question.source_document_question_no }}</text>
           <QuestionDetailCard
-            v-for="(question, index) in questions"
-            :key="question.id"
             :question="question"
             :index="pageOffset + index + 1"
             :show-answer="Boolean(showAnswerMap[question.id])"
@@ -97,6 +97,7 @@
               <button data-test="disabled-variant" size="mini" disabled @click.stop="handleDisabledVariantAction">生成变式题</button>
             </template>
           </QuestionDetailCard>
+          </view>
         </scroll-view>
       </view>
       <RightActionPanel
