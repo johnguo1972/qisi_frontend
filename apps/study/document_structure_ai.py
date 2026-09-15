@@ -93,18 +93,38 @@ def _validated_question(parsed, candidate, asset_files=None) -> StructuredQuesti
         or not isinstance(item.get('content'), str) for item in parsed['options']
     ):
         raise AIResponseError('document structure response has invalid options')
-    if not all(isinstance(parsed[name], str) for name in ('answer', 'analysis', 'review_reason')):
-        raise AIResponseError('document structure response has invalid text fields')
-    if not isinstance(parsed['tables'], list) or not isinstance(parsed['illustrations'], list):
+    text_fields = {}
+    for name in ('answer', 'analysis', 'review_reason'):
+        value = parsed[name]
+        if value is None:
+            text_fields[name] = ''
+        elif isinstance(value, str):
+            text_fields[name] = value
+        else:
+            raise AIResponseError('document structure response has invalid text fields')
+    tables = parsed['tables']
+    if tables is None:
+        tables = []
+    elif isinstance(tables, dict):
+        tables = [tables]
+    elif not isinstance(tables, list):
         raise AIResponseError('document structure response has invalid assets')
-    allowed_files = set((asset_files or {}).values())
-    if any(
-        not isinstance(asset, dict)
-        or not isinstance(asset.get('file'), str)
-        or asset['file'] not in allowed_files
-        for asset in parsed['illustrations']
-    ):
+    illustrations = parsed['illustrations']
+    if illustrations is None:
+        illustrations = []
+    if not isinstance(illustrations, list):
         raise AIResponseError('document structure response has invalid assets')
+    known_assets = asset_files or {}
+    allowed_files = set(known_assets.values())
+    normalized_illustrations = []
+    for asset in illustrations:
+        if not isinstance(asset, dict):
+            continue
+        file_name = asset.get('file')
+        if file_name not in allowed_files:
+            file_name = known_assets.get(asset.get('reference'))
+        if file_name in allowed_files:
+            normalized_illustrations.append({'file': file_name})
     try:
         confidence = float(parsed['confidence'])
     except (TypeError, ValueError):
@@ -113,9 +133,9 @@ def _validated_question(parsed, candidate, asset_files=None) -> StructuredQuesti
         raise AIResponseError('document structure response has invalid confidence')
     return StructuredQuestion(
         question_no=str(parsed['question_no']).strip(), question_type=parsed['question_type'].strip(),
-        stem=parsed['stem'].strip(), options=parsed['options'], answer=parsed['answer'],
-        analysis=parsed['analysis'], tables=parsed['tables'], illustrations=parsed['illustrations'],
-        confidence=confidence, review_reason=parsed['review_reason'],
+        stem=parsed['stem'].strip(), options=parsed['options'], answer=text_fields['answer'],
+        analysis=text_fields['analysis'], tables=tables, illustrations=normalized_illustrations,
+        confidence=confidence, review_reason=text_fields['review_reason'],
         page_start=candidate.page_range[0], page_end=candidate.page_range[1],
     )
 

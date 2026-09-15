@@ -426,7 +426,7 @@ def _process_json_import(*, temp_dir, user, batch, source_file_path, course=None
     return result.as_dict(batch=batch, course=course)
 
 
-def _link_questions_to_course(*, course, tree_node, question_ids):
+def _link_questions_to_course(*, course, tree_node, question_ids, source_document_question_nos=None):
     """Upsert course links, creating a safe default node when none was chosen."""
     if not question_ids:
         return None, 0
@@ -447,6 +447,11 @@ def _link_questions_to_course(*, course, tree_node, question_ids):
         if question_id not in existing_links or existing_links[question_id].is_deleted
     }
     if not question_ids_to_link:
+        for question_id, link in existing_links.items():
+            source_no = source_document_question_nos.get(str(question_id)) if source_document_question_nos else None
+            if source_no and link.source_document_question_no != source_no:
+                link.source_document_question_no = source_no
+                link.save(update_fields=['source_document_question_no'])
         # A fully deduplicated course import still needs to identify the node
         # that already exposes those questions, so the client can refresh the
         # correct directory rather than receiving an ambiguous null node.
@@ -473,6 +478,7 @@ def _link_questions_to_course(*, course, tree_node, question_ids):
                 sort_order=(max_sort_order or 0) + 1,
             )
 
+    source_document_question_nos = source_document_question_nos or {}
     for question_id in question_ids_to_link:
         link = existing_links.get(question_id)
         if link is None:
@@ -482,15 +488,17 @@ def _link_questions_to_course(*, course, tree_node, question_ids):
                 tree_node=target_node,
                 source='import',
                 source_course_name=course.name,
+                source_document_question_no=source_document_question_nos.get(str(question_id)),
                 is_deleted=False,
             )
         else:
             link.tree_node = target_node
             link.source = 'import'
             link.source_course_name = course.name
+            link.source_document_question_no = source_document_question_nos.get(str(question_id))
             link.is_deleted = False
             link.save(update_fields=[
-                'tree_node', 'source', 'source_course_name', 'is_deleted',
+                'tree_node', 'source', 'source_course_name', 'source_document_question_no', 'is_deleted',
             ])
     return target_node, len(question_ids_to_link)
 

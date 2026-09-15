@@ -5,6 +5,9 @@ from io import BytesIO
 from math import ceil
 from pathlib import Path
 import re
+import hashlib
+import json
+import unicodedata
 from zipfile import BadZipFile, LargeZipFile, ZipFile
 
 import fitz
@@ -461,3 +464,11 @@ def _docx_body_items(document):
 def _paragraph_asset_refs(paragraph, image_refs: dict[str, DocumentAssetRef]):
     relation_ids = DOCX_IMAGE_REFERENCE.findall(paragraph._element.xml)
     return [image_refs[relation_id] for relation_id in relation_ids if relation_id in image_refs]
+def document_source_fingerprint(fragment: 'ExtractedQuestionFragment') -> str:
+    """Stable document identity: original stem/options only, never AI output or assets."""
+    text = QUESTION_START.sub('', fragment.text, count=1)
+    parts = OPTION_START.split(text)
+    labels = OPTION_START.findall(text)
+    canonical = lambda value: ' '.join(unicodedata.normalize('NFKC', value).split())
+    payload = {'stem': canonical(parts[0]), 'options': [canonical(label + value) for label, value in zip(labels, parts[1:])]}
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()

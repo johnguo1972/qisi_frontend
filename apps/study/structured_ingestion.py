@@ -7,7 +7,7 @@ from pathlib import Path
 
 from django.db import transaction
 
-from apps.parser.models import QuestionContentFingerprint
+from apps.parser.models import QuestionContentFingerprint, QuestionDocumentSourceFingerprint
 from apps.parser.question_identity import reserve_content_fingerprint
 from apps.study.ingestion import finish_ingestion_batch
 
@@ -77,9 +77,18 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
     prepared = []
     fingerprints_in_package = set()
     course_question_ids = set()
+    source_document_question_nos = {}
 
     for index, incoming in enumerate(questions):
         raw_question = _question_data(incoming)
+        existing_canonical_question_id = raw_question.pop('_existing_canonical_question_id', None)
+        document_fingerprint = raw_question.pop('_document_source_fingerprint', None)
+        source_document_question_no = raw_question.pop('_source_document_question_no', None)
+        if existing_canonical_question_id:
+            result.skipped_existing += 1
+            course_question_ids.add(existing_canonical_question_id)
+            source_document_question_nos[str(existing_canonical_question_id)] = source_document_question_no
+            continue
         try:
             qdata, fingerprint = _preflight_with_asset_retry(legacy, raw_question, assets_dir)
         except Exception as exc:
@@ -99,19 +108,25 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
             result.failed += 1
             result.errors.append(legacy._question_error(raw_question, index, exc))
             continue
+        source_registry = QuestionDocumentSourceFingerprint.objects.filter(
+            fingerprint=document_fingerprint,
+        ).select_related('canonical_question').first() if document_fingerprint else None
+        if source_registry:
+            registry = source_registry
         if registry:
             result.skipped_existing += 1
             if course and registry.canonical_question_id:
                 course_question_ids.add(registry.canonical_question_id)
+                source_document_question_nos[str(registry.canonical_question_id)] = source_document_question_no
             legacy._append_duplicate_detail(
                 result.details, source_index=index, category='existing', fingerprint=fingerprint,
                 registry=registry,
             )
             continue
-        prepared.append((qdata, fingerprint, index))
+        prepared.append((qdata, fingerprint, index, source_document_question_no, document_fingerprint))
 
     paper = None
-    for qdata, fingerprint, index in prepared:
+    for qdata, fingerprint, index, source_document_question_no, document_fingerprint in prepared:
         created_paper = False
         created_media_paths = []
         try:
@@ -123,6 +138,7 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
                         result.skipped_existing += 1
                         if course and registry.canonical_question_id:
                             course_question_ids.add(registry.canonical_question_id)
+                            source_document_question_nos[str(registry.canonical_question_id)] = source_document_question_no
                         legacy._append_duplicate_detail(
                             result.details, source_index=index, category='existing', fingerprint=fingerprint,
                             registry=registry,
@@ -144,9 +160,15 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
                 # Keep the JSON import seam stable for its existing activation
                 # failure/cleanup regression while all callers share this flow.
                 legacy.activate_content_fingerprint(registry, question)
+                if document_fingerprint:
+                    QuestionDocumentSourceFingerprint.objects.get_or_create(
+                        fingerprint=document_fingerprint,
+                        defaults={'canonical_question': question},
+                    )
                 result.imported += 1
                 if course:
                     course_question_ids.add(question.id)
+                    source_document_question_nos[str(question.id)] = source_document_question_no
         except Exception as exc:
             legacy._cleanup_media_paths(created_media_paths)
             if created_paper:
@@ -163,6 +185,7 @@ def ingest_structured_questions(*, questions, paper_info, actor, batch, source_r
         )
         linked_tree_node, result.linked_count = legacy._link_questions_to_course(
             course=course, tree_node=tree_node, question_ids=course_question_ids,
+            source_document_question_nos=source_document_question_nos,
         )
         result.tree_node_id = str(linked_tree_node.id) if linked_tree_node else None
 
