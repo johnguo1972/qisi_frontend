@@ -18,6 +18,10 @@ class LearningMission(models.Model):
     assignment_mode = models.CharField(max_length=20, default='levels')
     mission_kind = models.CharField(max_length=30, default='regular')
     source_type = models.CharField(max_length=30, default='question_bank')
+    # Optional provenance for source-specific teacher editors.  Keep the
+    # existing source_type values unchanged for legacy clients.
+    source_context = models.CharField(max_length=30, blank=True, default='')
+    source_node_ids = models.JSONField(default=list, blank=True)
     # Phase 4 wrong-book matrix provenance. Nullable to preserve legacy missions.
     source_matrix_id = models.UUIDField(null=True, blank=True, db_index=True)
     source_generation_batch_id = models.UUIDField(null=True, blank=True, db_index=True)
@@ -98,6 +102,10 @@ class MissionLevel(models.Model):
     pass_rule_json = models.JSONField(default=dict)
     mode_policy = models.CharField(max_length=50, blank=True, null=True)
     hint_strength = models.CharField(max_length=20, default='medium')
+    # Immutable classroom-practice provenance. Legacy levels may remain null.
+    source_node_id = models.UUIDField(null=True, blank=True, db_index=True)
+    node_name_snapshot = models.CharField(max_length=200, blank=True, default='')
+    node_sort_no_snapshot = models.PositiveIntegerField(default=0)
 
     class Meta:
         db_table = 'mission_level'
@@ -125,6 +133,10 @@ class MissionQuestionRel(models.Model):
     source_wrong_book_item_id = models.UUIDField(null=True, blank=True, db_index=True)
     source_role = models.CharField(max_length=30, blank=True, default='')
     source_provider = models.CharField(max_length=20, blank=True, default='')
+    # Immutable classroom-practice provenance and node-local display number.
+    source_node_id = models.UUIDField(null=True, blank=True, db_index=True)
+    source_node_name_snapshot = models.CharField(max_length=200, blank=True, default='')
+    node_question_no = models.CharField(max_length=50, blank=True, default='')
 
     class Meta:
         db_table = 'mission_question_rel'
@@ -171,7 +183,12 @@ class TeacherWrongBookMatrix(models.Model):
         db_table = 'teacher_wrongbook_matrix'
         constraints = [
             models.UniqueConstraint(
-                fields=['source_mission'], name='uq_wrongbook_matrix_source_mission',
+                fields=['source_mission'], condition=models.Q(class_obj__isnull=True),
+                name='uq_wrongbook_matrix_source_mission_null_class',
+            ),
+            models.UniqueConstraint(
+                fields=['source_mission', 'class_obj'], condition=models.Q(class_obj__isnull=False),
+                name='uq_wrongbook_matrix_source_mission_class',
             ),
         ]
 
@@ -204,7 +221,11 @@ class TeacherWrongBookMatrixQuestion(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     matrix = models.ForeignKey(TeacherWrongBookMatrix, on_delete=models.CASCADE, related_name='questions')
     source_question_id = models.UUIDField()
-    source_relation = models.ForeignKey(MissionQuestionRel, on_delete=models.CASCADE, related_name='wrongbook_matrix_questions')
+    source_relation = models.ForeignKey(MissionQuestionRel, on_delete=models.SET_NULL, null=True, blank=True, related_name='wrongbook_matrix_questions')
+    source_node_id = models.UUIDField(null=True, blank=True, db_index=True)
+    node_name_snapshot = models.CharField(max_length=200, blank=True, default='')
+    node_sort_no = models.PositiveIntegerField(default=0)
+    node_question_no = models.CharField(max_length=50, blank=True, default='')
     question_no_snapshot = models.CharField(max_length=50, blank=True, default='')
     sort_no = models.PositiveIntegerField(default=0)
     question_snapshot = models.JSONField(default=dict, blank=True)
@@ -229,9 +250,10 @@ class TeacherWrongBookCell(models.Model):
     matrix = models.ForeignKey(TeacherWrongBookMatrix, on_delete=models.CASCADE, related_name='cells')
     student = models.ForeignKey(UserAccount, on_delete=models.CASCADE, related_name='wrongbook_matrix_cells')
     source_question_id = models.UUIDField()
-    source_relation = models.ForeignKey(MissionQuestionRel, on_delete=models.CASCADE, related_name='wrongbook_matrix_cells')
+    source_relation = models.ForeignKey(MissionQuestionRel, on_delete=models.SET_NULL, null=True, blank=True, related_name='wrongbook_matrix_cells')
     wrong_book_item = models.ForeignKey('wrongbook.WrongBookItem', on_delete=models.PROTECT, related_name='teacher_matrix_cells')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='marked')
+    mark_source = models.CharField(max_length=20, choices=[('online', 'online'), ('manual', 'manual'), ('import', 'import')], default='manual')
     marked_by = models.ForeignKey(UserAccount, on_delete=models.SET_NULL, null=True, related_name='marked_wrongbook_cells')
     marked_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
@@ -246,6 +268,34 @@ class TeacherWrongBookCell(models.Model):
                 fields=['matrix', 'student', 'source_question_id'], name='uq_wrongbook_matrix_cell',
             ),
         ]
+        indexes = [
+            models.Index(fields=['matrix', 'mark_source', 'status'], name='idx_twb_cell_src_status'),
+            models.Index(fields=['matrix', 'student', 'status'], name='idx_twb_cell_student_status'),
+        ]
+
+
+class TeacherWrongBookImportBatch(models.Model):
+    """Auditable, all-or-nothing classroom wrong-book import."""
+    STATUS_CHOICES = [('validating', 'validating'), ('succeeded', 'succeeded'), ('failed', 'failed')]
+    id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
+    matrix = models.ForeignKey(TeacherWrongBookMatrix, on_delete=models.CASCADE, related_name='import_batches')
+    uploaded_by = models.ForeignKey(UserAccount, on_delete=models.SET_NULL, null=True, related_name='wrongbook_import_batches')
+    file_name = models.CharField(max_length=255, blank=True, default='')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='validating')
+    sheet_count = models.PositiveIntegerField(default=0)
+    total_cells = models.PositiveIntegerField(default=0)
+    imported_count = models.PositiveIntegerField(default=0)
+    skipped_count = models.PositiveIntegerField(default=0)
+    failed_count = models.PositiveIntegerField(default=0)
+    cancelled_count = models.PositiveIntegerField(default=0)
+    replace_scope = models.CharField(max_length=80, default='offline_students_in_uploaded_nodes')
+    errors = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'teacher_wrongbook_import_batch'
+        ordering = ['-created_at']
 
 
 class WrongBookGenerationBatch(models.Model):
@@ -388,6 +438,7 @@ class TeacherWrongBookMatrixAudit(models.Model):
     ACTION_CHOICES = [
         ('scope_created', 'scope_created'), ('scope_refreshed', 'scope_refreshed'),
         ('mark_saved', 'mark_saved'), ('mark_cancelled', 'mark_cancelled'),
+        ('import_succeeded', 'import_succeeded'), ('import_failed', 'import_failed'),
         ('generation_requested', 'generation_requested'), ('generation_completed', 'generation_completed'),
         ('recommendation_requested', 'recommendation_requested'), ('recommendation_confirmed', 'recommendation_confirmed'),
         ('retry_requested', 'retry_requested'), ('matrix_closed', 'matrix_closed'),

@@ -162,8 +162,13 @@ def _normalize_matrix_question_order(matrix):
 
 @transaction.atomic
 def get_or_create_matrix(mission, teacher, class_id=None, refresh=False):
+    matrix_key = {'source_mission': mission}
+    if class_id:
+        matrix_key['class_obj_id'] = class_id
+    elif mission.class_obj_id:
+        matrix_key['class_obj_id'] = mission.class_obj_id
     matrix, created = TeacherWrongBookMatrix.objects.select_for_update().get_or_create(
-        source_mission=mission,
+        **matrix_key,
         defaults={'creator_teacher': teacher, 'class_obj_id': class_id or mission.class_obj_id},
     )
     if matrix.creator_teacher_id != teacher.id and not can_manage_matrix(mission, teacher):
@@ -249,7 +254,12 @@ def _sync_scope(matrix, teacher, force=False):
         snapshot = _question_snapshot(question)
         row = existing_q.get(question_id)
         values = {
-            'source_relation': rel, 'question_no_snapshot': question.question_no,
+            'source_relation': rel,
+            'source_node_id': rel.source_node_id,
+            'node_name_snapshot': rel.source_node_name_snapshot or getattr(rel.level, 'node_name_snapshot', '') or rel.level.level_name,
+            'node_sort_no': getattr(rel.level, 'node_sort_no_snapshot', 0) or rel.level.level_no,
+            'node_question_no': rel.node_question_no or str(rel.sort_no),
+            'question_no_snapshot': rel.node_question_no or question.question_no,
             'sort_no': rel.sort_no, 'question_snapshot': snapshot, 'status': 'active',
         }
         if row is None:
@@ -304,6 +314,7 @@ def matrix_payload(matrix, class_id=None):
                 'source_question_id': str(question.source_question_id),
                 'wrong': bool(cell and cell.status in ('marked', 'generated', 'locked')),
                 'status': cell.status if cell else 'normal',
+                'mark_source': cell.mark_source if cell else None,
                 'wrong_book_item_id': str(cell.wrong_book_item_id) if cell else None,
             })
         rows.append({
@@ -332,6 +343,9 @@ def matrix_payload(matrix, class_id=None):
         'failed_count': matrix.failed_count, 'students': rows,
         'questions': [{
             'id': str(q.source_question_id), 'question_no': q.question_no_snapshot,
+            'node_question_no': q.node_question_no or q.question_no_snapshot,
+            'node_id': str(q.source_node_id) if q.source_node_id else None,
+            'node_name': q.node_name_snapshot,
             'sort_no': q.sort_no, 'snapshot': q.question_snapshot,
         } for q in questions],
     }
@@ -376,17 +390,18 @@ def save_marks(matrix, teacher, changes, version, trace_id=''):
                 cell = TeacherWrongBookCell.objects.create(
                     matrix=matrix, student_id=student_id, source_question_id=question_id,
                     source_relation=relation,
-                    wrong_book_item=wrong_item, status='marked', marked_by=teacher,
+                    wrong_book_item=wrong_item, status='marked', mark_source='manual', marked_by=teacher,
                     marked_at=now,
                 )
             else:
                 cell.status = 'marked'
+                cell.mark_source = 'manual'
                 cell.wrong_book_item = wrong_item
                 cell.source_relation = relation
                 cell.marked_by = teacher
                 cell.marked_at = now
                 cell.cancelled_at = None
-                cell.save(update_fields=['status', 'wrong_book_item', 'source_relation', 'marked_by', 'marked_at', 'cancelled_at', 'updated_at'])
+                cell.save(update_fields=['status', 'mark_source', 'wrong_book_item', 'source_relation', 'marked_by', 'marked_at', 'cancelled_at', 'updated_at'])
             _audit(matrix, teacher, 'mark_saved', trace_id, payload={'student_id': student_id, 'question_id': question_id})
         elif cell is not None:
             cell.status = 'cancelled'

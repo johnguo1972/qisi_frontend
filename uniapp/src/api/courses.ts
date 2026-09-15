@@ -46,6 +46,8 @@ export const courseApi = {
     courseFetch<any>(`/courses/${id}/collaborators/`, { method: 'POST', body: JSON.stringify(data) }),
   revokeCollaborator: (id: UUID, userId: UUID) =>
     courseFetch<any>(`/courses/${id}/collaborators/${userId}/`, { method: 'DELETE' }),
+  classroomPracticeMissions: (id: UUID) =>
+    courseFetch<any>(`/courses/${id}/classroom-practice-missions`),
 }
 
 // ============================================================

@@ -355,6 +355,31 @@ def _get_course_or_404(course_id):
         raise NotFound(f'课程 {course_id} 不存在')
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def classroom_practice_missions(request, course_id):
+    """List published classroom-practice missions manageable by the teacher."""
+    course = _get_course_or_404(course_id)
+    _check_course_access(course, request.user)
+    from apps.missions.classroom_wrongbook_views import _mission_payload
+    from apps.missions.models import LearningMission
+    from apps.missions.wrongbook_matrix import can_manage_matrix
+
+    missions = LearningMission.objects.filter(
+        course=course, status='published', source_context='course_practice',
+    ).prefetch_related('class_assignments__class_obj', 'levels')
+    rows = [
+        _mission_payload(mission)
+        for mission in missions.order_by('-updated_at', '-created_at')
+        if can_manage_matrix(mission, request.user)
+    ]
+    return Response({
+        'code': 0,
+        'message': 'success',
+        'data': {'course_id': str(course.id), 'missions': rows},
+    })
+
+
 # ============================================================
 # 课程 CRUD
 # ============================================================
@@ -1054,6 +1079,34 @@ def paginate_question_queryset(queryset, request):
         'page_size': page_size,
     }
 
+
+def add_course_question_node_metadata(page_data, links):
+    """Attach every course-tree membership to each paged question.
+
+    The course question endpoint historically returned ``ExamQuestion`` rows,
+    so the response did not contain the ``CourseQuestionLink.tree_node_id``
+    needed by the classroom-practice selector. Keep the existing question
+    shape and add backward-compatible node fields instead of replacing the
+    serializer with link IDs.
+    """
+    question_ids = [str(item.get('id')) for item in page_data['items'] if item.get('id')]
+    node_map = {}
+    if question_ids:
+        rows = links.filter(question_id__in=question_ids).values('question_id', 'tree_node_id')
+        for row in rows:
+            question_id = str(row['question_id'])
+            node_id = row['tree_node_id']
+            if node_id is None:
+                continue
+            node_map.setdefault(question_id, []).append(str(node_id))
+
+    for item in page_data['items']:
+        question_id = str(item.get('id') or '')
+        node_ids = list(dict.fromkeys(node_map.get(question_id, [])))
+        item['tree_node_ids'] = node_ids
+        item['tree_node_id'] = node_ids[0] if node_ids else None
+    return page_data
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def question_list(request, course_id):
@@ -1079,7 +1132,9 @@ def question_list(request, course_id):
         id__in=links.values('question_id'),
     ).annotate(source_document_question_no=Subquery(links.filter(question_id=OuterRef('pk')).values('source_document_question_no')[:1]))
     queryset = apply_course_question_filters(queryset, request.query_params)
-    return Response({'success': True, 'data': paginate_question_queryset(queryset, request)})
+    page_data = paginate_question_queryset(queryset, request)
+    page_data = add_course_question_node_metadata(page_data, links)
+    return Response({'success': True, 'data': page_data})
 
 
 @api_view(['POST'])
@@ -1573,8 +1628,11 @@ def variant_task_reject(request, course_id, task_id):
 @permission_classes([IsAuthenticated])
 def generate_mission(request, course_id):
     """从课程目录节点批量生成任务关卡"""
-    from apps.missions.models import LearningMission, MissionLevel, MissionQuestionRel
+    from apps.missions.models import LearningMission, MissionLevel, MissionQuestionRel, MissionClassAssignment
+    from apps.missions.views import _validate_mission_classes
     from apps.accounts.models import UserAccount
+    from datetime import datetime, time
+    from django.utils.dateparse import parse_date, parse_datetime
     from django.utils import timezone as tz
 
     course = _get_course_or_404(course_id)
@@ -1584,26 +1642,129 @@ def generate_mission(request, course_id):
     mission_name = request.data.get('mission_name', f'{course.name} - 任务')
     level_type = request.data.get('level_type', 'practice')
     pass_rule = request.data.get('pass_rule', {'correct_rate': 0.6})
+    source_type = request.data.get('source_type', 'handout')
+    start_at_value = request.data.get('start_at')
+    end_at_value = request.data.get('end_at', request.data.get('deadline'))
+    class_ids_value = request.data.get('class_ids')
+    question_ids_value = request.data.get('question_ids')
+    source_context = str(request.data.get('source_context') or '').strip()
     class_id = request.data.get('class_id')
-    deadline = request.data.get('deadline')
     handout_id = request.data.get('handout_id')
+    handout_ids_value = request.data.get('handout_ids')
 
-    if class_id and not CourseClass.objects.filter(
-        course=course, class_obj_id=class_id, status='active',
-    ).exists():
-        raise PermissionDenied('只能向已关联到课程的班级发布任务')
+    if source_type != 'handout':
+        raise ValidationError('课堂练习生成作业的题目来源固定为讲义')
 
-    handout = None
-    if handout_id:
+    # ``class_ids`` is the new multi-class contract. Keep the old class_id
+    # contract for existing handout callers and old clients.
+    using_multi_class_contract = class_ids_value is not None
+    if using_multi_class_contract:
+        if not isinstance(class_ids_value, list):
+            raise ValidationError('class_ids 必须是数组')
+        class_ids = class_ids_value
+        classes, class_error = _validate_mission_classes(request.user, class_ids, course)
+        if class_error:
+            raise PermissionDenied(class_error)
+        if not classes:
+            raise ValidationError('请至少选择一个班级')
+    else:
+        classes = []
+        if class_id and not CourseClass.objects.filter(
+            course=course, class_obj_id=class_id, status='active',
+        ).exists():
+            raise PermissionDenied('只能向已关联到课程的班级发布任务')
+
+    using_question_selection = question_ids_value is not None
+    selected_question_ids = []
+    selected_question_order = {}
+    if using_question_selection:
+        if not isinstance(question_ids_value, list):
+            raise ValidationError('question_ids 必须是数组')
+        selected_question_ids = list(dict.fromkeys(str(value) for value in question_ids_value if value))
+        if not selected_question_ids:
+            raise ValidationError('请至少选择一道作业题目')
+        selected_question_order = {
+            question_id: index for index, question_id in enumerate(selected_question_ids, start=1)
+        }
+
+    current_local = tz.localtime(tz.now())
+    default_start = current_local.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def parse_mission_datetime(value, default=None, end_of_day=False):
+        if value in (None, ''):
+            return default
+        parsed = parse_datetime(str(value))
+        if parsed is None:
+            parsed_date = parse_date(str(value))
+            if parsed_date is None:
+                raise ValidationError('日期格式无效，请使用 YYYY-MM-DD')
+            parsed = datetime.combine(parsed_date, time.max if end_of_day else time.min)
+        if tz.is_naive(parsed):
+            parsed = tz.make_aware(parsed, tz.get_current_timezone())
+        return parsed
+
+    start_at = parse_mission_datetime(start_at_value, default=default_start)
+    end_at = parse_mission_datetime(end_at_value, end_of_day=True)
+    if using_multi_class_contract and end_at is None:
+        raise ValidationError('请选择截止日期')
+    if end_at is not None and end_at < start_at:
+        raise ValidationError('截止日期不能早于开始日期')
+
+    handout_ids = []
+    if handout_ids_value is not None:
+        if not isinstance(handout_ids_value, list):
+            raise ValidationError('handout_ids 必须是数组')
+        handout_ids = list(dict.fromkeys(str(value) for value in handout_ids_value if value))
+    elif handout_id:
+        handout_ids = [str(handout_id)]
+
+    handouts = []
+    if handout_ids:
         from apps.handouts.models import Handout
-        try:
-            handout = Handout.objects.get(id=handout_id, course=course, status='published')
-        except (Handout.DoesNotExist, ValueError, TypeError):
-            raise ValidationError('讲义不存在、未发布或不属于当前课程')
-        if not handout.questions.exists():
-            raise ValidationError('讲义至少需要一道题目')
+        handout_rows = list(Handout.objects.filter(
+            id__in=handout_ids, course=course, status='published',
+        ).prefetch_related('questions'))
+        handout_map = {str(row.id): row for row in handout_rows}
+        missing_handout_ids = [value for value in handout_ids if value not in handout_map]
+        if missing_handout_ids:
+            raise ValidationError('存在不存在、未发布或不属于当前课程的讲义')
+        handouts = [handout_map[value] for value in handout_ids]
+        if not any(handout.questions.exists() for handout in handouts):
+            raise ValidationError('所选讲义至少需要一道题目')
 
-    if not node_ids and handout is None:
+    if using_question_selection:
+        if handouts:
+            available_question_ids = {
+                str(value)
+                for handout in handouts
+                for value in handout.questions.values_list('question_id', flat=True)
+            }
+        else:
+            available_links = CourseQuestionLink.objects.filter(
+                course=course, is_deleted=False, question_id__in=selected_question_ids,
+            )
+            if node_ids:
+                available_links = available_links.filter(tree_node_id__in=node_ids)
+            available_question_ids = {
+                str(value) for value in available_links.values_list('question_id', flat=True)
+            }
+        missing_ids = [question_id for question_id in selected_question_ids if question_id not in available_question_ids]
+        if missing_ids:
+            raise ValidationError('所选题目不属于当前课程生成范围')
+
+        # When no node was selected in the UI, use the nodes containing the
+        # explicitly selected questions instead of silently falling back to
+        # root nodes only.
+        if not node_ids and not handouts:
+            node_ids = list(
+                CourseQuestionLink.objects.filter(
+                    course=course, is_deleted=False, question_id__in=selected_question_ids,
+                ).exclude(tree_node_id__isnull=True).values_list('tree_node_id', flat=True).distinct()
+            )
+            if not node_ids:
+                raise ValidationError('所选题目没有对应的课程目录节点')
+
+    if not node_ids and not handouts:
         # 如果未选择节点，使用课程下所有根节点
         node_ids = list(CourseTree.objects.filter(
             course=course, parent=None
@@ -1616,25 +1777,67 @@ def generate_mission(request, course_id):
         mission_name=mission_name,
         creator_teacher_id=request.user,
         status='draft',
-        class_obj_id=class_id if class_id else None,
-        end_at=deadline if deadline else None,
+        class_obj_id=(classes[0].id if classes else (class_id if class_id else None)),
+        start_at=start_at,
+        end_at=end_at,
+        source_type=source_type,
+        source_context=source_context,
+        source_node_ids=[str(value) for value in node_ids],
         course=course,
     )
 
-    if handout is not None:
+    if classes:
+        MissionClassAssignment.objects.bulk_create([
+            MissionClassAssignment(
+                mission=mission,
+                class_obj=class_obj,
+                start_at=start_at,
+                end_at=end_at,
+            )
+            for class_obj in classes
+        ])
+
+    if handouts:
         level = MissionLevel.objects.create(
-            mission=mission, level_no=1, level_name=handout.name,
+            mission=mission,
+            level_no=1,
+            level_name=(handouts[0].name if len(handouts) == 1 else '、'.join(item.name for item in handouts))[:100],
             level_type=level_type, pass_rule_json=pass_rule,
+            node_name_snapshot=(handouts[0].name if len(handouts) == 1 else '、'.join(item.name for item in handouts))[:200],
+            node_sort_no_snapshot=1,
         )
-        for sort_no, handout_question in enumerate(handout.questions.all(), 1):
+        handout_questions = []
+        seen_question_ids = set()
+        for selected_handout in handouts:
+            for handout_question in selected_handout.questions.all():
+                question_id = str(handout_question.question_id)
+                if question_id in seen_question_ids:
+                    continue
+                seen_question_ids.add(question_id)
+                handout_questions.append(handout_question)
+        if using_question_selection:
+            handout_questions = [
+                item for item in handout_questions if str(item.question_id) in selected_question_order
+            ]
+            handout_questions.sort(key=lambda item: selected_question_order[str(item.question_id)])
+        for sort_no, handout_question in enumerate(handout_questions, 1):
             MissionQuestionRel.objects.create(
                 mission=mission, level=level, question_id=handout_question.question_id,
-                sort_no=sort_no, source_type='handout_snapshot',
+                sort_no=selected_question_order.get(str(handout_question.question_id), sort_no),
+                source_type='handout_selected' if using_question_selection else 'handout_snapshot',
                 question_snapshot=handout_question.display_snapshot,
+                source_node_name_snapshot=level.node_name_snapshot,
+                node_question_no=str(selected_question_order.get(str(handout_question.question_id), sort_no)),
             )
         return Response({
             'success': True,
-            'data': {'mission_id': mission.id, 'mission_no': mission.mission_no, 'level_ids': [level.id], 'level_count': 1},
+            'data': {
+                'mission_id': mission.id,
+                'mission_no': mission.mission_no,
+                'level_ids': [level.id],
+                'level_count': 1,
+                'class_ids': [str(item.id) for item in classes] if classes else ([str(class_id)] if class_id else []),
+            },
             'message': '讲义任务创建成功，共 1 个关卡',
         }, status=status.HTTP_201_CREATED)
 
@@ -1652,19 +1855,30 @@ def generate_mission(request, course_id):
             level_name=node.name,
             level_type=level_type,
             pass_rule_json=pass_rule,
+            source_node_id=node.id,
+            node_name_snapshot=node.name,
+            node_sort_no_snapshot=idx,
         )
 
         # 关联节点下的习题
         question_links = CourseQuestionLink.objects.filter(
             course=course, tree_node=node, is_deleted=False
         )
+        if using_question_selection:
+            question_links = [
+                link for link in question_links if str(link.question_id) in selected_question_order
+            ]
+            question_links.sort(key=lambda link: selected_question_order[str(link.question_id)])
         for sort_no, link in enumerate(question_links, 1):
             MissionQuestionRel.objects.create(
                 mission=mission,
                 level=level,
                 question_id=link.question_id,
-                sort_no=sort_no,
-                source_type='course_sync',
+                sort_no=selected_question_order.get(str(link.question_id), sort_no),
+                source_type='course_selected' if using_question_selection else 'course_sync',
+                source_node_id=node.id,
+                source_node_name_snapshot=node.name,
+                node_question_no=str(selected_question_order.get(str(link.question_id), sort_no)),
             )
 
         created_levels.append(level.id)
@@ -1676,9 +1890,60 @@ def generate_mission(request, course_id):
             'mission_no': mission.mission_no,
             'level_ids': created_levels,
             'level_count': len(created_levels),
+            'class_ids': [str(item.id) for item in classes] if classes else ([str(class_id)] if class_id else []),
         },
         'message': f'任务创建成功，共 {len(created_levels)} 个关卡',
     }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def generate_and_publish_mission(request, course_id):
+    """Create and publish a classroom-practice mission in one operation.
+
+    The legacy ``generate-mission`` endpoint intentionally remains a draft
+    creator.  Classroom practice uses this separate endpoint so other mission
+    creation flows keep their existing publish behavior.
+    """
+    from apps.missions.views import mission_publish
+
+    # Keep the database portion atomic: if publication validation or progress
+    # creation fails, do not leave an orphan draft created by this one-click
+    # flow. PDF generation may create an external file before the transaction,
+    # but the mission and all of its relations remain all-or-nothing.
+    with transaction.atomic():
+        # ``generate_mission`` and ``mission_publish`` are DRF-decorated view
+        # callables. Pass the underlying HttpRequest when composing them so
+        # DRF does not try to wrap an already wrapped Request a second time.
+        raw_request = getattr(request, '_request', request)
+        generated = generate_mission(raw_request, course_id)
+        if generated.status_code < 200 or generated.status_code >= 300:
+            transaction.set_rollback(True)
+            return generated
+
+        generated_data = generated.data.get('data') or {}
+        mission_id = generated_data.get('mission_id')
+        if not mission_id:
+            transaction.set_rollback(True)
+            return Response({
+                'code': 500,
+                'message': '作业创建成功但未获取到作业ID，发布失败',
+                'data': None,
+                'trace_id': uuid.uuid4().hex[:16],
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        published = mission_publish(raw_request, mission_id)
+        if published.status_code < 200 or published.status_code >= 300:
+            transaction.set_rollback(True)
+            return published
+
+        published_data = published.data.get('data') or {}
+        return Response({
+            'code': 0,
+            'message': '创建作业并发布成功',
+            'data': {**generated_data, **published_data, 'mission_id': mission_id},
+            'trace_id': uuid.uuid4().hex[:16],
+        }, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])

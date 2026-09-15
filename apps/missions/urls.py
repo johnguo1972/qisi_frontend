@@ -2,6 +2,7 @@ from django.urls import path
 from . import views
 from . import wrongbook_matrix_views as matrix_views
 from .learning_stats_views import mission_learning_stats
+from .classroom_wrongbook_views import classroom_wrongbook_statistics, classroom_wrongbook_import
 
 app_name = 'missions'
 urlpatterns = [
@@ -10,6 +11,8 @@ urlpatterns = [
     # POST/PUT callers must not depend on APPEND_SLASH redirects.
     path('<uuid:mission_id>', views.mission_detail, name='mission-detail-no-slash'),
     path('<uuid:mission_id>/', views.mission_detail, name='mission-detail'),
+    path('<uuid:mission_id>/handout-edit', views.mission_handout_edit, name='mission-handout-edit-no-slash'),
+    path('<uuid:mission_id>/handout-edit/', views.mission_handout_edit, name='mission-handout-edit'),
     path('<uuid:mission_id>/delete', views.mission_delete, name='mission-delete-no-slash'),
     path('<uuid:mission_id>/delete/', views.mission_delete, name='mission-delete'),
     path('<uuid:mission_id>/levels', views.mission_levels, name='mission-levels-no-slash'),
@@ -58,6 +61,8 @@ urlpatterns = [
     path('<uuid:mission_id>/wrongbook-matrix/students/<uuid:student_id>', matrix_views.wrongbook_matrix_student, name='wrongbook-matrix-student'),
     path('<uuid:mission_id>/wrongbook-matrix/refresh-scope', matrix_views.wrongbook_matrix_refresh_scope, name='wrongbook-matrix-refresh-scope'),
     path('<uuid:mission_id>/wrongbook-matrix/close', matrix_views.wrongbook_matrix_close, name='wrongbook-matrix-close'),
+    path('<uuid:mission_id>/classroom-wrongbook-statistics', classroom_wrongbook_statistics, name='classroom-wrongbook-statistics'),
+    path('<uuid:mission_id>/classroom-wrongbook-statistics/import', classroom_wrongbook_import, name='classroom-wrongbook-import'),
     path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>', matrix_views.wrongbook_generation_detail_nested, name='wrongbook-generation-detail-nested'),
     path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/retry', matrix_views.wrongbook_generation_retry_nested, name='wrongbook-generation-retry-nested'),
     path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/recommendations', matrix_views.wrongbook_recommendations_nested, name='wrongbook-recommendations-nested'),

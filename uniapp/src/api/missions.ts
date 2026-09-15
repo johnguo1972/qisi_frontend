@@ -12,6 +12,8 @@ export interface Mission {
   assignment_mode?: 'flat' | 'levels'
   mission_kind?: 'regular' | 'drill' | 'wrongbook_personal'
   source_type?: string
+  source_context?: string
+  source_node_ids?: UUID[]
   class_ids?: UUID[]
   class_names?: string[]
   assignment_summary?: string
@@ -128,4 +130,23 @@ export const missionApi = {
   teacherWrongbookCandidateGroups: (id: UUID, batchId: UUID) => get<any[]>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/candidate-groups`),
   teacherWrongbookCandidateGroupNext: (id: UUID, batchId: UUID, itemId: UUID, data: { excluded_question_ids: string[] }) => post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/candidate-groups/${itemId}/next`, data),
   confirmTeacherWrongbookCandidateGroups: (id: UUID, batchId: UUID, data: { groups: Array<{ student_id: UUID; source_wrong_book_item_id: UUID; candidate_question_ids: UUID[] }>; idempotency_key: string }) => post<any>(`/missions/${id}/wrongbook-matrix/generation/${batchId}/candidate-groups/confirm`, data),
+}
+
+// Dedicated classroom-practice handout editor.  The generic mission editor
+// intentionally remains unchanged for question-bank, wrongbook and AI tasks.
+export const missionHandoutEditApi = {
+  detail: (id: UUID) => get<any>(`/missions/${id}/handout-edit/`),
+  update: (id: UUID, data: {
+    mission_name: string
+    goal_text?: string
+    level_type: string
+    pass_rule: { correct_rate: number }
+    source_type: 'handout'
+    source_context: 'course_practice'
+    node_ids: UUID[]
+    question_ids: UUID[]
+    class_ids: UUID[]
+    start_at?: string
+    end_at: string
+  }) => put<any>(`/missions/${id}/handout-edit/`, data),
 }

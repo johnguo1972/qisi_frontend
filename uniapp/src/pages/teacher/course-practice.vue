@@ -116,7 +116,6 @@
         @ai-mode-c="submitAiMode('C')"
       >
         <template #course-actions>
-          <button class="course-action-btn" @click="goAssignMission">布置作业</button>
           <button class="course-action-btn" @click="showGenerateMission">生成作业</button>
           <button class="course-action-btn" disabled @click="handleDisabledVariantAction">批量生成变式题</button>
         </template>
@@ -248,6 +247,13 @@
       <view class="modal">
         <text class="modal-title">生成任务关卡</text>
         <view class="form-group">
+          <text class="form-label">题目来源</text>
+          <view class="picker-value readonly-picker">
+            <text class="picker-text">讲义（课堂练习）</text>
+            <text class="readonly-hint">固定来源</text>
+          </view>
+        </view>
+        <view class="form-group">
           <text class="form-label">作业名称</text>
           <input class="form-input" v-model="missionForm.name" placeholder="请输入作业名称" />
         </view>
@@ -260,32 +266,160 @@
           </picker>
         </view>
         <view class="form-group">
+          <text class="form-label">已选择节点</text>
+          <view class="picker-value" @click="missionNodePickerVisible = !missionNodePickerVisible">
+            <text :class="selectedNodeIds.length ? 'picker-text' : 'picker-placeholder'">
+              {{ selectedMissionNodeNames || '全部节点（默认，可多选）' }}
+            </text>
+          </view>
+          <view v-if="missionNodePickerVisible" class="mission-class-dropdown" @click.stop>
+            <view
+              v-for="node in missionNodeOptions"
+              :key="node.id"
+              class="mission-class-option mission-node-option"
+              @click="toggleMissionNode(node)"
+            >
+              <text>{{ node.name }}</text>
+              <text class="mission-class-check">{{ selectedNodeIds.includes(String(node.id)) ? '✓' : '' }}</text>
+            </view>
+            <view v-if="missionNodeOptions.length === 0" class="mission-class-empty">暂无课程节点</view>
+            <view class="mission-class-footer">
+              <text>已选 {{ selectedNodeIds.length }} 个节点</text>
+              <button size="mini" type="primary" @click="missionNodePickerVisible = false">完成</button>
+            </view>
+          </view>
+        </view>
+        <view class="form-group">
+          <text class="form-label">作业题目数</text>
+          <view class="picker-value" @click="openMissionQuestionPicker">
+            <text class="picker-text">{{ missionSelectedQuestionIds.length }} / {{ missionQuestionOptions.length }} 题</text>
+            <text class="date-picker-icon">📋</text>
+          </view>
+        </view>
+        <view class="form-group">
           <text class="form-label">通过条件（正确率）</text>
           <input class="form-input" type="number" v-model="missionForm.correctRate" placeholder="0.6" />
         </view>
         <view class="form-group">
-          <text class="form-label">分配班级</text>
-          <picker :range="classList" range-key="name" @change="onClassChange">
-            <view class="picker-value">
-              <text :class="missionForm.classId ? 'picker-text' : 'picker-placeholder'">
-                {{ missionForm.classId ? classList.find(c => c.id === missionForm.classId)?.name : '请选择班级（可选）' }}
-              </text>
+          <text class="form-label">分配班级 *</text>
+          <view class="picker-value" @click="classPickerVisible = !classPickerVisible">
+            <text :class="missionForm.classIds.length ? 'picker-text' : 'picker-placeholder'">
+              {{ selectedMissionClassNames || '请选择班级（可多选）' }}
+            </text>
+          </view>
+          <view v-if="classPickerVisible" class="mission-class-dropdown" @click.stop>
+            <view
+              v-for="cls in classList"
+              :key="cls.id"
+              class="mission-class-option"
+              @click="toggleMissionClass(cls)"
+            >
+              <text>{{ cls.class_name }}</text>
+              <text class="mission-class-check">{{ missionForm.classIds.includes(String(cls.id)) ? '✓' : '' }}</text>
             </view>
-          </picker>
+            <view v-if="classList.length === 0" class="mission-class-empty">暂无可分配班级</view>
+            <view class="mission-class-footer">
+              <text>已选 {{ missionForm.classIds.length }} 个班级</text>
+              <button size="mini" type="primary" @click="classPickerVisible = false">完成</button>
+            </view>
+          </view>
         </view>
         <view class="form-group">
-          <text class="form-label">截止日期</text>
-          <input class="form-input" type="date" v-model="missionForm.deadline" placeholder="选择日期（可选）" />
+          <text class="form-label">开始日期</text>
+          <view class="picker-value readonly-picker">
+            <text class="picker-text">{{ formatMissionDate(missionForm.startAt) }}</text>
+            <text class="readonly-hint">当前日期</text>
+          </view>
         </view>
-        <view class="selected-nodes" v-if="selectedNodeIds.length > 0">
-          <text class="form-label">已选节点（{{ selectedNodeIds.length }}）：</text>
-          <text class="node-list">{{ selectedNodeNames }}</text>
+        <view class="form-group">
+          <text class="form-label">截止日期 *</text>
+          <picker mode="date" :value="missionForm.deadline || localDateString()" @change="onMissionDeadlineChange">
+            <view class="picker-value">
+              <text :class="missionForm.deadline ? 'picker-text' : 'picker-placeholder'">
+                {{ missionForm.deadline || '请选择截止日期' }}
+              </text>
+              <text class="date-picker-icon">📅</text>
+            </view>
+          </picker>
         </view>
         <view class="modal-footer">
           <button size="default" @click="missionDialogVisible = false">取消</button>
           <button size="default" type="primary" @click="confirmGenerateMission">
             确认生成
           </button>
+        </view>
+      </view>
+    </view>
+
+    <!-- Mission question selection dialog -->
+    <view v-if="missionQuestionPickerVisible" class="modal-overlay" @click.self="closeMissionQuestionPicker">
+      <view class="modal question-selection-modal" @click.stop>
+        <text class="modal-title">选择作业题目</text>
+        <view class="question-selection-toolbar">
+          <view class="question-selection-summary">
+            <text>已选 {{ missionSelectedQuestionIds.length }} / {{ missionQuestionOptions.length }} 题</text>
+            <text class="question-selection-hint">拖动 ☷ 调整顺序</text>
+          </view>
+          <view class="question-selection-actions">
+            <button size="mini" @click="selectAllMissionQuestions">全选</button>
+            <button size="mini" @click="clearMissionQuestions">取消全选</button>
+          </view>
+        </view>
+        <view class="mission-question-picker-body">
+          <scroll-view scroll-y class="mission-handout-tree">
+            <view
+              v-if="!selectedNodeIds.length"
+              class="mission-handout-tree-item"
+              :class="{ active: missionQuestionNodeId === '' }"
+              @click="selectMissionQuestionNode('')"
+            >
+              <text>全部节点</text>
+              <text class="mission-handout-count">{{ missionQuestionOptions.length }}</text>
+            </view>
+            <view
+              v-for="node in missionQuestionNodeTree"
+              :key="node.id"
+              class="mission-handout-tree-item"
+              :class="{ active: missionQuestionNodeId === String(node.id) }"
+              @click="selectMissionQuestionNode(String(node.id))"
+            >
+              <text class="mission-handout-tree-name">{{ node.name }}</text>
+              <text class="mission-handout-count">{{ missionQuestionNodeQuestionIds[String(node.id)]?.length || 0 }}</text>
+            </view>
+            <view v-if="missionQuestionNodeTree.length === 0" class="mission-question-empty">暂无课程节点</view>
+          </scroll-view>
+          <view class="mission-question-content">
+            <view v-if="missionQuestionsLoading" class="mission-question-empty">题目加载中...</view>
+            <view v-else-if="missionQuestionOptions.length === 0" class="mission-question-empty">当前生成范围暂无题目</view>
+            <scroll-view v-else scroll-y class="mission-question-list">
+              <view v-for="(question, index) in missionQuestionRows" :key="question.id" class="mission-question-row"
+                    :class="{ 'mission-question-drag-over': missionQuestionDragOverId === question.id }"
+                    :draggable="missionSelectedQuestionIds.includes(question.id)"
+                    @dragstart.stop="startMissionQuestionDrag(question.id)"
+                    @dragover.prevent.stop="dragOverMissionQuestion(question.id)"
+                    @drop.stop="dropMissionQuestion(question.id)"
+                    @dragend.stop="endMissionQuestionDrag">
+                <text v-if="missionSelectedQuestionIds.includes(question.id)" class="mission-question-drag-handle"
+                      title="拖拽调整题目顺序"
+                      @touchstart.stop="startMissionQuestionTouchDrag(question.id)"
+                      @touchmove.stop.prevent="moveMissionQuestionTouchDrag"
+                      @touchend.stop="endMissionQuestionDrag"
+                      @touchcancel.stop="endMissionQuestionDrag">☷</text>
+                <view class="mission-question-main" @click="toggleMissionQuestion(question.id)">
+                  <text class="mission-question-check">{{ missionSelectedQuestionIds.includes(question.id) ? '☑' : '☐' }}</text>
+                  <text class="mission-question-order">{{ missionQuestionOrder(question.id) || '-' }}</text>
+                  <text class="mission-question-stem">{{ question.stem_preview || question.stem || `题目 ${index + 1}` }}</text>
+                </view>
+                <view v-if="missionSelectedQuestionIds.includes(question.id)" class="mission-question-move">
+                  <button size="mini" :disabled="missionQuestionOrder(question.id) <= 1" @click.stop="moveMissionQuestion(question.id, -1)">↑</button>
+                  <button size="mini" :disabled="missionQuestionOrder(question.id) >= missionSelectedQuestionIds.length" @click.stop="moveMissionQuestion(question.id, 1)">↓</button>
+                </view>
+              </view>
+            </scroll-view>
+          </view>
+        </view>
+        <view class="modal-footer">
+          <button size="default" @click="closeMissionQuestionPicker">完成</button>
         </view>
       </view>
     </view>
@@ -690,6 +824,8 @@ interface Question {
   difficulty: number | null
   knowledge_points_display?: Array<{ id?: string; name: string }>
   tags?: string[]
+  tree_node_id?: string | null
+  tree_node_ids?: string[]
   [key: string]: unknown
 }
 
@@ -740,6 +876,9 @@ const allAnswersShown = computed(() => questions.value.length > 0 && questions.v
 
 function normalizeQuestion(item: any): Question {
   const id = String(item?.id || item?.question_id || '')
+  const treeNodeIds = Array.isArray(item?.tree_node_ids)
+    ? item.tree_node_ids.map((value: any) => String(value)).filter(Boolean)
+    : item?.tree_node_id ? [String(item.tree_node_id)] : []
   return {
     ...item,
     id,
@@ -747,6 +886,8 @@ function normalizeQuestion(item: any): Question {
     stem: item?.stem || item?.stem_preview || '',
     tags: Array.isArray(item?.tags) ? item.tags : [],
     knowledge_points_display: Array.isArray(item?.knowledge_points_display) ? item.knowledge_points_display : [],
+    tree_node_id: treeNodeIds[0] || null,
+    tree_node_ids: treeNodeIds,
   }
 }
 
@@ -905,10 +1046,6 @@ function chooseImage() {
       closeAddPanel()
     },
   })
-}
-
-function goAssignMission() {
-  uni.navigateTo({ url: `/pages/teacher/mission-create?courseId=${courseId.value}` })
 }
 
 function importJsonPackage() {
@@ -1714,7 +1851,9 @@ const missionForm = ref({
   levelType: 'practice',
   levelTypeLabel: '练习',
   correctRate: '0.6',
-  classId: null as number | null,
+  sourceType: 'handout',
+  startAt: '',
+  classIds: [] as string[],
   deadline: '',
 })
 
@@ -1726,19 +1865,266 @@ const levelTypeOptions = [
   { label: '测验', value: 'check' },
 ]
 
-const selectedNodeIds = ref<number[]>([])
+const selectedNodeIds = ref<string[]>([])
 const selectedNodeNames = computed(() => {
   return selectedNodeIds.value
     .map(id => {
-      const node = flatTreeToArray(treeNodes.value).find((n: any) => n.id === id)
+      const node = flatTreeToArray(treeNodes.value).find((n: any) => String(n.id) === String(id))
       return node?.name || ''
     })
     .filter(Boolean)
     .join('、')
 })
 
+const missionNodePickerVisible = ref(false)
+const missionNodeOptions = computed(() => flatTreeToArray(treeNodes.value))
+const selectedMissionNodeNames = computed(() => selectedNodeNames.value)
+
+const selectedMissionClassNames = computed(() => {
+  const selected = new Set(missionForm.value.classIds.map(id => String(id)))
+  return classList.value
+    .filter(cls => selected.has(String(cls.id)))
+    .map(cls => cls.class_name)
+    .filter(Boolean)
+    .join('、')
+})
+
+function localDateString(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+function localDateTimeString(date = new Date(), endOfDay = false): string {
+  return `${localDateString(date)}T${endOfDay ? '23:59:59' : '00:00:00'}+08:00`
+}
+
+function formatMissionDate(value: string): string {
+  return value ? value.slice(0, 10) : localDateString()
+}
+
 // 班级列表
 const classList = ref<any[]>([])
+const classPickerVisible = ref(false)
+const missionQuestionPickerVisible = ref(false)
+const missionQuestionsLoading = ref(false)
+const missionQuestionOptions = ref<Question[]>([])
+const missionSelectedQuestionIds = ref<string[]>([])
+const missionQuestionNodeId = ref('')
+const missionQuestionNodeQuestionIds = ref<Record<string, string[]>>({})
+const missionQuestionDragId = ref('')
+const missionQuestionDragOverId = ref('')
+const missionQuestionNodeTree = computed(() => {
+  if (!selectedNodeIds.value.length) return missionNodeOptions.value
+  const selected = new Set(selectedNodeIds.value.map(id => String(id)))
+  return missionNodeOptions.value.filter(node => selected.has(String(node.id)))
+})
+const missionVisibleQuestionIds = computed(() => {
+  if (!missionQuestionNodeId.value) return new Set(missionQuestionOptions.value.map(question => question.id))
+  return new Set(missionQuestionNodeQuestionIds.value[missionQuestionNodeId.value] || [])
+})
+const missionQuestionRows = computed(() => {
+  const questionMap = new Map(missionQuestionOptions.value.map(question => [question.id, question]))
+  const visibleIds = missionVisibleQuestionIds.value
+  const selected = missionSelectedQuestionIds.value
+    .map(id => questionMap.get(id))
+    .filter(question => question && visibleIds.has(question.id))
+    .filter(Boolean) as Question[]
+  const selectedSet = new Set(missionSelectedQuestionIds.value)
+  return [
+    ...selected,
+    ...missionQuestionOptions.value.filter(question => visibleIds.has(question.id) && !selectedSet.has(question.id)),
+  ]
+})
+
+function missionQuestionOrder(id: string): number {
+  const index = missionSelectedQuestionIds.value.indexOf(String(id))
+  return index >= 0 ? index + 1 : 0
+}
+
+let missionQuestionLoadSequence = 0
+
+async function loadCourseMissionQuestions(treeNodeIds: string[]): Promise<Question[]> {
+  const nodeIds = treeNodeIds.length ? treeNodeIds : ['']
+  const uniqueQuestions = new Map<string, Question>()
+  for (const treeNodeId of nodeIds) {
+    const pageSize = 100
+    let page = 1
+    let totalCount = 0
+    do {
+      const query: any = { page, page_size: pageSize }
+      if (treeNodeId) query.tree_node_id = treeNodeId
+      const response: any = await courseQuestionApi.list(courseId.value, query)
+      const pageData = response?.data || {}
+      const items = Array.isArray(pageData.items) ? pageData.items : []
+      for (const item of items) {
+        const question = normalizeQuestion(item)
+        if (question.id) uniqueQuestions.set(question.id, question)
+      }
+      totalCount = Number(pageData.total || uniqueQuestions.size)
+      if (items.length === 0 || page * pageSize >= totalCount) break
+      page += 1
+    } while (page <= 100)
+  }
+  return [...uniqueQuestions.values()]
+}
+
+async function loadMissionQuestionOptions() {
+  if (!courseId.value) return
+  const sequence = ++missionQuestionLoadSequence
+  missionQuestionsLoading.value = true
+  missionQuestionOptions.value = []
+  missionQuestionNodeQuestionIds.value = {}
+  missionSelectedQuestionIds.value = []
+  try {
+    const nodeIds = selectedNodeIds.value.length
+      ? selectedNodeIds.value.map(id => String(id))
+      : ['']
+    const allQuestions = new Map<string, Question>()
+    const nodeQuestionIds: Record<string, string[]> = {}
+    for (const nodeId of nodeIds) {
+      const nodeQuestions = await loadCourseMissionQuestions([nodeId])
+      const ids: string[] = []
+      for (const question of nodeQuestions) {
+        if (!allQuestions.has(question.id)) allQuestions.set(question.id, question)
+        if (!ids.includes(question.id)) ids.push(question.id)
+      }
+      if (nodeId) nodeQuestionIds[nodeId] = ids
+    }
+
+    if (!selectedNodeIds.value.length) {
+      for (const question of allQuestions.values()) {
+        const nodeIds = Array.isArray(question.tree_node_ids)
+          ? question.tree_node_ids
+          : question.tree_node_id ? [question.tree_node_id] : []
+        for (const nodeId of nodeIds) {
+          const normalizedNodeId = String(nodeId)
+          if (!normalizedNodeId) continue
+          if (!nodeQuestionIds[normalizedNodeId]) nodeQuestionIds[normalizedNodeId] = []
+          if (!nodeQuestionIds[normalizedNodeId].includes(question.id)) {
+            nodeQuestionIds[normalizedNodeId].push(question.id)
+          }
+        }
+      }
+    }
+
+    if (sequence !== missionQuestionLoadSequence) return
+    missionQuestionOptions.value = [...allQuestions.values()]
+    missionQuestionNodeQuestionIds.value = nodeQuestionIds
+    missionQuestionNodeId.value = ''
+    missionSelectedQuestionIds.value = missionQuestionOptions.value.map(question => question.id)
+  } catch (e) {
+    if (sequence === missionQuestionLoadSequence) {
+      console.error('加载作业题目失败:', e)
+      uni.showToast({ title: '加载作业题目失败', icon: 'none' })
+    }
+  } finally {
+    if (sequence === missionQuestionLoadSequence) missionQuestionsLoading.value = false
+  }
+}
+
+function openMissionQuestionPicker() {
+  missionQuestionPickerVisible.value = true
+  if (!missionQuestionsLoading.value && missionQuestionOptions.value.length === 0) {
+    void loadMissionQuestionOptions()
+  }
+}
+
+function closeMissionQuestionPicker() {
+  missionQuestionPickerVisible.value = false
+}
+
+function toggleMissionQuestion(id: string) {
+  const questionId = String(id)
+  const index = missionSelectedQuestionIds.value.indexOf(questionId)
+  if (index >= 0) missionSelectedQuestionIds.value.splice(index, 1)
+  else missionSelectedQuestionIds.value.push(questionId)
+}
+
+function selectMissionQuestionNode(nodeId: string) {
+  missionQuestionNodeId.value = String(nodeId || '')
+}
+
+function selectAllMissionQuestions() {
+  const visibleIds = [...missionVisibleQuestionIds.value]
+  const visibleSet = new Set(visibleIds)
+  const retainedIds = missionSelectedQuestionIds.value.filter(id => !visibleSet.has(id))
+  missionSelectedQuestionIds.value = [...retainedIds, ...visibleIds]
+}
+
+function clearMissionQuestions() {
+  const visibleIds = missionVisibleQuestionIds.value
+  missionSelectedQuestionIds.value = missionSelectedQuestionIds.value.filter(id => !visibleIds.has(id))
+}
+
+function startMissionQuestionDrag(id: string) {
+  const questionId = String(id)
+  if (!missionSelectedQuestionIds.value.includes(questionId)) return
+  missionQuestionDragId.value = questionId
+  missionQuestionDragOverId.value = questionId
+}
+
+function dragOverMissionQuestion(id: string) {
+  const questionId = String(id)
+  if (!missionQuestionDragId.value || !missionSelectedQuestionIds.value.includes(questionId)) return
+  missionQuestionDragOverId.value = questionId
+}
+
+function reorderMissionQuestion(dragId: string, targetId: string) {
+  if (!dragId || dragId === targetId || !missionSelectedQuestionIds.value.includes(targetId)) return
+  const next = [...missionSelectedQuestionIds.value]
+  const sourceIndex = next.indexOf(dragId)
+  const targetIndex = next.indexOf(targetId)
+  if (sourceIndex < 0 || targetIndex < 0) return
+  next.splice(sourceIndex, 1)
+  next.splice(targetIndex, 0, dragId)
+  missionSelectedQuestionIds.value = next
+}
+
+function dropMissionQuestion(id: string) {
+  const dragId = missionQuestionDragId.value
+  const targetId = String(id)
+  reorderMissionQuestion(dragId, targetId)
+  endMissionQuestionDrag()
+}
+
+function startMissionQuestionTouchDrag(id: string) {
+  startMissionQuestionDrag(id)
+}
+
+function moveMissionQuestionTouchDrag(event: any) {
+  const dragId = missionQuestionDragId.value
+  const touch = event?.touches?.[0]
+  if (!dragId || !touch) return
+  const touchY = Number(touch.clientY ?? touch.pageY)
+  if (!Number.isFinite(touchY)) return
+
+  uni.createSelectorQuery()
+    .selectAll('.mission-question-row')
+    .boundingClientRect((rects: any[]) => {
+      if (!missionQuestionDragId.value || !Array.isArray(rects)) return
+      const targetIndex = rects.findIndex(rect => touchY >= rect.top && touchY <= rect.bottom)
+      const targetQuestion = targetIndex >= 0 ? missionQuestionRows.value[targetIndex] : undefined
+      if (!targetQuestion || !missionSelectedQuestionIds.value.includes(targetQuestion.id)) return
+      missionQuestionDragOverId.value = targetQuestion.id
+      reorderMissionQuestion(dragId, targetQuestion.id)
+    })
+    .exec()
+}
+
+function endMissionQuestionDrag() {
+  missionQuestionDragId.value = ''
+  missionQuestionDragOverId.value = ''
+}
+
+function moveMissionQuestion(id: string, offset: number) {
+  const currentIndex = missionSelectedQuestionIds.value.indexOf(String(id))
+  const targetIndex = currentIndex + offset
+  if (currentIndex < 0 || targetIndex < 0 || targetIndex >= missionSelectedQuestionIds.value.length) return
+  const next = [...missionSelectedQuestionIds.value]
+  const [movedId] = next.splice(currentIndex, 1)
+  next.splice(targetIndex, 0, movedId)
+  missionSelectedQuestionIds.value = next
+}
 
 function showGenerateMission() {
   missionForm.value = {
@@ -1746,9 +2132,17 @@ function showGenerateMission() {
     levelType: 'practice',
     levelTypeLabel: '练习',
     correctRate: '0.6',
-    classId: null,
+    sourceType: 'handout',
+    startAt: localDateTimeString(),
+    classIds: [],
     deadline: '',
   }
+  classPickerVisible.value = false
+  missionNodePickerVisible.value = false
+  missionQuestionPickerVisible.value = false
+  selectedNodeIds.value = selectedNode.value ? [String(selectedNode.value.id)] : []
+  missionQuestionNodeId.value = ''
+  void loadMissionQuestionOptions()
   // 默认选中当前选中的节点
   selectedNodeIds.value = selectedNode.value ? [selectedNode.value.id] : []
   // 加载班级列表
@@ -1771,6 +2165,15 @@ async function loadClassList() {
   }
 }
 
+function toggleMissionNode(node: TreeNodeData) {
+  const id = String(node?.id || '')
+  if (!id) return
+  const index = selectedNodeIds.value.indexOf(id)
+  if (index >= 0) selectedNodeIds.value.splice(index, 1)
+  else selectedNodeIds.value.push(id)
+  void loadMissionQuestionOptions()
+}
+
 function onLevelTypeChange(e: any) {
   const idx = e.detail.value
   const opt = levelTypeOptions[idx]
@@ -1778,18 +2181,39 @@ function onLevelTypeChange(e: any) {
   missionForm.value.levelTypeLabel = opt.label
 }
 
-function onClassChange(e: any) {
-  const idx = e.detail.value
-  const cls = classList.value[idx]
-  if (cls) {
-    missionForm.value.classId = cls.id
-  }
+function toggleMissionClass(cls: any) {
+  const id = String(cls?.id || '')
+  if (!id) return
+  const selectedIndex = missionForm.value.classIds.indexOf(id)
+  if (selectedIndex >= 0) missionForm.value.classIds.splice(selectedIndex, 1)
+  else missionForm.value.classIds.push(id)
+}
+
+function onMissionDeadlineChange(e: any) {
+  const value = String(e?.detail?.value || '')
+  if (value) missionForm.value.deadline = value
 }
 
 async function confirmGenerateMission() {
+  if (!missionForm.value.classIds.length) {
+    uni.showToast({ title: '请选择至少一个班级', icon: 'none' })
+    return
+  }
+  if (!missionForm.value.deadline) {
+    uni.showToast({ title: '请选择截止日期', icon: 'none' })
+    return
+  }
+  if (missionQuestionsLoading.value) {
+    uni.showToast({ title: '题目加载中，请稍候', icon: 'none' })
+    return
+  }
+  if (!missionSelectedQuestionIds.value.length) {
+    uni.showToast({ title: '请至少选择一道作业题目', icon: 'none' })
+    return
+  }
   const token = uni.getStorageSync('accessToken')
   try {
-    const response = await fetch(`/api/v1/courses/${courseId.value}/generate-mission/`, {
+    const response = await fetch(`/api/v1/courses/${courseId.value}/generate-mission-and-publish/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1800,8 +2224,12 @@ async function confirmGenerateMission() {
         mission_name: missionForm.value.name,
         level_type: missionForm.value.levelType,
         pass_rule: { correct_rate: parseFloat(missionForm.value.correctRate) || 0.6 },
-        class_id: missionForm.value.classId,
-        deadline: missionForm.value.deadline || null,
+        source_type: missionForm.value.sourceType,
+        source_context: 'course_practice',
+        start_at: missionForm.value.startAt || localDateTimeString(),
+        end_at: `${missionForm.value.deadline}T23:59:59+08:00`,
+        class_ids: missionForm.value.classIds,
+        question_ids: missionSelectedQuestionIds.value,
       }),
     })
 
@@ -1810,7 +2238,7 @@ async function confirmGenerateMission() {
       throw new Error(data.message || '生成作业失败')
     }
 
-    uni.showToast({ title: data.message || '作业生成成功', icon: 'success' })
+    uni.showToast({ title: '创建作业并发布成功,请在工作台中查看', icon: 'success' })
     missionDialogVisible.value = false
   } catch (e: any) {
     console.error('生成作业失败:', e)
@@ -2527,6 +2955,239 @@ onUnmounted(() => {
 .picker-placeholder {
   font-size: 13px;
   color: #c0c4cc;
+}
+
+.readonly-picker {
+  justify-content: space-between;
+  background: #f8f9fb;
+}
+
+.readonly-hint {
+  margin-left: 8px;
+  color: #909399;
+  font-size: 12px;
+}
+
+.date-picker-icon {
+  margin-left: auto;
+  font-size: 16px;
+}
+
+.mission-class-dropdown {
+  margin-top: 6px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.mission-class-option,
+.mission-class-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 36px;
+  padding: 0 8px;
+  font-size: 13px;
+}
+
+.mission-class-option:active {
+  background: #f5f7fa;
+}
+
+.mission-class-check {
+  color: #409eff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.mission-class-empty {
+  padding: 16px 8px;
+  color: #909399;
+  font-size: 13px;
+  text-align: center;
+}
+
+.mission-class-footer {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #ebeef5;
+  color: #909399;
+}
+
+.question-selection-modal {
+  width: min(860px, calc(100vw - 32px));
+  max-height: 80vh;
+}
+
+.question-selection-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  color: #606266;
+  font-size: 13px;
+}
+
+.question-selection-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.question-selection-hint {
+  color: #909399;
+  font-size: 12px;
+}
+
+.mission-question-picker-body {
+  display: flex;
+  min-height: 360px;
+  gap: 12px;
+}
+
+.mission-handout-tree {
+  width: 210px;
+  flex-shrink: 0;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  background: #fafbfc;
+}
+
+.mission-handout-tree-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 0 10px;
+  border-bottom: 1px solid #f0f2f5;
+  color: #606266;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mission-handout-tree-item:last-child {
+  border-bottom: 0;
+}
+
+.mission-handout-tree-item.active {
+  background: #ecf5ff;
+  color: #409eff;
+  font-weight: 500;
+}
+
+.mission-handout-tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-handout-count {
+  margin-left: 8px;
+  color: #909399;
+  font-size: 12px;
+}
+
+.mission-question-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.question-selection-actions,
+.mission-question-move {
+  display: flex;
+  gap: 6px;
+}
+
+.mission-question-list {
+  width: 100%;
+  height: 360px;
+  max-height: 52vh;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+}
+
+.mission-node-option {
+  padding-left: 12px;
+}
+
+.mission-question-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 8px;
+  border-bottom: 1px solid #f0f2f5;
+  transition: background-color 0.15s ease;
+}
+
+.mission-question-row:last-child {
+  border-bottom: 0;
+}
+
+.mission-question-row[draggable="true"] {
+  cursor: grab;
+}
+
+.mission-question-row[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.mission-question-drag-over {
+  background: #ecf5ff;
+  box-shadow: inset 0 2px 0 #409eff;
+}
+
+.mission-question-drag-handle {
+  width: 20px;
+  color: #909399;
+  font-size: 18px;
+  line-height: 20px;
+  text-align: center;
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.mission-question-main {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 6px;
+}
+
+.mission-question-check {
+  width: 20px;
+  color: #409eff;
+  font-size: 16px;
+}
+
+.mission-question-order {
+  width: 28px;
+  color: #909399;
+  font-size: 12px;
+  text-align: center;
+}
+
+.mission-question-stem {
+  flex: 1;
+  overflow: hidden;
+  color: #303133;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-question-empty {
+  padding: 28px 8px;
+  color: #909399;
+  font-size: 13px;
+  text-align: center;
 }
 
 .modal-footer {

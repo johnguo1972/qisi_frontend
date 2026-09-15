@@ -47,6 +47,7 @@
           <text class="col col-name">作业名称</text>
           <text class="col col-class">班级</text>
           <text class="col col-questions">题目数</text>
+          <text class="col col-source">题目来源</text>
           <text class="col col-progress">完成进度</text>
           <!-- <text class="col col-levels">关卡数</text> -->
           <text class="col col-start">开始时间</text>
@@ -58,8 +59,9 @@
         <scroll-view scroll-y class="table-body">
           <view v-for="m in filteredMissions" :key="m.id" class="table-row">
             <text class="col col-name" @click="goMissionDetail(m.id)">{{ m.mission_name }}</text>
-            <text class="col col-class">{{ m.class_name || '-' }}</text>
+            <text class="col col-class">{{ m.class_names?.length ? m.class_names.join('、') : (m.class_name || '-') }}</text>
             <text class="col col-questions">{{ m.question_count || 0 }}</text>
+            <text class="col col-source">{{ sourceTypeText(m) }}</text>
             <text class="col col-progress progress-link" @click.stop="goMissionProgress(m.id)">{{ completionText(m) }}</text>
             <!-- <text class="col col-levels">{{ m.level_count || 0 }}</text> -->
             <text class="col col-start">{{ formatDate(m.start_at) }}</text>
@@ -69,7 +71,11 @@
             </view>
             <view class="col col-actions">
               <text class="action-btn action-view" @click="goMissionDetail(m.id)">查看</text>
-              <text class="action-btn action-edit" @click="goEdit(m.id)">编辑</text>
+              <template v-if="isClassroomPractice(m)">
+                <text class="action-btn action-view" @click.stop="goClassroomWrongbook(m)">错题统计</text>
+                <text class="action-btn action-view" @click.stop="showClassroomFeedback">课堂反馈</text>
+              </template>
+              <text class="action-btn action-edit" @click="goEdit(m)">编辑</text>
               <text v-if="m.status === 'draft'" class="action-btn action-publish" @click.stop="publishMission(m)">发布</text>
               <text v-if="m.status === 'draft'" class="action-btn action-delete" @click="confirmDelete(m)">删除</text>
             </view>
@@ -86,8 +92,8 @@ import { missionApi, type Mission } from '@/api/missions.ts'
 import { classApi } from '@/api/institutions.ts'
 
 interface MissionExtended extends Mission {
-  class_name?: string
-  class_obj?: number
+  class_name?: string | null
+  class_obj?: number | string | null
   question_count?: number
 }
 
@@ -129,11 +135,26 @@ async function loadMissions() {
   loading.value = true
   try {
     const res = await missionApi.list(unfinishedOnly.value ? { unfinished: true } : undefined)
-    missions.value = res.data || []
+    missions.value = (Array.isArray(res.data) ? res.data : []).map(normalizeMission)
   } catch (e) {
     console.error('Failed to load missions:', e)
   } finally {
     loading.value = false
+  }
+}
+
+function normalizeMission(item: Mission): MissionExtended {
+  const legacyClassId = (item as MissionExtended).class_obj
+  const classIds = Array.isArray(item.class_ids) && item.class_ids.length
+    ? item.class_ids.map(value => String(value))
+    : legacyClassId ? [String(legacyClassId)] : []
+  const classNames = Array.isArray(item.class_names) && item.class_names.length
+    ? item.class_names.filter(Boolean)
+    : item.class_name ? [item.class_name] : []
+  return {
+    ...item,
+    class_ids: classIds as Mission['class_ids'],
+    class_names: classNames,
   }
 }
 
@@ -158,7 +179,7 @@ const filteredMissions = computed(() => {
   // 班级筛选
   const classFilter = classList.value[classFilterIndex.value]
   if (classFilter && classFilter.id !== 0) {
-    list = list.filter(m => m.class_obj === classFilter.id)
+    list = list.filter(m => m.class_ids?.includes(String(classFilter.id)) || m.class_obj === classFilter.id)
   }
 
   // 状态筛选
@@ -192,6 +213,20 @@ function statusText(status: string): string {
     closed: '已关闭', archived: '已归档'
   }
   return map[status] || status
+}
+
+function sourceTypeText(mission: MissionExtended): string {
+  if (mission.source_type === 'handout' && mission.source_context === 'course_practice') {
+    return '讲义（课堂练习）'
+  }
+  const map: Record<string, string> = {
+    question_bank: '题库',
+    handout: '讲义',
+    wrongbook: '错题本',
+    ai_recommendation: 'AI推荐',
+    teacher_matrix: '错题练习',
+  }
+  return map[mission.source_type || ''] || mission.source_type || '-'
 }
 
 function formatDate(dateStr: string | null): string {
@@ -230,10 +265,28 @@ function toggleUnfinished() {
 }
 
 // 导航
-function goMissionDetail(id: number) { uni.navigateTo({ url: `/pages/teacher/mission-detail?id=${id}` }) }
-function goMissionProgress(id: number) { uni.navigateTo({ url: `/pages/teacher/mission-progress?id=${id}` }) }
-function goEdit(id: number) { uni.navigateTo({ url: `/pages/teacher/mission-create?id=${id}` }) }
+function goMissionDetail(id: number | string) { uni.navigateTo({ url: `/pages/teacher/mission-detail?id=${id}` }) }
+function goMissionProgress(id: number | string) { uni.navigateTo({ url: `/pages/teacher/mission-progress?id=${id}` }) }
+function goEdit(mission: MissionExtended) {
+  const isCoursePracticeHandout = mission.source_type === 'handout'
+    && mission.source_context === 'course_practice'
+  const page = isCoursePracticeHandout
+    ? '/pages/teacher/mission-handout-edit'
+    : '/pages/teacher/mission-create'
+  uni.navigateTo({ url: `${page}?id=${mission.id}` })
+}
 function goCreate() { uni.navigateTo({ url: '/pages/teacher/mission-create' }) }
+function isClassroomPractice(mission: MissionExtended) {
+  return mission.source_context === 'course_practice' && mission.source_type === 'handout'
+}
+function goClassroomWrongbook(mission: MissionExtended) {
+  const ids = (mission.class_ids || []).map(String)
+  const suffix = ids.length === 1 ? `&class_id=${ids[0]}` : ''
+  uni.navigateTo({ url: `/pages/teacher/classroom-wrongbook-statistics?mission_id=${mission.id}${suffix}` })
+}
+function showClassroomFeedback() {
+  uni.showToast({ title: '课堂反馈功能将在下次开发', icon: 'none' })
+}
 
 async function publishMission(m: MissionExtended) {
   if (publishingMissionId.value) return
@@ -388,7 +441,7 @@ function confirmDelete(m: MissionExtended) {
 .table-header {
   display: flex;
   align-items: center;
-  min-width: 1180px;
+  min-width: 1410px;
   padding: 16rpx 20rpx;
   background: #f5f7fa;
   border-bottom: 1rpx solid #eee;
@@ -399,13 +452,13 @@ function confirmDelete(m: MissionExtended) {
 
 /* 表格内容 */
 .table-body {
-  min-width: 1180px;
+  min-width: 1410px;
   max-height: 70vh;
 }
 .table-row {
   display: flex;
   align-items: center;
-  min-width: 1180px;
+  min-width: 1410px;
   padding: 16rpx 20rpx;
   border-bottom: 1rpx solid #f0f0f0;
   font-size: 24rpx;
@@ -424,6 +477,7 @@ function confirmDelete(m: MissionExtended) {
 .col-name:hover { color: #409eff; }
 .col-class { flex: 1 1 180px; min-width: 180px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-questions { flex-basis: 90px; width: 90px; text-align: center; color: #666; }
+.col-source { flex-basis: 130px; width: 130px; text-align: center; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-progress { flex-basis: 150px; width: 150px; text-align: center; color: #666; white-space: nowrap; }
 .progress-link { color: #409eff; cursor: pointer; }
 .col-levels { flex-basis: 90px; width: 90px; text-align: center; color: #666; }

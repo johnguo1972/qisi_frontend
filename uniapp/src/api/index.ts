@@ -18,7 +18,7 @@ export const authApi = {
 
 export { institutionApi, classApi, studentClassApi, teacherApi } from './institutions'
 export { questionApi } from './questions'
-export { missionApi } from './missions'
+export { missionApi, missionHandoutEditApi } from './missions'
 export { practiceApi } from './student'
 export const wechatLogin = (code: string) => post<any>('/auth/wechat-login', { code })
 export const wechatBind = (data: any) => post<any>('/auth/wechat-bind', data)
@@ -41,3 +41,4 @@ export const studentParentApi = {
     post(`/student/parent-bind-requests/${bindId}/decision`, { decision }),
 }
 export { courseApi, materialApi, treeApi, courseQuestionApi, variantApi } from './courses'
+export { classroomWrongbookApi } from './classroom-wrongbook'

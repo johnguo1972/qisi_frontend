@@ -127,6 +127,9 @@ CELERY_TASK_ROUTES = {
     'apps.study.tasks.prepare_guidance_content': {'queue': 'ai.guidance'},
     'apps.study.document_import_tasks.process_document_import_task': {'queue': 'document.import'},
 }
+CELERY_IMPORTS = (
+    'apps.study.document_import_tasks',
+)
 
 CELERY_BEAT_SCHEDULE = {
     'ai-queue-recovery': {

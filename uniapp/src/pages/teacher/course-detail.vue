@@ -15,6 +15,8 @@
           <button class="btn secondary" @click="openEdit">编辑课程</button>
           <button class="btn secondary" @click="goMaterials">课程资料</button>
           <button class="btn primary" @click="goPractice">课程练习</button>
+          <button class="btn secondary" @click="goClassroomWrongbook">错题统计</button>
+          <button class="btn secondary" @click="showClassroomFeedback">课堂反馈</button>
         </view>
       </view>
 
@@ -120,6 +122,20 @@
                 <view class="action-copy">
                   <text class="action-title">课程练习</text>
                   <text class="action-desc">管理课程习题、目录和布置作业</text>
+                </view>
+                <text class="action-arrow">›</text>
+              </view>
+              <view class="action-item no-icon" @click="goClassroomWrongbook">
+                <view class="action-copy">
+                  <text class="action-title">错题统计</text>
+                  <text class="action-desc">查看课堂练习中各节点、学生和题号的错题情况</text>
+                </view>
+                <text class="action-arrow">›</text>
+              </view>
+              <view class="action-item no-icon" @click="showClassroomFeedback">
+                <view class="action-copy">
+                  <text class="action-title">课堂反馈</text>
+                  <text class="action-desc">功能将在下次开发</text>
                 </view>
                 <text class="action-arrow">›</text>
               </view>
@@ -334,6 +350,27 @@ function goPractice() {
   uni.navigateTo({ url: `/pages/teacher/course-practice?id=${courseId.value}` })
 }
 
+async function goClassroomWrongbook() {
+  try {
+    const response: any = await courseApi.classroomPracticeMissions(courseId.value as any)
+    const rows = response?.data?.missions || response?.data?.data?.missions || []
+    if (rows.length === 1) {
+      uni.navigateTo({ url: `/pages/teacher/classroom-wrongbook-statistics?mission_id=${rows[0].mission_id}` })
+    } else if (rows.length > 1) {
+      uni.navigateTo({ url: `/pages/teacher/classroom-practice-select?course_id=${courseId.value}` })
+    } else {
+      uni.showToast({ title: '当前课程暂无已发布的课堂练习', icon: 'none' })
+    }
+  } catch (error) {
+    console.error('加载课堂练习失败:', error)
+    uni.showToast({ title: '加载课堂练习失败', icon: 'none' })
+  }
+}
+
+function showClassroomFeedback() {
+  uni.showToast({ title: '课堂反馈功能将在下次开发', icon: 'none' })
+}
+
 function openEdit() {
   if (!course.value) return
   editForm.name = course.value.name || ''
@@ -502,6 +539,7 @@ onLoad((options: any) => {
 .action-list { padding-top: 8rpx; }
 .action-item { display: flex; align-items: center; gap: 18rpx; padding: 24rpx 4rpx; border-bottom: 1rpx solid #f0f0f0; cursor: pointer; }
 .action-item:last-child { border-bottom: none; }
+.action-item.no-icon { padding-left: 58rpx; }
 .action-icon { font-size: 36rpx; }
 .action-copy { flex: 1; min-width: 0; }
 .action-title, .action-desc { display: block; }
@@ -510,6 +548,8 @@ onLoad((options: any) => {
 .action-arrow { color: #c0c4cc; font-size: 40rpx; font-weight: 300; }
 
 .modal-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .5); }
+:global(.uni-picker-container),
+:global(.uni-picker-container .uni-picker-custom) { z-index: 2000 !important; }
 .modal { width: 680rpx; max-width: calc(100vw - 48rpx); box-sizing: border-box; padding: 36rpx; border-radius: 16rpx; background: #fff; }
 .modal-title { display: block; margin-bottom: 28rpx; color: #303133; font-size: 32rpx; font-weight: 600; }
 .form-row { display: flex; gap: 20rpx; }

@@ -30,6 +30,8 @@
           @click="handleCourseClick"
           @materials="handleMaterials"
           @practice="handlePractice"
+          @wrongbook="handleWrongbook"
+          @feedback="handleFeedback"
           @delete="handleDeleteConfirm"
         />
       </view>
@@ -52,7 +54,7 @@
           <view class="form-group half">
             <text class="form-label">学科 <text class="required">*</text></text>
             <view class="subject-picker-wrap">
-              <view class="form-select" @click.stop="toggleSubjectDropdown">{{ createForm.subject || '请选择学科' }}</view>
+              <view class="form-select" @click.stop="toggleSubjectDropdown">{{ selectedSubjectLabel }}</view>
               <view v-if="subjectDropdownOpen" class="subject-dropdown" @click.stop>
                 <view
                   v-for="option in subjectOptions"
@@ -195,6 +197,27 @@ function handlePractice(course: Course) {
   })
 }
 
+async function handleWrongbook(course: Course) {
+  try {
+    const response: any = await courseApi.classroomPracticeMissions(String(course.id) as any)
+    const rows = response?.data?.missions || response?.data?.data?.missions || []
+    if (rows.length === 1) {
+      uni.navigateTo({ url: `/pages/teacher/classroom-wrongbook-statistics?mission_id=${rows[0].mission_id}` })
+    } else if (rows.length > 1) {
+      uni.navigateTo({ url: `/pages/teacher/classroom-practice-select?course_id=${course.id}` })
+    } else {
+      uni.showToast({ title: '当前课程暂无已发布的课堂练习', icon: 'none' })
+    }
+  } catch (error) {
+    console.error('加载课堂练习失败:', error)
+    uni.showToast({ title: '加载课堂练习失败', icon: 'none' })
+  }
+}
+
+function handleFeedback() {
+  uni.showToast({ title: '课堂反馈功能将在下次开发', icon: 'none' })
+}
+
 // ============================================================
 // Create dialog
 // ============================================================
@@ -220,6 +243,10 @@ const subjectOptions = [
   { value: 'geography', label: '\u5730\u7406' },
   { value: 'history', label: '\u5386\u53f2' },
 ]
+
+const selectedSubjectLabel = computed(() => {
+  return subjectOptions.find(option => option.value === createForm.value.subject)?.label || '请选择学科'
+})
 
 const gradeOptions = [
   { value: '一年级', label: '一年级' },

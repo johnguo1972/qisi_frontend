@@ -47,7 +47,8 @@
         </view>
         <view class="card-actions">
           <button size="mini" @click.stop="goMissionLearningStats(m.id)">学情统计</button>
-          <button size="mini" @click.stop="goWrongbookStats(m.id)">错题统计</button>
+          <button size="mini" @click.stop="goWrongbookStats(m)">错题统计</button>
+          <button v-if="isClassroomPractice(m)" size="mini" @click.stop="showClassroomFeedback">课堂反馈</button>
           <button size="mini" @click.stop="goGradeMission(m.id)">批改作业</button>
         </view>
       </view>
@@ -162,8 +163,22 @@ function goMissionLearningStats(id: string) {
   uni.navigateTo({ url: `/pages/teacher/mission-learning-stats?missionId=${id}` })
 }
 
-function goWrongbookStats(id: string) {
-  uni.navigateTo({ url: `/pages/teacher/wrongbook-matrix?missionId=${id}` })
+function isClassroomPractice(mission: Mission) {
+  return mission.source_context === 'course_practice' && mission.source_type === 'handout'
+}
+
+function goWrongbookStats(mission: Mission) {
+  if (isClassroomPractice(mission)) {
+    const ids = (mission.class_ids || []).map(String)
+    const suffix = ids.length === 1 ? `&class_id=${ids[0]}` : ''
+    uni.navigateTo({ url: `/pages/teacher/classroom-wrongbook-statistics?mission_id=${mission.id}${suffix}` })
+    return
+  }
+  uni.navigateTo({ url: `/pages/teacher/wrongbook-matrix?missionId=${mission.id}` })
+}
+
+function showClassroomFeedback() {
+  uni.showToast({ title: '课堂反馈功能将在下次开发', icon: 'none' })
 }
 </script>
 
