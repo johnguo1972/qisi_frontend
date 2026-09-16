@@ -12,6 +12,11 @@ from docx.oxml.ns import qn
 
 from apps.study.document_import_service import (
     DocumentValidationError,
+    MAX_DOCUMENT_BYTES,
+    MAX_DOCUMENT_PAGES,
+    MAX_DOCX_ARCHIVE_MEMBERS,
+    MAX_DOCX_MEMBER_BYTES,
+    MAX_DOCX_UNCOMPRESSED_BYTES,
     extract_document,
     validate_document_upload,
 )
@@ -22,18 +27,18 @@ def make_upload(name, content, content_type):
 
 
 def _over_limit_text():
-    return ''.join(f'{value:06x}' for value in range(26_667))
+    return ''.join(f'{value:06x}' for value in range(133_334))
 
 
 class SizeLyingUpload:
-    """A stream whose metadata says 1 byte but that contains over 100 MiB."""
+    """A stream whose metadata says 1 byte but that contains over 200 MiB."""
 
     name = 'stream.pdf'
     size = 1
 
     def __init__(self):
         self._position = 0
-        self._length = 100 * 1024 * 1024 + 1
+        self._length = 200 * 1024 * 1024 + 1
 
     def seek(self, position):
         self._position = position
@@ -57,11 +62,11 @@ def _repeated_image_docx(tmp_path):
     document_path = tmp_path / 'repeated-image.docx'
     document = Document()
     document.add_paragraph('1. Repeated image question')
-    for _ in range(101):
+    for _ in range(501):
         document.add_picture(str(image_path))
     document.save(document_path)
     with ZipFile(document_path) as archive:
-        assert archive.read('word/document.xml').count(b'r:embed=') == 101
+        assert archive.read('word/document.xml').count(b'r:embed=') == 501
     return document_path
 
 
@@ -120,6 +125,15 @@ def _docx_with_safe_member_count(tmp_path, member_count):
     return document_path
 
 
+def test_document_import_limits_match_large_paper_policy():
+    """The configured limits permit the agreed large-paper import envelope."""
+    assert MAX_DOCUMENT_BYTES == 200 * 1024 * 1024
+    assert MAX_DOCUMENT_PAGES == 500
+    assert MAX_DOCX_ARCHIVE_MEMBERS == 15_000
+    assert MAX_DOCX_MEMBER_BYTES == 100 * 1024 * 1024
+    assert MAX_DOCX_UNCOMPRESSED_BYTES == 500 * 1024 * 1024
+
+
 def test_validate_document_rejects_docx_named_pdf():
     """Changing a PDF filename to .docx must not bypass type validation."""
     upload = make_upload('fake.docx', b'%PDF-1.7', 'application/pdf')
@@ -136,12 +150,12 @@ def test_validate_document_rejects_legacy_doc_extension():
         validate_document_upload(upload)
 
 
-def test_validate_document_rejects_file_larger_than_100_mb():
+def test_validate_document_rejects_file_larger_than_200_mb():
     """The declared upload size is checked before expensive document parsing."""
     upload = make_upload('large.pdf', b'%PDF-1.7', 'application/pdf')
-    upload.size = 100 * 1024 * 1024 + 1
+    upload.size = 200 * 1024 * 1024 + 1
 
-    with pytest.raises(DocumentValidationError, match='100MB'):
+    with pytest.raises(DocumentValidationError, match='200MB'):
         validate_document_upload(upload)
 
 
@@ -149,12 +163,12 @@ def test_validate_document_rejects_pdf_over_page_limit(tmp_path):
     """An over-limit PDF is rejected at upload validation, before it is queued."""
     pdf_path = tmp_path / 'too-many-pages.pdf'
     pdf = canvas.Canvas(str(pdf_path), pagesize=letter)
-    for _ in range(101):
+    for _ in range(501):
         pdf.drawString(72, 720, '1. A numbered question')
         pdf.showPage()
     pdf.save()
 
-    with pytest.raises(DocumentValidationError, match='100 页'):
+    with pytest.raises(DocumentValidationError, match='500 页'):
         validate_document_upload(make_upload('too-many-pages.pdf', pdf_path.read_bytes(), 'application/pdf'))
 
 
@@ -165,16 +179,16 @@ def test_validate_document_rejects_docx_over_equivalent_page_limit(tmp_path):
     document.add_paragraph('1. ' + _over_limit_text())
     document.save(document_path)
 
-    with pytest.raises(DocumentValidationError, match='100 页'):
+    with pytest.raises(DocumentValidationError, match='500 页'):
         validate_document_upload(make_upload(
             'too-large.docx', document_path.read_bytes(),
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         ))
 
 
-def test_validate_document_rejects_size_lying_stream_over_100_mb():
+def test_validate_document_rejects_size_lying_stream_over_200_mb():
     """The upload byte stream, not caller-controlled metadata, enforces the size cap."""
-    with pytest.raises(DocumentValidationError, match='100MB'):
+    with pytest.raises(DocumentValidationError, match='200MB'):
         validate_document_upload(SizeLyingUpload())
 
 
@@ -182,7 +196,7 @@ def test_validate_document_counts_each_reused_docx_image_reference(tmp_path):
     """Every displayed image counts even when the DOCX reuses one relationship target."""
     document_path = _repeated_image_docx(tmp_path)
 
-    with pytest.raises(DocumentValidationError, match='100 页'):
+    with pytest.raises(DocumentValidationError, match='500 页'):
         validate_document_upload(make_upload(
             'repeated-image.docx', document_path.read_bytes(),
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -191,7 +205,7 @@ def test_validate_document_counts_each_reused_docx_image_reference(tmp_path):
 
 def test_extract_document_counts_each_reused_docx_image_reference(tmp_path):
     """Path-based extraction applies the same repeated-image quota as upload validation."""
-    with pytest.raises(DocumentValidationError, match='100 页'):
+    with pytest.raises(DocumentValidationError, match='500 页'):
         extract_document(_repeated_image_docx(tmp_path))
 
 
@@ -216,7 +230,7 @@ def test_validate_document_counts_nested_table_text_and_table_count(tmp_path):
     """Nested table content contributes to the upload-time DOCX equivalent page limit."""
     document_path = _nested_table_over_limit_docx(tmp_path)
 
-    with pytest.raises(DocumentValidationError, match='100 页'):
+    with pytest.raises(DocumentValidationError, match='500 页'):
         validate_document_upload(make_upload(
             'nested-table-over-limit.docx', document_path.read_bytes(),
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -225,7 +239,7 @@ def test_validate_document_counts_nested_table_text_and_table_count(tmp_path):
 
 def test_extract_document_counts_nested_table_text_and_table_count(tmp_path):
     """Nested table content contributes to the path-based DOCX equivalent page limit."""
-    with pytest.raises(DocumentValidationError, match='100 页'):
+    with pytest.raises(DocumentValidationError, match='500 页'):
         extract_document(_nested_table_over_limit_docx(tmp_path))
 
 
@@ -255,16 +269,16 @@ def test_extract_pdf_slices_questions_and_binds_assets(pdf_fixture):
     assert document.fragments[0].page_range == (1, 1)
 
 
-def test_extract_pdf_rejects_more_than_100_pages(tmp_path):
+def test_extract_pdf_rejects_more_than_500_pages(tmp_path):
     """Page limits are enforced before a large PDF can enter AI processing."""
     pdf_path = tmp_path / 'too-many-pages.pdf'
     pdf = canvas.Canvas(str(pdf_path), pagesize=letter)
-    for _ in range(101):
+    for _ in range(501):
         pdf.drawString(72, 720, '1. A numbered question')
         pdf.showPage()
     pdf.save()
 
-    with pytest.raises(DocumentValidationError, match='100 页'):
+    with pytest.raises(DocumentValidationError, match='500 页'):
         extract_document(pdf_path)
 
 
@@ -286,7 +300,7 @@ def test_extract_docx_rejects_equivalent_page_count_above_limit(tmp_path):
     document.add_paragraph('1. ' + _over_limit_text())
     document.save(document_path)
 
-    with pytest.raises(DocumentValidationError, match='100 页'):
+    with pytest.raises(DocumentValidationError, match='500 页'):
         extract_document(document_path)
 
 
@@ -328,9 +342,9 @@ def test_extract_docx_attaches_images_embedded_inside_question_tables(tmp_path):
     assert extracted.fragments[0].asset_refs[0].reference.startswith('docx:')
 
 
-def test_validate_document_accepts_safe_docx_with_3000_members(tmp_path):
+def test_validate_document_accepts_safe_docx_with_15000_members(tmp_path):
     """A normal image-heavy Word paper must reach parsing while byte safety limits still apply."""
-    document_path = _docx_with_safe_member_count(tmp_path, 3000)
+    document_path = _docx_with_safe_member_count(tmp_path, 15_000)
 
     validated = validate_document_upload(make_upload(
         'many-members.docx', document_path.read_bytes(),

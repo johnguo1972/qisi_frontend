@@ -16,12 +16,12 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 
 
-MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
-MAX_DOCUMENT_PAGES = 100
+MAX_DOCUMENT_BYTES = 200 * 1024 * 1024
+MAX_DOCUMENT_PAGES = 500
 READ_CHUNK_BYTES = 1024 * 1024
-MAX_DOCX_ARCHIVE_MEMBERS = 3000
-MAX_DOCX_MEMBER_BYTES = 25 * 1024 * 1024
-MAX_DOCX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
+MAX_DOCX_ARCHIVE_MEMBERS = 15_000
+MAX_DOCX_MEMBER_BYTES = 100 * 1024 * 1024
+MAX_DOCX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024
 MAX_DOCX_COMPRESSION_RATIO = 200
 QUESTION_START = re.compile(r'(?m)^\s*(\d+)\s*[.、．)]\s*')
 OPTION_START = re.compile(r'(?m)^\s*[A-HＡ-Ｈ]\s*[.．、]\s*')
@@ -79,7 +79,7 @@ def validate_document_upload(uploaded_file) -> ValidatedDocument:
 
     size_bytes = int(getattr(uploaded_file, 'size', 0))
     if size_bytes > MAX_DOCUMENT_BYTES:
-        raise DocumentValidationError('文件大小不能超过 100MB')
+        raise DocumentValidationError('文件大小不能超过 200MB')
 
     content = _read_upload_bytes(uploaded_file)
     document_type = _detect_document_type(content)
@@ -132,7 +132,7 @@ def _read_limited_bytes(stream) -> bytes:
             break
         bytes_read += len(chunk)
         if bytes_read > MAX_DOCUMENT_BYTES:
-            raise DocumentValidationError('文件大小不能超过 100MB')
+            raise DocumentValidationError('文件大小不能超过 200MB')
         chunks.append(chunk)
     return b''.join(chunks)
 
@@ -177,7 +177,7 @@ def _validate_source_path(path: Path) -> None:
         raise DocumentValidationError('仅支持 PDF 和 DOCX 格式文件')
     size_bytes = path.stat().st_size
     if size_bytes > MAX_DOCUMENT_BYTES:
-        raise DocumentValidationError('文件大小不能超过 100MB')
+        raise DocumentValidationError('文件大小不能超过 200MB')
     with path.open('rb') as source_file:
         content = _read_limited_bytes(source_file)
     document_type = _detect_document_type(content)
@@ -196,7 +196,7 @@ def _validate_document_page_limit(document_type: str, content: bytes) -> int:
         with pdf:
             page_count = len(pdf)
         if page_count > MAX_DOCUMENT_PAGES:
-            raise DocumentValidationError('PDF 文档不能超过 100 页')
+            raise DocumentValidationError('PDF 文档不能超过 500 页')
         return page_count
 
     try:
@@ -205,7 +205,7 @@ def _validate_document_page_limit(document_type: str, content: bytes) -> int:
         raise DocumentValidationError('无法读取 DOCX 文件') from exc
     page_count = _docx_equivalent_page_count(document)
     if page_count > MAX_DOCUMENT_PAGES:
-        raise DocumentValidationError('DOCX 文档等价页数不能超过 100 页')
+        raise DocumentValidationError('DOCX 文档等价页数不能超过 500 页')
     return page_count
 
 
@@ -217,7 +217,7 @@ def _extract_pdf(path: Path) -> ExtractedDocument:
     with pdf:
         page_count = len(pdf)
         if page_count > MAX_DOCUMENT_PAGES:
-            raise DocumentValidationError('PDF 文档不能超过 100 页')
+            raise DocumentValidationError('PDF 文档不能超过 500 页')
         page_details = [_pdf_page_detail(page, number + 1) for number, page in enumerate(pdf)]
 
     fragments = _pdf_fragments(page_details)
@@ -298,7 +298,7 @@ def _extract_docx(path: Path) -> ExtractedDocument:
     image_refs = _docx_image_references(document)
     page_count = _docx_equivalent_page_count(document)
     if page_count > MAX_DOCUMENT_PAGES:
-        raise DocumentValidationError('DOCX 文档等价页数不能超过 100 页')
+        raise DocumentValidationError('DOCX 文档等价页数不能超过 500 页')
 
     fragments = _docx_fragments(document, image_refs, max(page_count, 1))
     if not fragments:
