@@ -84,7 +84,7 @@ def _backfill_existing_assets(legacy, question, qdata, assets_dir):
 
 def ingest_structured_questions(
     *, questions, paper_info, actor, batch, source_root, course, tree_node,
-    document_import_task=None,
+    document_import_task=None, paper=None, finalize_batch=True,
 ):
     """Create canonical questions once and always link resolved questions to a course.
 
@@ -170,7 +170,7 @@ def ingest_structured_questions(
             continue
         prepared.append((qdata, fingerprint, index, source_document_question_no, document_fingerprint))
 
-    paper = None
+    supplied_paper = paper
     for qdata, fingerprint, index, source_document_question_no, document_fingerprint in prepared:
         created_paper = False
         created_media_paths = []
@@ -199,15 +199,15 @@ def ingest_structured_questions(
                     raise legacy.FingerprintReservationPendingError(
                         'Fingerprint reservation did not resolve to an active question'
                     )
-                if paper is None:
-                    paper = legacy._create_json_import_paper(
+                if supplied_paper is None:
+                    supplied_paper = legacy._create_json_import_paper(
                         paper_info, actor, paper_info.get('source_file_path', ''),
                     )
-                    batch.paper = paper
+                    batch.paper = supplied_paper
                     batch.save(update_fields=['paper'])
                     created_paper = True
                 question = legacy._import_single_question(
-                    qdata, paper, assets_dir, assets_dir, created_media_paths=created_media_paths,
+                    qdata, supplied_paper, assets_dir, assets_dir, created_media_paths=created_media_paths,
                 )
                 # Keep the JSON import seam stable for its existing activation
                 # failure/cleanup regression while all callers share this flow.
@@ -225,7 +225,7 @@ def ingest_structured_questions(
         except Exception as exc:
             legacy._cleanup_media_paths(created_media_paths)
             if created_paper:
-                paper = None
+                supplied_paper = None
             result.failed += 1
             result.errors.append(legacy._question_error(qdata, index, exc))
 
@@ -269,17 +269,19 @@ def ingest_structured_questions(
                     },
                 )
 
-    if paper:
-        paper.total_questions = result.imported
-        paper.save(update_fields=['total_questions'])
-        result.paper_id = str(paper.id)
-        result.paper_title = paper.title
-    finish_ingestion_batch(
-        batch,
-        total_read=result.total_read,
-        created_count=result.imported,
-        skipped_existing_count=result.skipped_existing,
-        skipped_in_package_count=result.skipped_in_package,
-        failed_count=result.failed,
-    )
+    if supplied_paper:
+        if finalize_batch:
+            supplied_paper.total_questions = result.imported
+            supplied_paper.save(update_fields=['total_questions'])
+        result.paper_id = str(supplied_paper.id)
+        result.paper_title = supplied_paper.title
+    if finalize_batch:
+        finish_ingestion_batch(
+            batch,
+            total_read=result.total_read,
+            created_count=result.imported,
+            skipped_existing_count=result.skipped_existing,
+            skipped_in_package_count=result.skipped_in_package,
+            failed_count=result.failed,
+        )
     return result

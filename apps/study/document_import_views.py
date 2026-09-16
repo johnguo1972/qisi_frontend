@@ -8,7 +8,7 @@ from django.db import transaction
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 
-from apps.study.document_import_models import QuestionDocumentImportTask
+from apps.study.document_import_models import QuestionDocumentImportItem, QuestionDocumentImportTask
 from apps.study.document_import_service import DocumentValidationError, validate_document_upload
 from apps.study.document_import_tasks import process_document_import_task
 from apps.study.ingestion import finish_ingestion_batch, start_ingestion_batch
@@ -16,6 +16,20 @@ from apps.study.ingestion import finish_ingestion_batch, start_ingestion_batch
 
 def _task_data(task):
     batch = task.batch
+    items = task.items.all()
+    candidate_count = task.candidate_count or items.count()
+    success_count = items.filter(
+        status=QuestionDocumentImportItem.Status.SUCCESS,
+        ingest_status=QuestionDocumentImportItem.IngestStatus.INGESTED,
+    ).count()
+    failed_question_count = items.filter(status=QuestionDocumentImportItem.Status.FAILED).count()
+    running_count = items.filter(
+        status__in=(
+            QuestionDocumentImportItem.Status.DISPATCHED,
+            QuestionDocumentImportItem.Status.RUNNING,
+            QuestionDocumentImportItem.Status.RETRYING,
+        ),
+    ).count()
     return {
         'task_id': str(task.id),
         'batch_id': str(task.batch_id),
@@ -28,11 +42,16 @@ def _task_data(task):
         'source_type': task.source_type,
         'wrong_drill_source_set_id': str(task.wrong_drill_source_set_id) if task.wrong_drill_source_set_id else None,
         'page_count': task.page_count,
-        'total_read': batch.total_read,
+        'candidate_count': candidate_count,
+        'success_count': success_count or task.success_count,
+        'failed_question_count': failed_question_count or task.failed_question_count,
+        'running_count': running_count,
+        'last_heartbeat_at': task.last_heartbeat_at,
+        'total_read': batch.total_read or candidate_count,
         'created_count': batch.created_count,
         'skipped_existing_count': batch.skipped_existing_count,
         'skipped_in_package_count': batch.skipped_in_package_count,
-        'failed_count': batch.failed_count,
+        'failed_count': batch.failed_count or failed_question_count,
         'linked_count': task.linked_count,
         'errors': [part for part in task.error_summary.split('; ') if part][:20],
     }

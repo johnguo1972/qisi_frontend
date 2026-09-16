@@ -21,11 +21,16 @@ docker start qisi-redis 2>nul
 echo [2/4] Redis 就绪（端口 6379）
 echo.
 
-rem ---- 3) 后端 Django :8001（已运行则跳过）----
-rem ---- Celery Worker: Windows uses the solo pool to avoid prefork permission errors ----
-echo [3/5] Starting Celery Worker ...
-start "qisi-Celery" cmd.exe /d /k venv\Scripts\celery.exe -A config worker -P solo -l info -Q celery,ai.batch,document.import
-echo [3/5] Celery Worker ready
+rem ---- 3) Celery Worker（已有同项目 Worker 则跳过）----
+rem Windows uses the solo pool to avoid prefork permission errors.
+echo [3/5] Checking Celery Worker ...
+powershell -NoProfile -Command "$root=(Get-Location).Path; $worker=Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -match 'celery.*-A config worker' -and $_.CommandLine -match [regex]::Escape($root) }; if ($worker) { exit 0 }; exit 1"
+if errorlevel 1 (
+  start "qisi-Celery" cmd.exe /d /k venv\Scripts\celery.exe -A config worker -P solo -l info -Q celery,ai.batch,ai.guidance,document.import,ai.feedback
+  echo [3/5] Celery Worker started
+) else (
+  echo [3/5] Existing Celery Worker detected; skip starting another one
+)
 echo.
 
 netstat -ano | findstr "LISTENING" | findstr ":8001" >nul && goto backend_done

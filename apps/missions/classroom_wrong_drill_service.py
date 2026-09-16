@@ -226,9 +226,30 @@ def import_number_mapping(source_set, mapping_import):
 
 
 def source_sets_payload(mission):
+    from apps.study.document_import_models import QuestionDocumentImportItem, QuestionDocumentImportTask
+
     result = []
     for source_set in mission.wrong_drill_source_sets.prefetch_related('questions', 'number_mappings').order_by('-created_at'):
         mapping_import = source_set.mapping_imports.order_by('-created_at').first()
+        import_task = QuestionDocumentImportTask.objects.filter(
+            wrong_drill_source_set_id=source_set.id,
+        ).order_by('-created_at').first()
+        import_status = None
+        if import_task:
+            import_status = {
+                'task_id': str(import_task.id),
+                'stage': import_task.stage,
+                'progress': import_task.progress,
+                'candidate_count': import_task.candidate_count,
+                'success_count': import_task.items.filter(
+                    status=QuestionDocumentImportItem.Status.SUCCESS,
+                    ingest_status=QuestionDocumentImportItem.IngestStatus.INGESTED,
+                ).count(),
+                'failed_question_count': import_task.items.filter(
+                    status=QuestionDocumentImportItem.Status.FAILED,
+                ).count(),
+                'error_summary': import_task.error_summary,
+            }
         result.append({
             'source_set_id': str(source_set.id),
             'source_file_name': Path(source_set.source_file_path).name,
@@ -239,6 +260,7 @@ def source_sets_payload(mission):
             'mapping_count': source_set.number_mappings.filter(status='active').count(),
             'mapping_version': source_set.number_mapping_version,
             'error_summary': source_set.error_summary,
+            'import_task': import_status,
             'mapping_import': {
                 'file_name': mapping_import.file_name,
                 'status': mapping_import.status,

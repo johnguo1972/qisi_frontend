@@ -51,6 +51,7 @@
       <view class="legend">线上答题错题自动生成；线上学生单元格只读。线下学生可手动统计或导入。</view>
       <view v-if="matrix.latest_import" class="import-result">最近导入：{{ matrix.latest_import.file_name }}，成功 {{ matrix.latest_import.imported_count }}，取消 {{ matrix.latest_import.cancelled_count }}，跳过 {{ matrix.latest_import.skipped_count }}</view>
       <view v-if="sources.length" class="import-result">当前错题练习题源：{{ sources[0].source_file_name }}，{{ sources[0].status }}，有效映射 {{ sources[0].mapping_count }} 条。<text v-if="sources[0].error_summary">{{ sources[0].error_summary }}</text></view>
+      <view v-if="selectedImportTask" class="import-result">错题练习题导入：{{ selectedImportTask.stage }}，进度 {{ selectedImportTask.progress }}%，成功 {{ selectedImportTask.success_count || 0 }}，失败 {{ selectedImportTask.failed_question_count || 0 }}</view>
     </template>
   </view>
 </template>
@@ -72,6 +73,7 @@ const missionId = ref('')
 const classOptions = ref<Array<{ class_id: string; class_name: string }>>([])
 const sources = ref<any[]>([])
 const selectedSourceId = ref('')
+let importPollTimer: any = null
 const selectedStudentIds = ref<string[]>([])
 const generatedPackages = ref<Record<string, any>>({})
 const latestBatchId = ref('')
@@ -81,6 +83,9 @@ const classIndex = computed(() => {
   return index >= 0 ? index : 0
 })
 const sourceReady = computed(() => !!sources.value.find(item => item.source_set_id === selectedSourceId.value && item.status === 'ready'))
+const selectedImportTask = computed(() => sources.value.find(
+  item => item.source_set_id === selectedSourceId.value,
+)?.import_task || null)
 const allStudentsSelected = computed(() => {
   const ids = (matrix.value?.students || []).map((item: any) => String(item.student_id))
   return ids.length > 0 && ids.every((id: string) => selectedStudentIds.value.includes(id))
@@ -177,8 +182,28 @@ function chooseWrongDrillFile() {
 function uploadWrongDrill(filePath?: string) {
   if (!filePath) return
   classroomWrongbookApi.uploadWrongDrill(missionId.value, filePath, { class_id: classId.value, source_node_id: selectedNodeId.value })
-    .then((response: any) => { selectedSourceId.value = response.data.source_set_id; uni.showToast({ title: '错题练习题已提交', icon: 'success' }); load() })
+    .then(async (response: any) => {
+      selectedSourceId.value = response.data.source_set_id
+      uni.showToast({ title: '错题练习题已提交', icon: 'success' })
+      await load()
+      const taskId = response.data.task?.task_id
+      if (taskId) pollDocumentImport(taskId)
+    })
     .catch((error: any) => uni.showToast({ title: error?.message || '导入失败', icon: 'none' }))
+}
+
+function pollDocumentImport(taskId: string, attempt = 0) {
+  if (!taskId || attempt > 90) return
+  if (importPollTimer) clearTimeout(importPollTimer)
+  importPollTimer = setTimeout(async () => {
+    try {
+      await load()
+      const current = selectedImportTask.value
+      if (current?.task_id === taskId && ['queued', 'extracting', 'structuring', 'importing'].includes(current.stage)) {
+        pollDocumentImport(taskId, attempt + 1)
+      }
+    } catch { /* manual refresh remains available */ }
+  }, 2000)
 }
 function chooseMappingFile() {
   if (!selectedSourceId.value) { uni.showToast({ title: '请先导入错题练习题', icon: 'none' }); return }

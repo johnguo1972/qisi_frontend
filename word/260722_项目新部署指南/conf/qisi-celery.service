@@ -10,7 +10,7 @@ Group=ubuntu
 WorkingDirectory=/mnt/datadisk0/qisi/backend
 Environment="PATH=/mnt/datadisk0/qisi/backend/venv/bin"
 ExecStart=/mnt/datadisk0/qisi/backend/venv/bin/celery -A config worker -l info \
-  -Q celery,ai.batch \
+  -Q celery,ai.batch,ai.guidance,document.import,ai.feedback \
   --concurrency=16 \
   --logfile=/mnt/datadisk0/qisi/logs/celery-worker.log \
   --pidfile=/mnt/datadisk0/qisi/logs/celery-worker.pid

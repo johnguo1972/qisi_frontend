@@ -104,6 +104,13 @@ AI_DEEPSEEK_CONCURRENCY = int(os.environ.get('AI_DEEPSEEK_CONCURRENCY', '6'))
 AI_PROVIDER_LEASE_WAIT_SECONDS = int(os.environ.get('AI_PROVIDER_LEASE_WAIT_SECONDS', '300'))
 AI_PROVIDER_LEASE_POLL_SECONDS = float(os.environ.get('AI_PROVIDER_LEASE_POLL_SECONDS', '2'))
 
+# Document imports are split into durable question items. The window limits
+# broker pressure while item workers use the same provider leases as all other
+# AI workloads.
+DOCUMENT_IMPORT_DISPATCH_WINDOW = int(os.environ.get('DOCUMENT_IMPORT_DISPATCH_WINDOW', '24'))
+DOCUMENT_IMPORT_MAX_RETRIES = int(os.environ.get('DOCUMENT_IMPORT_MAX_RETRIES', '2'))
+DOCUMENT_IMPORT_ITEM_LEASE_SECONDS = int(os.environ.get('DOCUMENT_IMPORT_ITEM_LEASE_SECONDS', '900'))
+
 # Student guidance is a realtime path.  It can be disabled immediately during
 # a gray rollout without changing application code; an empty allowlist means
 # the feature is enabled for all authenticated students.
@@ -127,6 +134,9 @@ CELERY_TASK_ROUTES = {
     'apps.review.tasks.dispatch_queued_ai_items_task': {'queue': 'ai.batch'},
     'apps.study.tasks.prepare_guidance_content': {'queue': 'ai.guidance'},
     'apps.study.document_import_tasks.process_document_import_task': {'queue': 'document.import'},
+    'apps.study.document_import_tasks.process_document_import_item_task': {'queue': 'document.import'},
+    'apps.study.document_import_tasks.finalize_document_import_task': {'queue': 'document.import'},
+    'apps.study.document_import_tasks.recover_document_import_tasks': {'queue': 'document.import'},
     'apps.classroom_feedback.tasks.generate_classroom_feedback_report': {'queue': 'ai.feedback'},
     'apps.classroom_feedback.tasks.generate_classroom_feedback_student': {'queue': 'ai.feedback'},
 }
@@ -139,6 +149,10 @@ CELERY_BEAT_SCHEDULE = {
     'ai-queue-recovery': {
         'task': 'apps.review.tasks.recover_and_dispatch_ai_items',
         'schedule': 5.0,
+    },
+    'document-import-recovery': {
+        'task': 'apps.study.document_import_tasks.recover_document_import_tasks',
+        'schedule': 30.0,
     },
 }
 

@@ -9,7 +9,7 @@ from apps.accounts.models import UserAccount
 from apps.common.ai.exceptions import AIResponseError
 from apps.courses.models import Course
 from apps.study import document_import_tasks as module
-from apps.study.document_import_models import QuestionDocumentImportTask
+from apps.study.document_import_models import QuestionDocumentImportItem, QuestionDocumentImportTask
 from apps.study.document_import_service import ExtractedDocument, ExtractedQuestionFragment
 from apps.study.models import QuestionIngestionBatch
 
@@ -37,6 +37,41 @@ def test_document_task_records_each_source_position_when_two_fragments_share_one
     references = CourseQuestionDocumentReference.objects.filter(document_import_task=task).order_by('source_position')
     assert references.count() == 2
     assert list(references.values_list('source_position', 'source_question_no')) == [(1, '1'), (2, '1')]
+
+
+@pytest.mark.django_db
+def test_async_document_task_persists_and_finalizes_question_items(task, monkeypatch, settings, tmp_path):
+    """The production task path completes through durable item tasks, not the legacy fallback."""
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    source_path = tmp_path / 'questions.pdf'
+    source_path.write_bytes(b'async document fixture')
+    task.source_file = str(source_path)
+    task.save(update_fields=['source_file'])
+    monkeypatch.setattr(
+        module,
+        'extract_document',
+        lambda _path: ExtractedDocument(
+            document_type='pdf', page_count=1,
+            fragments=[
+                ExtractedQuestionFragment(question_no='1', text='1. First.'),
+                ExtractedQuestionFragment(question_no='2', text='2. Second.'),
+            ],
+        ),
+    )
+    first, second = valid_question(), valid_question()
+    second['question_no'] = '2'
+    monkeypatch.setattr(module, 'structure_candidate', Mock(side_effect=[first, second]))
+    result = module.process_document_import_task.apply_async(args=(str(task.id),))
+
+    assert result.successful()
+    task.refresh_from_db()
+    assert task.stage == QuestionDocumentImportTask.Stage.SUCCESS
+    assert task.candidate_count == 2
+    assert QuestionDocumentImportItem.objects.filter(
+        document_import_task=task,
+        status=QuestionDocumentImportItem.Status.SUCCESS,
+        ingest_status=QuestionDocumentImportItem.IngestStatus.INGESTED,
+    ).count() == 2
 
 
 @pytest.mark.django_db
