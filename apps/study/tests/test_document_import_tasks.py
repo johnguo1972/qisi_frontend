@@ -212,6 +212,17 @@ def test_task_marks_partial_success_after_one_candidate_failure(task, monkeypatc
     assert task.stage == 'partial_success'
 
 
+@pytest.mark.parametrize(
+    ('question_no', 'message', 'expected'),
+    [
+        ('12', 'AI provider request timed out', '第12题：AI响应超时'),
+        ('18', 'AI response is not valid JSON; preview={"question_no":"18"}', '第18题：AI返回格式错误'),
+    ],
+)
+def test_question_error_is_safe_and_readable_for_history_popup(question_no, message, expected):
+    assert module._question_error(question_no, ValueError(message)) == expected
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize('factory', [_pdf_with_image, _docx_with_image])
 def test_document_asset_is_materialized_before_shared_ingestion(task, tmp_path, monkeypatch, factory):
@@ -275,4 +286,4 @@ def test_task_continues_after_exhausted_asset_read_retry(task, monkeypatch):
     task.refresh_from_db()
     assert task.stage == 'partial_success'
     assert task.progress == 100
-    assert '[path hidden]' in task.error_summary
+    assert '第2题：题目资源处理失败' in task.error_summary

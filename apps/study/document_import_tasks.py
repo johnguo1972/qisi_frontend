@@ -30,6 +30,26 @@ def _redacted_error(error) -> str:
     return LOCAL_PATH.sub('[path hidden]', str(error))[:200] or 'document import processing failed'
 
 
+def _friendly_error_label(error) -> str:
+    """Return a short, safe label suitable for the import-history popup."""
+    message = str(error or '')
+    if re.search(r'timed out|timeout|超时', message, re.IGNORECASE):
+        return 'AI响应超时'
+    if re.search(r'not valid json|invalid json|json|schema|格式错误|response content is missing|结构化', message, re.IGNORECASE):
+        return 'AI返回格式错误'
+    if re.search(r'credential|api[_ -]?key|配置', message, re.IGNORECASE):
+        return 'AI配置错误'
+    if isinstance(error, OSError) or re.search(r'asset|image|图片|资源', message, re.IGNORECASE):
+        return '题目资源处理失败'
+    return '题目处理失败'
+
+
+def _question_error(question_no, error) -> str:
+    label = _friendly_error_label(error)
+    question = str(question_no or '').strip()
+    return f'第{question}题：{label}' if question and question != '未知' else label
+
+
 def _set_stage(task, stage, progress, *, error_summary=None, linked_count=None):
     task.stage = stage
     task.progress = progress
@@ -137,7 +157,7 @@ def process_document_import_task(self, task_id):
                 structured['_source_document_reference'] = source_reference
                 valid.append(structured)
             except (AIResponseError, AIRequestError, ValueError, OSError) as exc:
-                failures.append(_redacted_error(exc))
+                failures.append(_question_error(candidate.question_no, exc))
             _set_stage(task, QuestionDocumentImportTask.Stage.STRUCTURING, 20 + int(45 * (index + 1) / max(total, 1)))
 
         _set_stage(task, QuestionDocumentImportTask.Stage.IMPORTING, 70)
@@ -170,7 +190,7 @@ def process_document_import_task(self, task_id):
             skipped_in_package_count=result.skipped_in_package,
             failed_count=failed_count,
         )
-        summaries = failures + [item['error'] for item in result.errors]
+        summaries = failures + [_question_error(item.get('question_no'), item.get('error')) for item in result.errors]
         completed = result.imported + result.skipped_existing + result.skipped_in_package
         stage = (
             QuestionDocumentImportTask.Stage.SUCCESS if not failed_count else

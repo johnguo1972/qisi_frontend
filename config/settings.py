@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'apps.handouts',
     'apps.qrcode',
     'apps.practice',
+    'apps.classroom_feedback',
 ]
 
 MIDDLEWARE = [
@@ -126,9 +127,12 @@ CELERY_TASK_ROUTES = {
     'apps.review.tasks.dispatch_queued_ai_items_task': {'queue': 'ai.batch'},
     'apps.study.tasks.prepare_guidance_content': {'queue': 'ai.guidance'},
     'apps.study.document_import_tasks.process_document_import_task': {'queue': 'document.import'},
+    'apps.classroom_feedback.tasks.generate_classroom_feedback_report': {'queue': 'ai.feedback'},
+    'apps.classroom_feedback.tasks.generate_classroom_feedback_student': {'queue': 'ai.feedback'},
 }
 CELERY_IMPORTS = (
     'apps.study.document_import_tasks',
+    'apps.classroom_feedback.tasks',
 )
 
 CELERY_BEAT_SCHEDULE = {

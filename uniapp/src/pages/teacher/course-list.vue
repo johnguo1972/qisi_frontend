@@ -214,8 +214,23 @@ async function handleWrongbook(course: Course) {
   }
 }
 
-function handleFeedback() {
-  uni.showToast({ title: '课堂反馈功能将在下次开发', icon: 'none' })
+async function handleFeedback(course: Course) {
+  try {
+    const response: any = await courseApi.classroomPracticeMissions(String(course.id) as any)
+    const rows = response?.data?.missions || response?.data?.data?.missions || []
+    if (rows.length === 1) {
+      const ids = (rows[0].class_ids || []).map(String)
+      const suffix = ids.length === 1 ? `&class_id=${ids[0]}` : ''
+      uni.navigateTo({ url: `/pages/teacher/classroom-feedback?mission_id=${rows[0].mission_id}${suffix}` })
+    } else if (rows.length > 1) {
+      uni.navigateTo({ url: `/pages/teacher/classroom-practice-select?course_id=${course.id}&mode=feedback` })
+    } else {
+      uni.showToast({ title: '当前课程暂无已发布的课堂练习', icon: 'none' })
+    }
+  } catch (error) {
+    console.error('加载课堂练习失败:', error)
+    uni.showToast({ title: '加载课堂练习失败', icon: 'none' })
+  }
 }
 
 // ============================================================

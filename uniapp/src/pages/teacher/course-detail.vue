@@ -16,7 +16,7 @@
           <button class="btn secondary" @click="goMaterials">课程资料</button>
           <button class="btn primary" @click="goPractice">课程练习</button>
           <button class="btn secondary" @click="goClassroomWrongbook">错题统计</button>
-          <button class="btn secondary" @click="showClassroomFeedback">课堂反馈</button>
+          <button class="btn secondary" @click="goClassroomFeedback">课堂反馈</button>
         </view>
       </view>
 
@@ -132,10 +132,10 @@
                 </view>
                 <text class="action-arrow">›</text>
               </view>
-              <view class="action-item no-icon" @click="showClassroomFeedback">
+              <view class="action-item no-icon" @click="goClassroomFeedback">
                 <view class="action-copy">
                   <text class="action-title">课堂反馈</text>
-                  <text class="action-desc">功能将在下次开发</text>
+                  <text class="action-desc">查看班级统计并生成家长反馈话术</text>
                 </view>
                 <text class="action-arrow">›</text>
               </view>
@@ -367,8 +367,23 @@ async function goClassroomWrongbook() {
   }
 }
 
-function showClassroomFeedback() {
-  uni.showToast({ title: '课堂反馈功能将在下次开发', icon: 'none' })
+async function goClassroomFeedback() {
+  try {
+    const response: any = await courseApi.classroomPracticeMissions(courseId.value as any)
+    const rows = response?.data?.missions || response?.data?.data?.missions || []
+    if (rows.length === 1) {
+      const ids = (rows[0].class_ids || []).map(String)
+      const suffix = ids.length === 1 ? `&class_id=${ids[0]}` : ''
+      uni.navigateTo({ url: `/pages/teacher/classroom-feedback?mission_id=${rows[0].mission_id}${suffix}` })
+    } else if (rows.length > 1) {
+      uni.navigateTo({ url: `/pages/teacher/classroom-practice-select?course_id=${courseId.value}&mode=feedback` })
+    } else {
+      uni.showToast({ title: '当前课程暂无已发布的课堂练习', icon: 'none' })
+    }
+  } catch (error) {
+    console.error('加载课堂练习失败:', error)
+    uni.showToast({ title: '加载课堂练习失败', icon: 'none' })
+  }
 }
 
 function openEdit() {

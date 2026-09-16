@@ -24,7 +24,7 @@
             <text>{{ UI_TEXT.failed }} {{ item.failed_count || 0 }}</text>
           </view>
           <text v-if="item.document_stage" class="history-time">文档状态：{{ item.document_stage }}（{{ item.document_progress || 0 }}%）</text>
-          <text v-for="message in item.document_errors || []" :key="message" class="history-error">{{ message }}</text>
+          <text v-for="message in displayErrors(item)" :key="message" class="history-error">{{ message }}</text>
         </view>
       </scroll-view>
     </view>
@@ -34,6 +34,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { getQuestionIngestionHistory, type QuestionIngestionHistoryScope } from '@/api/questions'
+import { formatDocumentImportErrors } from '@/utils/document-import-error'
 
 type IngestionHistoryItem = {
   id: string
@@ -93,6 +94,10 @@ function formatTime(value?: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
 }
 
+function displayErrors(item: IngestionHistoryItem): string[] {
+  return formatDocumentImportErrors(item.document_errors)
+}
+
 function close() {
   emit('close')
 }
@@ -141,5 +146,5 @@ watch(
 .history-time { display: block; margin-top: 10rpx; color: #909399; font-size: 22rpx; }
 .history-counts { display: flex; gap: 22rpx; margin-top: 12rpx; color: #606266; font-size: 23rpx; }
 .history-state { padding: 64rpx 32rpx; color: #909399; text-align: center; font-size: 26rpx; }
-.history-error { color: #f56c6c; }
+.history-error { display: block; margin-top: 8rpx; color: #f56c6c; line-height: 1.5; word-break: break-all; }
 </style>

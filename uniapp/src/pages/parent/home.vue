@@ -40,7 +40,11 @@
         :end-at="mission.mission?.deadline || mission.end_at"
         :progress-percent="mission.progress_percent || 0"
         :pdf-download-url="mission.pdf_download_url"
+        :is-classroom-practice="mission.is_classroom_practice"
+        :feedback-available="mission.feedback_available"
+        :feedback-status="mission.feedback_status"
         @click="goMission"
+        @feedback="goFeedback"
       />
     </view>
   </view>
@@ -103,6 +107,10 @@ async function load() {
 
 function goMission(id: string) {
   if (id && id !== 'undefined') uni.navigateTo({ url: `/pages/parent/mission?id=${id}` })
+}
+
+function goFeedback(id: string) {
+  if (id && id !== 'undefined') uni.navigateTo({ url: `/pages/parent/classroom-feedback?mission_id=${id}` })
 }
 
 function goBind() {

@@ -42,6 +42,8 @@ REQUIRED_TASKS = {
     "photo_recognize",
     "course_material_recognize",
     "document_structure",
+    "classroom_feedback_class_summary",
+    "classroom_feedback_student_script",
 }
 
 EXPECTED_ROUTE_MATRIX = {
@@ -71,6 +73,8 @@ EXPECTED_ROUTE_MATRIX = {
     "photo_recognize": ("qwen", "qwen3-vl-plus", 300.0),
     "course_material_recognize": ("qwen", "qwen3-vl-plus", 300.0),
     "document_structure": ("qwen", "qwen3.7-plus", 300.0),
+    "classroom_feedback_class_summary": ("qwen", "qwen3.7-flash", 300.0),
+    "classroom_feedback_student_script": ("qwen", "qwen3.7-flash", 300.0),
 }
 
 

@@ -48,7 +48,7 @@
         <view class="card-actions">
           <button size="mini" @click.stop="goMissionLearningStats(m.id)">学情统计</button>
           <button size="mini" @click.stop="goWrongbookStats(m)">错题统计</button>
-          <button v-if="isClassroomPractice(m)" size="mini" @click.stop="showClassroomFeedback">课堂反馈</button>
+          <button v-if="isClassroomPractice(m)" size="mini" @click.stop="goClassroomFeedback(m)">课堂反馈</button>
           <button size="mini" @click.stop="goGradeMission(m.id)">批改作业</button>
         </view>
       </view>
@@ -177,8 +177,10 @@ function goWrongbookStats(mission: Mission) {
   uni.navigateTo({ url: `/pages/teacher/wrongbook-matrix?missionId=${mission.id}` })
 }
 
-function showClassroomFeedback() {
-  uni.showToast({ title: '课堂反馈功能将在下次开发', icon: 'none' })
+function goClassroomFeedback(mission: Mission) {
+  const ids = (mission.class_ids || []).map(String)
+  const suffix = ids.length === 1 ? `&class_id=${ids[0]}` : ''
+  uni.navigateTo({ url: `/pages/teacher/classroom-feedback?mission_id=${mission.id}${suffix}` })
 }
 </script>
 

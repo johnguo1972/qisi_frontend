@@ -14,6 +14,7 @@ from .permissions import IsParentReadContext
 from .student_views import _visible_mission_rels
 from apps.missions.services import assignment_levels, close_stale_missions
 from apps.missions.pdf_service import mission_pdf_download_url
+from apps.classroom_feedback.services import parent_feedback_available
 
 
 def make_trace_id():
@@ -103,6 +104,12 @@ def _mission_payload(mission, student, include_levels=False):
         'accuracy': accuracy,
         'last_attempt_at': latest_attempt.submitted_at if latest_attempt else None,
     }
+    feedback_available, feedback_status = parent_feedback_available(mission, student)
+    payload.update({
+        'is_classroom_practice': mission.source_context == 'course_practice' and mission.source_type == 'handout',
+        'feedback_available': feedback_available,
+        'feedback_status': feedback_status,
+    })
     if include_levels:
         payload['levels'] = levels
     return payload

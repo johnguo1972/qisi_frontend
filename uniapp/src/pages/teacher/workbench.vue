@@ -73,7 +73,7 @@
               <text class="action-btn action-view" @click="goMissionDetail(m.id)">查看</text>
               <template v-if="isClassroomPractice(m)">
                 <text class="action-btn action-view" @click.stop="goClassroomWrongbook(m)">错题统计</text>
-                <text class="action-btn action-view" @click.stop="showClassroomFeedback">课堂反馈</text>
+                <text class="action-btn action-view" @click.stop="goClassroomFeedback(m)">课堂反馈</text>
               </template>
               <text class="action-btn action-edit" @click="goEdit(m)">编辑</text>
               <text v-if="m.status === 'draft'" class="action-btn action-publish" @click.stop="publishMission(m)">发布</text>
@@ -284,8 +284,10 @@ function goClassroomWrongbook(mission: MissionExtended) {
   const suffix = ids.length === 1 ? `&class_id=${ids[0]}` : ''
   uni.navigateTo({ url: `/pages/teacher/classroom-wrongbook-statistics?mission_id=${mission.id}${suffix}` })
 }
-function showClassroomFeedback() {
-  uni.showToast({ title: '课堂反馈功能将在下次开发', icon: 'none' })
+function goClassroomFeedback(mission: MissionExtended) {
+  const ids = (mission.class_ids || []).map(String)
+  const suffix = ids.length === 1 ? `&class_id=${ids[0]}` : ''
+  uni.navigateTo({ url: `/pages/teacher/classroom-feedback?mission_id=${mission.id}${suffix}` })
 }
 
 async function publishMission(m: MissionExtended) {

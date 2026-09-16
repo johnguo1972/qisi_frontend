@@ -8,7 +8,7 @@
         <view class="name">{{ mission.mission_name }}</view>
         <view class="meta">{{ mission.node_count }} 个节点 · {{ mission.question_count }} 道题</view>
         <view class="classes">
-          <button size="mini" @click="openStats(mission)">查看错题统计</button>
+          <button size="mini" @click="openMission(mission)">{{ feedbackMode ? '查看课堂反馈' : '查看错题统计' }}</button>
         </view>
       </view>
     </view>
@@ -22,9 +22,11 @@ import { courseApi } from '@/api/courses'
 
 const missions = ref<any[]>([])
 const loading = ref(false)
+const feedbackMode = ref(false)
 
 onLoad(async (options: any) => {
   const courseId = String(options?.course_id || '')
+  feedbackMode.value = options?.mode === 'feedback'
   if (!courseId) return
   loading.value = true
   try {
@@ -38,8 +40,11 @@ onLoad(async (options: any) => {
   }
 })
 
-function openStats(mission: any) {
-  uni.navigateTo({ url: `/pages/teacher/classroom-wrongbook-statistics?mission_id=${mission.mission_id}` })
+function openMission(mission: any) {
+  const ids = (mission.class_ids || []).map(String)
+  const suffix = ids.length === 1 ? `&class_id=${ids[0]}` : ''
+  const page = feedbackMode.value ? 'classroom-feedback' : 'classroom-wrongbook-statistics'
+  uni.navigateTo({ url: `/pages/teacher/${page}?mission_id=${mission.mission_id}${suffix}` })
 }
 </script>
 

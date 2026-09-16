@@ -28,6 +28,7 @@ export const parentApi = {
   overview: () => get<any>('/parent/overview'),
   missions: (params?: { scope?: string; class_id?: string }) => get<any>('/parent/missions', params),
   missionDetail: (missionId: string) => get<any>(`/parent/missions/${missionId}`),
+  classroomFeedback: (missionId: string) => get<any>(`/parent/missions/${missionId}/classroom-feedback`),
   createBindRequest: (bindCode: string, relationType: string = 'guardian') =>
     post('/parent/bind-requests', { bind_code: bindCode, relation_type: relationType }),
   pendingRequests: () => get<any[]>('/parent/bind-requests/pending'),
@@ -42,3 +43,4 @@ export const studentParentApi = {
 }
 export { courseApi, materialApi, treeApi, courseQuestionApi, variantApi } from './courses'
 export { classroomWrongbookApi } from './classroom-wrongbook'
+export { classroomFeedbackApi } from './classroom-feedback'

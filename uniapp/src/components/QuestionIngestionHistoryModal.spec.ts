@@ -68,6 +68,33 @@ describe('QuestionIngestionHistoryModal', () => {
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
+  it('shows concise question-level import errors instead of raw AI diagnostics', async () => {
+    getQuestionIngestionHistory.mockResolvedValue({
+      code: 0,
+      data: {
+        items: [{
+          id: 'document-task-1',
+          source_type: 'document_import',
+          source_name: '练习册.docx',
+          document_errors: [
+            '第12题：AI provider request timed out',
+            'AI response is not valid JSON; preview={"question_no":"18","stem":"..."}',
+          ],
+        }],
+      },
+    })
+
+    const wrapper = mount(QuestionIngestionHistoryModal, {
+      props: { visible: true, scope: 'bank' },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('第12题：AI响应超时')
+    expect(wrapper.text()).toContain('第18题：AI返回格式错误')
+    expect(wrapper.text()).not.toContain('AI provider request timed out')
+    expect(wrapper.text()).not.toContain('preview=')
+  })
+
   it.each([
     ['json_import', 'JSON \u6570\u636e\u5305\u5bfc\u5165'],
     ['manual_create', '\u624b\u52a8\u65b0\u589e'],

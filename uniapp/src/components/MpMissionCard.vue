@@ -14,7 +14,10 @@
       <view class="fill" :style="{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }" />
       <text>{{ progressPercent }}%</text>
     </view>
-    <button v-if="pdfDownloadUrl" class="pdf-button" @click.stop="downloadPdf">下载PDF作业</button>
+    <view v-if="pdfDownloadUrl || (isClassroomPractice && feedbackAvailable)" class="card-actions">
+      <button v-if="pdfDownloadUrl" :class="['action-button', 'pdf-button', { 'single-action': !(isClassroomPractice && feedbackAvailable) }]" @click.stop="downloadPdf">下载PDF作业</button>
+      <button v-if="isClassroomPractice && feedbackAvailable" class="action-button feedback-button" @click.stop="$emit('feedback', missionId)">查看错题反馈</button>
+    </view>
   </view>
 </template>
 
@@ -33,9 +36,12 @@ const props = defineProps<{
   endAt?: string
   progressPercent: number
   pdfDownloadUrl?: string
+  isClassroomPractice?: boolean
+  feedbackAvailable?: boolean
+  feedbackStatus?: string | null
 }>()
 
-defineEmits<{ click: [id: string] }>()
+defineEmits<{ click: [id: string]; feedback: [id: string] }>()
 
 function downloadPdf() {
   const url = getPublicMediaUrl(props.pdfDownloadUrl)
@@ -73,6 +79,11 @@ function downloadPdf() {
 .progress { display: flex; align-items: center; gap: 14rpx; color: #666; font-size: 22rpx; }
 .progress > view { height: 12rpx; flex: 1; border-radius: 8rpx; background: #eee; }
 .fill { height: 100%; border-radius: 8rpx; background: linear-gradient(90deg, #409eff, #6366f1); }
-.pdf-button { margin: 18rpx 0 0; padding: 0 20rpx; height: 58rpx; line-height: 58rpx; color: #409eff; background: #ecf5ff; border: 1rpx solid #b3d8ff; border-radius: 10rpx; font-size: 23rpx; }
+.card-actions { display: flex; gap: 12rpx; margin-top: 18rpx; width: 100%; box-sizing: border-box; }
+.action-button { flex: 0 0 calc(50% - 6rpx); width: calc(50% - 6rpx); margin: 0; padding: 0 10rpx; height: 58rpx; line-height: 58rpx; box-sizing: border-box; border-radius: 10rpx; font-size: 23rpx; }
+.pdf-button { color: #409eff; background: #ecf5ff; border: 1rpx solid #b3d8ff; }
+.single-action { flex-basis: 100%; width: 100%; }
+.feedback-button { color: #fff; background: #409eff; border: 1rpx solid #409eff; }
 .pdf-button::after { border: none; }
+.feedback-button::after { border: none; }
 </style>

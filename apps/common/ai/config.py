@@ -49,6 +49,8 @@ TASK_PROVIDER_SCHEMA = {
     "photo_recognize": "qwen",
     "course_material_recognize": "qwen",
     "document_structure": "qwen",
+    "classroom_feedback_class_summary": "qwen",
+    "classroom_feedback_student_script": "qwen",
 }
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 PROMPT_VARIABLE_PATTERN = re.compile(

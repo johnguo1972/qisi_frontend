@@ -27,6 +27,7 @@
     { "path": "pages/teacher/wrongbook-matrix", "style": { "navigationBarTitleText": "学生错题统计" } },
     { "path": "pages/teacher/classroom-practice-select", "style": { "navigationBarTitleText": "选择课堂练习" } },
     { "path": "pages/teacher/classroom-wrongbook-statistics", "style": { "navigationBarTitleText": "课堂错题统计" } },
+    { "path": "pages/teacher/classroom-feedback", "style": { "navigationBarTitleText": "课堂反馈" } },
     { "path": "pages/teacher/level-practice", "style": { "navigationBarTitleText": "关卡练习" } },
     { "path": "pages/teacher/class-create", "style": { "navigationBarTitleText": "创建班级" } },
     { "path": "pages/teacher/class-edit", "style": { "navigationBarTitleText": "编辑班级" } },
@@ -56,6 +57,7 @@
     ,{ "path": "pages/parent/layout", "style": { "navigationBarTitleText": "家长端" } }
     ,{ "path": "pages/parent/home", "style": { "navigationBarTitleText": "家长端" } }
     ,{ "path": "pages/parent/mission", "style": { "navigationBarTitleText": "作业详情" } }
+    ,{ "path": "pages/parent/classroom-feedback", "style": { "navigationBarTitleText": "课堂错题反馈" } }
     ,{ "path": "pages/student/growth", "style": { "navigationBarTitleText": "成长" } }
     ,{ "path": "pages/student/scan-entry", "style": { "navigationBarTitleText": "作业入口" } }
     ,{ "path": "pages/student/practice-sheet", "style": { "navigationBarTitleText": "错题练习" } }
