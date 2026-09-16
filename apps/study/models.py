@@ -225,6 +225,7 @@ class QuestionIngestionBatch(models.Model):
         COURSE_MATERIAL_IMPORT = 'course_material_import', 'Course material import'
         COURSE_LINK_IMPORT = 'course_link_import', 'Course link import'
         DOCUMENT_IMPORT = 'document_import', 'Document import'
+        WRONGBOOK_DRILL = 'wrongbook_drill', 'Wrongbook drill source'
 
     class Status(models.TextChoices):
         RUNNING = 'running', 'Running'

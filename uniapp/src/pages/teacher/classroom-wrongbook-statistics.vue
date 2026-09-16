@@ -9,9 +9,12 @@
         </picker>
         <button size="mini" @click="load">刷新</button>
         <button size="mini" @click="chooseImportFile">导入错题统计</button>
+        <button size="mini" @click="chooseWrongDrillFile">导入错题练习题</button>
+        <button size="mini" @click="chooseMappingFile" :disabled="!selectedSourceId">导入映射表</button>
         <button size="mini" :type="manualEditing ? 'primary' : 'default'" @click="toggleManual">{{ manualEditing ? '保存统计' : '手动统计错题' }}</button>
         <button v-if="manualEditing" size="mini" @click="cancelManual">取消</button>
-        <button size="mini" type="primary" @click="generateDrill">生成精练题</button>
+        <button size="mini" type="primary" @click="generateDrill">{{ selectedStudentIds.length ? `生成选中学生精练题(${selectedStudentIds.length})` : '生成全部精练题' }}</button>
+        <button size="mini" @click="bulkExport">批量下载精练题 PDF</button>
       </view>
     </view>
 
@@ -34,11 +37,11 @@
         <view class="matrix-wrap">
           <scroll-view scroll-x class="matrix-scroll">
             <view class="matrix-table" :style="{ minWidth: `${430 + visibleQuestions.length * 76}px` }">
-              <view class="matrix-row matrix-header"><text class="serial-col">序号</text><text class="student-col">学生</text><text v-for="question in visibleQuestions" :key="question.question_id" class="question-col">{{ question.question_no }}</text><text class="rate-col">错题率</text></view>
+              <view class="matrix-row matrix-header"><text class="check-col"><checkbox :checked="allStudentsSelected" @click.stop="toggleAllStudents" /></text><text class="serial-col">序号</text><text class="student-col">学生</text><text v-for="question in visibleQuestions" :key="question.question_id" class="question-col">{{ question.question_no }}</text><text class="rate-col">错题率</text><text class="operation-col">操作</text></view>
               <view v-for="(student, index) in matrix.students" :key="student.student_id" class="matrix-row">
-                <text class="serial-col">{{ index + 1 }}</text><text class="student-col"><text>{{ student.student_name }}</text><text v-if="student.data_source === 'online'" class="lock-hint">线上已答，人工统计已锁定</text></text>
+                <text class="check-col"><checkbox :checked="selectedStudentIds.includes(student.student_id)" @click.stop="toggleStudent(student.student_id)" /></text><text class="serial-col">{{ index + 1 }}</text><text class="student-col"><text>{{ student.student_name }}</text><text v-if="student.data_source === 'online'" class="lock-hint">线上已答，人工统计已锁定</text></text>
                 <text v-for="question in visibleQuestions" :key="question.question_id" class="question-col cell" :class="{ editable: manualEditing && !isOnline(student.student_id) }" @click="toggleCell(student.student_id, question.question_id)">{{ displayWrong(student.student_id, question.question_id) ? '❌' : '' }}</text>
-                <text class="rate-col">{{ studentWrongRate(student.student_id) }}%</text>
+                <text class="rate-col">{{ studentWrongRate(student.student_id) }}%</text><view class="operation-col"><button v-if="packageFor(student.student_id)" size="mini" @click="showPackageItems(packageFor(student.student_id))">查看</button><button v-if="packageFor(student.student_id)" size="mini" @click="previewPackage(packageFor(student.student_id))">预览</button><button v-if="packageFor(student.student_id)" size="mini" @click="downloadPackage(packageFor(student.student_id))">下载</button><text v-else class="operation-hint">{{ sourceReady ? '待生成' : '暂无精练题' }}</text></view>
               </view>
             </view>
           </scroll-view>
@@ -47,6 +50,7 @@
       </view>
       <view class="legend">线上答题错题自动生成；线上学生单元格只读。线下学生可手动统计或导入。</view>
       <view v-if="matrix.latest_import" class="import-result">最近导入：{{ matrix.latest_import.file_name }}，成功 {{ matrix.latest_import.imported_count }}，取消 {{ matrix.latest_import.cancelled_count }}，跳过 {{ matrix.latest_import.skipped_count }}</view>
+      <view v-if="sources.length" class="import-result">当前错题练习题源：{{ sources[0].source_file_name }}，{{ sources[0].status }}，有效映射 {{ sources[0].mapping_count }} 条。<text v-if="sources[0].error_summary">{{ sources[0].error_summary }}</text></view>
     </template>
   </view>
 </template>
@@ -55,6 +59,7 @@
 import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { classroomWrongbookApi } from '@/api/classroom-wrongbook'
+import { getPublicMediaUrl } from '@/utils/media-url'
 
 const matrix = ref<any | null>(null)
 const loading = ref(false)
@@ -65,10 +70,20 @@ const manualEditing = ref(false)
 const editedMarks = ref<Record<string, boolean>>({})
 const missionId = ref('')
 const classOptions = ref<Array<{ class_id: string; class_name: string }>>([])
+const sources = ref<any[]>([])
+const selectedSourceId = ref('')
+const selectedStudentIds = ref<string[]>([])
+const generatedPackages = ref<Record<string, any>>({})
+const latestBatchId = ref('')
 const classLabels = computed(() => classOptions.value.map(item => item.class_name))
 const classIndex = computed(() => {
   const index = classOptions.value.findIndex(item => item.class_id === classId.value)
   return index >= 0 ? index : 0
+})
+const sourceReady = computed(() => !!sources.value.find(item => item.source_set_id === selectedSourceId.value && item.status === 'ready'))
+const allStudentsSelected = computed(() => {
+  const ids = (matrix.value?.students || []).map((item: any) => String(item.student_id))
+  return ids.length > 0 && ids.every((id: string) => selectedStudentIds.value.includes(id))
 })
 
 const visibleQuestions = computed(() => (matrix.value?.questions || []).filter((item: any) => !selectedNodeId.value || item.node_id === selectedNodeId.value))
@@ -95,6 +110,16 @@ async function load() {
     const response: any = await classroomWrongbookApi.statistics(missionId.value, classId.value ? { class_id: classId.value } : undefined)
     if (response?.code !== 0) throw new Error(response?.message || '加载失败')
     matrix.value = response.data
+    if (Array.isArray(matrix.value.wrong_drill_sources?.sources)) sources.value = matrix.value.wrong_drill_sources.sources
+    if (Array.isArray(matrix.value.wrong_drill_sources?.packages)) {
+      generatedPackages.value = Object.fromEntries(matrix.value.wrong_drill_sources.packages.map((item: any) => [String(item.student_id), item]))
+    }
+    latestBatchId.value = matrix.value.wrong_drill_sources?.latest_batch_id || latestBatchId.value
+    const sourceResponse: any = await classroomWrongbookApi.wrongDrillSources(missionId.value, classId.value ? { class_id: classId.value } : undefined)
+    sources.value = sourceResponse?.data?.sources || []
+    if (!selectedSourceId.value || !sources.value.some(item => item.source_set_id === selectedSourceId.value)) {
+      selectedSourceId.value = sources.value[0]?.source_set_id || ''
+    }
     classOptions.value = Array.isArray(matrix.value.class_options)
       ? matrix.value.class_options.map((item: any) => ({
         class_id: String(item.class_id),
@@ -119,8 +144,56 @@ function changeClass(event: any) {
   classId.value = option.class_id
   selectedNodeId.value = ''
   editedMarks.value = {}
+  selectedStudentIds.value = []
+  generatedPackages.value = {}
+  latestBatchId.value = ''
   manualEditing.value = false
   load()
+}
+
+function toggleStudent(studentId: string) {
+  const id = String(studentId)
+  selectedStudentIds.value = selectedStudentIds.value.includes(id)
+    ? selectedStudentIds.value.filter(item => item !== id)
+    : [...selectedStudentIds.value, id]
+}
+function toggleAllStudents() {
+  const ids = (matrix.value?.students || []).map((item: any) => String(item.student_id))
+  selectedStudentIds.value = allStudentsSelected.value ? [] : ids
+}
+function packageFor(studentId: string) { return generatedPackages.value[String(studentId)] }
+
+function chooseWrongDrillFile() {
+  // The mapping file is intentionally a separate optional upload. This keeps
+  // DOCX upload and the existing statistics XLSX upload unambiguous on all
+  // uni-app targets; the server stores both under the same source set.
+  // #ifdef MP-WEIXIN
+  uni.chooseMessageFile({ count: 1, type: 'file', success: (result: any) => uploadWrongDrill(result.tempFiles?.[0]?.path) })
+  // #endif
+  // #ifndef MP-WEIXIN
+  ;(uni as any).chooseFile({ count: 1, extension: ['docx', 'pdf'], success: (result: any) => uploadWrongDrill(result.tempFiles?.[0]?.path) })
+  // #endif
+}
+function uploadWrongDrill(filePath?: string) {
+  if (!filePath) return
+  classroomWrongbookApi.uploadWrongDrill(missionId.value, filePath, { class_id: classId.value, source_node_id: selectedNodeId.value })
+    .then((response: any) => { selectedSourceId.value = response.data.source_set_id; uni.showToast({ title: '错题练习题已提交', icon: 'success' }); load() })
+    .catch((error: any) => uni.showToast({ title: error?.message || '导入失败', icon: 'none' }))
+}
+function chooseMappingFile() {
+  if (!selectedSourceId.value) { uni.showToast({ title: '请先导入错题练习题', icon: 'none' }); return }
+  // #ifdef MP-WEIXIN
+  uni.chooseMessageFile({ count: 1, type: 'file', success: (result: any) => uploadMapping(result.tempFiles?.[0]?.path) })
+  // #endif
+  // #ifndef MP-WEIXIN
+  ;(uni as any).chooseFile({ count: 1, extension: ['xlsx'], success: (result: any) => uploadMapping(result.tempFiles?.[0]?.path) })
+  // #endif
+}
+function uploadMapping(filePath?: string) {
+  if (!filePath) return
+  classroomWrongbookApi.uploadWrongDrillMapping(missionId.value, selectedSourceId.value, filePath, classId.value)
+    .then(() => { uni.showToast({ title: '映射表已导入', icon: 'success' }); load() })
+    .catch((error: any) => uni.showToast({ title: error?.message || '映射表导入失败', icon: 'none' }))
 }
 
 function key(studentId: string, questionId: string) { return `${studentId}:${questionId}` }
@@ -198,11 +271,80 @@ function uploadFile(filePath?: string) {
       uni.showToast({ title: detail || error?.message || '导入失败', icon: 'none' })
     })
 }
-function generateDrill() {
+async function generateDrill() {
   const wrongCount = (matrix.value?.students || []).reduce((sum: number, student: any) => sum + Number(student.wrong_count || 0), 0)
   if (manualEditing.value) { uni.showToast({ title: '请先保存错题统计', icon: 'none' }); return }
   if (!wrongCount) { uni.showToast({ title: '当前没有错题可以生成精练题，请手动统计或者导入错题', icon: 'none' }); return }
-  uni.showToast({ title: '生成精练题功能将在下次开发', icon: 'none' })
+  if (!sourceReady.value) { uni.showToast({ title: '请先完成错题练习题导入和映射', icon: 'none' }); return }
+  try {
+    const response: any = await classroomWrongbookApi.generateWrongDrill(missionId.value, {
+      class_id: classId.value, version: matrix.value.version, source_set_id: selectedSourceId.value,
+      ...(selectedStudentIds.value.length ? { student_ids: selectedStudentIds.value } : {}),
+    })
+    if (response?.code !== 0) throw new Error(response?.message || '生成失败')
+    const packages = response.data?.packages || []
+    latestBatchId.value = response.data?.batch_id || ''
+    generatedPackages.value = Object.fromEntries(packages.map((item: any) => [String(item.student_id), item]))
+    if (['queued', 'generating'].includes(response.data?.status)) {
+      uni.showToast({ title: '生成任务已提交，请稍候', icon: 'success' })
+      pollBatch(latestBatchId.value)
+    } else {
+      uni.showToast({ title: `已生成 ${packages.length} 名学生的精练题`, icon: 'success' })
+    }
+    await load()
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || '生成精练题失败', icon: 'none' })
+  }
+}
+
+async function pollBatch(batchId: string, attempt = 0) {
+  if (!batchId || attempt > 60) return
+  setTimeout(async () => {
+    try {
+      const response: any = await classroomWrongbookApi.wrongDrillBatch(missionId.value, batchId, classId.value)
+      const data = response?.data
+      if (data?.packages) generatedPackages.value = Object.fromEntries(data.packages.map((item: any) => [String(item.student_id), item]))
+      if (['queued', 'generating'].includes(data?.status)) return pollBatch(batchId, attempt + 1)
+      uni.showToast({ title: `精练题生成完成 ${data?.generated_count || 0} 人`, icon: 'success' })
+      await load()
+    } catch { /* the next manual refresh remains available */ }
+  }, 2000)
+}
+
+function packageUrl(item: any) {
+  return getPublicMediaUrl(item?.pdf_download_url || item?.pdf_file_path || '')
+}
+function openPackage(item: any) {
+  const url = packageUrl(item)
+  if (!url) return
+  // #ifdef H5
+  window.open(url, '_blank')
+  // #endif
+  // #ifndef H5
+  uni.downloadFile({ url, success: (result) => uni.openDocument({ filePath: result.tempFilePath, fileType: 'pdf', showMenu: true }) })
+  // #endif
+}
+function previewPackage(item: any) { openPackage(item) }
+function downloadPackage(item: any) { openPackage(item) }
+function showPackageItems(item: any) {
+  const content = (item?.items || []).map((row: any, index: number) => `${index + 1}. 错题${row.wrong_question_no} → 精练题${row.drill_question_no}\n${row.stem_preview || ''}`).join('\n\n')
+  uni.showModal({ title: `${item.student_name || ''} 的精练题`, content: content || '暂无可用精练题', showCancel: false })
+}
+async function bulkExport() {
+  if (!latestBatchId.value) { uni.showToast({ title: '请先生成精练题', icon: 'none' }); return }
+  try {
+    const response: any = await classroomWrongbookApi.bulkExportWrongDrill(missionId.value, latestBatchId.value, {
+      class_id: classId.value, ...(selectedStudentIds.value.length ? { student_ids: selectedStudentIds.value } : {}),
+    })
+    if (response?.code !== 0) throw new Error(response?.message || '批量导出失败')
+    const url = getPublicMediaUrl(response.data?.download_url || '')
+    // #ifdef H5
+    window.open(url, '_blank')
+    // #endif
+    // #ifndef H5
+    uni.downloadFile({ url, success: result => uni.openDocument({ filePath: result.tempFilePath, fileType: 'zip', showMenu: true }) })
+    // #endif
+  } catch (error: any) { uni.showToast({ title: error?.message || '批量导出失败', icon: 'none' }) }
 }
 </script>
 
@@ -228,4 +370,8 @@ function generateDrill() {
 .actions button,
 .class-picker button { height: 64rpx; line-height: 64rpx; padding-top: 0; padding-bottom: 0; box-sizing: border-box; }
 .class-picker { display: flex; align-items: center; height: 64rpx; }
+.check-col { flex: 0 0 76rpx; width: 76rpx; padding: 16rpx 4rpx; box-sizing: border-box; text-align: center; }
+.operation-col { flex: 0 0 220rpx; width: 220rpx; padding: 12rpx 4rpx; box-sizing: border-box; text-align: center; white-space: nowrap; }
+.operation-col button { margin: 0 4rpx; }
+.operation-hint { color: #909399; font-size: 22rpx; }
 </style>

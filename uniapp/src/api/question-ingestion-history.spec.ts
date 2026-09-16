@@ -81,6 +81,17 @@ describe('importCourseDocument', () => {
     )
   })
 
+  it('shows the backend validation array instead of the generic submit error', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ['DOCX 文档等价页数不能超过 100 页'],
+    } as Response)
+
+    await expect(importCourseDocument(new File(['docx'], 'paper.docx'), { courseId: 'course-1' }))
+      .rejects.toThrow('DOCX 文档等价页数不能超过 100 页')
+  })
+
   it('reads persisted document status from its current-course endpoint', () => {
     getCourseDocumentImportStatus('course-1', 'task-1')
     expect(get).toHaveBeenCalledWith('/courses/course-1/questions/import-document/task-1/status/')

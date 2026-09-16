@@ -12,6 +12,7 @@ import fitz
 
 from celery import shared_task
 from django.conf import settings
+from django.utils import timezone
 
 from apps.common.ai.exceptions import AIResponseError
 from apps.common.exceptions import AIRequestError
@@ -151,10 +152,15 @@ def process_document_import_task(self, task_id):
             actor=task.batch.actor,
             batch=task.batch,
             source_root=asset_root,
-            course=task.course,
-            tree_node=task.tree_node,
+            # The wrong-drill source must remain isolated from the classroom
+            # workbook/course links. Ordinary imports keep the old linkage.
+            course=task.course if task.import_purpose != 'wrongbook_drill' else None,
+            tree_node=task.tree_node if task.import_purpose != 'wrongbook_drill' else None,
             document_import_task=task,
         )
+        if task.import_purpose == 'wrongbook_drill' and task.wrong_drill_source_set_id:
+            from apps.missions.classroom_wrong_drill_service import finalize_source_import
+            finalize_source_import(task.wrong_drill_source_set_id, valid, result)
         failed_count = result.failed + len(failures)
         finish_ingestion_batch(
             task.batch,
@@ -174,6 +180,11 @@ def process_document_import_task(self, task_id):
         _set_stage(task, stage, 100, error_summary='; '.join(summaries), linked_count=result.linked_count)
         return {'task_id': str(task.id), 'stage': stage, **result.as_dict(batch=task.batch, course=task.course)}
     except Exception as exc:
+        if task.import_purpose == 'wrongbook_drill' and task.wrong_drill_source_set_id:
+            from apps.missions.models import ClassroomWrongDrillSourceSet
+            ClassroomWrongDrillSourceSet.objects.filter(pk=task.wrong_drill_source_set_id).update(
+                status='failed', error_summary=_redacted_error(exc), updated_at=timezone.now(),
+            )
         finish_ingestion_batch(
             task.batch, total_read=task.batch.total_read, created_count=task.batch.created_count,
             skipped_existing_count=task.batch.skipped_existing_count,

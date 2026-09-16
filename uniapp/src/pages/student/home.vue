@@ -40,6 +40,7 @@
           </view>
           <view class="card-top">
             <text class="mission-name">{{ m.mission.mission_name }}</text>
+            <text v-if="m.mission.source_type === 'wrongbook_drill'" class="drill-tag">错题本 · 精练题</text>
             <text class="mission-status" :class="'status-' + m.progress_status">{{ statusText(m.progress_status) }}</text>
           </view>
           <!-- 关卡数和题目数 -->
@@ -237,6 +238,7 @@ function statusText(status: string): string {
 </script>
 
 <style scoped>
+.drill-tag { margin-left: 10rpx; padding: 4rpx 8rpx; color: #67c23a; background: #f0f9eb; border-radius: 6rpx; font-size: 20rpx; }
 .student-home {
   display: flex;
   min-height: 100vh;

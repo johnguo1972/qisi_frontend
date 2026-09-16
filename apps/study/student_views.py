@@ -223,11 +223,15 @@ def student_home(request):
                 'mission_no': mission.mission_no,
                 'mission_name': mission.mission_name,
                 'created_at': mission.created_at.isoformat() if mission.created_at else None,
+                'source_type': mission.source_type,
+                'mission_kind': mission.mission_kind,
             },
             'class_label': '、'.join(cls.class_name for cls in assignment_classes) if assignment_classes else (class_obj.class_name if class_obj else None),
             'class_ids': [str(cls.id) for cls in assignment_classes],
             'deadline': mission.end_at.isoformat() if mission.end_at else None,
             'assignment_mode': mission.assignment_mode,
+            'source_type': mission.source_type,
+            'mission_kind': mission.mission_kind,
             'subject': mission_subject_codes[0] if mission_subject_codes else '',
             'subjects': mission_subject_codes,
             'level_count': level_count,
@@ -335,6 +339,8 @@ def student_mission_detail(request, mission_id):
             'class_ids': [str(cls.id) for cls in assignment_classes],
             'deadline': mission.end_at.isoformat() if mission.end_at else None,
             'assignment_mode': mission.assignment_mode,
+            'source_type': mission.source_type,
+            'mission_kind': mission.mission_kind,
             'progress_status': sp.progress_status if sp else 'not_started',
             'progress_percent': float(sp.progress_percent) if sp else overall_progress,
             'pdf_download_url': mission_pdf_download_url(mission),
@@ -374,7 +380,14 @@ def student_level_detail(request, level_id):
     for rel in rels:
         try:
             q = ExamQuestion.objects.get(pk=rel.question_id)
-            questions.append(snapshot_payload(q, rel))
+            payload = snapshot_payload(q, rel)
+            if level.mission.source_type == 'wrongbook_drill':
+                # The answer appendix is a PDF-only artifact for this
+                # business type; never expose it through the online question API.
+                payload['answer'] = ''
+                payload['analysis'] = ''
+                payload['solution'] = ''
+            questions.append(payload)
         except ExamQuestion.DoesNotExist:
             continue
 
@@ -643,7 +656,8 @@ def _export_question_type(q: dict, infer_unknown: bool = False) -> str:
 
 
 def _build_pdf(export_type: str, questions: list, include_answers: bool,
-               watermark_text: str = "", render_formulas: bool = False) -> bytes:
+               watermark_text: str = "", render_formulas: bool = False,
+               answer_only: bool = False) -> bytes:
     """增强版 PDF 生成：水印、知识点标签、页码、图片。"""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -717,11 +731,12 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
             content = option.get('text', '')
         return str(label), str(content or '')
 
-    type_label = '同类题练习' if export_type == 'variants' else ('错题本' if export_type == 'wrongbook' else '任务题目')
-    type_label = next(
-        (str(q.get('_pdf_title')) for q in questions if q.get('_pdf_title')),
-        type_label,
-    )
+    type_label = '答案' if answer_only else ('同类题练习' if export_type == 'variants' else ('错题本' if export_type == 'wrongbook' else '任务题目'))
+    if not answer_only:
+        type_label = next(
+            (str(q.get('_pdf_title')) for q in questions if q.get('_pdf_title')),
+            type_label,
+        )
     story.append(Paragraph(pdf_text(type_label), h1))
     story.append(Spacer(1, 6*mm))
     story.append(Paragraph(f'导出时间：{timezone.now().strftime("%Y-%m-%d %H:%M:%S")}　题目数：{len(questions)}', body))
@@ -731,6 +746,14 @@ def _build_pdf(export_type: str, questions: list, include_answers: bool,
     # true/false and fill-in-the-blank questions keep the compact layout.
     short_answer_types = {'short_answer'}
     for i, q in enumerate(questions, 1):
+        if answer_only:
+            story.append(Paragraph(pdf_text(f'第{i}题'), question_number))
+            if q.get('answer'):
+                story.append(Paragraph(f'<b>答案：</b>{content_text(q["answer"])}', body))
+            else:
+                story.append(Paragraph('<b>答案：</b>缺少答案', body))
+            story.append(Spacer(1, 4 * mm))
+            continue
         effective_type = _export_question_type(q, infer_unknown=render_formulas)
         qtype = ExamQuestion.QUESTION_TYPE_LABELS.get(effective_type, '未识别题型' if render_formulas else effective_type)
         header_label = f'第{i}题（{qtype}）'

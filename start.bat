@@ -24,7 +24,7 @@ echo.
 rem ---- 3) 后端 Django :8001（已运行则跳过）----
 rem ---- Celery Worker: Windows uses the solo pool to avoid prefork permission errors ----
 echo [3/5] Starting Celery Worker ...
-start "qisi-Celery" cmd.exe /d /k venv\Scripts\celery.exe -A config worker -P solo -l info -Q celery,ai.batch
+start "qisi-Celery" cmd.exe /d /k venv\Scripts\celery.exe -A config worker -P solo -l info -Q celery,ai.batch,document.import
 echo [3/5] Celery Worker ready
 echo.
 

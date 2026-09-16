@@ -24,6 +24,9 @@ def _task_data(task):
         'stage': task.stage,
         'progress': task.progress,
         'document_type': task.document_type,
+        'import_purpose': task.import_purpose,
+        'source_type': task.source_type,
+        'wrong_drill_source_set_id': str(task.wrong_drill_source_set_id) if task.wrong_drill_source_set_id else None,
         'page_count': task.page_count,
         'total_read': batch.total_read,
         'created_count': batch.created_count,
@@ -35,9 +38,9 @@ def _task_data(task):
     }
 
 
-def _save_upload(upload, *, course_id, document_type):
+def _save_upload(upload, *, course_id, document_type, storage_prefix='course_document_imports'):
     """Write an untrusted file only below our controlled media root."""
-    relative_path = Path('course_document_imports') / str(course_id) / (
+    relative_path = Path(storage_prefix) / str(course_id) / (
         f'{uuid.uuid4().hex}.{document_type}'
     )
     destination = Path(settings.MEDIA_ROOT) / relative_path
@@ -56,9 +59,15 @@ def _save_upload(upload, *, course_id, document_type):
     return relative_path.as_posix()
 
 
-def create_course_document_import(request, *, course, tree_node=None):
+def create_course_document_import(
+    request, *, course, tree_node=None, import_purpose='document_import',
+    source_type='document_import', wrong_drill_source_set_id=None,
+    storage_prefix='course_document_imports', upload=None,
+):
     """Create a durable import record, then dispatch only after DB commit."""
-    upload = request.FILES.get('file')
+    # Ordinary course imports continue to use the existing ``file`` field.
+    # Isolated business imports may pass their explicitly named upload field.
+    upload = upload or request.FILES.get('file')
     if upload is None:
         raise ValidationError('file is required')
     try:
@@ -71,10 +80,14 @@ def create_course_document_import(request, *, course, tree_node=None):
         with transaction.atomic():
             source_file = _save_upload(
                 upload, course_id=course.id, document_type=validated.document_type,
+                storage_prefix=storage_prefix,
             )
             batch = start_ingestion_batch(
                 actor=request.user,
-                source_type='document_import',
+                # Keep the ordinary default unchanged while allowing isolated
+                # business imports (for example wrongbook_drill) to retain
+                # their own auditable source type.
+                source_type=source_type,
                 source_name=validated.filename,
                 course=course,
             )
@@ -86,6 +99,9 @@ def create_course_document_import(request, *, course, tree_node=None):
                 detected_mime=validated.detected_mime,
                 document_type=validated.document_type,
                 page_count=validated.page_count,
+                import_purpose=import_purpose,
+                source_type=source_type,
+                wrong_drill_source_set_id=wrong_drill_source_set_id,
             )
 
             def dispatch():

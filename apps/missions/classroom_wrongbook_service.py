@@ -399,7 +399,33 @@ def classroom_statistics_payload(mission, matrix):
         } for question in questions],
         'students': student_rows,
         'latest_import': import_batch_payload(latest_import),
+        'wrong_drill_sources': _wrong_drill_sources_payload(mission, matrix),
     }
+
+
+def _wrong_drill_sources_payload(mission, matrix):
+    """Expose isolated source status and latest package actions to the page."""
+    from .models import ClassroomWrongDrillBatch
+    from .classroom_wrong_drill_service import source_sets_payload
+    sources = source_sets_payload(mission)
+    latest = ClassroomWrongDrillBatch.objects.filter(matrix=matrix).order_by('-created_at').first()
+    packages = []
+    if latest:
+        packages = [{
+            'package_id': str(package.id), 'student_id': str(package.student_id),
+            'student_name': package.student.display_name, 'file_name': package.file_name,
+            'pdf_file_path': package.pdf_file_path,
+            'pdf_download_url': f"{settings.MEDIA_URL.rstrip('/')}/{package.pdf_file_path.lstrip('/')}",
+            'mission_id': str(package.mission_id),
+            'question_count': package.question_count, 'status': package.status,
+            'items': [{
+                'wrong_question_no': item.wrong_question_no,
+                'drill_question_no': item.drill_question_no,
+                'stem_preview': str((item.source_question.question_snapshot or {}).get('stem', ''))[:120],
+                'status': item.status,
+            } for item in package.items.select_related('source_question').order_by('sort_no')],
+        } for package in latest.packages.select_related('student').all()]
+    return {'sources': sources, 'latest_batch_id': str(latest.id) if latest else None, 'packages': packages}
 
 
 def import_batch_payload(batch):

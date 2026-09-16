@@ -3,6 +3,12 @@ from . import views
 from . import wrongbook_matrix_views as matrix_views
 from .learning_stats_views import mission_learning_stats
 from .classroom_wrongbook_views import classroom_wrongbook_statistics, classroom_wrongbook_import
+from .classroom_wrong_drill_views import (
+    classroom_wrong_drill_sources, classroom_wrong_drill_mapping_import,
+    classroom_wrong_drill_generate, classroom_wrong_drill_batch,
+    classroom_wrong_drill_bulk_export,
+    classroom_wrong_drill_preflight_view,
+)
 
 app_name = 'missions'
 urlpatterns = [
@@ -63,6 +69,14 @@ urlpatterns = [
     path('<uuid:mission_id>/wrongbook-matrix/close', matrix_views.wrongbook_matrix_close, name='wrongbook-matrix-close'),
     path('<uuid:mission_id>/classroom-wrongbook-statistics', classroom_wrongbook_statistics, name='classroom-wrongbook-statistics'),
     path('<uuid:mission_id>/classroom-wrongbook-statistics/import', classroom_wrongbook_import, name='classroom-wrongbook-import'),
+    path('<uuid:mission_id>/classroom-wrongbook-statistics/wrong-drill/sources', classroom_wrong_drill_sources, name='classroom-wrong-drill-sources'),
+    # Backward-compatible singular alias used by local integrations.
+    path('<uuid:mission_id>/classroom-wrongbook-statistics/wrong-drill/source', classroom_wrong_drill_sources, name='classroom-wrong-drill-source'),
+    path('<uuid:mission_id>/classroom-wrongbook-statistics/wrong-drill/sources/<uuid:source_set_id>/mapping', classroom_wrong_drill_mapping_import, name='classroom-wrong-drill-mapping-import'),
+    path('<uuid:mission_id>/classroom-wrongbook-statistics/wrong-drill/generate', classroom_wrong_drill_generate, name='classroom-wrong-drill-generate'),
+    path('<uuid:mission_id>/classroom-wrongbook-statistics/wrong-drill/preflight', classroom_wrong_drill_preflight_view, name='classroom-wrong-drill-preflight'),
+    path('<uuid:mission_id>/classroom-wrongbook-statistics/wrong-drill/batches/<uuid:batch_id>', classroom_wrong_drill_batch, name='classroom-wrong-drill-batch'),
+    path('<uuid:mission_id>/classroom-wrongbook-statistics/wrong-drill/batches/<uuid:batch_id>/bulk-export', classroom_wrong_drill_bulk_export, name='classroom-wrong-drill-bulk-export'),
     path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>', matrix_views.wrongbook_generation_detail_nested, name='wrongbook-generation-detail-nested'),
     path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/retry', matrix_views.wrongbook_generation_retry_nested, name='wrongbook-generation-retry-nested'),
     path('<uuid:mission_id>/wrongbook-matrix/generation/<uuid:batch_id>/recommendations', matrix_views.wrongbook_recommendations_nested, name='wrongbook-recommendations-nested'),

@@ -11,6 +11,7 @@
       </view>
       <view class="mission-card">
         <text class="title">{{ missionName }}</text>
+        <view v-if="isWrongDrill" class="source-tags"><text class="source-tag">题目来源：错题本</text><text class="source-tag">类型：精练题</text></view>
         <text class="goal">{{ goalText || '暂无描述' }}</text>
         <button v-if="missionId" class="submit-all-btn" :disabled="submitting || missionSubmitted" @click="submitMission">{{ submitting ? '提交中...' : (missionSubmitted ? '整份作业已提交' : '提交整份作业') }}</button>
         <!-- 班级和截止日期 -->
@@ -79,6 +80,9 @@ const goalText = ref('')
 const className = ref('')
 const deadline = ref('')
 const assignmentMode = ref<'flat' | 'levels'>('levels')
+const sourceType = ref('')
+const missionKind = ref('')
+const isWrongDrill = computed(() => sourceType.value === 'wrongbook_drill' || missionKind.value === 'wrongbook_personal')
 const levels = ref<any[]>([])
 const submitting = ref(false)
 const progressStatus = ref('not_started')
@@ -118,6 +122,8 @@ async function loadMission() {
     className.value = res.data?.class_name || ''
     deadline.value = res.data?.deadline || ''
     assignmentMode.value = res.data?.assignment_mode || 'levels'
+    sourceType.value = res.data?.source_type || ''
+    missionKind.value = res.data?.mission_kind || ''
     progressStatus.value = String(res.data?.progress_status || 'not_started')
     levels.value = res.data?.levels || []
   } catch (e) {
@@ -205,6 +211,8 @@ function goBack() {
 </script>
 
 <style scoped>
+.source-tags { display: flex; gap: 12rpx; margin: 10rpx 0; }
+.source-tag { padding: 4rpx 10rpx; color: #409eff; background: #ecf5ff; border-radius: 6rpx; font-size: 22rpx; }
 .mission-page {
   display: flex;
   min-height: 100vh;

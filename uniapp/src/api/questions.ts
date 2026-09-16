@@ -303,6 +303,21 @@ export type CourseDocumentImportOptions = {
   treeNodeId?: string
 }
 
+function documentImportErrorMessage(payload: any, status: number) {
+  const values = Array.isArray(payload)
+    ? payload
+    : [payload?.message, payload?.detail, payload?.error]
+  const messages = values
+    .flatMap((value: any) => Array.isArray(value) ? value : [value])
+    .map((value: any) => {
+      if (typeof value === 'string') return value.trim()
+      if (value && typeof value === 'object') return JSON.stringify(value)
+      return ''
+    })
+    .filter(Boolean)
+  return messages.join('；') || `文档导入提交失败（HTTP ${status}）`
+}
+
 /** Queue a PDF/DOCX import only in the currently selected course. */
 export function importCourseDocument(file: File, options: CourseDocumentImportOptions) {
   const courseId = String(options.courseId || '').trim()
@@ -315,7 +330,9 @@ export function importCourseDocument(file: File, options: CourseDocumentImportOp
     method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData,
   }).then(async response => {
     const data = await response.json()
-    if (!response.ok || data.code !== 0) throw new Error(data.message || '文档导入提交失败')
+    if (!response.ok || data.code !== 0) {
+      throw new Error(documentImportErrorMessage(data, response.status))
+    }
     return data
   })
 }

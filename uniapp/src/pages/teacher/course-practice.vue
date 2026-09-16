@@ -153,7 +153,7 @@
         <scroll-view v-show="activeTab === 'document'" class="tab-content" scroll-y>
           <view class="upload-area">
             <text class="upload-hint">上传 PDF 或 DOCX 试卷，系统将异步解析、结构化并关联到当前课程</text>
-            <text class="upload-note">仅支持 .pdf / .docx，单个文件不超过 100 MB、最多 100 页</text>
+          <text class="upload-note">仅支持 .pdf / .docx，单个文件不超过 200 MB；PDF 不超过 500 页，DOCX 等价页数不超过 500 页</text>
             <button class="btn-upload" :disabled="documentImportUploading" @click="chooseCourseDocument">
               {{ documentImportUploading ? '正在提交…' : '选择 PDF/Word 文档' }}
             </button>

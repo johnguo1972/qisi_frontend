@@ -276,7 +276,7 @@ class CreateMissionSerializer(serializers.ModelSerializer):
     target_student_ids = serializers.ListField(child=serializers.UUIDField(), required=False, default=list)
     course_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
     mission_kind = serializers.ChoiceField(choices=['regular', 'drill', 'wrongbook_personal'], required=False, default='regular')
-    source_type = serializers.ChoiceField(choices=['question_bank', 'handout', 'wrongbook', 'ai_recommendation', 'teacher_matrix'], required=False, default='question_bank')
+    source_type = serializers.ChoiceField(choices=['question_bank', 'handout', 'wrongbook', 'ai_recommendation', 'teacher_matrix', 'wrongbook_drill'], required=False, default='question_bank')
 
     class Meta:
         model = LearningMission

@@ -545,7 +545,7 @@ def mission_detail(request, mission_id):
                 return Response({'code': 400, 'message': 'assignment_mode 无效', 'data': None, 'trace_id': make_trace_id()}, status=400)
             if field == 'mission_kind' and val not in ('regular', 'drill', 'wrongbook_personal'):
                 return Response({'code': 400, 'message': 'mission_kind 无效', 'data': None, 'trace_id': make_trace_id()}, status=400)
-            if field == 'source_type' and val not in ('question_bank', 'handout', 'wrongbook', 'ai_recommendation', 'teacher_matrix'):
+            if field == 'source_type' and val not in ('question_bank', 'handout', 'wrongbook', 'ai_recommendation', 'teacher_matrix', 'wrongbook_drill'):
                 return Response({'code': 400, 'message': 'source_type 无效', 'data': None, 'trace_id': make_trace_id()}, status=400)
             setattr(mission, field, val)
     if 'target_student_ids' in request.data:

@@ -31,6 +31,11 @@ class QuestionDocumentImportTask(models.Model):
         related_name='document_import_tasks',
     )
     source_file = models.CharField(max_length=500)
+    # Optional isolated business context. Ordinary document imports retain
+    # their existing default values and behavior.
+    import_purpose = models.CharField(max_length=40, default='document_import')
+    source_type = models.CharField(max_length=40, default='document_import')
+    wrong_drill_source_set_id = models.UUIDField(null=True, blank=True, db_index=True)
     detected_mime = models.CharField(max_length=127)
     document_type = models.CharField(max_length=4, choices=DocumentType.choices)
     page_count = models.PositiveIntegerField()
