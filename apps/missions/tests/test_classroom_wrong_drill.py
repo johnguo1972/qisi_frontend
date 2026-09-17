@@ -7,7 +7,10 @@ import fitz
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import resolve
 
-from apps.missions.classroom_wrong_drill_service import generate_wrong_drill_batch, import_number_mapping, save_mapping_upload
+from apps.missions.classroom_wrong_drill_service import (
+    generate_wrong_drill_batch, import_number_mapping, save_mapping_upload,
+    source_set_detail_payload,
+)
 from apps.missions.classroom_wrongbook_service import prepare_classroom_matrix
 from apps.missions.models import (
     ClassroomWrongDrillNumberMapping, ClassroomWrongDrillSourceQuestion,
@@ -155,3 +158,58 @@ def test_mapping_file_uses_wrongbook_number_to_workbook_number_direction():
     assert row.workbook_question_no == '1'
     assert row.workbook_question_id == workbook_question.id
     assert source_set.status == 'ready'
+
+
+def test_source_detail_uses_question_cards_with_filters_pagination_and_document_number():
+    teacher, _, _, node, workbook_question, mission, _ = _fixture()
+    source_set = ClassroomWrongDrillSourceSet.objects.create(
+        source_mission=mission, source_node_id=node.id, source_node_name=node.name,
+        created_by=teacher, status='pending',
+    )
+    first = ExamQuestion.objects.create(
+        paper=workbook_question.paper, question_no='101', question_type='single_choice',
+        subject='math', stem='第一道保留题', difficulty=2,
+    )
+    second = ExamQuestion.objects.create(
+        paper=workbook_question.paper, question_no='102', question_type='fill_blank',
+        subject='math', stem='第二道填空题', difficulty=3,
+    )
+    ClassroomWrongDrillSourceQuestion.objects.create(
+        source_set=source_set, question=first, wrong_question_no='4', sort_no=1,
+    )
+    ClassroomWrongDrillSourceQuestion.objects.create(
+        source_set=source_set, question=second, wrong_question_no='8', sort_no=2,
+    )
+
+    payload = source_set_detail_payload(source_set, {
+        'question_type': 'fill_blank', 'page': '1', 'page_size': '1',
+    })
+
+    assert payload['total'] == 1
+    assert payload['page_no'] == 1
+    assert payload['page_size'] == 1
+    assert payload['questions'][0]['id'] == str(second.id)
+    assert payload['questions'][0]['source_document_question_no'] == '8'
+    assert payload['questions'][0]['wrong_question_no'] == '8'
+    assert payload['questions'][0]['stem'] == '第二道填空题'
+
+
+def test_teacher_can_remove_question_from_wrong_drill_source_without_deleting_question():
+    teacher, _, class_obj, node, workbook_question, mission, _ = _fixture()
+    source_set = ClassroomWrongDrillSourceSet.objects.create(
+        source_mission=mission, source_node_id=node.id, source_node_name=node.name,
+        created_by=teacher, status='pending',
+    )
+    source_question = ClassroomWrongDrillSourceQuestion.objects.create(
+        source_set=source_set, question=workbook_question, wrong_question_no='9', sort_no=1,
+    )
+
+    response = _client(teacher).delete(
+        f'/api/v1/missions/{mission.id}/classroom-wrongbook-statistics/wrong-drill/sources/{source_set.id}'
+        f'?class_id={class_obj.id}&question_ids={workbook_question.id}',
+    )
+
+    assert response.status_code == 200
+    assert response.data['data']['removed_count'] == 1
+    assert not ClassroomWrongDrillSourceQuestion.objects.filter(pk=source_question.id).exists()
+    assert ExamQuestion.objects.filter(pk=workbook_question.id).exists()

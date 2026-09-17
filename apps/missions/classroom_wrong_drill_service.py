@@ -12,6 +12,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Case, IntegerField, Value, When
 from django.utils import timezone
 
 from apps.common.xlsx_reader import read_xlsx_sheets
@@ -300,20 +301,54 @@ def source_sets_payload(mission):
     return result
 
 
-def source_set_detail_payload(source_set):
-    """Payload for the source-management pages; never exposes mutable ORM fields."""
+def source_set_detail_payload(source_set, params=None):
+    """Return paged card data for one isolated wrong-drill source set.
+
+    The linked canonical questions remain the source of truth.  This keeps the
+    wrong-drill screen compatible with the course-practice card (including
+    options, media, tags and AI fields) while retaining the document number
+    needed by the wrong-question mapping workflow.
+    """
+    from apps.courses.views import apply_course_question_filters
+    from apps.study.serializers import QuestionListSerializer
+
+    params = params or {}
+    try:
+        page = max(int(params.get('page', 1)), 1)
+        page_size = min(max(int(params.get('page_size', 20)), 1), 100)
+    except (TypeError, ValueError):
+        raise MatrixError('page/page_size 参数无效', 'SOURCE_PAGE_INVALID', 400)
+
+    source_rows = list(source_set.questions.order_by('sort_no', 'id').values(
+        'question_id', 'wrong_question_no', 'sort_no', 'question_snapshot',
+    ))
+    source_by_question_id = {str(row['question_id']): row for row in source_rows}
+    ordering = Case(
+        *[When(id=row['question_id'], then=Value(row['sort_no'])) for row in source_rows],
+        output_field=IntegerField(),
+    ) if source_rows else Value(0, output_field=IntegerField())
+    questions = ExamQuestion.objects.select_related('paper').prefetch_related('images', 'options').filter(
+        id__in=[row['question_id'] for row in source_rows],
+    )
+    questions = apply_course_question_filters(questions, params)
+    total = questions.count()
+    page_items = list(questions.order_by(ordering, 'id')[(page - 1) * page_size:page * page_size])
+    serialized = QuestionListSerializer(page_items, many=True).data
+    for item in serialized:
+        source_row = source_by_question_id.get(str(item.get('id')), {})
+        document_no = source_row.get('wrong_question_no') or ''
+        item['source_document_question_no'] = document_no
+        item['wrong_question_no'] = document_no
+        item['source_sort_no'] = source_row.get('sort_no')
+        item['source_snapshot'] = source_row.get('question_snapshot') or {}
     return {
         'source_set_id': str(source_set.id),
         'status': source_set.status,
         'source_file_name': Path(source_set.source_file_path).name,
-        'questions': [{
-            'question_id': str(item.question_id),
-            'question_no': item.wrong_question_no,
-            'sort_no': item.sort_no,
-            'snapshot': item.question_snapshot or {},
-            'answer': item.answer_snapshot,
-            'analysis': item.analysis_snapshot,
-        } for item in source_set.questions.order_by('sort_no', 'id')],
+        'questions': serialized,
+        'total': total,
+        'page_no': page,
+        'page_size': page_size,
         'mappings': [{
             'mapping_id': str(item.id),
             'wrong_question_no': item.wrong_question_no,
@@ -322,6 +357,18 @@ def source_set_detail_payload(source_set):
             'reason': item.reason,
         } for item in source_set.number_mappings.order_by('sort_no', 'id')],
     }
+
+
+@transaction.atomic
+def remove_source_questions(source_set, question_ids):
+    """Remove source-set membership only; canonical question rows are retained."""
+    normalized_ids = {str(question_id).strip() for question_id in question_ids if str(question_id).strip()}
+    if not normalized_ids:
+        raise MatrixError('question_ids 必须是非空数组', 'SOURCE_QUESTION_IDS_REQUIRED', 400)
+    source_questions = source_set.questions.filter(question_id__in=normalized_ids)
+    removed_count = source_questions.count()
+    source_questions.delete()
+    return removed_count
 
 
 @transaction.atomic
