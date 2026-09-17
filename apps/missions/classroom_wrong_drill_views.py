@@ -18,6 +18,7 @@ from apps.study.document_import_views import create_course_document_import
 from .classroom_wrong_drill_service import (
     import_number_mapping, queue_wrong_drill_batch, save_mapping_upload, wrong_drill_preflight,
     source_sets_payload, source_set_detail_payload, save_manual_number_mappings,
+    remove_source_questions,
 )
 from .classroom_wrongbook_service import prepare_classroom_matrix
 from .models import (
@@ -60,7 +61,9 @@ def _batch_payload(batch):
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def classroom_wrong_drill_sources(request, mission_id):
     try:
-        class_id = request.GET.get('class_id') if request.method == 'GET' else request.data.get('class_id')
+        class_id = request.GET.get('class_id') if request.method == 'GET' else (
+            request.data.get('class_id') or request.query_params.get('class_id')
+        )
         mission, _, _ = prepare_classroom_matrix(mission_id, request.user, class_id)
         if request.method == 'GET':
             return Response({'code': 0, 'message': 'success', 'data': {'sources': source_sets_payload(mission)}, 'trace_id': make_trace_id()})
@@ -110,15 +113,22 @@ def classroom_wrong_drill_sources(request, mission_id):
         return _error(MatrixError(str(exc) or '错题练习题导入失败', 'SOURCE_IMPORT_INVALID', 400))
 
 
-@api_view(['GET'])
+@api_view(['GET', 'DELETE'])
 @permission_classes([IsAuthenticated, IsTeacherSession])
 def classroom_wrong_drill_source_detail(request, mission_id, source_set_id):
     try:
-        mission, _, _ = prepare_classroom_matrix(mission_id, request.user, request.GET.get('class_id'))
+        class_id = request.GET.get('class_id') if request.method == 'GET' else request.data.get('class_id')
+        mission, _, _ = prepare_classroom_matrix(mission_id, request.user, class_id)
         source_set = ClassroomWrongDrillSourceSet.objects.filter(pk=source_set_id, source_mission=mission).first()
         if source_set is None:
             raise MatrixError('错题练习题导入源不存在', 'SOURCE_NOT_FOUND', 404)
-        return Response({'code': 0, 'message': 'success', 'data': source_set_detail_payload(source_set), 'trace_id': make_trace_id()})
+        if request.method == 'DELETE':
+            question_ids = request.data.get('question_ids') or request.query_params.get('question_ids') or []
+            if isinstance(question_ids, str):
+                question_ids = [item for item in question_ids.split(',') if item]
+            removed_count = remove_source_questions(source_set, question_ids)
+            return Response({'code': 0, 'message': '已从错题练习册移除', 'data': {'removed_count': removed_count}, 'trace_id': make_trace_id()})
+        return Response({'code': 0, 'message': 'success', 'data': source_set_detail_payload(source_set, request.query_params), 'trace_id': make_trace_id()})
     except MatrixError as exc:
         return _error(exc)
 

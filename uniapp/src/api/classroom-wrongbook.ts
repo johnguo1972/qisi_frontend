@@ -1,8 +1,15 @@
-import { get, post, patch } from '@/utils/request'
+import { del, get, post, patch } from '@/utils/request'
 import { getApiUrl } from '@/utils/api-config'
 
 export interface ClassroomWrongbookQuery {
   class_id?: string
+  page?: number
+  page_size?: number
+  question_type?: string
+  difficulty?: string
+  knowledge_point_id?: string
+  tag?: string
+  keyword?: string
 }
 
 export const classroomWrongbookApi = {
@@ -47,8 +54,10 @@ export const classroomWrongbookApi = {
   }),
   wrongDrillSources: (missionId: string, params?: ClassroomWrongbookQuery) =>
     get<any>(`/missions/${missionId}/classroom-wrongbook-statistics/wrong-drill/sources`, params),
-  wrongDrillSourceDetail: (missionId: string, sourceSetId: string, classId?: string) =>
-    get<any>(`/missions/${missionId}/classroom-wrongbook-statistics/wrong-drill/sources/${sourceSetId}`, classId ? { class_id: classId } : undefined),
+  wrongDrillSourceDetail: (missionId: string, sourceSetId: string, params?: ClassroomWrongbookQuery) =>
+    get<any>(`/missions/${missionId}/classroom-wrongbook-statistics/wrong-drill/sources/${sourceSetId}`, params),
+  removeWrongDrillQuestions: (missionId: string, sourceSetId: string, data: { class_id: string; question_ids: string[] }) =>
+    del<any>(`/missions/${missionId}/classroom-wrongbook-statistics/wrong-drill/sources/${sourceSetId}`, data),
   saveWrongDrillMappings: (missionId: string, sourceSetId: string, data: {
     class_id?: string
     mappings: Array<{ wrong_question_no: string; workbook_question_no: string }>
