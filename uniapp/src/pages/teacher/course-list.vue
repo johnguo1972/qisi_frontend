@@ -35,6 +35,8 @@
           @click="handleCourseClick"
           @materials="handleMaterials"
           @practice="handlePractice"
+          @wrong-drill="handleWrongDrill"
+          @wrong-mapping="handleWrongMapping"
           @wrongbook="handleWrongbook"
           @feedback="handleFeedback"
           @delete="handleDeleteConfirm"
@@ -263,7 +265,10 @@ async function handleWrongbook(course: Course) {
     } else if (rows.length > 1) {
       uni.navigateTo({ url: `/pages/teacher/classroom-practice-select?course_id=${course.id}` })
     } else {
-      uni.showToast({ title: '当前课程暂无已发布的课堂练习', icon: 'none' })
+      const context: any = await courseApi.wrongDrillContext(String(course.id) as any)
+      const data = context?.data || context
+      const suffix = data.class_ids?.length === 1 ? `&class_id=${data.class_ids[0]}` : ''
+      uni.navigateTo({ url: `/pages/teacher/classroom-wrongbook-statistics?mission_id=${data.mission_id}${suffix}` })
     }
   } catch (error) {
     console.error('加载课堂练习失败:', error)
@@ -290,11 +295,15 @@ async function handleFeedback(course: Course) {
   }
 }
 
+function handleWrongDrill(course: Course) { uni.navigateTo({ url: `/pages/teacher/classroom-wrong-drill?course_id=${course.id}` }) }
+function handleWrongMapping(course: Course) { uni.navigateTo({ url: `/pages/teacher/classroom-wrong-mapping?course_id=${course.id}` }) }
+
 // ============================================================
 // Create dialog
 // ============================================================
 const showCreateDialog = ref(false)
 const creating = ref(false)
+const createValidationMessage = ref('')
 const subjectDropdownOpen = ref(false)
 const gradeDropdownOpen = ref(false)
 const classDropdownOpen = ref(false)

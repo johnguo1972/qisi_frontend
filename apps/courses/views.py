@@ -380,6 +380,31 @@ def classroom_practice_missions(request, course_id):
     })
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def wrong_drill_context(request, course_id):
+    """Resolve an existing practice mission or create a private offline resource carrier."""
+    course = _get_course_or_404(course_id)
+    _check_course_access(course, request.user)
+    from apps.missions.models import LearningMission, MissionClassAssignment
+    from apps.missions.wrongbook_matrix import can_manage_matrix
+
+    mission = LearningMission.objects.filter(course=course, status='published', source_context='course_practice').order_by('-updated_at', '-created_at').first()
+    created_offline = False
+    if mission is None:
+        mission = LearningMission.objects.filter(course=course, status='published', source_context='course_offline_wrongbook', creator_teacher_id=request.user).order_by('-updated_at', '-created_at').first()
+    if mission is None:
+        classes = list(CourseClass.objects.filter(course=course, status='active').values_list('class_obj_id', flat=True))
+        if not classes:
+            raise ValidationError('课程尚未关联班级，无法管理错题资源')
+        mission = LearningMission.objects.create(mission_name=f'{course.name}-线下错题资源', creator_teacher_id=request.user, course=course, class_obj_id=classes[0], status='published', assignment_mode='flat', source_type='wrongbook_drill', source_context='course_offline_wrongbook')
+        MissionClassAssignment.objects.bulk_create([MissionClassAssignment(mission=mission, class_obj_id=class_id, status='active') for class_id in classes])
+        created_offline = True
+    if not can_manage_matrix(mission, request.user):
+        raise PermissionDenied('无权管理该课堂错题资源')
+    return Response({'code': 0, 'message': 'success', 'data': {'mission_id': str(mission.id), 'class_ids': [str(row.class_obj_id) for row in mission.class_assignments.filter(status='active')], 'offline_context': mission.source_context == 'course_offline_wrongbook', 'created_offline': created_offline}})
+
+
 # ============================================================
 # 课程 CRUD
 # ============================================================

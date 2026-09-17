@@ -15,6 +15,8 @@
           <button class="btn secondary" @click="openEdit">编辑课程</button>
           <button class="btn secondary" @click="goMaterials">课程资料</button>
           <button class="btn primary" @click="goPractice">课程练习</button>
+          <button class="btn secondary" @click="goWrongDrill">错题练习</button>
+          <button class="btn secondary" @click="goWrongMapping">错题映射</button>
           <button class="btn secondary" @click="goClassroomWrongbook">错题统计</button>
           <button class="btn secondary" @click="goClassroomFeedback">课堂反馈</button>
         </view>
@@ -349,6 +351,8 @@ function goMaterials() {
 function goPractice() {
   uni.navigateTo({ url: `/pages/teacher/course-practice?id=${courseId.value}` })
 }
+function goWrongDrill() { uni.navigateTo({ url: `/pages/teacher/classroom-wrong-drill?course_id=${courseId.value}` }) }
+function goWrongMapping() { uni.navigateTo({ url: `/pages/teacher/classroom-wrong-mapping?course_id=${courseId.value}` }) }
 
 async function goClassroomWrongbook() {
   try {
@@ -359,7 +363,10 @@ async function goClassroomWrongbook() {
     } else if (rows.length > 1) {
       uni.navigateTo({ url: `/pages/teacher/classroom-practice-select?course_id=${courseId.value}` })
     } else {
-      uni.showToast({ title: '当前课程暂无已发布的课堂练习', icon: 'none' })
+      const context: any = await courseApi.wrongDrillContext(courseId.value as any)
+      const data = context?.data || context
+      const suffix = data.class_ids?.length === 1 ? `&class_id=${data.class_ids[0]}` : ''
+      uni.navigateTo({ url: `/pages/teacher/classroom-wrongbook-statistics?mission_id=${data.mission_id}${suffix}` })
     }
   } catch (error) {
     console.error('加载课堂练习失败:', error)

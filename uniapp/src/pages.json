@@ -27,6 +27,8 @@
     { "path": "pages/teacher/wrongbook-matrix", "style": { "navigationBarTitleText": "学生错题统计" } },
     { "path": "pages/teacher/classroom-practice-select", "style": { "navigationBarTitleText": "选择课堂练习" } },
     { "path": "pages/teacher/classroom-wrongbook-statistics", "style": { "navigationBarTitleText": "课堂错题统计" } },
+    { "path": "pages/teacher/classroom-wrong-drill", "style": { "navigationBarTitleText": "错题练习" } },
+    { "path": "pages/teacher/classroom-wrong-mapping", "style": { "navigationBarTitleText": "错题映射" } },
     { "path": "pages/teacher/classroom-feedback", "style": { "navigationBarTitleText": "课堂反馈" } },
     { "path": "pages/teacher/level-practice", "style": { "navigationBarTitleText": "关卡练习" } },
     { "path": "pages/teacher/class-create", "style": { "navigationBarTitleText": "创建班级" } },

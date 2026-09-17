@@ -62,7 +62,7 @@ def _question_no(value) -> str:
 def is_classroom_practice(mission: LearningMission) -> bool:
     return bool(
         mission.status == 'published'
-        and mission.source_context == 'course_practice'
+        and mission.source_context in ('course_practice', 'course_offline_wrongbook')
         and mission.course_id
     )
 
@@ -189,7 +189,10 @@ def prepare_classroom_matrix(mission_id, teacher, class_id=None):
         raise MatrixError('无权管理该课堂练习', 'FORBIDDEN', 403)
     if not is_classroom_practice(mission):
         raise MatrixError('当前任务不是已发布课堂练习', 'SCOPE_INVALID', 409)
-    ensure_classroom_provenance(mission)
+    # The offline resource carrier intentionally has no classroom questions.
+    # It exists only to own imported wrong-drill sources and mappings.
+    if mission.source_context == 'course_practice':
+        ensure_classroom_provenance(mission)
     selected_class_id = resolve_class_id(mission, class_id)
     matrix = get_or_create_matrix(mission, teacher, selected_class_id)
     return mission, matrix, selected_class_id

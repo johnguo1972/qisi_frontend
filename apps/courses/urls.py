@@ -54,6 +54,7 @@ urlpatterns = [
     path('courses/<uuid:course_id>/generate-mission-and-publish/', views.generate_and_publish_mission, name='generate-mission-and-publish'),
     path('courses/<uuid:course_id>/classroom-practice-missions/', views.classroom_practice_missions, name='classroom-practice-missions'),
     path('courses/<uuid:course_id>/classroom-practice-missions', views.classroom_practice_missions, name='classroom-practice-missions-no-slash'),
+    path('courses/<uuid:course_id>/wrong-drill-context', views.wrong_drill_context, name='wrong-drill-context'),
     path('courses/<uuid:course_id>/materials/<uuid:material_id>/pages/', views.material_pages, name='material-pages'),
     path('courses/<uuid:course_id>/materials/<uuid:material_id>/ai-recognize/', views.material_ai_recognize, name='material-ai-recognize'),
     path('courses/<uuid:course_id>/import-question/', views.import_question, name='import-question'),

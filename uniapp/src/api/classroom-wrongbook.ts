@@ -1,4 +1,4 @@
-import { get, patch } from '@/utils/request'
+import { get, post, patch } from '@/utils/request'
 import { getApiUrl } from '@/utils/api-config'
 
 export interface ClassroomWrongbookQuery {
@@ -47,6 +47,12 @@ export const classroomWrongbookApi = {
   }),
   wrongDrillSources: (missionId: string, params?: ClassroomWrongbookQuery) =>
     get<any>(`/missions/${missionId}/classroom-wrongbook-statistics/wrong-drill/sources`, params),
+  wrongDrillSourceDetail: (missionId: string, sourceSetId: string, classId?: string) =>
+    get<any>(`/missions/${missionId}/classroom-wrongbook-statistics/wrong-drill/sources/${sourceSetId}`, classId ? { class_id: classId } : undefined),
+  saveWrongDrillMappings: (missionId: string, sourceSetId: string, data: {
+    class_id?: string
+    mappings: Array<{ wrong_question_no: string; workbook_question_no: string }>
+  }) => patch<any>(`/missions/${missionId}/classroom-wrongbook-statistics/wrong-drill/sources/${sourceSetId}/mapping`, data),
   uploadWrongDrill: (missionId: string, filePath: string, data: {
     class_id: string
     source_node_id?: string

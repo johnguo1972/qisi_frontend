@@ -29,6 +29,8 @@
     <view class="card-actions">
       <button class="action-btn" size="mini" @click.stop="$emit('materials', course)">课程资料</button>
       <button class="action-btn primary" size="mini" @click.stop="$emit('practice', course)">课程练习</button>
+      <button class="action-btn" size="mini" @click.stop="$emit('wrong-drill', course)">错题练习</button>
+      <button class="action-btn" size="mini" @click.stop="$emit('wrong-mapping', course)">错题映射</button>
       <button class="action-btn" size="mini" @click.stop="$emit('wrongbook', course)">错题统计</button>
       <button class="action-btn" size="mini" @click.stop="$emit('feedback', course)">课堂反馈</button>
       <view class="delete-btn" @click.stop="$emit('delete', course)">
@@ -59,6 +61,8 @@ defineEmits<{
   click: [course: Course]
   materials: [course: Course]
   practice: [course: Course]
+  'wrong-drill': [course: Course]
+  'wrong-mapping': [course: Course]
   wrongbook: [course: Course]
   feedback: [course: Course]
   delete: [course: Course]

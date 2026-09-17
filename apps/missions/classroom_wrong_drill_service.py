@@ -194,13 +194,13 @@ def import_number_mapping(source_set, mapping_import):
             code = 'WRONG_NUMBER_NOT_IN_DOCX'
         elif target in duplicate_numbers:
             code = 'AMBIGUOUS_WORKBOOK_NUMBER'
-        elif target not in workbook_map:
+        elif target not in workbook_map and source_set.source_mission.source_context != 'course_offline_wrongbook':
             code = 'WORKBOOK_NUMBER_NOT_IN_CLASS'
         if code:
             errors.append({**row, 'reason_code': code})
             continue
         seen.add(wrong)
-        active.append((row, source_questions[wrong], workbook_map[target]))
+        active.append((row, source_questions[wrong], workbook_map.get(target)))
     source_set.number_mappings.all().delete()
     for index, (row, source_question, workbook_question_id) in enumerate(active, 1):
         ClassroomWrongDrillNumberMapping.objects.create(
@@ -271,6 +271,64 @@ def source_sets_payload(mission):
             } if mapping_import else None,
         })
     return result
+
+
+def source_set_detail_payload(source_set):
+    """Payload for the source-management pages; never exposes mutable ORM fields."""
+    return {
+        'source_set_id': str(source_set.id),
+        'status': source_set.status,
+        'source_file_name': Path(source_set.source_file_path).name,
+        'questions': [{
+            'question_id': str(item.question_id),
+            'question_no': item.wrong_question_no,
+            'sort_no': item.sort_no,
+            'snapshot': item.question_snapshot or {},
+            'answer': item.answer_snapshot,
+            'analysis': item.analysis_snapshot,
+        } for item in source_set.questions.order_by('sort_no', 'id')],
+        'mappings': [{
+            'mapping_id': str(item.id),
+            'wrong_question_no': item.wrong_question_no,
+            'workbook_question_no': item.workbook_question_no,
+            'status': item.status,
+            'reason': item.reason,
+        } for item in source_set.number_mappings.order_by('sort_no', 'id')],
+    }
+
+
+@transaction.atomic
+def save_manual_number_mappings(source_set, rows):
+    """Replace one source set's mappings with teacher-edited table rows."""
+    if not isinstance(rows, list):
+        raise MatrixError('mappings 必须是数组', 'INVALID_REQUEST', 400)
+    source_questions = {item.wrong_question_no: item for item in source_set.questions.all()}
+    workbook_map, _ = _workbook_number_map(source_set.source_mission, source_set.source_node_id)
+    normalized, seen = [], set()
+    for index, row in enumerate(rows, 1):
+        wrong = _norm((row or {}).get('wrong_question_no'))
+        target = _norm((row or {}).get('workbook_question_no'))
+        if not wrong or not target:
+            raise MatrixError(f'第 {index} 行题号不能为空', 'MAPPING_INVALID', 400)
+        if wrong in seen or wrong not in source_questions:
+            raise MatrixError(f'错题练习题号 {wrong} 不存在或重复', 'MAPPING_INVALID', 400)
+        seen.add(wrong)
+        workbook_id = workbook_map.get(target)
+        offline = source_set.source_mission.source_context == 'course_offline_wrongbook'
+        normalized.append((wrong, target, workbook_id, 'active' if workbook_id or offline else 'unmatched', '' if workbook_id or offline else '未在课堂练习中找到题号'))
+    source_set.number_mappings.all().delete()
+    ClassroomWrongDrillNumberMapping.objects.bulk_create([
+        ClassroomWrongDrillNumberMapping(
+            source_set=source_set, source_question=source_questions[wrong], wrong_question_no=wrong,
+            workbook_question_no=target, workbook_question_id=workbook_id, status=status,
+            reason=reason, mapping_version=source_set.number_mapping_version + 1, sort_no=index,
+        ) for index, (wrong, target, workbook_id, status, reason) in enumerate(normalized, 1)
+    ])
+    source_set.number_mapping_version += 1
+    source_set.status = 'ready' if normalized else 'pending_mapping'
+    source_set.error_summary = ''
+    source_set.save(update_fields=['number_mapping_version', 'status', 'error_summary', 'updated_at'])
+    return source_set
 
 
 def wrong_drill_preflight(*, mission, matrix, source_set_id, student_ids=None):

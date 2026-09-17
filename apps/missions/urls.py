@@ -4,7 +4,7 @@ from . import wrongbook_matrix_views as matrix_views
 from .learning_stats_views import mission_learning_stats
 from .classroom_wrongbook_views import classroom_wrongbook_statistics, classroom_wrongbook_import
 from .classroom_wrong_drill_views import (
-    classroom_wrong_drill_sources, classroom_wrong_drill_mapping_import,
+    classroom_wrong_drill_sources, classroom_wrong_drill_source_detail, classroom_wrong_drill_mapping_import,
     classroom_wrong_drill_generate, classroom_wrong_drill_batch,
     classroom_wrong_drill_bulk_export,
     classroom_wrong_drill_preflight_view,
@@ -70,6 +70,7 @@ urlpatterns = [
     path('<uuid:mission_id>/classroom-wrongbook-statistics', classroom_wrongbook_statistics, name='classroom-wrongbook-statistics'),
     path('<uuid:mission_id>/classroom-wrongbook-statistics/import', classroom_wrongbook_import, name='classroom-wrongbook-import'),
     path('<uuid:mission_id>/classroom-wrongbook-statistics/wrong-drill/sources', classroom_wrong_drill_sources, name='classroom-wrong-drill-sources'),
+    path('<uuid:mission_id>/classroom-wrongbook-statistics/wrong-drill/sources/<uuid:source_set_id>', classroom_wrong_drill_source_detail, name='classroom-wrong-drill-source-detail'),
     # Backward-compatible singular alias used by local integrations.
     path('<uuid:mission_id>/classroom-wrongbook-statistics/wrong-drill/source', classroom_wrong_drill_sources, name='classroom-wrong-drill-source'),
     path('<uuid:mission_id>/classroom-wrongbook-statistics/wrong-drill/sources/<uuid:source_set_id>/mapping', classroom_wrong_drill_mapping_import, name='classroom-wrong-drill-mapping-import'),

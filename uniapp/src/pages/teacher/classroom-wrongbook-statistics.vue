@@ -9,8 +9,12 @@
         </picker>
         <button size="mini" @click="load">刷新</button>
         <button size="mini" @click="chooseImportFile">导入错题统计</button>
+        <!--
+          导入入口已迁移到“错题练习”和“错题映射”独立页面；保留事件方法，
+          以便需要时恢复此处入口，不能删除或改写既有导入逻辑。
         <button size="mini" @click="chooseWrongDrillFile">导入错题练习题</button>
-        <button size="mini" @click="chooseMappingFile" :disabled="!selectedSourceId">导入映射表</button>
+        <button size="mini" @click="chooseMappingFile">导入映射表</button>
+        -->
         <button size="mini" :type="manualEditing ? 'primary' : 'default'" @click="toggleManual">{{ manualEditing ? '保存统计' : '手动统计错题' }}</button>
         <button v-if="manualEditing" size="mini" @click="cancelManual">取消</button>
         <button size="mini" type="primary" @click="generateDrill">{{ selectedStudentIds.length ? `生成选中学生精练题(${selectedStudentIds.length})` : '生成全部精练题' }}</button>
