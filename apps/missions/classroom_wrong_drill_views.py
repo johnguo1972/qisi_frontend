@@ -48,7 +48,8 @@ def _batch_payload(batch):
             'items': [{
                 'wrong_question_no': item.wrong_question_no,
                 'drill_question_no': item.drill_question_no,
-                'stem_preview': str((item.source_question.question_snapshot or {}).get('stem', ''))[:120],
+                'mapping_type': item.mapping_type,
+                'stem_preview': str((item.content_snapshot or (item.source_question.question_snapshot if item.source_question else {})).get('stem', ''))[:120],
                 'status': item.status,
             } for item in package.items.select_related('source_question').order_by('sort_no')],
         } for package in batch.packages.select_related('student', 'mission').all()],

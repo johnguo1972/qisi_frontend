@@ -47,7 +47,8 @@ def _build_cover_pdf(package):
     wrong_numbers = '、'.join(item.wrong_question_no for item in items) or '无'
     knowledge = []
     for item in items:
-        for point in (item.source_question.question_snapshot or {}).get('knowledge_points', []) or []:
+        snapshot = item.content_snapshot or (item.source_question.question_snapshot if item.source_question else {})
+        for point in snapshot.get('knowledge_points', []) or []:
             value = point.get('module') if isinstance(point, dict) else point
             if value and value not in knowledge:
                 knowledge.append(str(value))

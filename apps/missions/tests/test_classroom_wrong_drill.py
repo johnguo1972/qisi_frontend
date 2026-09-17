@@ -195,3 +195,42 @@ def test_mapping_file_uses_first_two_columns_when_headers_are_nonstandard():
 
     assert parsing['mode'] == 'position'
     assert rows == [{'sheet': 'mapping', 'row': 3, 'wrong': '5', 'target': '1'}]
+
+
+def test_original_mapping_keeps_workbook_question_content_and_reuses_drill_number():
+    teacher, student, class_obj, node, workbook_question, mission, _ = _fixture()
+    matrix = prepare_classroom_matrix(mission.id, teacher, class_obj.id)[1]
+    drill = ExamQuestion.objects.create(
+        paper=workbook_question.paper, question_no='5', question_type='single_choice',
+        subject='math', stem='replacement drill', answer='A',
+    )
+    source_set = ClassroomWrongDrillSourceSet.objects.create(
+        source_mission=mission, source_node_id=node.id, created_by=teacher,
+        status='ready', number_mapping_version=1,
+    )
+    source_question = ClassroomWrongDrillSourceQuestion.objects.create(
+        source_set=source_set, question=drill, wrong_question_no='5',
+        question_snapshot={'stem': drill.stem, 'question_type': drill.question_type}, answer_snapshot='A',
+    )
+    # Reusing the same drill question is valid when it is placed at different
+    # workbook positions.  The original row keeps the workbook question itself.
+    ClassroomWrongDrillNumberMapping.objects.create(
+        source_set=source_set, source_question=source_question, wrong_question_no='5',
+        workbook_question_no='2', workbook_question_id=workbook_question.id, sort_no=1,
+    )
+    original_mapping = ClassroomWrongDrillNumberMapping.objects.create(
+        source_set=source_set, mapping_type='original', original_question=workbook_question,
+        wrong_question_no='原题', workbook_question_no='1', workbook_question_id=workbook_question.id,
+        display_question_no='1', sort_no=2,
+    )
+
+    batch = generate_wrong_drill_batch(
+        mission=mission, matrix=matrix, teacher=teacher, source_set_id=source_set.id,
+    )
+
+    item = batch.packages.get(student=student).items.get(mapping=original_mapping)
+    assert item.mapping_type == 'original'
+    assert item.source_question is None
+    assert item.drill_question_id == workbook_question.id
+    assert item.content_snapshot['stem'] == workbook_question.stem
+    assert item.drill_question_no == '1'

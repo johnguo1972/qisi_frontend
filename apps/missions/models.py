@@ -376,23 +376,37 @@ class ClassroomWrongDrillMappingImport(models.Model):
 
 class ClassroomWrongDrillNumberMapping(models.Model):
     STATUS_CHOICES = [('active', 'active'), ('invalid', 'invalid'), ('unmatched', 'unmatched')]
+    TYPE_CHOICES = [('wrong_drill', 'wrong_drill'), ('original', 'original')]
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     source_set = models.ForeignKey(ClassroomWrongDrillSourceSet, on_delete=models.CASCADE, related_name='number_mappings')
-    source_question = models.ForeignKey(ClassroomWrongDrillSourceQuestion, on_delete=models.CASCADE, related_name='number_mappings')
-    wrong_question_no = models.CharField(max_length=50)
+    # ``original`` mappings deliberately have no wrong-drill source question.
+    # Keeping them in this table lets a mapping spreadsheet describe every
+    # workbook question, including rows that must retain the original content.
+    source_question = models.ForeignKey(
+        ClassroomWrongDrillSourceQuestion, on_delete=models.CASCADE,
+        related_name='number_mappings', null=True, blank=True,
+    )
+    original_question = models.ForeignKey(
+        'parser.ExamQuestion', on_delete=models.PROTECT,
+        related_name='wrong_drill_original_mappings', null=True, blank=True,
+    )
+    mapping_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='wrong_drill')
+    wrong_question_no = models.CharField(max_length=50, blank=True, default='')
     workbook_question_no = models.CharField(max_length=50)
     workbook_question_id = models.UUIDField(null=True, blank=True, db_index=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     reason = models.CharField(max_length=255, blank=True, default='')
     mapping_version = models.PositiveIntegerField(default=1)
     sort_no = models.PositiveIntegerField(default=0)
+    # Empty for historical mappings, whose old display behaviour is retained.
+    display_question_no = models.CharField(max_length=50, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'classroom_wrong_drill_number_mapping'
         ordering = ['sort_no', 'id']
         constraints = [
-            models.UniqueConstraint(fields=['source_set', 'wrong_question_no'], name='uq_cwdnm_set_wrong_no'),
+            models.UniqueConstraint(fields=['source_set', 'workbook_question_no'], name='uq_cwdnm_set_workbook_no'),
         ]
 
 
@@ -451,9 +465,18 @@ class ClassroomWrongDrillItem(models.Model):
     STATUS_CHOICES = [('generated', 'generated'), ('missing_mapping', 'missing_mapping'), ('missing_answer', 'missing_answer')]
     id = models.UUIDField(primary_key=True, default=uuid_compat.uuid7, editable=False)
     package = models.ForeignKey(ClassroomWrongDrillPackage, on_delete=models.CASCADE, related_name='items')
-    source_question = models.ForeignKey(ClassroomWrongDrillSourceQuestion, on_delete=models.PROTECT, related_name='generated_items')
+    source_question = models.ForeignKey(
+        ClassroomWrongDrillSourceQuestion, on_delete=models.PROTECT,
+        related_name='generated_items', null=True, blank=True,
+    )
     mapping = models.ForeignKey(ClassroomWrongDrillNumberMapping, on_delete=models.PROTECT, related_name='generated_items')
     drill_question = models.ForeignKey('parser.ExamQuestion', on_delete=models.PROTECT, related_name='wrong_drill_items')
+    original_question = models.ForeignKey(
+        'parser.ExamQuestion', on_delete=models.PROTECT,
+        related_name='wrong_drill_original_items', null=True, blank=True,
+    )
+    mapping_type = models.CharField(max_length=20, default='wrong_drill')
+    content_snapshot = models.JSONField(default=dict, blank=True)
     wrong_question_no = models.CharField(max_length=50)
     drill_question_no = models.CharField(max_length=50)
     sort_no = models.PositiveIntegerField(default=0)
@@ -467,7 +490,7 @@ class ClassroomWrongDrillItem(models.Model):
         db_table = 'classroom_wrong_drill_item'
         ordering = ['sort_no', 'id']
         constraints = [
-            models.UniqueConstraint(fields=['package', 'source_question'], name='uq_cwdi_package_source'),
+            models.UniqueConstraint(fields=['package', 'mapping'], name='uq_cwdi_package_mapping'),
         ]
 
 

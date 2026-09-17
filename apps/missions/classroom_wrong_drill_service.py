@@ -236,35 +236,51 @@ def import_number_mapping(source_set, mapping_import):
     mapping_import.total_rows = len(rows)
     errors = []
     active = []
-    seen = set()
+    # A drill question may be reused by several workbook questions.  The
+    # workbook number, not the drill number, is the unique placement key.
+    seen_targets = set()
     for row in rows:
         wrong, target = row['wrong'], row['target']
         code = None
         if not wrong or not target:
             code = 'MISSING_NUMBER'
-        elif target in ('原题', 'original'):
-            code = 'ORIGINAL_QUESTION'
-        elif wrong in seen:
-            code = 'DUPLICATE_WRONG_NUMBER'
-        elif wrong not in source_questions:
-            code = 'WRONG_NUMBER_NOT_IN_DOCX'
+        elif target in seen_targets:
+            code = 'DUPLICATE_WORKBOOK_NUMBER'
         elif target in duplicate_numbers:
             code = 'AMBIGUOUS_WORKBOOK_NUMBER'
         elif target not in workbook_map and source_set.source_mission.source_context != 'course_offline_wrongbook':
             code = 'WORKBOOK_NUMBER_NOT_IN_CLASS'
+        elif wrong not in ('原题', 'original') and wrong not in source_questions:
+            code = 'WRONG_NUMBER_NOT_IN_DOCX'
         if code:
             errors.append({**row, 'reason_code': code})
             continue
-        seen.add(wrong)
-        active.append((row, source_questions[wrong], workbook_map.get(target)))
+        seen_targets.add(target)
+        mapping_type = 'original' if wrong in ('原题', 'original') else 'wrong_drill'
+        workbook_question_id = workbook_map.get(target)
+        if mapping_type == 'original' and not workbook_question_id:
+            # Original content cannot be reproduced if it is not part of the
+            # classroom/workbook question set.  Keep the row in import errors
+            # instead of silently creating an incomplete package.
+            errors.append({**row, 'reason_code': 'ORIGINAL_QUESTION_NOT_IN_CLASS'})
+            continue
+        active.append((row, mapping_type, source_questions.get(wrong), workbook_question_id))
     source_set.number_mappings.all().delete()
-    for index, (row, source_question, workbook_question_id) in enumerate(active, 1):
+    original_questions = {
+        str(question.id): question
+        for question in ExamQuestion.objects.filter(id__in=[item[3] for item in active if item[1] == 'original'])
+        .prefetch_related('images', 'options')
+    }
+    for index, (row, mapping_type, source_question, workbook_question_id) in enumerate(active, 1):
         ClassroomWrongDrillNumberMapping.objects.create(
             source_set=source_set,
             source_question=source_question,
+            original_question=original_questions.get(str(workbook_question_id)),
+            mapping_type=mapping_type,
             wrong_question_no=row['wrong'],
             workbook_question_no=row['target'],
             workbook_question_id=workbook_question_id,
+            display_question_no=row['target'],
             mapping_version=source_set.number_mapping_version + 1,
             sort_no=index,
         )
@@ -347,6 +363,8 @@ def source_set_detail_payload(source_set):
             'mapping_id': str(item.id),
             'wrong_question_no': item.wrong_question_no,
             'workbook_question_no': item.workbook_question_no,
+            'mapping_type': item.mapping_type,
+            'display_question_no': item.display_question_no,
             'status': item.status,
             'reason': item.reason,
         } for item in source_set.number_mappings.order_by('sort_no', 'id')],
@@ -360,25 +378,39 @@ def save_manual_number_mappings(source_set, rows):
         raise MatrixError('mappings 必须是数组', 'INVALID_REQUEST', 400)
     source_questions = {item.wrong_question_no: item for item in source_set.questions.all()}
     workbook_map, _ = _workbook_number_map(source_set.source_mission, source_set.source_node_id)
-    normalized, seen = [], set()
+    normalized, seen_targets = [], set()
     for index, row in enumerate(rows, 1):
         wrong = _norm((row or {}).get('wrong_question_no'))
         target = _norm((row or {}).get('workbook_question_no'))
         if not wrong or not target:
             raise MatrixError(f'第 {index} 行题号不能为空', 'MAPPING_INVALID', 400)
-        if wrong in seen or wrong not in source_questions:
-            raise MatrixError(f'错题练习题号 {wrong} 不存在或重复', 'MAPPING_INVALID', 400)
-        seen.add(wrong)
+        if target in seen_targets:
+            raise MatrixError(f'练习题号 {target} 重复', 'MAPPING_INVALID', 400)
+        seen_targets.add(target)
         workbook_id = workbook_map.get(target)
         offline = source_set.source_mission.source_context == 'course_offline_wrongbook'
-        normalized.append((wrong, target, workbook_id, 'active' if workbook_id or offline else 'unmatched', '' if workbook_id or offline else '未在课堂练习中找到题号'))
+        mapping_type = 'original' if wrong in ('原题', 'original') else 'wrong_drill'
+        if mapping_type == 'wrong_drill' and wrong not in source_questions:
+            raise MatrixError(f'错题练习题号 {wrong} 不存在', 'MAPPING_INVALID', 400)
+        if mapping_type == 'original' and not workbook_id:
+            raise MatrixError(f'练习题号 {target} 未找到，无法保留原题', 'MAPPING_INVALID', 400)
+        normalized.append((wrong, target, mapping_type, workbook_id, 'active' if workbook_id or offline else 'unmatched', '' if workbook_id or offline else '未在课堂练习中找到题号'))
     source_set.number_mappings.all().delete()
+    original_questions = {
+        str(question.id): question
+        for question in ExamQuestion.objects.filter(
+            id__in=[item[3] for item in normalized if item[2] == 'original'],
+        )
+    }
     ClassroomWrongDrillNumberMapping.objects.bulk_create([
         ClassroomWrongDrillNumberMapping(
-            source_set=source_set, source_question=source_questions[wrong], wrong_question_no=wrong,
+            source_set=source_set, source_question=source_questions.get(wrong),
+            original_question=original_questions.get(str(workbook_id)), mapping_type=mapping_type,
+            wrong_question_no=wrong,
             workbook_question_no=target, workbook_question_id=workbook_id, status=status,
             reason=reason, mapping_version=source_set.number_mapping_version + 1, sort_no=index,
-        ) for index, (wrong, target, workbook_id, status, reason) in enumerate(normalized, 1)
+            display_question_no=target,
+        ) for index, (wrong, target, mapping_type, workbook_id, status, reason) in enumerate(normalized, 1)
     ])
     source_set.number_mapping_version += 1
     source_set.status = 'ready' if normalized else 'pending_mapping'
@@ -432,17 +464,17 @@ def _filename(mission, source_set, student):
 
 def _mission_pdf_questions(package):
     rows = []
-    for item in package.items.filter(status='generated').select_related('drill_question').order_by('sort_no'):
+    for item in package.items.filter(status='generated').select_related('drill_question', 'source_question').order_by('sort_no'):
         q = item.drill_question
-        snapshot = item.source_question.question_snapshot or {}
+        snapshot = item.content_snapshot or (item.source_question.question_snapshot if item.source_question else {}) or _question_snapshot(q)
         data = dict(snapshot)
         data.update({
             'id': q.id, 'question_no': item.drill_question_no,
             'question_type': snapshot.get('question_type') or q.question_type,
             'stem': snapshot.get('stem') or q.stem,
             'stem_html': snapshot.get('stem_html') or q.stem_html,
-            'answer': item.source_question.answer_snapshot,
-            'analysis': item.source_question.analysis_snapshot,
+            'answer': (item.source_question.answer_snapshot if item.source_question else q.answer),
+            'analysis': (item.source_question.analysis_snapshot if item.source_question else q.analysis),
             '_pdf_title': package.mission.mission_name,
         })
         rows.append(data)
@@ -481,11 +513,11 @@ def _create_personal_mission(matrix, batch, package, student, items):
         MissionQuestionRel.objects.create(
             mission=mission, level=level, question_id=item.drill_question_id,
             sort_no=sort_no, source_type='wrongbook_drill', target_student_ids=[str(student.id)],
-            question_snapshot=item.source_question.question_snapshot,
+            question_snapshot=item.content_snapshot or (item.source_question.question_snapshot if item.source_question else _question_snapshot(item.drill_question)),
             source_matrix_id=matrix.id, source_student_id=student.id,
             source_set_id=batch.source_set_id, source_wrong_question_id=item.mapping.workbook_question_id,
             source_mapping_id=item.mapping_id, source_wrong_question_no=item.wrong_question_no,
-            source_drill_question_no=item.drill_question_no, source_role='drill_question',
+            source_drill_question_no=item.drill_question_no, source_role=('original_question' if item.mapping_type == 'original' else 'drill_question'),
             source_provider='wrongbook_drill', source_node_id=batch.source_set.source_node_id,
         )
     return mission
@@ -530,7 +562,7 @@ def generate_wrong_drill_batch(*, mission, matrix, teacher, source_set_id, stude
             status='generating', requested_count=len(selected),
         )
     mapping_by_workbook = {}
-    for row in source_set.number_mappings.filter(status='active').select_related('source_question'):
+    for row in source_set.number_mappings.filter(status='active').select_related('source_question', 'original_question'):
         mapping_by_workbook.setdefault(str(row.workbook_question_id), []).append(row)
     errors = []
     created_packages = []
@@ -540,18 +572,29 @@ def generate_wrong_drill_batch(*, mission, matrix, teacher, source_set_id, stude
         ).order_by('created_at')
         rows = []
         missing_answer_rows = []
-        seen_drill = set()
+        seen_mappings = set()
         for cell in cells:
             for mapping in mapping_by_workbook.get(str(cell.source_question_id), []):
-                if str(mapping.source_question_id) in seen_drill:
+                if str(mapping.id) in seen_mappings:
+                    continue
+                if mapping.mapping_type == 'original':
+                    question = mapping.original_question
+                    if question is None:
+                        errors.append({'student_id': student_id, 'wrong_question_no': mapping.workbook_question_no, 'reason_code': 'MISSING_ORIGINAL_QUESTION'})
+                        continue
+                    rows.append((question, mapping, _question_snapshot(question), question.answer or '', question.analysis or ''))
+                    seen_mappings.add(str(mapping.id))
                     continue
                 source_question = mapping.source_question
+                if source_question is None:
+                    errors.append({'student_id': student_id, 'wrong_question_no': mapping.workbook_question_no, 'reason_code': 'MISSING_DRILL_QUESTION'})
+                    continue
                 if not source_question.answer_snapshot.strip():
                     errors.append({'student_id': student_id, 'wrong_question_no': mapping.workbook_question_no, 'reason_code': 'MISSING_ANSWER'})
                     missing_answer_rows.append((source_question, mapping))
                     continue
-                rows.append((source_question, mapping))
-                seen_drill.add(str(mapping.source_question_id))
+                rows.append((source_question.question, mapping, source_question.question_snapshot or {}, source_question.answer_snapshot, source_question.analysis_snapshot))
+                seen_mappings.add(str(mapping.id))
         if not rows:
             errors.append({'student_id': student_id, 'reason_code': 'NO_MAPPED_DRILL'})
             continue
@@ -575,17 +618,19 @@ def generate_wrong_drill_batch(*, mission, matrix, teacher, source_set_id, stude
             number_mapping_version=source_set.number_mapping_version,
         )
         item_models = []
-        for sort_no, (source_question, mapping) in enumerate(rows, 1):
+        for sort_no, (question, mapping, snapshot, answer, analysis) in enumerate(rows, 1):
             item_models.append(ClassroomWrongDrillItem.objects.create(
-                package=package, source_question=source_question, mapping=mapping,
-                drill_question_id=source_question.question_id,
+                package=package, source_question=mapping.source_question, mapping=mapping,
+                drill_question=question, original_question=mapping.original_question,
+                mapping_type=mapping.mapping_type, content_snapshot=snapshot,
                 wrong_question_no=mapping.workbook_question_no,
-                drill_question_no=source_question.wrong_question_no, sort_no=sort_no,
+                drill_question_no=(mapping.display_question_no or (mapping.workbook_question_no if mapping.mapping_type == 'original' else mapping.wrong_question_no)), sort_no=sort_no,
                 relation_snapshot={
                     'source_wrong_question_id': str(mapping.workbook_question_id),
                     'source_wrong_question_no': mapping.workbook_question_no,
-                    'drill_question_id': str(source_question.question_id),
-                    'drill_question_no': source_question.wrong_question_no,
+                    'drill_question_id': str(question.id),
+                    'drill_question_no': mapping.wrong_question_no,
+                    'mapping_type': mapping.mapping_type,
                     'source_set_id': str(source_set.id),
                     'number_mapping_version': source_set.number_mapping_version,
                 },
@@ -668,10 +713,10 @@ def _create_personal_mission_relations(mission, matrix, batch, student_id, items
         MissionQuestionRel.objects.create(
             mission=mission, level=level, question_id=item.drill_question_id,
             sort_no=sort_no, source_type='wrongbook_drill', target_student_ids=[str(student_id)],
-            question_snapshot=item.source_question.question_snapshot,
+            question_snapshot=item.content_snapshot or (item.source_question.question_snapshot if item.source_question else _question_snapshot(item.drill_question)),
             source_matrix_id=matrix.id, source_student_id=student_id,
             source_set_id=batch.source_set_id, source_wrong_question_id=item.mapping.workbook_question_id,
             source_mapping_id=item.mapping_id, source_wrong_question_no=item.wrong_question_no,
-            source_drill_question_no=item.drill_question_no, source_role='drill_question',
+            source_drill_question_no=item.drill_question_no, source_role=('original_question' if item.mapping_type == 'original' else 'drill_question'),
             source_provider='wrongbook_drill', source_node_id=batch.source_set.source_node_id,
         )
