@@ -50,6 +50,12 @@ def _norm(value):
     return re.sub(r'\s+', '', value)
 
 
+def _is_mapping_number(value):
+    """Whether a cell looks like a data value instead of an unknown header."""
+    value = _norm(value)
+    return bool(value) and (value in ('原题', 'original') or bool(re.fullmatch(r'\d+(?:\.\d+)?', value)))
+
+
 def _resolve_path(relative_path):
     path = Path(relative_path)
     return path if path.is_absolute() else Path(settings.MEDIA_ROOT) / path
@@ -76,6 +82,7 @@ def _mapping_rows(mapping_import):
     with path.open('rb') as stream:
         sheets = read_xlsx_sheets(stream)
     rows = []
+    parsing = {'mode': 'header', 'sheets': []}
     for sheet in sheets:
         header_index = None
         header = {}
@@ -95,7 +102,26 @@ def _mapping_rows(mapping_import):
                 header_index, header = index, {'wrong': wrong_col, 'target': target_col}
                 break
         if header_index is None:
-            continue
+            # Existing teacher spreadsheets use several different labels. When
+            # labels are unknown, use the first two non-empty columns by
+            # position instead of rejecting a valid two-column mapping sheet.
+            candidate_index = next((
+                index for index, row in enumerate(sheet.rows)
+                if len(row) >= 2 and _norm(row[0]) and _norm(row[1])
+            ), None)
+            if candidate_index is None:
+                continue
+            candidate = sheet.rows[candidate_index]
+            data_starts_at = candidate_index if (
+                _is_mapping_number(candidate[0]) and _is_mapping_number(candidate[1])
+            ) else candidate_index + 1
+            header_index, header = data_starts_at - 1, {'wrong': 1, 'target': 0}
+            parsing['mode'] = 'position'
+            parsing['sheets'].append({
+                'sheet': sheet.title,
+                'header_row': candidate_index + 1,
+                'data_starts_at_row': data_starts_at + 1,
+            })
         for row_number, row in enumerate(sheet.rows[header_index + 1:], header_index + 2):
             wrong = _norm(row[header['wrong']] if header['wrong'] < len(row) else '')
             target = _norm(row[header['target']] if header['target'] < len(row) else '')
@@ -105,7 +131,7 @@ def _mapping_rows(mapping_import):
         raise MatrixError('映射表没有工作表', 'MAPPING_EMPTY', 400)
     if not rows:
         raise MatrixError('映射表未找到“错题练习题号”和“针对练习册题号”列', 'MAPPING_HEADER_INVALID', 400)
-    return rows
+    return rows, parsing
 
 
 def _workbook_number_map(mission, node_id=None):
@@ -199,7 +225,10 @@ def finalize_source_import(source_set_id, valid_questions, result):
 
 @transaction.atomic
 def import_number_mapping(source_set, mapping_import):
-    rows = _mapping_rows(mapping_import)
+    rows, parsing = _mapping_rows(mapping_import)
+    # This transient attribute is returned by the upload endpoint so the UI
+    # can tell the teacher when a non-standard sheet was parsed by position.
+    mapping_import.mapping_parse = parsing
     source_questions = {q.wrong_question_no: q for q in source_set.questions.all()}
     workbook_map, duplicate_numbers = _workbook_number_map(
         source_set.source_mission, source_set.source_node_id,

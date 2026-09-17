@@ -7,7 +7,7 @@ import fitz
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import resolve
 
-from apps.missions.classroom_wrong_drill_service import generate_wrong_drill_batch, import_number_mapping, save_mapping_upload
+from apps.missions.classroom_wrong_drill_service import _mapping_rows, generate_wrong_drill_batch, import_number_mapping, save_mapping_upload
 from apps.missions.classroom_wrongbook_service import prepare_classroom_matrix
 from apps.missions.models import (
     ClassroomWrongDrillNumberMapping, ClassroomWrongDrillSourceQuestion,
@@ -50,6 +50,28 @@ def _mapping_xlsx():
         archive.writestr('xl/_rels/workbook.xml.rels', rels)
         archive.writestr('xl/worksheets/sheet1.xml', sheet)
     return SimpleUploadedFile('mapping.xlsx', stream.getvalue())
+
+
+def _two_column_xlsx(first_header, second_header, first_value='1', second_value='5'):
+    def cell(ref, value):
+        return f'<c r="{ref}" t="inlineStr"><is><t>{value}</t></is></c>'
+    sheet = (
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+        f'<row r="1">{cell("A1", "映射关系")}</row>'
+        f'<row r="2">{cell("A2", first_header)}{cell("B2", second_header)}</row>'
+        f'<row r="3">{cell("A3", first_value)}{cell("B3", second_value)}</row>'
+        '</sheetData></worksheet>'
+    )
+    workbook = '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="mapping" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    rels = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'
+    content = '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/xml"/></Types>'
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, 'w') as archive:
+        archive.writestr('[Content_Types].xml', content)
+        archive.writestr('xl/workbook.xml', workbook)
+        archive.writestr('xl/_rels/workbook.xml.rels', rels)
+        archive.writestr('xl/worksheets/sheet1.xml', sheet)
+    return SimpleUploadedFile('nonstandard-mapping.xlsx', stream.getvalue())
 
 
 def test_fixed_mapping_generates_one_personal_mission_and_pdf(tmp_path, settings):
@@ -155,3 +177,21 @@ def test_mapping_file_uses_wrongbook_number_to_workbook_number_direction():
     assert row.workbook_question_no == '1'
     assert row.workbook_question_id == workbook_question.id
     assert source_set.status == 'ready'
+
+
+def test_mapping_file_uses_first_two_columns_when_headers_are_nonstandard():
+    teacher, _, _, node, _, mission, _ = _fixture()
+    source_set = ClassroomWrongDrillSourceSet.objects.create(
+        source_mission=mission, source_node_id=node.id, source_node_name=node.name,
+        created_by=teacher, status='pending',
+    )
+    upload = _two_column_xlsx('练习册题号', '错题练习册')
+    mapping_import = ClassroomWrongDrillMappingImport.objects.create(
+        source_set=source_set, file_path=save_mapping_upload(upload, source_set_id=source_set.id),
+        file_name=upload.name, created_by=teacher,
+    )
+
+    rows, parsing = _mapping_rows(mapping_import)
+
+    assert parsing['mode'] == 'position'
+    assert rows == [{'sheet': 'mapping', 'row': 3, 'wrong': '5', 'target': '1'}]
