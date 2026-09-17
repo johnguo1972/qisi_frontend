@@ -3,6 +3,7 @@ import os
 import uuid
 import logging
 import mimetypes
+import re
 from django.conf import settings
 from django.db import models as db_models, transaction
 from django.db.models import Q, CharField
@@ -209,6 +210,16 @@ def _course_stage(grade_level):
         if 7 <= number <= 9:
             return '初中'
     return None
+
+
+def _class_grade_level(class_obj):
+    """Resolve a course grade from the selected class without a visible grade form."""
+    configured_grade = (class_obj.grade_level or '').strip()
+    if configured_grade:
+        return configured_grade
+    class_name = (class_obj.class_name or '').strip()
+    matched_grade = re.search(r'(?:[一二三四五六七八九]年级|初[一二三]|高[一二三])', class_name)
+    return matched_grade.group(0) if matched_grade else ''
 
 
 def _active_role(user):
@@ -597,6 +608,10 @@ def course_list_or_create(request):
             raise PermissionDenied('您没有权限使用该班级')
         if course_institution and selected_class.institution_id != course_institution.id:
             raise ValidationError('班级与课堂所属机构不一致')
+    if selected_class and not (request_data.get('grade_level') or '').strip():
+        resolved_grade = _class_grade_level(selected_class)
+        if resolved_grade:
+            request_data['grade_level'] = resolved_grade
     serializer = CourseSerializer(
         data=request_data,
         context={'request': request, 'course_institution': course_institution},

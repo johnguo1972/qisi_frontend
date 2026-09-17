@@ -53,6 +53,7 @@
           <input
             class="form-input"
             v-model="createForm.name"
+            @input="clearCreateValidationMessage"
             placeholder="请输入课次名称"
             maxlength="50"
           />
@@ -116,9 +117,13 @@
           <textarea
             class="form-textarea"
             v-model="createForm.description"
+            @input="clearCreateValidationMessage"
             placeholder="请输入课程简介（选填）"
             maxlength="200"
           />
+        </view>
+        <view v-if="createValidationMessage" class="form-validation-error">
+          {{ createValidationMessage }}
         </view>
         <view class="modal-footer">
           <button size="default" @click="closeCreateDialog">取消</button>
@@ -356,6 +361,7 @@ function toggleSubjectDropdown() {
 
 function selectSubject(value: string) {
   createForm.value.subject = value
+  clearCreateValidationMessage()
   subjectDropdownOpen.value = false
 }
 
@@ -383,11 +389,13 @@ function selectCreateClass(classId: string) {
 
   createForm.value.class_id = classId
   createForm.value.grade_level = selectedClass.grade_level || ''
+  clearCreateValidationMessage()
   classDropdownOpen.value = false
 }
 
 function openCreateDialog() {
   showCreateDialog.value = true
+  createValidationMessage.value = ''
   if (selectedClassId.value) selectCreateClass(selectedClassId.value)
 }
 
@@ -396,34 +404,50 @@ function closeCreateDialog() {
   subjectDropdownOpen.value = false
   gradeDropdownOpen.value = false
   classDropdownOpen.value = false
+  createValidationMessage.value = ''
   createForm.value = { name: '', subject: '', grade_level: '', class_id: '', description: '' }
 }
 
-async function handleCreate() {
+function showCreateValidationMessage(message: string) {
+  createValidationMessage.value = message
+  uni.showToast({ title: message, icon: 'none', duration: 2500 })
+}
+
+function clearCreateValidationMessage() {
+  if (createValidationMessage.value) createValidationMessage.value = ''
+}
+
+function validateCreateForm() {
   const { name, subject, class_id } = createForm.value
   if (!name.trim()) {
-    uni.showToast({ title: '请输入课次名称', icon: 'none' })
-    return
+    showCreateValidationMessage('请输入课次名称')
+    return false
   }
   if (!subject) {
-    uni.showToast({ title: '请选择学科', icon: 'none' })
-    return
+    showCreateValidationMessage('请选择学科')
+    return false
   }
   if (!class_id) {
-    uni.showToast({ title: '请选择班级', icon: 'none' })
-    return
+    showCreateValidationMessage('请选择班级')
+    return false
   }
+  return true
+}
+
+async function handleCreate() {
+  if (!validateCreateForm()) return
+
+  const { name, subject, class_id } = createForm.value
   const selectedClass = visibleClassOptions.value.find(option => option.id === class_id)
-  const gradeLevel = selectedClass?.grade_level?.trim() || ''
   if (!selectedClass) {
-    uni.showToast({ title: '班级选择已失效，请重新选择班级', icon: 'none' })
+    showCreateValidationMessage('班级选择已失效，请重新选择班级')
     return
   }
-  if (!gradeLevel) {
-    uni.showToast({ title: '所选班级未设置年级，请先完善班级信息', icon: 'none' })
-    return
-  }
-  createForm.value.grade_level = gradeLevel
+
+  // 年级表单已隐藏，不再作为前端必填项；有值时继续传递兼容历史数据，
+  // 为空时由后端根据所选班级补齐，避免隐藏字段阻断创建。
+  const gradeLevel = selectedClass.grade_level?.trim() || undefined
+  createForm.value.grade_level = gradeLevel || ''
 
   creating.value = true
   try {
@@ -670,6 +694,15 @@ onMounted(async () => {
 .form-textarea:focus {
   border-color: #409eff;
   background: #fff;
+}
+
+.form-validation-error {
+  width: 100%;
+  margin-top: -4rpx;
+  color: #f56c6c;
+  font-size: 24rpx;
+  line-height: 36rpx;
+  text-align: left;
 }
 
 .form-select {

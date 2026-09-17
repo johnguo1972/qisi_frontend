@@ -42,7 +42,7 @@ export const courseApi = {
     const query = params.toString()
     return courseFetch<any[]>(`/courses/${query ? `?${query}` : ''}`)
   },
-  create: (data: { name: string; subject: string; grade_level: string; description?: string; institution_id?: UUID; class_id?: UUID }) =>
+  create: (data: { name: string; subject: string; grade_level?: string; description?: string; institution_id?: UUID; class_id?: UUID }) =>
     courseFetch<any>('/courses/', { method: 'POST', body: JSON.stringify(data) }),
   detail: (id: UUID) => courseFetch<any>(`/courses/${id}/`),
   update: (id: UUID, data: any) => courseFetch<any>(`/courses/${id}/`, { method: 'PUT', body: JSON.stringify(data) }),

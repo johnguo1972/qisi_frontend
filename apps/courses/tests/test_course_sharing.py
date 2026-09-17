@@ -170,3 +170,28 @@ class CourseSharingTests(TestCase):
                 status='active',
             ).exists()
         )
+
+    def test_create_course_uses_class_name_grade_when_grade_form_is_hidden(self):
+        selected_class = Class.objects.create(
+            institution=self.institution,
+            creator_teacher=self.owner,
+            class_name='八年级8班',
+        )
+        ClassTeacher.objects.create(class_obj=selected_class, teacher=self.owner, role='owner')
+        request = APIRequestFactory().post(
+            '/api/v1/courses/',
+            {
+                'name': '隐藏年级表单创建测试',
+                'subject': 'physics',
+                'institution_id': str(self.institution.id),
+                'class_id': str(selected_class.id),
+            },
+            format='json',
+        )
+        force_authenticate(request, user=self.owner)
+
+        response = course_list_or_create(request)
+
+        self.assertEqual(response.status_code, 201)
+        created_course = Course.objects.get(name='隐藏年级表单创建测试')
+        self.assertEqual(created_course.grade_level, '八年级')
