@@ -19,7 +19,7 @@ from apps.accounts.roles import has_user_role
 from apps.common.subject_codes import normalize_subject_codes
 from apps.common.question_types import CANONICAL_QUESTION_TYPES, normalize_question_type
 from apps.common.p2_api import success as p2_success
-from apps.institutions.models import Institution, InstitutionMember
+from apps.institutions.models import Class, Institution, InstitutionMember
 from apps.knowledge.models import KnowledgePoint
 from apps.parser.models import ExamQuestion
 from apps.study.models import QuestionTagRelation
@@ -493,6 +493,23 @@ def course_handout_remove(request, course_id, handout_id):
 def course_list_or_create(request):
     """课程列表（GET）和创建（POST）"""
     if request.method == 'GET':
+        class_id = request.query_params.get('class_id')
+        selected_class_id = None
+        if class_id:
+            try:
+                selected_class_id = uuid.UUID(str(class_id))
+            except (ValueError, TypeError, AttributeError):
+                raise ValidationError('class_id 无效')
+
+            class_scope = Class.objects.filter(id=selected_class_id, status='active')
+            if not _is_admin(request.user):
+                class_scope = class_scope.filter(
+                    Q(class_teachers__teacher=request.user)
+                    | Q(creator_teacher=request.user),
+                )
+            if not class_scope.exists():
+                raise PermissionDenied('您没有权限访问该班级')
+
         if _is_admin(request.user):
             courses = Course.objects.filter(is_deleted=False)
             institution_id = request.query_params.get('institution_id')
@@ -523,18 +540,51 @@ def course_list_or_create(request):
                     grade_level__in=grade_levels,
                 )
             ).distinct().order_by('-created_at')
+        if selected_class_id:
+            courses = courses.filter(
+                class_relations__class_obj_id=selected_class_id,
+                class_relations__status='active',
+            ).distinct()
         serializer = CourseSerializer(courses, many=True, context={'request': request})
         return Response({'success': True, 'data': serializer.data})
 
     if not (_is_teacher(request.user) or _is_admin(request.user)):
         raise PermissionDenied('只有教师或管理员可以创建课程')
     course_institution = _resolve_course_institution(request, required=True)
+    request_data = request.data.copy()
+    class_id = request_data.pop('class_id', None)
+    if isinstance(class_id, (list, tuple)):
+        class_id = class_id[0] if class_id else None
+    selected_class = None
+    if class_id:
+        try:
+            selected_class_id = uuid.UUID(str(class_id))
+        except (ValueError, TypeError, AttributeError):
+            raise ValidationError('class_id 无效')
+        class_scope = Class.objects.filter(id=selected_class_id, status='active')
+        if not _is_admin(request.user):
+            class_scope = class_scope.filter(
+                Q(class_teachers__teacher=request.user)
+                | Q(creator_teacher=request.user),
+            )
+        selected_class = class_scope.first()
+        if selected_class is None:
+            raise PermissionDenied('您没有权限使用该班级')
+        if course_institution and selected_class.institution_id != course_institution.id:
+            raise ValidationError('班级与课堂所属机构不一致')
     serializer = CourseSerializer(
-        data=request.data,
+        data=request_data,
         context={'request': request, 'course_institution': course_institution},
     )
     serializer.is_valid(raise_exception=True)
-    course = serializer.save()
+    with transaction.atomic():
+        course = serializer.save()
+        if selected_class is not None:
+            CourseClass.objects.update_or_create(
+                course=course,
+                class_obj=selected_class,
+                defaults={'status': 'active'},
+            )
     _audit(course, request.user, 'course.create')
     return Response(
         {'success': True, 'data': CourseSerializer(course, context={'request': request}).data, 'message': '课程创建成功'},

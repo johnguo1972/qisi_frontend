@@ -34,7 +34,7 @@
     { "path": "pages/teacher/class-detail", "style": { "navigationBarTitleText": "班级详情" } },
     { "path": "pages/teacher/student-import", "style": { "navigationBarTitleText": "批量导入学生" } },
     { "path": "pages/teacher/class-requests", "style": { "navigationBarTitleText": "申请审批" } },
-    { "path": "pages/teacher/course-list", "style": { "navigationBarTitleText": "课程列表" } },
+    { "path": "pages/teacher/course-list", "style": { "navigationBarTitleText": "课堂管理" } },
     { "path": "pages/teacher/course-detail", "style": { "navigationBarTitleText": "课程详情" } },
     { "path": "pages/teacher/course-materials", "style": { "navigationBarTitleText": "课程资料" } },
     { "path": "pages/teacher/course-practice", "style": { "navigationBarTitleText": "课程练习" } },

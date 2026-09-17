@@ -42,7 +42,7 @@
       </view>
       <view class="nav-item" :class="{ active: activeItem === 'course-list' }" @click="goCourseList">
         <text class="nav-icon">&#127891;</text>
-        <text class="nav-text">课程管理</text>
+        <text class="nav-text">课堂管理</text>
       </view>
       <view class="nav-item nav-logout" @click="handleLogout">
         <text class="nav-icon">&#128682;</text>

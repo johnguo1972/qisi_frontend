@@ -5,9 +5,9 @@
     <view class="main">
       <view class="page-header">
         <view class="header-title">
-          <button class="back-btn" @click="goBack">返回课程管理</button>
+          <button class="back-btn" @click="goBack">返回课堂管理</button>
           <view class="title-stack">
-            <text class="eyebrow">课程管理</text>
+            <text class="eyebrow">课堂管理</text>
             <text class="page-title">{{ course?.name || '课程详情' }}</text>
           </view>
         </view>
@@ -29,7 +29,7 @@
         <text class="error-message">{{ errorMessage }}</text>
         <view class="error-actions">
           <button class="btn secondary" @click="loadCourse">重新加载</button>
-          <button class="btn primary" @click="goBack">返回课程管理</button>
+          <button class="btn primary" @click="goBack">返回课堂管理</button>
         </view>
       </view>
 
@@ -294,7 +294,7 @@ function responseData(response: any): any {
 
 async function loadCourse() {
   if (!courseId.value) {
-    errorMessage.value = '缺少课程ID参数，请从课程管理列表进入。'
+    errorMessage.value = '缺少课次ID参数，请从课堂管理列表进入。'
     return
   }
 

@@ -6,8 +6,13 @@
         <picker v-if="institutionOptions.length > 1" :range="institutionNames" :value="institutionIndex" @change="changeInstitution">
           <view class="institution-picker">{{ institutionNames[institutionIndex] }}</view>
         </picker>
-        <text class="page-title">课程管理</text>
-        <button class="create-btn" @click="showCreateDialog = true">+ 新建课程</button>
+        <view class="header-filters">
+          <text class="page-title">课堂管理</text>
+          <picker v-if="classNames.length" :range="classNames" :value="classIndex" @change="changeClass">
+            <view class="class-picker">班级：{{ classNames[classIndex] }}</view>
+          </picker>
+        </view>
+        <button class="create-btn" @click="openCreateDialog">+ 新建课次</button>
       </view>
 
       <!-- Loading state -->
@@ -18,7 +23,7 @@
       <!-- Empty state -->
       <view v-else-if="courses.length === 0" class="empty">
         <text class="empty-icon">📚</text>
-        <text class="empty-text">暂无课程，点击右上角「新建课程」开始创建</text>
+        <text class="empty-text">暂无课次，点击右上角「新建课次」开始创建</text>
       </view>
 
       <!-- Card grid -->
@@ -37,16 +42,16 @@
       </view>
     </view>
 
-    <!-- Create course dialog -->
+    <!-- Create classroom session dialog -->
     <view v-if="showCreateDialog" class="modal-overlay" @click.self="closeCreateDialog">
-      <view class="modal" @click="subjectDropdownOpen = false; gradeDropdownOpen = false">
-        <text class="modal-title">新建课程</text>
+      <view class="modal" @click="subjectDropdownOpen = false; gradeDropdownOpen = false; classDropdownOpen = false">
+        <text class="modal-title">新建课次</text>
         <view class="form-group">
-          <text class="form-label">课程名称 <text class="required">*</text></text>
+          <text class="form-label">课次名称 <text class="required">*</text></text>
           <input
             class="form-input"
             v-model="createForm.name"
-            placeholder="请输入课程名称"
+            placeholder="请输入课次名称"
             maxlength="50"
           />
         </view>
@@ -67,6 +72,8 @@
               </view>
             </view>
           </view>
+          <!-- 旧年级表单暂时保留，避免删除历史功能；新建课次改为从所选班级自动带出年级。 -->
+          <!--
           <view class="form-group half">
             <text class="form-label">年级 <text class="required">*</text></text>
             <view class="subject-picker-wrap">
@@ -80,6 +87,24 @@
                 >
                   {{ option.label }}
                 </view>
+              </view>
+            </view>
+          </view>
+          -->
+          <view class="form-group half">
+            <text class="form-label">班级 <text class="required">*</text></text>
+            <view class="subject-picker-wrap">
+              <view class="form-select" @click.stop="toggleClassDropdown">{{ selectedCreateClassLabel }}</view>
+              <view v-if="classDropdownOpen" class="subject-dropdown" @click.stop>
+                <view
+                  v-for="option in visibleClassOptions"
+                  :key="option.id"
+                  :class="['subject-option', { active: createForm.class_id === option.id }]"
+                  @click="selectCreateClass(option.id)"
+                >
+                  {{ option.class_name }}
+                </view>
+                <view v-if="!visibleClassOptions.length" class="class-empty-option">暂无可选班级</view>
               </view>
             </view>
           </view>
@@ -122,7 +147,7 @@
 import { computed, ref, onMounted } from 'vue'
 import CourseCard from '@/components/CourseCard.vue'
 import { courseApi } from '@/api/courses'
-import { teacherApi } from '@/api/institutions'
+import { classApi, teacherApi } from '@/api/institutions'
 
 // ============================================================
 // Course list
@@ -143,6 +168,25 @@ const institutionId = ref<string | undefined>()
 const institutionOptions = ref<Array<{ id: string; institution_name: string }>>([])
 const institutionIndex = ref(0)
 const institutionNames = computed(() => institutionOptions.value.map(item => item.institution_name))
+interface TeacherClass {
+  id: string
+  class_name: string
+  class_no?: string
+  grade_level?: string | null
+  institution_id?: string
+}
+
+const classOptions = ref<TeacherClass[]>([])
+const classIndex = ref(0)
+const visibleClassOptions = computed(() => {
+  if (!institutionId.value) return classOptions.value
+  return classOptions.value.filter(item => String(item.institution_id || '') === String(institutionId.value))
+})
+const classNames = computed(() => [
+  '全部班级',
+  ...visibleClassOptions.value.map(item => item.class_name),
+])
+const selectedClassId = computed(() => visibleClassOptions.value[classIndex.value - 1]?.id)
 
 async function loadInstitutionScope() {
   const response: any = await teacherApi.institutions()
@@ -154,13 +198,26 @@ async function loadInstitutionScope() {
 function changeInstitution(event: any) {
   institutionIndex.value = Number(event.detail.value)
   institutionId.value = institutionOptions.value[institutionIndex.value]?.id
+  classIndex.value = 0
+  loadCourses()
+}
+
+async function loadClasses() {
+  const response: any = await classApi.simpleList()
+  const classes = response?.data?.data ?? response?.data ?? []
+  classOptions.value = Array.isArray(classes) ? classes : []
+  if (classIndex.value > visibleClassOptions.value.length) classIndex.value = 0
+}
+
+function changeClass(event: any) {
+  classIndex.value = Number(event.detail.value)
   loadCourses()
 }
 
 async function loadCourses() {
   loading.value = true
   try {
-    const res = await courseApi.list(institutionId.value as any)
+    const res = await courseApi.list(institutionId.value as any, selectedClassId.value as any)
     courses.value = res.data || []
   } catch (e: any) {
     console.error('加载课程列表失败:', e)
@@ -240,7 +297,8 @@ const showCreateDialog = ref(false)
 const creating = ref(false)
 const subjectDropdownOpen = ref(false)
 const gradeDropdownOpen = ref(false)
-const createForm = ref({ name: '', subject: '', grade_level: '', description: '' })
+const classDropdownOpen = ref(false)
+const createForm = ref({ name: '', subject: '', grade_level: '', class_id: '', description: '' })
 
 const legacySubjectOptions = [
   { value: '数学', label: '数学' },
@@ -261,6 +319,10 @@ const subjectOptions = [
 
 const selectedSubjectLabel = computed(() => {
   return subjectOptions.find(option => option.value === createForm.value.subject)?.label || '请选择学科'
+})
+
+const selectedCreateClassLabel = computed(() => {
+  return visibleClassOptions.value.find(option => option.id === createForm.value.class_id)?.class_name || '请选择班级'
 })
 
 const gradeOptions = [
@@ -297,42 +359,78 @@ function selectGrade(value: string) {
   gradeDropdownOpen.value = false
 }
 
+function toggleClassDropdown() {
+  classDropdownOpen.value = !classDropdownOpen.value
+  if (classDropdownOpen.value) {
+    subjectDropdownOpen.value = false
+    gradeDropdownOpen.value = false
+  }
+}
+
+function selectCreateClass(classId: string) {
+  const selectedClassIndex = visibleClassOptions.value.findIndex(option => option.id === classId)
+  const selectedClass = visibleClassOptions.value[selectedClassIndex]
+  if (!selectedClass) return
+
+  createForm.value.class_id = classId
+  createForm.value.grade_level = selectedClass.grade_level || ''
+  classDropdownOpen.value = false
+}
+
+function openCreateDialog() {
+  showCreateDialog.value = true
+  if (selectedClassId.value) selectCreateClass(selectedClassId.value)
+}
+
 function closeCreateDialog() {
   showCreateDialog.value = false
   subjectDropdownOpen.value = false
   gradeDropdownOpen.value = false
-  createForm.value = { name: '', subject: '', grade_level: '', description: '' }
+  classDropdownOpen.value = false
+  createForm.value = { name: '', subject: '', grade_level: '', class_id: '', description: '' }
 }
 
 async function handleCreate() {
-  const { name, subject, grade_level } = createForm.value
+  const { name, subject, class_id } = createForm.value
   if (!name.trim()) {
-    uni.showToast({ title: '请输入课程名称', icon: 'none' })
+    uni.showToast({ title: '请输入课次名称', icon: 'none' })
     return
   }
   if (!subject) {
     uni.showToast({ title: '请选择学科', icon: 'none' })
     return
   }
-  if (!grade_level) {
-    uni.showToast({ title: '请选择年级', icon: 'none' })
+  if (!class_id) {
+    uni.showToast({ title: '请选择班级', icon: 'none' })
     return
   }
+  const selectedClass = visibleClassOptions.value.find(option => option.id === class_id)
+  const gradeLevel = selectedClass?.grade_level?.trim() || ''
+  if (!selectedClass) {
+    uni.showToast({ title: '班级选择已失效，请重新选择班级', icon: 'none' })
+    return
+  }
+  if (!gradeLevel) {
+    uni.showToast({ title: '所选班级未设置年级，请先完善班级信息', icon: 'none' })
+    return
+  }
+  createForm.value.grade_level = gradeLevel
 
   creating.value = true
   try {
     await courseApi.create({
       name: name.trim(),
       subject,
-      grade_level,
+      grade_level: gradeLevel,
       description: createForm.value.description.trim() || undefined,
       institution_id: institutionId.value as any,
+      class_id: class_id as any,
     })
     uni.showToast({ title: '创建成功', icon: 'success' })
     closeCreateDialog()
     await loadCourses()
   } catch (e: any) {
-    console.error('创建课程失败:', e)
+    console.error('创建课次失败:', e)
     const msg = e?.message || ''
     if (msg.includes('401') || msg.includes('登录')) {
       // courseFetch 已处理跳转，这里不重复提示
@@ -378,7 +476,10 @@ async function handleDelete() {
 // ============================================================
 onMounted(async () => {
   try {
-    await loadInstitutionScope()
+    await Promise.all([
+      loadInstitutionScope(),
+      loadClasses(),
+    ])
   } catch (error) {
     console.error('加载教师机构失败:', error)
   }
@@ -403,10 +504,18 @@ onMounted(async () => {
 }
 
 /* Page header */
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24rpx; }
+.page-header { display: flex; justify-content: space-between; align-items: center; gap: 24rpx; margin-bottom: 24rpx; }
+.header-filters { display: flex; align-items: center; gap: 24rpx; min-width: 0; }
 .page-title { font-size: 32rpx; font-weight: 600; color: #303133; }
 .institution-picker { color: #409eff; font-size: 24rpx; margin-left: auto; margin-right: 20rpx; }
+.class-picker { min-width: 220rpx; padding: 12rpx 20rpx; border: 1rpx solid #dcdfe6; border-radius: 8rpx; color: #606266; background: #fff; font-size: 24rpx; }
 .create-btn { background: #409eff; color: #fff; border: none; border-radius: 4px; padding: 6px 16px; font-size: 13px; cursor: pointer; }
+
+@media (max-width: 768px) {
+  .page-header { align-items: flex-start; flex-wrap: wrap; }
+  .header-filters { flex: 1 1 100%; justify-content: space-between; }
+  .class-picker { min-width: 0; }
+}
 
 /* Loading / Empty */
 .loading {
@@ -618,6 +727,13 @@ onMounted(async () => {
 .subject-option:active {
   background: #ecf5ff;
   color: #409eff;
+}
+
+.class-empty-option {
+  padding: 20rpx;
+  color: #909399;
+  font-size: 24rpx;
+  text-align: center;
 }
 
 .picker-value {

@@ -35,8 +35,14 @@ function courseFetch<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const courseApi = {
-  list: (institutionId?: UUID) => courseFetch<any[]>(`/courses/${institutionId ? `?institution_id=${institutionId}` : ''}`),
-  create: (data: { name: string; subject: string; grade_level: string; description?: string; institution_id?: UUID }) =>
+  list: (institutionId?: UUID, classId?: UUID) => {
+    const params = new URLSearchParams()
+    if (institutionId) params.set('institution_id', String(institutionId))
+    if (classId) params.set('class_id', String(classId))
+    const query = params.toString()
+    return courseFetch<any[]>(`/courses/${query ? `?${query}` : ''}`)
+  },
+  create: (data: { name: string; subject: string; grade_level: string; description?: string; institution_id?: UUID; class_id?: UUID }) =>
     courseFetch<any>('/courses/', { method: 'POST', body: JSON.stringify(data) }),
   detail: (id: UUID) => courseFetch<any>(`/courses/${id}/`),
   update: (id: UUID, data: any) => courseFetch<any>(`/courses/${id}/`, { method: 'PUT', body: JSON.stringify(data) }),

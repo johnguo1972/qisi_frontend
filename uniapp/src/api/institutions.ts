@@ -41,6 +41,7 @@ export interface ClassSimpleItem {
   class_name: string
   class_no: string
   grade_level?: string | null
+  institution_id?: UUID
 }
 
 export interface AddStudentPayload {

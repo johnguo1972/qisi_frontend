@@ -7,9 +7,9 @@
       <view class="page-header">
         <!-- #ifndef MP-WEIXIN -->
         <view class="breadcrumb-area">
-          <button class="back-btn" @click="goCourseList">返回课程管理</button>
+          <button class="back-btn" @click="goCourseList">返回课堂管理</button>
           <view class="breadcrumb">
-            <text class="breadcrumb-item" @click="goCourseList">课程管理</text>
+            <text class="breadcrumb-item" @click="goCourseList">课堂管理</text>
             <text class="breadcrumb-sep">/</text>
             <text class="breadcrumb-current">{{ courseName }}</text>
             <text class="breadcrumb-sep">/</text>
@@ -19,7 +19,7 @@
         <!-- #endif -->
         <!-- #ifdef MP-WEIXIN -->
         <view class="breadcrumb">
-          <text class="breadcrumb-item" @click="goCourseList">课程管理</text>
+          <text class="breadcrumb-item" @click="goCourseList">课堂管理</text>
           <text class="breadcrumb-sep">/</text>
           <text class="breadcrumb-current">{{ courseName }}</text>
           <text class="breadcrumb-sep">/</text>

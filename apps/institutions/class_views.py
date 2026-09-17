@@ -175,7 +175,7 @@ def class_simple_list(request):
         Q(class_teachers__teacher=request.user) | Q(creator_teacher=request.user),
         status='active',
     ).distinct().order_by('-created_at').values(
-        'id', 'class_name', 'class_no', 'grade_level',
+        'id', 'class_name', 'class_no', 'grade_level', 'institution_id',
     )
 
     return Response({

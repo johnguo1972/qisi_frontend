@@ -3,8 +3,8 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.accounts.models import UserAccount
 from apps.accounts.roles import grant_user_role
-from apps.courses.models import Course, CourseCollaborator
-from apps.institutions.models import Institution, InstitutionMember
+from apps.courses.models import Course, CourseClass, CourseCollaborator
+from apps.institutions.models import Class, ClassTeacher, Institution, InstitutionMember
 from apps.courses.views import _check_course_owner, course_list_or_create
 
 
@@ -115,3 +115,58 @@ class CourseSharingTests(TestCase):
         self.assertIn(str(self.course.id), [item['id'] for item in response.data['data']])
         with self.assertRaisesMessage(Exception, '您没有权限操作此课程'):
             _check_course_owner(self.course, viewer)
+
+    def test_teacher_can_filter_courses_by_managed_class(self):
+        selected_class = Class.objects.create(
+            institution=self.institution,
+            creator_teacher=self.owner,
+            class_name='筛选班级',
+        )
+        other_class = Class.objects.create(
+            institution=self.institution,
+            creator_teacher=self.owner,
+            class_name='其他班级',
+        )
+        ClassTeacher.objects.create(class_obj=selected_class, teacher=self.owner, role='owner')
+        ClassTeacher.objects.create(class_obj=other_class, teacher=self.owner, role='owner')
+        CourseClass.objects.create(course=self.course, class_obj=selected_class)
+
+        request = APIRequestFactory().get(f'/api/v1/courses/?class_id={selected_class.id}')
+        force_authenticate(request, user=self.owner)
+
+        response = course_list_or_create(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item['id'] for item in response.data['data']], [str(self.course.id)])
+
+    def test_create_course_with_class_id_creates_active_class_relation(self):
+        selected_class = Class.objects.create(
+            institution=self.institution,
+            creator_teacher=self.owner,
+            class_name='新建课次班级',
+        )
+        ClassTeacher.objects.create(class_obj=selected_class, teacher=self.owner, role='owner')
+        request = APIRequestFactory().post(
+            '/api/v1/courses/',
+            {
+                'name': '新建课次测试',
+                'subject': 'physics',
+                'grade_level': '八年级',
+                'institution_id': str(self.institution.id),
+                'class_id': str(selected_class.id),
+            },
+            format='json',
+        )
+        force_authenticate(request, user=self.owner)
+
+        response = course_list_or_create(request)
+
+        self.assertEqual(response.status_code, 201)
+        created_course = Course.objects.get(name='新建课次测试')
+        self.assertTrue(
+            CourseClass.objects.filter(
+                course=created_course,
+                class_obj=selected_class,
+                status='active',
+            ).exists()
+        )

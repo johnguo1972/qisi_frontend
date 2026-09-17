@@ -5,7 +5,7 @@
     <view class="main">
       <!-- #ifndef MP-WEIXIN -->
       <view class="page-topbar">
-        <button class="back-btn" @click="goCourseList">返回课程管理</button>
+        <button class="back-btn" @click="goCourseList">返回课堂管理</button>
         <text class="page-topbar-title">课程练习</text>
       </view>
       <!-- #endif -->
