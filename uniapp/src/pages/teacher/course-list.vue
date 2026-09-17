@@ -76,8 +76,7 @@
             </view>
           </view>
           <!-- 旧年级表单暂时保留，避免删除历史功能；新建课次改为从所选班级自动带出年级。 -->
-          <!--
-          <view class="form-group half">
+          <view v-if="requiresManualGradeSelection" class="form-group half">
             <text class="form-label">年级 <text class="required">*</text></text>
             <view class="subject-picker-wrap">
               <view class="form-select" @click.stop="toggleGradeDropdown">{{ createForm.grade_level || '请选择年级' }}</view>
@@ -93,7 +92,6 @@
               </view>
             </view>
           </view>
-          -->
           <view class="form-group half">
             <text class="form-label">班级 <text class="required">*</text></text>
             <view class="subject-picker-wrap">
@@ -339,6 +337,16 @@ const selectedCreateClassLabel = computed(() => {
   return visibleClassOptions.value.find(option => option.id === createForm.value.class_id)?.class_name || '请选择班级'
 })
 
+const selectedCreateClass = computed(() => {
+  return visibleClassOptions.value.find(option => option.id === createForm.value.class_id)
+})
+
+// A legacy class may have no configured grade. In that case, show the grade
+// selector rather than omitting the required course field in the POST body.
+const requiresManualGradeSelection = computed(() => {
+  return Boolean(createForm.value.class_id) && !selectedCreateClass.value?.grade_level?.trim()
+})
+
 const gradeOptions = [
   { value: '一年级', label: '一年级' },
   { value: '二年级', label: '二年级' },
@@ -371,6 +379,7 @@ function toggleGradeDropdown() {
 
 function selectGrade(value: string) {
   createForm.value.grade_level = value
+  clearCreateValidationMessage()
   gradeDropdownOpen.value = false
 }
 
@@ -418,7 +427,7 @@ function clearCreateValidationMessage() {
 }
 
 function validateCreateForm() {
-  const { name, subject, class_id } = createForm.value
+  const { name, subject, class_id, grade_level } = createForm.value
   if (!name.trim()) {
     showCreateValidationMessage('请输入课次名称')
     return false
@@ -429,6 +438,10 @@ function validateCreateForm() {
   }
   if (!class_id) {
     showCreateValidationMessage('请选择班级')
+    return false
+  }
+  if (!grade_level.trim()) {
+    showCreateValidationMessage('请选择年级')
     return false
   }
   return true
@@ -446,8 +459,7 @@ async function handleCreate() {
 
   // 年级表单已隐藏，不再作为前端必填项；有值时继续传递兼容历史数据，
   // 为空时由后端根据所选班级补齐，避免隐藏字段阻断创建。
-  const gradeLevel = selectedClass.grade_level?.trim() || undefined
-  createForm.value.grade_level = gradeLevel || ''
+  const gradeLevel = createForm.value.grade_level.trim()
 
   creating.value = true
   try {

@@ -195,7 +195,51 @@ def prepare_classroom_matrix(mission_id, teacher, class_id=None):
         ensure_classroom_provenance(mission)
     selected_class_id = resolve_class_id(mission, class_id)
     matrix = get_or_create_matrix(mission, teacher, selected_class_id)
+    if mission.source_context == 'course_offline_wrongbook':
+        _ensure_offline_classroom_questions(mission, matrix)
     return mission, matrix, selected_class_id
+
+
+@transaction.atomic
+def _ensure_offline_classroom_questions(mission, matrix):
+    """Populate the statistics scope from imported classroom practice questions.
+
+    Offline wrong-drill carriers have no MissionQuestionRel rows.  Reuse the
+    current course's active classroom question links as the canonical scope.
+    """
+    links = list(CourseQuestionLink.objects.filter(
+        course_id=mission.course_id, is_deleted=False,
+    ).select_related('question', 'tree_node').order_by('created_at', 'id'))
+    existing = {str(row.source_question_id): row for row in matrix.questions.all()}
+    changed = False
+    for index, link in enumerate(links, 1):
+        qid = str(link.question_id)
+        number = _question_no(link.source_document_question_no or link.question.question_no or index)
+        values = {
+            'source_relation': None,
+            'source_node_id': link.tree_node_id,
+            'node_name_snapshot': link.tree_node.name if link.tree_node_id else '',
+            'node_sort_no': link.tree_node.sort_order if link.tree_node_id else 0,
+            'node_question_no': number,
+            'question_no_snapshot': number,
+            'sort_no': index,
+            'question_snapshot': _question_snapshot(link.question),
+            'status': 'active',
+        }
+        row = existing.get(qid)
+        if row is None:
+            TeacherWrongBookMatrixQuestion.objects.create(
+                matrix=matrix, source_question_id=link.question_id, **values,
+            )
+            changed = True
+        elif row.status != 'active' or row.question_snapshot != values['question_snapshot']:
+            for field, value in values.items(): setattr(row, field, value)
+            row.save(update_fields=[*values.keys()])
+            changed = True
+    if changed:
+        matrix.status = 'saved'
+        matrix.save(update_fields=['status', 'updated_at'])
+    return changed
 
 
 def sync_classroom_online_for_student(mission_id, student_id):
@@ -223,7 +267,8 @@ def _scope(matrix):
     questions = list(matrix.questions.filter(status='active').order_by('node_sort_no', 'sort_no', 'id'))
     if not students or not questions:
         return students, questions
-    if any(not question.source_node_id for question in questions):
+    offline = getattr(getattr(matrix, 'source_mission', None), 'source_context', '') == 'course_offline_wrongbook'
+    if not offline and any(not question.source_node_id for question in questions):
         raise MatrixError('题目缺少节点快照', 'SCOPE_INVALID', 409)
     return students, questions
 
@@ -305,6 +350,7 @@ def sync_classroom_online_wrongbook(mission, matrix):
 
 def classroom_statistics_payload(mission, matrix):
     matrix = sync_classroom_online_wrongbook(mission, matrix)
+    _ensure_offline_default_cells(mission, matrix)
     students, questions = _scope(matrix)
     question_ids = [str(question.source_question_id) for question in questions]
     online_map = _student_online_map(mission, students, question_ids)
@@ -404,6 +450,52 @@ def classroom_statistics_payload(mission, matrix):
         'latest_import': import_batch_payload(latest_import),
         'wrong_drill_sources': _wrong_drill_sources_payload(mission, matrix),
     }
+
+
+@transaction.atomic
+def _ensure_offline_default_cells(mission, matrix):
+    """Mark every mapped classroom question for each student when no real
+    student statistics exist.  The existing ``import`` source value is used
+    because mark_source choices are intentionally backward compatible.
+    """
+    if mission.source_context != 'course_offline_wrongbook':
+        return
+    from .classroom_wrong_drill_service import ClassroomWrongDrillSourceSet
+    source_set = ClassroomWrongDrillSourceSet.objects.filter(
+        source_mission=mission, status='ready',
+    ).order_by('-updated_at').first()
+    if source_set is None:
+        return
+    question_ids = list(source_set.number_mappings.filter(
+        status='active', workbook_question_id__isnull=False,
+    ).values_list('workbook_question_id', flat=True).distinct())
+    if not question_ids:
+        return
+    students = list(matrix.students.filter(status='active').values_list('student_id', flat=True))
+    if not students:
+        return
+    existing = set(TeacherWrongBookCell.objects.filter(
+        matrix=matrix, student_id__in=students, source_question_id__in=question_ids,
+    ).values_list('student_id', 'source_question_id'))
+    created = 0
+    for student_id in students:
+        for question_id in question_ids:
+            if (student_id, question_id) in existing:
+                continue
+            wrong_item, _ = WrongBookItem.objects.get_or_create(
+                student_user_id_id=student_id, question_id=question_id,
+            )
+            TeacherWrongBookCell.objects.create(
+                matrix=matrix, student_id=student_id, source_question_id=question_id,
+                wrong_book_item=wrong_item, status='marked', mark_source='import',
+                marked_at=timezone.now(),
+            )
+            created += 1
+    if created:
+        matrix.version += 1
+        matrix.status = 'saved'
+        matrix.marked_count = matrix.cells.filter(status__in=VALID_CELL_STATUSES).count()
+        matrix.save(update_fields=['version', 'status', 'marked_count', 'updated_at'])
 
 
 def _wrong_drill_sources_payload(mission, matrix):
