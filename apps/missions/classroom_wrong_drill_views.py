@@ -158,7 +158,14 @@ def classroom_wrong_drill_mapping_import(request, mission_id, source_set_id):
             mapping_import.completed_at = timezone.now()
             mapping_import.save(update_fields=['status', 'errors', 'completed_at'])
             raise MatrixError(str(exc) or '映射表格式错误', 'MAPPING_INVALID', 400)
-        return Response({'code': 0, 'message': '映射表导入成功', 'data': {'sources': source_sets_payload(mission)}, 'trace_id': make_trace_id()})
+        parsing = getattr(mapping_import, 'mapping_parse', {'mode': 'header', 'sheets': []})
+        message = '映射表导入成功'
+        if parsing['mode'] == 'position':
+            message = '映射表已按前两列顺序导入'
+        return Response({'code': 0, 'message': message, 'data': {
+            'sources': source_sets_payload(mission),
+            'mapping_parse': parsing,
+        }, 'trace_id': make_trace_id()})
     except MatrixError as exc:
         return _error(exc)
     except (TypeError, ValueError, OSError) as exc:

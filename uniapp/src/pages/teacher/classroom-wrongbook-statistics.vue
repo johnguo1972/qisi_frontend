@@ -221,7 +221,15 @@ function chooseMappingFile() {
 function uploadMapping(filePath?: string) {
   if (!filePath) return
   classroomWrongbookApi.uploadWrongDrillMapping(missionId.value, selectedSourceId.value, filePath, classId.value)
-    .then(() => { uni.showToast({ title: '映射表已导入', icon: 'success' }); load() })
+    .then((response: any) => {
+      const parsing = response?.data?.mapping_parse
+      if (parsing?.mode === 'position') {
+        uni.showModal({ title: '已按列顺序导入', content: '未识别标准表头，已按第一列“练习题号”、第二列“错题练习题号”解析。请核对映射结果。', showCancel: false })
+      } else {
+        uni.showToast({ title: '映射表已导入', icon: 'success' })
+      }
+      load()
+    })
     .catch((error: any) => uni.showToast({ title: error?.message || '映射表导入失败', icon: 'none' }))
 }
 
