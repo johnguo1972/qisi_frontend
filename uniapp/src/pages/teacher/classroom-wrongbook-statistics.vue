@@ -303,7 +303,7 @@ function uploadFile(filePath?: string) {
 async function generateDrill() {
   const wrongCount = (matrix.value?.students || []).reduce((sum: number, student: any) => sum + Number(student.wrong_count || 0), 0)
   if (manualEditing.value) { uni.showToast({ title: '请先保存错题统计', icon: 'none' }); return }
-  if (!wrongCount) { uni.showToast({ title: '当前没有错题可以生成精练题，请手动统计或者导入错题', icon: 'none' }); return }
+  if (!wrongCount && !sourceReady.value) { uni.showToast({ title: '当前没有错题可以生成精练题，请手动统计或者导入错题', icon: 'none' }); return }
   if (!sourceReady.value) { uni.showToast({ title: '请先完成错题练习题导入和映射', icon: 'none' }); return }
   try {
     const response: any = await classroomWrongbookApi.generateWrongDrill(missionId.value, {
@@ -318,12 +318,17 @@ async function generateDrill() {
       uni.showToast({ title: '生成任务已提交，请稍候', icon: 'success' })
       pollBatch(latestBatchId.value)
     } else {
-      uni.showToast({ title: `已生成 ${packages.length} 名学生的精练题`, icon: 'success' })
+      showGenerateResult(packages.length, response.data?.failed_count || 0)
     }
     await load()
   } catch (error: any) {
     uni.showToast({ title: error?.message || '生成精练题失败', icon: 'none' })
   }
+}
+
+function showGenerateResult(generatedCount: number, failedCount = 0) {
+  const detail = failedCount ? `成功 ${generatedCount} 名，失败 ${failedCount} 名` : `已为 ${generatedCount} 名学生生成精练题`
+  uni.showModal({ title: '精练题生成成功', content: `${detail}\n\n教师端：工作台 → 作业列表 → 错题精练 → 查看\n学生端：我的作业 → 错题精练`, showCancel: false, confirmText: '确认' })
 }
 
 async function pollBatch(batchId: string, attempt = 0) {
@@ -334,7 +339,7 @@ async function pollBatch(batchId: string, attempt = 0) {
       const data = response?.data
       if (data?.packages) generatedPackages.value = Object.fromEntries(data.packages.map((item: any) => [String(item.student_id), item]))
       if (['queued', 'generating'].includes(data?.status)) return pollBatch(batchId, attempt + 1)
-      uni.showToast({ title: `精练题生成完成 ${data?.generated_count || 0} 人`, icon: 'success' })
+      showGenerateResult(data?.generated_count || 0, data?.failed_count || 0)
       await load()
     } catch { /* the next manual refresh remains available */ }
   }, 2000)

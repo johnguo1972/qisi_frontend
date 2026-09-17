@@ -225,6 +225,7 @@ function sourceTypeText(mission: MissionExtended): string {
     wrongbook: '错题本',
     ai_recommendation: 'AI推荐',
     teacher_matrix: '错题练习',
+    wrongbook_drill: '错题精练',
   }
   return map[mission.source_type || ''] || mission.source_type || '-'
 }

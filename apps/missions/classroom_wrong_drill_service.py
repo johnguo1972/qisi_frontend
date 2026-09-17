@@ -15,6 +15,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.common.xlsx_reader import read_xlsx_sheets
+from apps.courses.models import CourseQuestionLink
 from apps.institutions.models import ClassStudent
 from apps.parser.models import ExamQuestion
 from apps.study.document_import_views import _save_upload
@@ -128,6 +129,24 @@ def _workbook_number_map(mission, node_id=None):
             result[number] = rel.question_id
     for number in duplicates:
         result.pop(number, None)
+    # Offline carriers have no MissionQuestionRel. Resolve numbers from the
+    # classroom's imported practice-question links instead.
+    if not result and getattr(mission, 'course_id', None):
+        links = CourseQuestionLink.objects.filter(
+            course_id=mission.course_id, is_deleted=False,
+        ).select_related('question', 'tree_node')
+        if node_id:
+            links = links.filter(tree_node_id=node_id)
+        for link in links.order_by('created_at', 'id'):
+            number = _norm(link.source_document_question_no or link.question.question_no)
+            if not number:
+                continue
+            if number in result and str(result[number]) != str(link.question_id):
+                duplicates.add(number)
+            else:
+                result[number] = link.question_id
+        for number in duplicates:
+            result.pop(number, None)
     return result, duplicates
 
 

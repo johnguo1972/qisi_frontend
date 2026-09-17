@@ -612,6 +612,10 @@ def course_list_or_create(request):
         resolved_grade = _class_grade_level(selected_class)
         if resolved_grade:
             request_data['grade_level'] = resolved_grade
+        else:
+            raise ValidationError({
+                'grade_level': '所选班级未设置年级，请先完善班级信息或在创建课次时选择年级',
+            })
     serializer = CourseSerializer(
         data=request_data,
         context={'request': request, 'course_institution': course_institution},
