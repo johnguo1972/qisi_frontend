@@ -75,7 +75,10 @@ def ingestion_history(request):
             _check_course_owner(course, request.user)
         except PermissionDenied as exc:
             return _error_response(exc.detail, 403)
-        batches = batches.filter(course=course)
+        # Wrong-drill documents are intentionally associated with a course for
+        # permission and audit scope, but they are not course practice imports.
+        # Their progress/history belongs to the dedicated wrong-drill pages.
+        batches = batches.filter(course=course).exclude(source_type='wrongbook_drill')
     elif scope != 'bank':
         return _error_response('scope must be bank or course', 400)
 

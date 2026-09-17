@@ -80,8 +80,16 @@ def _mapping_rows(mapping_import):
         header = {}
         for index, row in enumerate(sheet.rows):
             names = {_norm(value): position for position, value in enumerate(row)}
-            wrong_col = next((names[key] for key in ('错题练习题号', '错题题号', '练习题号') if key in names), None)
-            target_col = next((names[key] for key in ('针对练习册题号', '练习册题号', '原题号') if key in names), None)
+            # Column meaning is determined by its header, not by its position.
+            # The current template puts the workbook/practice number first and
+            # the wrong-drill number second; legacy templates with the reverse
+            # order remain supported.
+            wrong_col = next((names[key] for key in (
+                '错题练习题号', '错题题号', '练习题号',
+            ) if key in names), None)
+            target_col = next((names[key] for key in (
+                '练习题题号', '针对练习册题号', '练习册题号', '针对题号', '原题号',
+            ) if key in names), None)
             if wrong_col is not None and target_col is not None:
                 header_index, header = index, {'wrong': wrong_col, 'target': target_col}
                 break
